@@ -3480,8 +3480,13 @@ partial class CSharpToGSharpTranslator {
             targetSymbol ISymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool -> switch targetSymbol {
-            case field is IFieldSymbol: !ContainsTypeParameter(field.OriginalDefinition.Type)
-            case property is IPropertySymbol: !ContainsTypeParameter(property.OriginalDefinition.Type)
+            case namedType is INamedTypeSymbol: !ContainsTypeParameter(namedType)
+            case field is IFieldSymbol: !ContainsTypeParameter(
+                EffectiveDeclaredSlotType(field.OriginalDefinition.Type, value)
+            )
+            case property is IPropertySymbol: !ContainsTypeParameter(
+                EffectiveDeclaredSlotType(property.OriginalDefinition.Type, value)
+            )
             case parameter is IParameterSymbol: this.ParameterSlotIsDeclared(parameter, value)
             case local is ILocalSymbol: this.LocalSlotIsDeclared(local)
             case method is IMethodSymbol: if this.ResultLambda(method, value) is {} lambda {
@@ -3510,11 +3515,12 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            let declaredType = parameter.OriginalDefinition.Type
+            let declaredType = EffectiveDeclaredSlotType(parameter.OriginalDefinition.Type, value)
             if !ContainsTypeParameter(declaredType) {
                 return true
             }
-            if ContainsTypeParameter(parameter.Type) {
+            let constructedType = EffectiveDeclaredSlotType(parameter.Type, value)
+            if ContainsTypeParameter(constructedType) {
                 return false
             }
             if MentionedTypeParameterKind(declaredType, TypeParameterKind.Method) &&
@@ -3529,6 +3535,17 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
+        private func EffectiveDeclaredSlotType(
+            slotType ITypeSymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) ITypeSymbol? {
+            if value is AnonymousFunctionExpressionSyntax &&
+                slotType is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                return invoke.ReturnType
+            }
+            return slotType
+        }
+
         private func CallReceiverSlotIsDeclared(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
             if value == nil {
                 return false
@@ -3540,6 +3557,9 @@ partial class CSharpToGSharpTranslator {
                         Parent: InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess}
                     }
                 }: memberAccess.Expression
+                case ArgumentSyntax{
+                    Parent: ArgumentListSyntax{Parent: BaseObjectCreationExpressionSyntax creation}
+                }: creation
                 case ArgumentSyntax{
                     Parent: BracketedArgumentListSyntax{Parent: ElementAccessExpressionSyntax elementAccess}
                 }: elementAccess.Expression
@@ -3555,8 +3575,15 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
-            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ObjectCreationExpressionSyntax {
-                return !this.MentionsValueNilableOnlyInEmittedGSharp(unwrapped)
+            if unwrapped is BaseObjectCreationExpressionSyntax creation {
+                let createdType = this.context.GetTypeInfo(creation).Type
+                return createdType is INamedTypeSymbol &&
+                    !ContainsTypeParameter(createdType) &&
+                    !this.TryGetManagedReferenceArrayProjectedMethod(creation, out _) &&
+                    this
+                    .EffectiveCreationPositions(creation, createdType)
+                    .Nullable
+                    .Count == 0
             }
             if unwrapped is InvocationExpressionSyntax invocation {
                 let receiverMethod = this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol

@@ -3892,18 +3892,25 @@ internal class ConversionClassifier {
             targetFunction == nil {
             return false
         }
-        if sourceFunction.Arity != targetFunction.Arity || TypeSymbol.ContainsTypeParameter(
-            targetFunction.ReturnType
-        ) ||
-            object.ReferenceEquals(sourceFunction.ReturnType, targetFunction.ReturnType) ||
-            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-            sourceFunction.ReturnType,
-            targetFunction.ReturnType
+        if sourceFunction.Arity != targetFunction.Arity ||
+            !(sourceFunction.ReturnType is NullableTypeSymbol sourceNullable) ||
+            targetFunction.ReturnType == TypeSymbol.Void ||
+            targetFunction.ReturnType == TypeSymbol.Error ||
+            TypeSymbol.ContainsTypeParameter(targetFunction.ReturnType) ||
+            targetFunction.ReturnType is NullableTypeSymbol ||
+            targetFunction.ReturnType is PlatformTypeSymbol ||
+            !(
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                sourceNullable.UnderlyingType,
+                targetFunction.ReturnType
+            ) ||
+                Conversion
+                .Classify(sourceNullable.UnderlyingType, targetFunction.ReturnType).IsImplicit
         ) ||
             Conversion
-            .Classify(sourceFunction.ReturnType, targetFunction.ReturnType)
+            .Classify(sourceNullable, targetFunction.ReturnType)
             .IsImplicit ||
-            HasUserDefinedImplicitConversionForTypes(sourceFunction.ReturnType, targetFunction.ReturnType) {
+            HasUserDefinedImplicitConversionForTypes(sourceNullable, targetFunction.ReturnType) {
             return false
         }
         lambdaSyntax = syntax

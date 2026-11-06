@@ -76,6 +76,8 @@ class Holder {
 }
 
 func Maybe() string? -> nil
+func MaybeArgException() ArgumentException? -> nil
+func MaybeRef[T class]() T? -> nil
 func MaybeBox() Box? -> nil
 func MaybeThing() IThing? -> nil
 func MaybeInt() int32? -> nil
@@ -288,6 +290,36 @@ func Run(token Token) {
                 `func Run() string -> StrictSink5686.PickArg((x) -> Maybe(), 1)`,
                 "Maybe()"
             )
+            yield Row(
+                "mixed-object-delegate-and-expression-tree-overload",
+                `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
+                "MaybeThing()",
+                "GS0156"
+            )
+            yield Row(
+                "mixed-class-type-param-to-object-delegate-and-expression-tree-overload",
+                `func Run[T class]() object -> StrictSink5686.PickObject(() -> MaybeRef[T](), 1)`,
+                "MaybeRef[T]()",
+                "GS0155"
+            )
+            yield Row(
+                "mixed-class-to-object-delegate-and-expression-tree-overload",
+                `func Run() object -> StrictSink5686.PickObject(() -> MaybeBox(), 1)`,
+                "MaybeBox()",
+                "GS0156"
+            )
+            yield Row(
+                "mixed-base-delegate-and-expression-tree-overload",
+                `func Run() Exception -> StrictSink5686.PickException(() -> MaybeArgException(), 1)`,
+                "MaybeArgException()",
+                "GS0156"
+            )
+            yield Row(
+                "mixed-interface-delegate-and-expression-tree-overload",
+                `func Run() IComparable -> StrictSink5686.PickComparable(() -> Maybe(), 1)`,
+                "Maybe()",
+                "GS0156"
+            )
         }
 
         func AcceptedRows() sequence[[]object] {
@@ -381,7 +413,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v6.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v8.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -399,6 +431,12 @@ namespace Lib5686
         public static string? TakeExpressionArg(Expression<Func<int, string>> f) => f.Compile()(1);
         public static string Pick(Func<string> f, int n) => f();
         public static string? Pick(Expression<Func<string>> f, bool b) => f.Compile()();
+        public static object PickObject(Func<object> f, int n) => f();
+        public static object? PickObject(Expression<Func<object>> f, bool b) => f.Compile()();
+        public static Exception PickException(Func<Exception> f, int n) => f();
+        public static Exception? PickException(Expression<Func<Exception>> f, bool b) => f.Compile()();
+        public static IComparable PickComparable(Func<IComparable> f, int n) => f();
+        public static IComparable? PickComparable(Expression<Func<IComparable>> f, bool b) => f.Compile()();
         public static string PickArg(Func<int, string> f, int n) => f(n);
         public static string? PickArg(Expression<Func<int, string>> f, bool b) => f.Compile()(1);
         public static string? TakeNullable(Func<string?> f) => f();
