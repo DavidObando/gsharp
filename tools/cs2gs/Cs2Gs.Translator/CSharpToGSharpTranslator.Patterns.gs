@@ -874,7 +874,7 @@ partial class CSharpToGSharpTranslator {
                 receiver = this.SpillOperand(
                     receiver!!,
                     isPattern.Expression,
-                    forceNonTrivial: !this.IsSmartCastableScrutinee(isPattern.Expression)
+                    forceNonTrivial: !this.PatternReceiverCanBeDuplicated(isPattern.Expression, receiver)
                 )
             }
             let test = this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression)

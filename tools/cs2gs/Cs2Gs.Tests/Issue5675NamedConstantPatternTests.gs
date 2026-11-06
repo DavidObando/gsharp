@@ -438,4 +438,31 @@ namespace Demo
     }
 }`, "False True False False True False False False")
     }
+
+    @Fact
+    func PropertySnapshots_StayBehindShortCircuitGuards() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Probe
+    {
+        public int Reads;
+        public object Value { get { Reads++; throw new InvalidOperationException("unexpected getter"); } }
+        public bool And(bool guard) => guard && (Value is 3 or 4);
+        public bool Or(bool guard) => guard || (Value is 3 or 4);
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var value = new Probe();
+            bool first = value.And(false);
+            bool second = value.Or(true);
+            return first + " " + second + " " + value.Reads;
+        }
+    }
+}`, "False True 0")
+    }
 }

@@ -3310,8 +3310,9 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[IsPatternExpressionSyntax]() {
-                if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) &&
-                    !this.PatternReceiverTranslatesToTrivialOperand(isPattern.Expression) &&
+                if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
+                    isPattern.Expression
+                ) &&
                     !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)) {
                     return true
                 }
@@ -3319,14 +3320,12 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        private func PatternReceiverTranslatesToTrivialOperand(expression ExpressionSyntax) bool {
-            if !IsTrivialPatternReceiver(expression) {
+        private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
+            if !this.IsSmartCastableScrutinee(expression) || !IsTrivialPatternReceiver(expression) {
                 return false
             }
-            // A bare identifier may become a member access through pattern-binding
-            // substitution or implicit static qualification. Classify the emitted
-            // shape so its spill stays behind earlier short-circuit guards.
-            return IsTrivialOperand(this.TranslateExpression(Unparenthesize(expression))!!)
+            // Both the spill emitter and its short-circuit scope detector use this decision.
+            return IsTrivialOperand(translated ?? this.TranslateExpression(expression)!!)
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not
