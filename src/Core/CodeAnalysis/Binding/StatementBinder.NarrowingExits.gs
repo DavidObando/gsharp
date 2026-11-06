@@ -105,8 +105,8 @@ internal partial class StatementBinder {
         var filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
         var branchesMutateMembers = false
         var statementMutatesMembers = false
-        var branchesMutateReferenceStorage = false
-        var statementMutatesReferenceStorage = false
+        var branchSyntaxMutatesReferenceStorage = false
+        var statementSyntaxMutatesReferenceStorage = false
         for path in exit.Paths {
             let joined = exit.NarrowedType(path)
             if joined == nil || !IsJoinGain(path, joined, entry) {
@@ -137,12 +137,18 @@ internal partial class StatementBinder {
                     syntax == nil ||
                     SyntaxMayMutateMemberPaths(syntax)
                 // An unanalyzed syntax node may write anything, so it keeps the conservative answer (#5292).
-                branchesMutateReferenceStorage = syntaxMutates || branchEffects.MayMutateReferenceStorage
-                statementMutatesReferenceStorage = branchesMutateReferenceStorage ||
-                    effects.MayMutateReferenceStorage ||
+                branchSyntaxMutatesReferenceStorage = syntaxMutates
+                statementSyntaxMutatesReferenceStorage = syntaxMutates ||
                     syntax == nil ||
                     SyntaxMayMutateMemberPaths(syntax)
             }
+            // ADR-0208 R20 (#5827): the bound writes kill the fact only when they can store into its root.
+            let branchesMutateReferenceStorage = branchSyntaxMutatesReferenceStorage || branchEffects.MayWriteStorageOf(
+                path
+            )
+            let statementMutatesReferenceStorage = branchesMutateReferenceStorage ||
+                statementSyntaxMutatesReferenceStorage ||
+                effects.MayWriteStorageOf(path)
             let killedByFilter = filterWrites != nil &&
                 (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
             if !killedByFilter &&
