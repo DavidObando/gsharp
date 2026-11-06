@@ -740,7 +740,7 @@ internal partial class StatementBinder {
                             (assigned VariableSymbol) -> object.ReferenceEquals(assigned, key.Root) ||
                                 MayShareStorage(assigned, key.Root)
                         ) ||
-                            DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths, dropAllMemberPaths)
+                            DropsOnMemberMutation(key, dropAllMemberPaths, dropAllMemberPaths)
                     }
                 )
                 if drop &&
@@ -844,7 +844,7 @@ internal partial class StatementBinder {
     ) bool -> MayBeMutatedByUnknownWrite(effects, path) ||
         (effects.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol && !path.Root.IsReadOnly) ||
         effects.AssignsRoot(path.Root) ||
-        DropsOnMemberMutation(path, dropAllMemberPaths, dropReferenceStorage, effects.MayMutateImplicitMembers)
+        DropsOnMemberMutation(path, dropAllMemberPaths || effects.ByReferenceWritesReach(path), dropReferenceStorage)
 
     private func UpdateExternalCallableAliases(
         statement BoundStatement,
@@ -2683,9 +2683,8 @@ internal partial class StatementBinder {
             if MayBeMutatedByUnknownWrite(collector, path) || collector.MayMutateGlobalRoot(path.Root, entry.Value) ||
                 DropsOnMemberMutation(
                 path,
-                syntaxMutatesMembers || collector.MayMutateMemberPaths,
-                collector.MayWriteStorageOf(path),
-                collector.MayMutateImplicitMembers
+                syntaxMutatesMembers || collector.MayMutateMemberPaths || collector.ByReferenceWritesReach(path),
+                collector.MayWriteStorageOf(path)
             ) ||
                 collector.InvalidatesNarrowing(path.Root, entry.Value) || collector.Roots.Contains(path.Root) {
                 state.Remove(path)
@@ -4369,6 +4368,7 @@ internal partial class StatementBinder {
                     (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
                 let killed = killedByFilter || collector.AssignsRoot(path.Root) ||
                     collector.HasMemberStorageWrite ||
+                    collector.ByReferenceWritesReach(path) ||
                     MayBeMutatedByUnknownWrite(collector, rootPath) ||
                     (collector.MayMutateMemberPaths && MayBeMutatedByUnknownCallable(rootPath))
                 if !killed {
@@ -4536,11 +4536,6 @@ internal partial class StatementBinder {
             private set;
         }
 
-        prop MayMutateImplicitMembers bool {
-            get;
-            private set;
-        }
-
         // ADR-0208 R12 (#5292): a member, index or indirect write, or user code that may run one
         // (a lambda, a loop header); unlike MayMutateMemberPaths, a plain call does not set it.
         prop MayMutateReferenceStorage bool {
@@ -4551,6 +4546,29 @@ internal partial class StatementBinder {
         // ADR-0208 R20 (#5827): the member, index and indirect writes that set MayMutateReferenceStorage.
         // A write that is not in this list sets untypedReferenceStorageWrite.
         private let referenceStorageWrites List[BoundExpression] = List[BoundExpression]()
+
+        // ADR-0208 R21 (#5786, #5832): the by-reference value roots (a struct `this`, a `ref` parameter or local)
+        // through which a separate source field or property write stores (cref:StatementBinder.MemberWriteStorage).
+        private let byReferenceWriteRoots HashSet[VariableSymbol] = HashSet[VariableSymbol]()
+
+        /// ADR-0208 R21 (#5786, #5832): whether a separate write through a by-reference value receiver can reach the
+        /// member facts of [`path`](paramref). Such a write stores a field of the root's own storage, so it keeps the
+        /// member facts of that root. Another root can name storage that overlaps it through a type with explicit
+        /// layout, so the write removes the member facts of every other root.
+        /// @param path The path of the fact.
+        /// @returns `true` when a by-reference write can change the members of the path.
+        func ByReferenceWritesReach(path AccessPath) bool {
+            if byReferenceWriteRoots.Count == 0 || !StatementBinder.HasMemberLinks(path) {
+                return false
+            }
+            let root = StatementBinder.EffectiveMemberRoot(path)
+            for writeRoot in byReferenceWriteRoots {
+                if root == nil || !object.ReferenceEquals(writeRoot, root) {
+                    return true
+                }
+            }
+            return false
+        }
         private var untypedReferenceStorageWrite bool = false
 
         /// ADR-0208 R12 and R20 (#5292, #5827): whether the statement can store into the storage that the root of
@@ -4563,11 +4581,15 @@ internal partial class StatementBinder {
             if !MayMutateReferenceStorage {
                 return false
             }
-            if !path.HasMembers || untypedReferenceStorageWrite {
+            if !StatementBinder.HasMemberLinks(path) || untypedReferenceStorageWrite {
+                return true
+            }
+            let root = StatementBinder.EffectiveMemberRoot(path)
+            if root == nil {
                 return true
             }
             for write in referenceStorageWrites {
-                if StatementBinder.StorageWriteMayOverwriteRoot(write, path.Root.Type) {
+                if StatementBinder.StorageWriteMayOverwriteRoot(write, root.Type) {
                     return true
                 }
             }
@@ -4714,16 +4736,14 @@ internal partial class StatementBinder {
             let isStableSystemIndexOp = StatementBinder.IsStableSystemIndexOperation(node)
             // ADR-0208 R20 and R21 (#5796, #5786): a source property or field write into storage that no other
             // field overlaps is classified below. Every other member write removes every member-bearing path.
-            let separateSourceWrite = (
-                node is BoundPropertyAssignmentExpression || node is BoundFieldAssignmentExpression
-            ) &&
-                StatementBinder.MemberWriteStorageIsSeparate(node)
+            let storage = StatementBinder.MemberWriteStorage(node)
+            let separateSourceWrite = storage.Separate
+            if separateSourceWrite && storage.ByReferenceRoot is {} byReferenceRoot {
+                byReferenceWriteRoots.Add(byReferenceRoot)
+            }
             if !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                 !separateSourceWrite {
                 MayMutateMemberPaths = true
-                if node is not BoundFieldAssignmentExpression {
-                    MayMutateImplicitMembers = true
-                }
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) ||
                 (
@@ -4744,9 +4764,6 @@ internal partial class StatementBinder {
             let writesStableField = node is BoundFieldAssignmentExpression fieldAssign && fieldAssign.Field.IsReadOnly
             if sourcePropertyRunsUserCode || writesStableAutoProperty || writesStableField {
                 MayMutateMemberPaths = true
-                if sourcePropertyRunsUserCode {
-                    MayMutateImplicitMembers = true
-                }
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) &&
                 (!separateSourceWrite || sourcePropertyRunsUserCode || writesStableAutoProperty || writesStableField) {
@@ -4829,7 +4846,6 @@ internal partial class StatementBinder {
                 !TypeSymbol
                 .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
                 MayMutateMemberPaths = true
-                MayMutateImplicitMembers = true
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
             }
@@ -6078,7 +6094,6 @@ internal partial class StatementBinder {
             }
             // User code can also write members and the storage behind by-reference aliases.
             MayMutateMemberPaths = true
-            MayMutateImplicitMembers = true
             if writesReferenceStorage {
                 RecordReferenceStorageWrite(nil)
             }
@@ -6277,7 +6292,6 @@ internal partial class StatementBinder {
             if !SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) {
                 if expression is BoundIndexExpression || expression is BoundClrIndexExpression {
                     MayMutateMemberPaths = true
-                    MayMutateImplicitMembers = true
                     RecordReferenceStorageWrite(nil)
                 } else {
                     MayMutateAnyRoot = true
@@ -6287,9 +6301,6 @@ internal partial class StatementBinder {
             }
             if path.HasMembers {
                 MayMutateMemberPaths = true
-                if expression is not BoundFieldAccessExpression {
-                    MayMutateImplicitMembers = true
-                }
                 RecordReferenceStorageWrite(nil)
             } else {
                 Roots.Add(path.Root)
@@ -9296,31 +9307,38 @@ internal partial class StatementBinder {
         }
 
         /// ADR-0208 R20 and R21 (#5796, #5786, #5832): whether the source field or property write
-        /// [`write`](paramref) stores into storage that no other field overlaps. This is an allow-list. The written
-        /// member must be declared in a source type of this compilation whose layout is known not to be explicit
-        /// (cref:IsSeparateStorageOwner); a field of a type with explicit layout can share bytes with another field.
-        /// Its receiver must be an object, a value-type variable that is not a by-reference root, or a value-type
-        /// field of such a receiver in such a type. A by-reference value receiver (a struct `this`, a `ref` parameter
-        /// or a `ref` local) can name a field of a type with explicit layout, so it does not qualify. An imported type
-        /// (G# or CLR), an interface field and every other write do not qualify.
-        /// @param write A (cref:BoundFieldAssignmentExpression) or a (cref:BoundPropertyAssignmentExpression).
-        /// @returns `true` when the write can keep the facts on member paths.
-        internal func MemberWriteStorageIsSeparate(write BoundExpression) bool -> switch write {
-            case field is BoundFieldAssignmentExpression: field.StructType is {} fieldOwner &&
-                IsSeparateStorageOwner(fieldOwner) &&
-                (
+        /// [`write`](paramref) stores into storage that no other field overlaps, and the by-reference value root
+        /// through which it stores, if any. This is an allow-list. The written member must be declared in a source type
+        /// of this compilation whose layout is known not to be explicit (cref:IsSeparateStorageOwner); a field of a type
+        /// with explicit layout can share bytes with another field. Its receiver must be an object, a value-type
+        /// variable, or a value-type field of such a receiver in such a type. A by-reference value variable (a struct
+        /// `this`, a `ref` parameter or a `ref` local) is returned as the root: the write stores a field of that root's
+        /// own storage, but the root can name a field of a type with explicit layout that overlaps another root
+        /// (`ByReferenceWritesReach`). An imported type (G# or CLR), an interface field and every other write are not
+        /// separate.
+        /// @param write The bound node of the write.
+        /// @returns Whether the storage is separate, and the by-reference root of the receiver.
+        internal func MemberWriteStorage(write BoundExpression)(Separate bool, ByReferenceRoot VariableSymbol?) ->
+        switch write {
+            case field is BoundFieldAssignmentExpression: if field.StructType is {} fieldOwner &&
+                IsSeparateStorageOwner(fieldOwner) {
                 if field.ReceiverExpression != nil {
-                    ReceiverStorageIsSeparate(field.ReceiverExpression)
+                    ReceiverStorage(field.ReceiverExpression)
                 } else if field.Receiver is {} receiverVariable {
-                    VariableStorageIsSeparate(receiverVariable)
+                    VariableStorage(receiverVariable)
                 } else {
-                    true
+                    (true, default(VariableSymbol?))
                 }
-            )
-            case property is BoundPropertyAssignmentExpression: property.StructType is {} propertyOwner &&
-                IsSeparateStorageOwner(propertyOwner) &&
-                ReceiverStorageIsSeparate(property.Receiver)
-            default: false
+            } else {
+                (false, default(VariableSymbol?))
+            }
+            case property is BoundPropertyAssignmentExpression: if property.StructType is {} propertyOwner &&
+                IsSeparateStorageOwner(propertyOwner) {
+                ReceiverStorage(property.Receiver)
+            } else {
+                (false, default(VariableSymbol?))
+            }
+            default: (false, default(VariableSymbol?))
         }
 
         // A source type of this compilation whose layout is known not to be explicit. An imported type has no
@@ -9342,26 +9360,32 @@ internal partial class StatementBinder {
             return true
         }
 
-        private func VariableStorageIsSeparate(variable VariableSymbol) bool {
+        private func VariableStorage(variable VariableSymbol)(Separate bool, ByReferenceRoot VariableSymbol?) {
             let variableType = StripNullability(variable.Type)
-            return (variableType != nil && Binder.IsReferenceTypeForConstraint(variableType)) ||
-                !IsExternalStorageAlias(variable)
+            if (variableType != nil && Binder.IsReferenceTypeForConstraint(variableType)) ||
+                !IsExternalStorageAlias(variable) {
+                return (true, nil)
+            }
+            return (true, variable)
         }
 
-        private func ReceiverStorageIsSeparate(receiver BoundExpression?) bool {
+        private func ReceiverStorage(receiver BoundExpression?)(Separate bool, ByReferenceRoot VariableSymbol?) {
             if receiver == nil {
-                return true
+                return (true, nil)
             }
             let receiverType = StripNullability(receiver.Type)
             if receiverType != nil && Binder.IsReferenceTypeForConstraint(receiverType) {
-                return true
+                return (true, nil)
             }
             return switch receiver {
-                case variable is BoundVariableExpression: VariableStorageIsSeparate(variable.Variable)
-                case field is BoundFieldAccessExpression: field.StructType is {} fieldOwner &&
-                    IsSeparateStorageOwner(fieldOwner) &&
-                    ReceiverStorageIsSeparate(field.Receiver)
-                default: false
+                case variable is BoundVariableExpression: VariableStorage(variable.Variable)
+                case field is BoundFieldAccessExpression: if field.StructType is {} fieldOwner &&
+                    IsSeparateStorageOwner(fieldOwner) {
+                    ReceiverStorage(field.Receiver)
+                } else {
+                    (false, default(VariableSymbol?))
+                }
+                default: (false, default(VariableSymbol?))
             }
         }
 
@@ -9886,23 +9910,36 @@ internal partial class StatementBinder {
         internal func DropsOnMemberMutation(
             path AccessPath,
             mayMutateMemberPaths bool,
-            mayMutateReferenceStorage bool,
-            mayMutateImplicitMembers bool = false
-        ) bool -> (path.HasMembers && mayMutateMemberPaths) ||
-            (IsImplicitMemberRoot(path.Root) && mayMutateImplicitMembers) ||
+            mayMutateReferenceStorage bool
+        ) bool -> (HasMemberLinks(path) && mayMutateMemberPaths) ||
             (
-            IsExternalStorageAlias(path.Root) &&
-                (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(path.Root)))
+            EffectiveMemberRoot(path) is {} root &&
+                IsExternalStorageAlias(root) &&
+                (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(root)))
         )
+
+        /// ADR-0208 R21 (#5786, #5830): a fact on a bare member name (an implicit member symbol) is a fact on the
+        /// member of `this`, so it has member links like a member path.
+        internal func HasMemberLinks(path AccessPath) bool -> path.HasMembers || IsImplicitMemberRoot(path.Root)
+
+        /// ADR-0208 R21 (#5786, #5830): the variable whose storage holds the first link of [`path`](paramref): the
+        /// receiver of an implicit instance member, the root of any other path, and `nil` for an implicit static
+        /// member.
+        internal func EffectiveMemberRoot(path AccessPath) VariableSymbol? -> switch path.Root {
+            case field is ImplicitFieldVariableSymbol: field.Receiver
+            case property is ImplicitPropertyVariableSymbol: property.Receiver
+            case _ is ImplicitStaticFieldVariableSymbol or
+                ImplicitStaticPropertyVariableSymbol: default(VariableSymbol?)
+            default: path.Root
+        }
 
         internal func DropsOnMemberMutation(
             path AccessPath,
             mutations AssignedRootsCollector
         ) bool -> DropsOnMemberMutation(
             path,
-            mutations.MayMutateMemberPaths,
-            mutations.MayWriteStorageOf(path),
-            mutations.MayMutateImplicitMembers
+            mutations.MayMutateMemberPaths || mutations.ByReferenceWritesReach(path),
+            mutations.MayWriteStorageOf(path)
         )
 
         /// ADR-0208 R12 (#5292): whether a call can write the storage that the external-storage alias

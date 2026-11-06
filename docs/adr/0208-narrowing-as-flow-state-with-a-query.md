@@ -978,25 +978,32 @@ Details per row:
   storage of that root (`h.tok = fresh` where `this` names `tok`). The fact on a by-reference root itself still
   dies on every member write (R12). An index, indirect or imported write, and a loop or backward-jump region
   (ADR-0213), keep the full rule. Review of #5832 made the decision an allow-list, which applies to R20 too
-  (`StatementBinder.MemberWriteStorageIsSeparate`). (1) Fields of a type with explicit layout
+  (`StatementBinder.MemberWriteStorage`). (1) Fields of a type with explicit layout
   (`@StructLayout(LayoutKind.Explicit)`) can share storage: after `if b.Text != nil` with
   `@FieldOffset(0) let Text string?` and `@FieldOffset(0) var Other string?`, `b.Other = nil` replaces
   `b.Text`. So a write keeps the facts only when the written member is declared in a source type of this
   compilation whose layout is known not to be explicit (`IsSeparateStorageOwner`: a declaration, and resolved
   layout metadata that is not explicit or no `StructLayout` annotation), and its receiver is an object, a
-  value-type variable that is not a by-reference root, or a value-type field of such a receiver in such a type.
-  An imported type, G# or CLR, does not qualify: an imported G# data type is built without its layout metadata
-  (`BuildSemanticAggregate`). A by-reference value receiver can name a field of a type with explicit layout
-  (`Run(ref e.a, ref e.b)` where `a` and `b` overlap), so a write through it keeps the full rule, and the R20 type
-  test then never decides a write that overlaps without containment. (2) A field of an interface has no owner
+  value-type variable, or a value-type field of such a receiver in such a type. An imported type, G# or CLR,
+  does not qualify: an imported G# data type is built without its layout metadata (`BuildSemanticAggregate`). A
+  by-reference value receiver (a struct `this`, a `ref` parameter or local) stores a field of its own storage, so
+  the write keeps the member facts of that root. That root can name a field of a type with explicit layout that
+  overlaps another root (`Run(ref e.a, ref e.b)` where `a` and `b` overlap), so the write removes the member facts
+  of every other root (`AssignedRootsCollector.ByReferenceWritesReach`). The R20 type test then never decides a
+  write that overlaps without containment. (2) A field of an interface has no owner
   type in the write, so it keeps the full rule. The first access of such a field runs the interface's type
   initializer, which runs its `shared` field initializers and can run a stored callback. So a read or a write of
   it is user code when the interface declares an initializer that is not a literal of its field type
   (`StaticMemberAccessRunsUserCode` reads `InterfaceInitializationRunsUserCode`, R11). This is the test of a
   struct or class owner (#5520, `DeclaresNonLiteralSharedFieldInitializer`, set in the declaration pass by the one
-  `IsLiteralInitializerSyntax`). A `const`, a field with no initializer and a literal initializer do not count. A `[MemberNotNull]` fact is on the implicit field symbol, not on a member path,
-  so this row does not change it; its write through another reference is
-  [#5830](https://github.com/DavidObando/gsharp/issues/5830). The tests that pinned the old rule,
+  `IsLiteralInitializerSyntax`). A `const`, a field with no initializer and a literal initializer do not count. (3) A `[MemberNotNull]` fact is on the implicit
+  field symbol (#5830, #5835). It is a fact on a member of `this`, so one decision serves it and the member paths:
+  `DropsOnMemberMutation` treats a path whose root is an implicit member as a path with member links
+  (`HasMemberLinks`) whose storage root is the receiver of the member (`EffectiveMemberRoot`). So R20 and R21
+  apply to it unchanged: a separate `var` field write of another field keeps it, a write that can replace a struct
+  `this` removes it, and a call or a full-rule write removes it. A write of the same field through any receiver
+  removes it by the member symbol that `AssignedRootsCollector` records (`AssignsRoot`, #5835). The collector has
+  no second write classification for implicit members. The tests that pinned the old rule,
   `Issue1180SmartCastMembersBinderTests.InterveningMemberAssignment_InvalidatesMemberPathNarrowing` and
   `Issue1639NarrowingInvalidationFastPathTests.ActiveMemberPathNarrowing_InterveningMemberAssignment_StillInvalidates`,
   now pin R21 (`InterveningVarFieldWrite_KeepsMemberPathNarrowing`) and an index write. New sibling cases

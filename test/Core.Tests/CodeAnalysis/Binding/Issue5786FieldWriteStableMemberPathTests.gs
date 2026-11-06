@@ -458,6 +458,100 @@ Run(Box("abc"))
         }
     }
 
+    private func MemberNotNullBox(kind string, write string, read string, call string) string -> `import System
+import System.Diagnostics.CodeAnalysis
+
+class Owner {
+    var A bool
+}
+` + kind + ` Box {
+    var _name string?
+    var count int32
+    let owner Owner?
+    init(owner Owner?) {
+        this.owner = owner
+        this._name = nil
+        this.count = 0
+    }
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+    func Run(other Box) int32 {
+        this.EnsureInit()
+        if owner != nil {
+            ` + write + `
+            owner.A = true
+            ` + read + `
+        }
+        return 0
+    }
+}
+` + call + `
+`
+
+    /// ADR-0208 R21 and #5830 together: a write of the `var` field `_name` through another reference keeps the
+    /// fact on the stable path `owner` and removes the `[MemberNotNull]` fact on `_name`, which it writes.
+    @Theory
+    @InlineData("class", "other._name = nil")
+    @InlineData("struct", "var copy = other\n            copy._name = nil")
+    func VarFieldWriteOfTheMemberNotNullField_KeepsPathFact_RemovesMemberNotNullFact(kind string, write string) {
+        let source = MemberNotNullBox(kind, write, "return _name.Length // READ", "var b = Box(Owner())\nb.Run(b)")
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
+    /// A write of another `var` field keeps both facts: through another object, and through the struct `this`
+    /// itself, whose own fields do not overlap.
+    @Theory
+    @InlineData("class", "other.count = 4", "return _name.Length + other.count")
+    @InlineData("struct", "var copy = other\n            copy.count = 4", "return _name.Length + copy.count")
+    @InlineData("class", "this.count = 4", "return _name.Length + this.count")
+    @InlineData("struct", "this.count = 4", "return _name.Length + this.count")
+    func VarFieldWriteOfAnotherField_KeepsPathFactAndMemberNotNullFact(kind string, write string, read string) {
+        let result = EmittedOracle.Evaluate(MemberNotNullBox(kind, write, read, "var b = Box(Owner())\nb.Run(b)"))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("9", result.ValueText)
+    }
+
+    /// A `[MemberNotNull]` fact on a bare field of a struct `this` is a fact on a member of `this`, so R20 applies:
+    /// `h.tok = fresh` replaces the storage that `this` names (#5827), and the fact dies.
+    @Fact
+    func WriteThatReplacesStructThis_RemovesMemberNotNullFact() {
+        let source = `import System
+import System.Diagnostics.CodeAnalysis
+
+struct Token {
+    var _name string?
+    init() {
+        this._name = nil
+    }
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+    func Restore(h Holder, fresh Token) int32 {
+        this.EnsureInit()
+        h.tok = fresh
+        return _name.Length // READ
+    }
+}
+class Holder {
+    var tok Token
+    func Run() int32 {
+        return tok.Restore(this, Token())
+    }
+}
+Holder{tok: Token()}.Run()
+`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
     shared {
         private func EmitLibrary(caseName string) string {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5786FieldWrite", caseName)
