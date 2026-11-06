@@ -3892,25 +3892,36 @@ internal class ConversionClassifier {
             targetFunction == nil {
             return false
         }
-        if sourceFunction.Arity != targetFunction.Arity ||
-            !(sourceFunction.ReturnType is NullableTypeSymbol sourceNullable) ||
-            targetFunction.ReturnType == TypeSymbol.Void ||
-            targetFunction.ReturnType == TypeSymbol.Error ||
-            TypeSymbol.ContainsTypeParameter(targetFunction.ReturnType) ||
-            targetFunction.ReturnType is NullableTypeSymbol ||
-            targetFunction.ReturnType is PlatformTypeSymbol ||
+        if sourceFunction.Arity != targetFunction.Arity {
+            return false
+        }
+        var sourceReturn = sourceFunction.ReturnType
+        var targetReturn = targetFunction.ReturnType
+        if literal.Function.IsAsync {
+            if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(sourceReturn, out var unwrappedSource) ||
+                !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetReturn, out var unwrappedTarget) ||
+                unwrappedSource == nil ||
+                unwrappedTarget == nil {
+                return false
+            }
+            sourceReturn = unwrappedSource
+            targetReturn = unwrappedTarget
+        }
+        if !(sourceReturn is NullableTypeSymbol sourceNullable) ||
+            targetReturn == TypeSymbol.Void ||
+            targetReturn == TypeSymbol.Error ||
+            TypeSymbol.ContainsTypeParameter(targetReturn) ||
+            targetReturn is NullableTypeSymbol ||
+            targetReturn is PlatformTypeSymbol ||
             !(
-            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                sourceNullable.UnderlyingType,
-                targetFunction.ReturnType
-            ) ||
+            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceNullable.UnderlyingType, targetReturn) ||
                 Conversion
-                .Classify(sourceNullable.UnderlyingType, targetFunction.ReturnType).IsImplicit
+                .Classify(sourceNullable.UnderlyingType, targetReturn).IsImplicit
         ) ||
             Conversion
-            .Classify(sourceNullable, targetFunction.ReturnType)
+            .Classify(sourceNullable, targetReturn)
             .IsImplicit ||
-            HasUserDefinedImplicitConversionForTypes(sourceNullable, targetFunction.ReturnType) {
+            HasUserDefinedImplicitConversionForTypes(sourceNullable, targetReturn) {
             return false
         }
         lambdaSyntax = syntax

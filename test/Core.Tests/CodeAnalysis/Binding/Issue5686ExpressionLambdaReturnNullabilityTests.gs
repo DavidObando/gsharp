@@ -320,6 +320,11 @@ func Run(token Token) {
                 "Maybe()",
                 "GS0156"
             )
+            yield Row(
+                "mixed-async-delegate-and-expression-tree-overload",
+                `func Run() Task[string] -> StrictSink5686.PickAsync(async () -> Maybe(), 1)`,
+                "Maybe()"
+            )
         }
 
         func AcceptedRows() sequence[[]object] {
@@ -413,10 +418,11 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v8.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v9.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
+using System.Threading.Tasks;
 
 namespace Lib5686
 {
@@ -437,6 +443,8 @@ namespace Lib5686
         public static Exception? PickException(Expression<Func<Exception>> f, bool b) => f.Compile()();
         public static IComparable PickComparable(Func<IComparable> f, int n) => f();
         public static IComparable? PickComparable(Expression<Func<IComparable>> f, bool b) => f.Compile()();
+        public static Task<string> PickAsync(Func<Task<string>> f, int n) => f();
+        public static Task<string>? PickAsync(Expression<Func<Task<string>>> f, bool b) => f.Compile()();
         public static string PickArg(Func<int, string> f, int n) => f(n);
         public static string? PickArg(Expression<Func<int, string>> f, bool b) => f.Compile()(1);
         public static string? TakeNullable(Func<string?> f) => f();
