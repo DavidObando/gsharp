@@ -16,6 +16,7 @@ import System.Reflection.Metadata.Ecma335
 internal shared class ParameterMetadataEmitter {
     /// Adds a parameter row, including ref-kind and optional-default metadata.
     /// @param emitCtx The active emit context.
+    /// @param getTypeReference Resolves constant attribute type references.
     /// @param parameter The source parameter.
     /// @param sequenceNumber The one-based parameter sequence number.
     /// @param attributes Additional attributes required by the caller.
@@ -23,6 +24,7 @@ internal shared class ParameterMetadataEmitter {
     /// @returns The emitted parameter handle.
     func AddParameter(
         emitCtx EmitContext,
+        getTypeReference(Type) -> TypeReferenceHandle,
         parameter ParameterSymbol,
         sequenceNumber int32,
         attributes ParameterAttributes = ParameterAttributes.None,
@@ -35,7 +37,10 @@ internal shared class ParameterMetadataEmitter {
             attributes |= ParameterAttributes.In
         }
         if parameter.HasExplicitDefaultValue {
-            attributes |= ParameterAttributes.Optional | ParameterAttributes.HasDefault
+            attributes |= ParameterAttributes.Optional
+            if parameter.ExplicitDefaultValue is not decimal {
+                attributes |= ParameterAttributes.HasDefault
+            }
         }
         let handle = emitCtx.Metadata.AddParameter(
             attributes,
@@ -43,7 +48,11 @@ internal shared class ParameterMetadataEmitter {
             sequenceNumber
         )
         if parameter.HasExplicitDefaultValue {
-            emitCtx.Metadata.AddConstant(handle, parameter.ExplicitDefaultValue)
+            if parameter.ExplicitDefaultValue is decimal value {
+                ConstantFieldMetadataEmitter.EmitDecimalConstantAttribute(emitCtx, getTypeReference, handle, value)
+            } else {
+                emitCtx.Metadata.AddConstant(handle, parameter.ExplicitDefaultValue)
+            }
         }
         return handle
     }
@@ -101,12 +110,14 @@ internal shared class ParameterMetadataEmitter {
     /// `EmitFunction`, mint their rows here. Call it immediately before
     /// `AddMethodDefinition`, whose `parameterList` is (cref:SignatureRows.First).
     /// @param emitCtx The active emit context.
+    /// @param getTypeReference Resolves constant attribute type references.
     /// @param returnType The signature's return type (`void` for none).
     /// @param returnRefKind The return's ref kind.
     /// @param parameters The signature's parameters, in order.
     /// @returns The rows and their plan.
     func AddSignatureRows(
         emitCtx EmitContext,
+        getTypeReference(Type) -> TypeReferenceHandle,
         returnType TypeSymbol,
         returnRefKind RefKind,
         parameters ImmutableArray[ParameterSymbol]
@@ -120,7 +131,7 @@ internal shared class ParameterMetadataEmitter {
         }
         let rows = ImmutableArray.CreateBuilder[ParameterHandle](parameters.Length)
         for var i = 0; i < parameters.Length; i++ {
-            rows.Add(AddParameter(emitCtx, parameters[i], sequenceNumber: i + 1))
+            rows.Add(AddParameter(emitCtx, getTypeReference, parameters[i], sequenceNumber: i + 1))
         }
         return SignatureRows(first, plan, returnRow, returnType, parameters, rows.MoveToImmutable())
     }

@@ -417,7 +417,7 @@ internal partial class DeclarationBinder {
                 }
             )
             let sliceType = symbolicParamsSlice ?? SliceTypeSymbol.Get(elementTypeSymbol)
-            let tailCount = boundArguments.Count - paramsIndex
+            let tailCount = Math.Max(0, boundArguments.Count - paramsIndex)
             let packed = ImmutableArray.CreateBuilder[BoundExpression](tailCount)
             for var j = 0; j < tailCount; j++ {
                 let srcIndex = paramsIndex + j
@@ -451,7 +451,13 @@ internal partial class DeclarationBinder {
             let arrayExpr = BoundArrayCreationExpression(syntax: nil, sliceType, packed.MoveToImmutable())
             let expandedBuilder = ImmutableArray.CreateBuilder[BoundExpression](ctorParams.Length)
             for var i = 0; i < paramsIndex; i++ {
-                expandedBuilder.Add(boundArguments[i])
+                expandedBuilder.Add(
+                    if i < boundArguments.Count {
+                        boundArguments[i]
+                    } else {
+                        ConversionClassifier.CreateOptionalDefaultArgument(ctorParams[i])
+                    }
+                )
             }
             expandedBuilder.Add(arrayExpr)
             orderedArgs = expandedBuilder.MoveToImmutable()
@@ -469,8 +475,29 @@ internal partial class DeclarationBinder {
         let refKindsBuilder = ImmutableArray.CreateBuilder[RefKind](ctorParams.Length)
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](ctorParams.Length)
         for var i = 0; i < ctorParams.Length; i++ {
+            // Synthesized defaults and params arrays have no source argument.
+            let argLoc = if (isExpanded && i == ctorParams.Length - 1) || i >= suppliedArgumentCount {
+                location
+            } else {
+                argLocation(i)
+            }
             let clrParamType = ctorParams[i].ParameterType
             if clrParamType.IsByRef {
+                if i >= boundArguments.Count && ConversionClassifier.IsImplicitInClrParameter(ctorParams[i]) &&
+                    TryProjectSymbolicBaseInPointeeType(
+                    openBaseCtorParams,
+                    openBaseDefinition,
+                    baseTypeArguments,
+                    i
+                ) is {} optionalPointee {
+                    orderedArgs = orderedArgs.SetItem(
+                        i,
+                        ConversionClassifier.CreateOptionalDefaultArgument(
+                            ctorParams[i],
+                            parameterType: optionalPointee
+                        )
+                    )
+                }
                 let refKind = RefCapabilities.GetParameterRefKind(ctorParams[i])
                 refKindsBuilder.Add(refKind)
                 // Issue #4400: a plain argument at an imported `in` base
@@ -494,7 +521,7 @@ internal partial class DeclarationBinder {
                         receiverType: nil,
                         symbolicMethodTypeArgs: default(ImmutableArray[TypeSymbol?])
                     )
-                    let inLocation = argLocation(i)
+                    let inLocation = argLoc
                     convertedArgs.Add(
                         (
                             if conversions.TryRejectClrPlatformContainerArgument(
@@ -520,7 +547,7 @@ internal partial class DeclarationBinder {
                 if !IsCompatibleExplicitByRefBaseArgument(orderedArgs[i], refKind, out var explicitClrRefKind) {
                     if explicitClrRefKind != RefKind.None && explicitClrRefKind != refKind {
                         Diagnostics.ReportRefKindMismatch(
-                            argLocation(i),
+                            argLoc,
                             i + 1,
                             ctorParams[i].Name ?? "value",
                             refKindToString(refKind),
@@ -528,7 +555,7 @@ internal partial class DeclarationBinder {
                         )
                     } else {
                         Diagnostics.ReportReadOnlyArgumentForWritableRef(
-                            argLocation(i),
+                            argLoc,
                             i + 1,
                             clrBase.Name,
                             refKindToString(refKind)
@@ -563,14 +590,14 @@ internal partial class DeclarationBinder {
                         refKind: refKind
                     )
                     if baseByRefPointee != TypeSymbol.Error && !conversions.CheckByRefArgumentStorage(
-                        argLocation(i),
+                        argLoc,
                         syntheticParameter,
                         baseByRefStorage,
                         baseByRefPointee,
                         orderedArgs[i]
                     ) {
                         conversions.ReportByRefStorageMismatch(
-                            argLocation(i),
+                            argLoc,
                             ctorParams[i].Name ?? "value",
                             baseByRefPointee,
                             baseByRefStorage
@@ -608,13 +635,6 @@ internal partial class DeclarationBinder {
             )
             if symbolicTarget != nil {
                 targetType = symbolicTarget
-            }
-            // The synthesised params array and any materialised optional default
-            // have no source argument of their own, so they report at the call.
-            let argLoc = if (isExpanded && i == ctorParams.Length - 1) || i >= suppliedArgumentCount {
-                location
-            } else {
-                argLocation(i)
             }
             // Issue #3984 (review follow-up): an omitted optional is
             // materialised from the parameter's ERASED CLR type, so
