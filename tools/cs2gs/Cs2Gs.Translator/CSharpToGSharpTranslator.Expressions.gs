@@ -5167,11 +5167,16 @@ partial class CSharpToGSharpTranslator {
                 if !visited.Add(local) {
                     return false
                 }
-                if local
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
-                    return this.TupleElementYieldsNilableBeyondItsCSharpType(initializer, path, visited)
+                try {
+                    if local
+                        .DeclaringSyntaxReferences
+                        .FirstOrDefault()
+                        ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} {
+                        return this.TupleElementYieldsNilableBeyondItsCSharpType(initializer, path, visited)
+                    }
+                    return false
+                } finally {
+                    visited.Remove(local)
                 }
             }
             return false
