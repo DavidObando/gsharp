@@ -348,4 +348,94 @@ namespace Demo
     }
 }`, "True False False False True True False False True False False True False True False False True False False")
     }
+
+    @Fact
+    func NullableListFallback_RejectsNilBeforeReadingElements() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int reads;
+        static object[]? Read(object[]? value) { reads++; return value; }
+        static string Test(object[]? value)
+        {
+            reads = 0;
+            bool hit = Read(value) is [3];
+            return hit + " " + reads;
+        }
+        public static string Run() => Test(null) + " / " + Test(new object[0]) + " / " +
+            Test(new object[] { 3 }) + " / " + Test(new object[] { 3L });
+    }
+}`, "False 1 / False 1 / True 1 / False 1")
+    }
+
+    @Fact
+    func UnqualifiedPropertyCombinator_ReadsTheScrutineeOnce() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Probe
+    {
+        public int Reads;
+        public object Value { get { Reads++; return Reads == 1 ? 4 : 3; } }
+        public bool Match() => Value is 3 or 4;
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var value = new Probe();
+            bool hit = value.Match();
+            return hit + " " + value.Reads;
+        }
+    }
+}`, "True 1")
+    }
+
+    @Fact
+    func MixedFallback_CapturesUnstableSiblingInputs() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Holder
+    {
+        public int Reads;
+        public int P { get { Reads++; return Reads == 1 ? 2 : 0; } }
+        public object Q = 3;
+    }
+    public static class P
+    {
+        static int reads;
+        static Holder Read(Holder value) { reads++; return value; }
+        static bool Match(Holder value) => Read(value) is { P: 1 or 2, Q: 3 };
+        public static string Run()
+        {
+            var value = new Holder();
+            bool hit = Match(value);
+            return hit + " " + value.Reads + " " + reads;
+        }
+    }
+}`, "True 1 1")
+    }
+
+    @Fact
+    func NegatedAndConstants_UseTheBoundLeafInput() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        const int K = 3;
+        static bool Match(object? value) => value is long and not K;
+        static bool Nested(object? value) => value is long and not (K or 4);
+        public static string Run() => Match(3L) + " " + Match(4L) + " " + Match(3) + " " + Match(null) + " " +
+            Nested(5L) + " " + Nested(3L) + " " + Nested(4L) + " " + Nested(null);
+    }
+}`, "False True False False True False False False")
+    }
 }

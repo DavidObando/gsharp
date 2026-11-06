@@ -871,7 +871,11 @@ partial class CSharpToGSharpTranslator {
             // <see cref="TryBuildNegatedGuardHoist"/> before reaching here — for
             // those, `receiver` is already a bare local and this is a no-op.
             if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) {
-                receiver = this.SpillOperand(receiver!!, isPattern.Expression)
+                receiver = this.SpillOperand(
+                    receiver!!,
+                    isPattern.Expression,
+                    forceNonTrivial: !this.IsSmartCastableScrutinee(isPattern.Expression)
+                )
             }
             let test = this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression)
             return this.MaterializeFallbackPatternBindings(isPattern, receiver, test)
@@ -1101,24 +1105,9 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        /// Issue #4356: whether the boolean lowering of [`pattern`](paramref)
-        /// over a NULLABLE nested member embeds that member more than once — a
-        /// type test, a `!= nil` guard, and one read per property/positional
-        /// subpattern each read it, and a designation re-reads it wherever it is
-        /// used. That is the shape where a re-read is not merely redundant but
-        /// wrong: the first read is what the nil test (or type test) proved,
-        /// and a later read that yields nil throws where C# matches or falls
-        /// through. A single subpattern over a member that needs no guard reads
-        /// it once and needs no local.
-        ///
-        /// A NON-nullable member re-read by member tests alone (`expr.Kind == A ||
-        /// expr.Kind == B` for `{ Kind: A or B }`) is left as it was: it cannot fail
-        /// a nil test it never had, the self-migration inventory keeps the
-        /// synthesized temporaries it would add retired
-        /// (Issue3347RemainingSpillInventoryTests), and it is a pre-existing
-        /// readability tradeoff outside #4356. Issue #4315: a non-nullable
-        /// member that now also takes the `!= nil` guard IS read more than once,
-        /// like a nullable one, and is bound once.
+        /// Whether fallback lowering reuses a nested value that needs a snapshot.
+        /// Nullable values and type proofs need the same stored value at each read.
+        /// An unstable getter read more than once also needs a snapshot.
         /// @param pattern The nested pattern.
         /// @param receiverType The receiver's declared C# type, if known.
         /// @param receiver The translated receiver (for the analyzer-mode registry).
@@ -1198,22 +1187,6 @@ partial class CSharpToGSharpTranslator {
                         ?.SpecialType == SpecialType.System_Nullable_T
                 )
             )
-            // Issue #4315: a declared-non-null reference member that a bare
-            // recursive pattern now also guards is read by the guard and again by
-            // its member tests, exactly like a nullable one. Only that shape
-            // widens the gate: a non-recursive pattern over such a member
-            // (`{ Name: "a" or "b" }`) keeps its pre-#4315 repeated reads.
-            let guardedNonNullMember = !nullableMember && !this.NullGuardIsProvablyRedundant(
-                receiver,
-                receiverType,
-                nil,
-                false
-            ) &&
-                !stableMember &&
-                receiverType != nil &&
-                !receiverType.IsValueType &&
-                this.ContainsBareRecursivePattern(pattern)
-            let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
             // A type proof must apply to the stored member value, not another getter result.
             let inputType = UnwrapNullable(receiverType)
             let typeTestedMember = pattern != nil &&
@@ -1235,28 +1208,7 @@ partial class CSharpToGSharpTranslator {
                     return narrowed != nil && !SymbolEqualityComparer.Default.Equals(narrowed, inputType)
                 }
             )
-            let comparedUnstableMember = !stableMember && pattern != nil && this.PatternRequiresValueEquality(pattern)
-            return (
-                nullableMember ||
-                    guardedNonNullMember ||
-                    designatedUnstableMember ||
-                    typeTestedMember ||
-                    comparedUnstableMember
-            ) &&
-                CountReads(pattern) > 1
-        }
-
-        private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
-            return switch pattern {
-                case recursive is RecursivePatternSyntax: recursive.Type == nil
-                case unary is UnaryPatternSyntax: this.ContainsBareRecursivePattern(unary.Pattern)
-                case parenthesized is ParenthesizedPatternSyntax: this.ContainsBareRecursivePattern(
-                    parenthesized.Pattern
-                )
-                case binary is BinaryPatternSyntax: this.ContainsBareRecursivePattern(binary.Left) ||
-                    this.ContainsBareRecursivePattern(binary.Right)
-                default: false
-            }
+            return (nullableMember || typeTestedMember || !stableMember) && CountReads(pattern) > 1
         }
 
         /// Issue #4356: THE test for whether an extended-property-path link is
@@ -1343,6 +1295,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsAutoPropertySyntax(syntax SyntaxNode) bool {
+            if syntax is ParameterSyntax {
+                return true
+            }
             if syntax is not PropertyDeclarationSyntax declaration {
                 return false
             }
@@ -1532,7 +1487,7 @@ partial class CSharpToGSharpTranslator {
             receiverSyntax ExpressionSyntax? = nil,
             isNestedPatternMember bool = false
         ) GExpression {
-            let receiverType = if pattern is ConstantPatternSyntax || pattern is RelationalPatternSyntax {
+            let receiverType = if pattern is RelationalPatternSyntax {
                 this.GetPatternInputType(pattern, receiverType)
             } else {
                 receiverType
@@ -1861,16 +1816,10 @@ partial class CSharpToGSharpTranslator {
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
-            // Issue #4356: a list pattern never matches nil, and a NESTED member
-            // tested with one (`{ P: [1] }`, `P` an `int[]?`) or a hoisted
-            // nullable scrutinee arrives here bound to a `let` local that is
-            // `T?` in G#. Guard it first: the guard both makes the pattern fall
-            // through on nil, as C# does, and smart-casts the local for the
-            // `.Length` / index reads.
+            // A list pattern never matches nil. Guard nullable receivers before reading their length or elements.
             if this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                 (
-                isNestedPatternMember &&
-                    receiverType != nil &&
+                receiverType != nil &&
                     receiverType.IsReferenceType == true &&
                     receiverType.NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -2099,6 +2048,7 @@ partial class CSharpToGSharpTranslator {
             receiverType ITypeSymbol?,
             negated bool = false
         ) GExpression {
+            let receiverType = this.GetPatternInputType(constantSyntax.Parent as PatternSyntax, receiverType)
             let constant GExpression? = if this.IsNullPatternValue(constantSyntax) {
                 LiteralExpression.Null()
             } else {
