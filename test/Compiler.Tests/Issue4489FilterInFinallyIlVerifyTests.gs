@@ -11,6 +11,7 @@ import System.IO
 import System.Linq
 import System.Reflection
 import System.Reflection.Metadata
+import System.Reflection.Metadata.Ecma335
 import System.Reflection.PortableExecutable
 import System.Runtime.Loader
 import Xunit
@@ -125,6 +126,165 @@ open class Issue4489FilterInFinallyIlVerifyTests {
         }
     }
 
+    @Fact
+    func Issue5115_InvalidFilterTailOrHandlerAfterFilterStart_IsRejectedByIlVerifier() {
+        if !IlVerifier.IsEnabled {
+            return
+        }
+        let dir = Directory.CreateTempSubdirectory("gs_ilv_5115_").FullName
+        try {
+            let dll = Compile(dir)
+            let originalBytes = File.ReadAllBytes(dll)
+            var code int32
+            var filterOffset int32
+            var handlerOffset int32
+            {
+                using let pe = PEReader(MemoryStream(originalBytes, writable: false))
+                let md = pe.GetMetadataReader()
+                let a = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == "A")
+                let body = pe.GetMethodBody(a.RelativeVirtualAddress)
+                let filter = body.ExceptionRegions.Single((r ExceptionRegion) -> r.Kind == ExceptionRegionKind.Filter)
+                filterOffset = filter.FilterOffset
+                handlerOffset = filter.HandlerOffset
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (s SectionHeader) -> a.RelativeVirtualAddress >= s.VirtualAddress &&
+                        a.RelativeVirtualAddress < s.VirtualAddress +
+                        s.SizeOfRawData
+                )
+                let headerOffset = a.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                let headerSize = (int32(originalBytes[headerOffset + 1]) >> 4) * 4
+                code = headerOffset + headerSize
+            }
+            // 1) #5115 repro: keep `isinst <token>` at FilterOffset intact, replace remainder of filter
+            // with `pop; pop; nop...; ldc.i4.0; endfilter`.
+            let filterTailBytes = cast[[]uint8](originalBytes.Clone())
+            Array.Fill(filterTailBytes, uint8(0), code + filterOffset + 5, handlerOffset - filterOffset - 5)
+            filterTailBytes[code + filterOffset + 5] = uint8(0x26) // pop
+            filterTailBytes[code + filterOffset + 6] = uint8(0x26) // pop (underflow!)
+            filterTailBytes[code + handlerOffset - 3] = uint8(0x16) // ldc.i4.0
+            filterTailBytes[code + handlerOffset - 2] = uint8(0xFE)
+            filterTailBytes[code + handlerOffset - 1] = uint8(0x11) // endfilter
+            let filterTailDll = Path.Combine(dir, "filter-tail.dll")
+            File.WriteAllBytes(filterTailDll, filterTailBytes)
+            Assert.False(
+                IlVerifyFilterInFinallyRule.Load(filterTailDll).Matches(
+                    "StackUnderflow",
+                    Line("StackUnderflow", "P.<Program>::A()", filterOffset)
+                )
+            )
+            let tailError = Assert.Throws[XunitException](() -> IlVerifier.Verify(filterTailDll))
+            Assert.Contains("Stack underflow", tailError.Message, StringComparison.Ordinal)
+
+            // 2) Keep the filter region itself 100% valid, but corrupt the catch handler start (`pop; leave ...`)
+            // by adding a second `pop` over the `leave` instruction so only shadow-patched re-verification catches it.
+            let handlerBytes = cast[[]uint8](originalBytes.Clone())
+            Assert.Equal(uint8(0x26), handlerBytes[code + handlerOffset])
+            handlerBytes[code + handlerOffset + 1] = uint8(0x26) // second pop at HandlerOffset + 1
+            let handlerDll = Path.Combine(dir, "handler-underflow.dll")
+            File.WriteAllBytes(handlerDll, handlerBytes)
+            let handlerError = Assert.Throws[XunitException](() -> IlVerifier.Verify(handlerDll))
+            Assert.Contains("Error(s)", handlerError.Message, StringComparison.Ordinal)
+
+            // 3) Balanced stack height with incompatible receiver type after `isinst`:
+            // change `isinst System.IO.IOException` at FilterOffset in `C` to `isinst System.Object` while
+            // the filter body still invokes `IOException`-specific / `Exception::get_Message` on the result.
+            let wrongTypeBytes = cast[[]uint8](originalBytes.Clone())
+            var cHeaderOffset int32
+            var cCode int32
+            var cFilterOffset int32
+            var objectTypeToken int32
+            {
+                using let pe = PEReader(MemoryStream(originalBytes, writable: false))
+                let md = pe.GetMetadataReader()
+                let c = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == "C")
+                let body = pe.GetMethodBody(c.RelativeVirtualAddress)
+                let filter = body.ExceptionRegions.Single((r ExceptionRegion) -> r.Kind == ExceptionRegionKind.Filter)
+                cFilterOffset = filter.FilterOffset
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (s SectionHeader) -> c.RelativeVirtualAddress >= s.VirtualAddress &&
+                        c.RelativeVirtualAddress < s.VirtualAddress +
+                        s.SizeOfRawData
+                )
+                cHeaderOffset = c.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                let headerSize = (int32(originalBytes[cHeaderOffset + 1]) >> 4) * 4
+                cCode = cHeaderOffset + headerSize
+                let objRef = md.TypeReferences.Single(
+                    (h TypeReferenceHandle) -> {
+                        let tr = md.GetTypeReference(h)
+                        return md.GetString(tr.Namespace) == "System" && md.GetString(tr.Name) == "Object"
+                    }
+                )
+                objectTypeToken = MetadataTokens.GetToken(objRef)
+            }
+            Assert.Equal(uint8(0x75), wrongTypeBytes[cCode + cFilterOffset])
+            Array.Copy(BitConverter.GetBytes(objectTypeToken), 0, wrongTypeBytes, cCode + cFilterOffset + 1, 4)
+            let wrongTypeDll = Path.Combine(dir, "wrong-filter-type.dll")
+            File.WriteAllBytes(wrongTypeDll, wrongTypeBytes)
+            let wrongTypeError = Assert.Throws[XunitException](() -> IlVerifier.Verify(wrongTypeDll))
+            Assert.Contains("Error(s)", wrongTypeError.Message, StringComparison.Ordinal)
+
+            // 4) Non-entity user-string token (`0x70000001`) on `isinst` must return false without throwing ArgumentException.
+            let badTokenBytes = cast[[]uint8](originalBytes.Clone())
+            Array.Copy(BitConverter.GetBytes(int32(0x70000001)), 0, badTokenBytes, cCode + cFilterOffset + 1, 4)
+            let badTokenDll = Path.Combine(dir, "bad-token-filter.dll")
+            File.WriteAllBytes(badTokenDll, badTokenBytes)
+            Assert.False(
+                IlVerifyFilterInFinallyRule.Load(badTokenDll).Matches(
+                    "StackUnderflow",
+                    Line("StackUnderflow", "P.<Program>::C(object)", cFilterOffset)
+                )
+            )
+            Assert.False(IlVerifyFilterInFinallyRule.TryWritePatchedAssembly(badTokenDll, Path.Combine(dir, "out.dll")))
+
+            // 5) False arm `pop; ldc.i4.0; br M` jumping to `matched` instead of `endfilter` must be rejected.
+            let badFalseBranchBytes = cast[[]uint8](originalBytes.Clone())
+            // In `C`, `filterOffset + 5` is `dup` (`0x25`), followed by 5-byte `brtrue matched` (`0x3A <int32>`),
+            // `pop` (`0x26`), `ldc.i4.0` (`0x16`), and 5-byte `br done` (`0x38 <int32>`).
+            // Setting `br done`'s delta to `0` makes it jump to `matched` (`cursor + 0`) instead of `endfilter`.
+            let brDoneOperandOffset = cCode + cFilterOffset + 5 + 1 + 5 + 2 + 1
+            Array.Copy(BitConverter.GetBytes(int32(0)), 0, badFalseBranchBytes, brDoneOperandOffset, 4)
+            let badFalseBranchDll = Path.Combine(dir, "bad-false-branch.dll")
+            File.WriteAllBytes(badFalseBranchDll, badFalseBranchBytes)
+            Assert.False(
+                IlVerifyFilterInFinallyRule.Load(badFalseBranchDll).Matches(
+                    "StackUnderflow",
+                    Line("StackUnderflow", "P.<Program>::C(object)", cFilterOffset)
+                )
+            )
+
+            // 6) Lowering `.maxstack` of `C` to `1` while the filter prelude uses `isinst; dup` (depth 2) must be rejected.
+            let lowMaxStackBytes = cast[[]uint8](originalBytes.Clone())
+            Array.Copy(BitConverter.GetBytes(uint16(1)), 0, lowMaxStackBytes, cHeaderOffset + 2, 2)
+            let lowMaxStackDll = Path.Combine(dir, "low-maxstack.dll")
+            File.WriteAllBytes(lowMaxStackDll, lowMaxStackBytes)
+            Assert.False(
+                IlVerifyFilterInFinallyRule.Load(lowMaxStackDll).Matches(
+                    "StackUnderflow",
+                    Line("StackUnderflow", "P.<Program>::C(object)", cFilterOffset)
+                )
+            )
+            Assert.False(
+                IlVerifyFilterInFinallyRule.TryWritePatchedAssembly(lowMaxStackDll, Path.Combine(dir, "out-max.dll"))
+            )
+            let lowMaxError = Assert.Throws[XunitException](() -> IlVerifier.Verify(lowMaxStackDll))
+            Assert.Contains("Error(s)", lowMaxError.Message, StringComparison.Ordinal)
+        } finally {
+            TryDelete(dir)
+        }
+    }
+
     shared {
         private const Source string = `package P
 
@@ -155,6 +315,17 @@ public func B(prefix string) string {
         }
     }
     return f()
+}
+
+public func C(o object) string {
+    try {
+        return o.ToString() ?? ""
+    } finally {
+        try {
+            Console.WriteLine("cleanup3")
+        } catch (ex IOException) when ex.Message.Length > 0 {
+        }
+    }
 }`
 
         private func Line(

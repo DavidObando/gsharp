@@ -1059,11 +1059,25 @@ internal partial class ExpressionBinder {
         // makes the write path symmetric with the read path fixed in #655.
         var implicitFieldReceiverExpr BoundExpression? = nil
         if variable is ImplicitFieldVariableSymbol implicitField {
-            implicitFieldReceiverExpr = BoundFieldAccessExpression(
+            let makeNarrowedField(TypeSymbol) -> BoundExpression = (
+                narrowedType TypeSymbol
+            ) -> BoundFieldAccessExpression(
                 nil,
                 BoundVariableExpression(nil, implicitField.Receiver),
                 implicitField.StructType,
-                implicitField.Field
+                implicitField.Field,
+                narrowedType
+            )
+            implicitFieldReceiverExpr = BuildNarrowedRead(
+                BoundFieldAccessExpression(
+                    nil,
+                    BoundVariableExpression(nil, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field
+                ),
+                implicitField.Field.Type,
+                TryGetNarrowedType(implicitField, syntax.Receiver.Location),
+                makeNarrowedField
             )
         } else if variable is ImplicitPropertyVariableSymbol implicitPropReceiver &&
             implicitPropReceiver
@@ -1115,6 +1129,11 @@ internal partial class ExpressionBinder {
                 implicitStaticPropReceiver.StructType,
                 implicitStaticPropReceiver.Property
             )
+        }
+        // Issue #5786: a bare member name used as a write receiver must consult
+        // the member's AccessPath narrowing, just as the read path does (#4310).
+        if implicitFieldReceiverExpr != nil {
+            implicitFieldReceiverExpr = ApplyMemberNarrowing(implicitFieldReceiverExpr)
         }
         // Issue #2488: classify and bind the write through the same narrowed
         // receiver view used by reads. The symbol retains its declared nullable
@@ -3848,12 +3867,26 @@ internal partial class ExpressionBinder {
                     implicitField.Field
                 )
             } else {
-                cast[BoundExpression](
-                    BoundFieldAccessExpression(
-                        nil,
-                        BoundVariableExpression(nil, implicitField.Receiver),
-                        implicitField.StructType,
-                        implicitField.Field
+                let makeNarrowedField(TypeSymbol) -> BoundExpression = (
+                    narrowedType TypeSymbol
+                ) -> BoundFieldAccessExpression(
+                    nil,
+                    BoundVariableExpression(nil, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field,
+                    narrowedType
+                )
+                ApplyMemberNarrowing(
+                    BuildNarrowedRead(
+                        BoundFieldAccessExpression(
+                            nil,
+                            BoundVariableExpression(nil, implicitField.Receiver),
+                            implicitField.StructType,
+                            implicitField.Field
+                        ),
+                        implicitField.Field.Type,
+                        TryGetNarrowedType(implicitField, syntax.TargetIdentifier.Location),
+                        makeNarrowedField
                     )
                 )
             }
@@ -3884,11 +3917,13 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(syntax.TargetIdentifier.Location, implicitProp.Property.Name)
                 return BoundErrorExpression(nil)
             }
-            let propertyAccess = BoundPropertyAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitProp.Receiver),
-                implicitProp.StructType,
-                implicitProp.Property
+            let propertyAccess = ApplyMemberNarrowing(
+                BoundPropertyAccessExpression(
+                    nil,
+                    BoundVariableExpression(nil, implicitProp.Receiver),
+                    implicitProp.StructType,
+                    implicitProp.Property
+                )
             )
             let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, propertyAccess.Type)
@@ -3914,16 +3949,18 @@ internal partial class ExpressionBinder {
         // stelem mutates the underlying storage), then do the indexed write to
         // that real local.
         if variable is ImplicitStaticFieldVariableSymbol implicitStaticField {
-            let fieldAccess = if implicitStaticField.InterfaceType != nil {
-                BoundFieldAccessExpression(nil, implicitStaticField.Field, implicitStaticField.InterfaceType)
-            } else {
-                BoundFieldAccessExpression(
-                    nil,
-                    receiver: nil,
-                    implicitStaticField.StructType,
-                    implicitStaticField.Field
-                )
-            }
+            let fieldAccess = ApplyMemberNarrowing(
+                if implicitStaticField.InterfaceType != nil {
+                    BoundFieldAccessExpression(nil, implicitStaticField.Field, implicitStaticField.InterfaceType)
+                } else {
+                    BoundFieldAccessExpression(
+                        nil,
+                        receiver: nil,
+                        implicitStaticField.StructType,
+                        implicitStaticField.Field
+                    )
+                }
+            )
             let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type)
             $scope.TryDeclareVariable(tempVar)
@@ -4001,6 +4038,12 @@ internal partial class ExpressionBinder {
             default {
                 target = BuildNarrowedVariableRead(variable, diagnosticLocation)
             }
+        }
+        if variable is ImplicitFieldVariableSymbol or
+            ImplicitStaticFieldVariableSymbol or
+            ImplicitPropertyVariableSymbol or
+            ImplicitStaticPropertyVariableSymbol {
+            target = ApplyMemberNarrowing(target)
         }
         let rectangular RectangularArrayTypeSymbol? = GetRectangularArrayTypeForBinding(target.Type)
         // ADR-0187 / issue #4350: a multi-parameter user indexer write.

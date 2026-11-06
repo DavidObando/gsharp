@@ -107,55 +107,45 @@ internal partial class StatementBinder {
     /// clause's gate is the receive's `ok` flag.
     /// @param binding The clause.
     /// @param receive The clause's `<-ch` initializer.
-    /// @param enclosingScope The scope the initializer binds in.
     /// @param loopScope The scope the binding is declared in.
     /// @returns The declarations to run at the check label and the gate to test after them.
     private func BindWhileLetChannelClause(
         binding IfLetBindingClauseSyntax,
         receive UnaryExpressionSyntax,
-        enclosingScope BoundScope,
         loopScope BoundScope
     ) WhileLetChannelClause {
-        let savedScope = $scope
-        $scope = BoundScope(enclosingScope)
-        try {
-            let declaredType TypeSymbol? = if binding.TypeClause != nil {
-                bindTypeClause(binding.TypeClause)
-            } else {
-                default(TypeSymbol?)
-            }
-            let tupleValue BoundExpression? = BindTwoValueReceive(receive, out var elementType)
-            if tupleValue == nil || tupleValue.Type is not TupleTypeSymbol tupleType {
-                let errorVariable = DeclareWhileLetBinding(
-                    loopScope,
-                    binding.Identifier,
-                    declaredType ?? TypeSymbol.Error
-                )
-                return WhileLetChannelClause(
-                    ImmutableArray.Create[BoundStatement](
-                        BoundVariableDeclaration(binding, errorVariable, BoundErrorExpression(nil))
-                    ),
-                    Gate: nil
-                )
-            }
-            let (tupleTemp, elements) = CreateTupleDeconstructionPlan(binding.Initializer, tupleType)
-            var value = elements[0]
-            var variableType = elementType
-            if declaredType != nil {
-                value = conversions.BindConversion(binding.Initializer.Location, value, declaredType)
-                variableType = declaredType
-            }
-            let variable = DeclareWhileLetBinding(loopScope, binding.Identifier, variableType)
+        let declaredType TypeSymbol? = if binding.TypeClause != nil {
+            bindTypeClause(binding.TypeClause)
+        } else {
+            default(TypeSymbol?)
+        }
+        let tupleValue BoundExpression? = BindTwoValueReceive(receive, out var elementType)
+        if tupleValue == nil || tupleValue.Type is not TupleTypeSymbol tupleType {
+            let errorVariable = DeclareWhileLetBinding(loopScope, binding.Identifier, declaredType ?? TypeSymbol.Error)
             return WhileLetChannelClause(
                 ImmutableArray.Create[BoundStatement](
-                    BoundVariableDeclaration(binding, tupleTemp, tupleValue),
-                    BoundVariableDeclaration(binding, variable, value)
+                    BoundVariableDeclaration(binding, errorVariable, BoundErrorExpression(nil))
                 ),
-                Gate: elements[1]
+                Gate: nil,
+                IsChannelGate: true
             )
-        } finally {
-            $scope = savedScope
         }
+        let (tupleTemp, elements) = CreateTupleDeconstructionPlan(binding.Initializer, tupleType)
+        var value = elements[0]
+        var variableType = elementType
+        if declaredType != nil {
+            value = conversions.BindConversion(binding.Initializer.Location, value, declaredType)
+            variableType = declaredType
+        }
+        let variable = DeclareWhileLetBinding(loopScope, binding.Identifier, variableType)
+        return WhileLetChannelClause(
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(binding, tupleTemp, tupleValue),
+                BoundVariableDeclaration(binding, variable, value)
+            ),
+            Gate: elements[1],
+            IsChannelGate: true
+        )
     }
 
     private func DeclareWhileLetBinding(loopScope BoundScope, identifier SyntaxToken, type TypeSymbol) VariableSymbol {
@@ -269,9 +259,11 @@ internal partial class StatementBinder {
     /// One bound `while let` channel clause: its check-label declarations and its `ok` gate.
     /// @param Declarations The declarations run at the check label, in order.
     /// @param Gate The `ok` flag to test after the declarations; `null` after an error.
+    /// @param IsChannelGate Whether the clause comes from a `<-ch` receive.
     private data struct WhileLetChannelClause(
         Declarations ImmutableArray[BoundStatement],
-        Gate BoundExpression?
+        Gate BoundExpression?,
+        IsChannelGate bool = false
     ) : IEquatable[WhileLetChannelClause] { }
 
     shared {

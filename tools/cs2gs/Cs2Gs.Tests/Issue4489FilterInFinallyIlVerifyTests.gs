@@ -200,6 +200,72 @@ open class Issue4489FilterInFinallyIlVerifyTests {
         }
     }
 
+    @Fact
+    func Issue5115_InvalidFilterTailOrHandlerAfterFilterStart_IsStillReported() {
+        let directory = NewDirectory()
+        try {
+            let image = CompileFixture()
+            let bytes = cast[[]uint8](image.Clone())
+            var code int32
+            var filterOffset int32
+            var handlerOffset int32
+            {
+                using let pe = PEReader(MemoryStream(image, writable: false))
+                let md = pe.GetMetadataReader()
+                let method = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == "Run")
+                let body = pe.GetMethodBody(method.RelativeVirtualAddress)
+                let filter = body.ExceptionRegions.Single((r ExceptionRegion) -> r.Kind == ExceptionRegionKind.Filter)
+                filterOffset = filter.FilterOffset
+                handlerOffset = filter.HandlerOffset
+                let section = pe
+                    .PEHeaders
+                    .SectionHeaders
+                    .Single(
+                    (h SectionHeader) -> method.RelativeVirtualAddress >= h.VirtualAddress &&
+                        method.RelativeVirtualAddress < h.VirtualAddress +
+                        h.SizeOfRawData
+                )
+                let header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData
+                code = header + ((int32(bytes[header + 1]) >> 4) * 4)
+            }
+            Array.Fill(bytes, uint8(0), code + filterOffset + 5, handlerOffset - filterOffset - 5)
+            bytes[code + filterOffset + 5] = uint8(0x26)
+            bytes[code + filterOffset + 6] = uint8(0x26)
+            bytes[code + handlerOffset - 3] = uint8(0x16)
+            bytes[code + handlerOffset - 2] = uint8(0xFE)
+            bytes[code + handlerOffset - 1] = uint8(0x11)
+            let path = Path.Combine(directory, "InvalidTail.dll")
+            File.WriteAllBytes(path, bytes)
+            Assert.False(IlVerifyFilterInFinallyRule.Load(path).Matches("StackUnderflow", RunLine(filterOffset)))
+            if IlVerifyRunner.IsEnabled && IlVerifyRunner().EnsureToolAvailable() {
+                let result = IlVerifyRunner().Verify(path)
+                Assert.False(result.Succeeded, result.Output)
+                let error = Assert.Single(result.Errors)
+                Assert.Equal("StackUnderflow", error.Code)
+                Assert.Equal("Demo.Outer+Inner::Run(string, int32)", error.Method)
+            }
+
+            // Also verify that when the filter prelude and stack heights are valid (so initial StackUnderflow is waived)
+            // and the filter body leaves a reference type instead of `int32` for `endfilter` (`nop; nop; nop` in place of
+            // `ldnull; cgt.un` before `endfilter`), the shadow run catches it and `result.Output` records the shadow failure.
+            let shadowInvalidBytes = cast[[]uint8](image.Clone())
+            Array.Fill(shadowInvalidBytes, uint8(0), code + handlerOffset - 8, 6)
+            let shadowInvalidPath = Path.Combine(directory, "ShadowInvalid.dll")
+            File.WriteAllBytes(shadowInvalidPath, shadowInvalidBytes)
+            if IlVerifyRunner.IsEnabled && IlVerifyRunner().EnsureToolAvailable() {
+                let shadowResult = IlVerifyRunner().Verify(shadowInvalidPath)
+                Assert.False(shadowResult.Succeeded, shadowResult.Output)
+                Assert.Contains("Shadow verification failed", shadowResult.Output, StringComparison.Ordinal)
+                Assert.NotEmpty(shadowResult.Errors)
+            }
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
         // The exact nightly line from #4489.
         private const NightlyLine string = "[IL]: Error [StackUnderflow]: [GSharp.Core.Tests.dll : GSharp.Core.Tests.CodeAnalysis.Binding." +

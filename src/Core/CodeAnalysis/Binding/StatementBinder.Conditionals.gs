@@ -557,11 +557,20 @@ internal partial class StatementBinder {
     /// block as appropriate. The nullable-stripping rules
     /// themselves live in (cref:IfLetBindingSupport), shared with the
     /// ADR-0151 `if let` expression and ADR-0163 `while let`.
-    private func BindIfLetBindingClause(binding IfLetBindingClauseSyntax)(
+    private func BindIfLetBindingClause(binding IfLetBindingClauseSyntax, isFinalBeforeGuard bool = false)(
         Variable VariableSymbol?,
         Underlying TypeSymbol?,
         Declaration BoundStatement
     ) {
+        let reportNonNullable = if isFinalBeforeGuard {
+            (
+                (clause IfLetBindingClauseSyntax, initializer BoundExpression) -> {
+                    IfLetBindingSupport.ReportFinalInitializerBeforeGuard(Diagnostics, clause, initializer)
+                }
+            )
+        } else {
+            default(((IfLetBindingClauseSyntax, BoundExpression) -> void)?)
+        }
         let bound = IfLetBindingSupport.BindBindingClause(
             binding,
             Diagnostics,
@@ -572,8 +581,20 @@ internal partial class StatementBinder {
             },
             (identifier SyntaxToken, isReadOnly bool, type TypeSymbol) -> {
                 return bindLocalVariable(identifier, isReadOnly, type)
-            }
+            },
+            reportNonNullable
         )
+        if bound.IsValid &&
+            isFinalBeforeGuard &&
+            binding.Initializer is not ParenthesizedExpressionSyntax &&
+            IfLetBindingSupport
+            .HasAmbiguousBooleanContinuation(bound.Initializer, binding.Initializer) {
+            Diagnostics.ReportIfLetGuardSplitsInitializer(
+                binding.Initializer.Location,
+                binding.Identifier.ValueText,
+                bound.Initializer.Type
+            )
+        }
         let declaration = BoundVariableDeclaration(binding, bound.Variable, bound.Initializer)
         return if bound.IsValid {
             (bound.Variable, bound.Underlying, declaration)
@@ -590,23 +611,61 @@ internal partial class StatementBinder {
     /// integrates with the enclosing block's narrowing frame.
     private func BindGuardLetStatement(syntax GuardLetStatementSyntax) BoundStatement {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let pseudoFrame = NarrowingFrame()
-        BindGuardLetStatementInBlock(syntax, statements, pseudoFrame)
+        let savedScope = $scope
+        $scope = BoundScope(savedScope)
+        let pseudoFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
+        try {
+            let _ = BindGuardLetStatementInBlock(syntax, statements, pseudoFrame)
+        } finally {
+            binderCtx.EndNarrowingProof()
+            $scope = savedScope
+        }
         return BoundBlockStatement(syntax, statements.ToImmutable())
     }
 
-    /// ADR-0071 / issue #708: bind `guard let` into the enclosing
-    /// statement builder so the synthesized locals and the narrowings
-    /// extend the enclosing block. Each binding becomes a let-decl
-    /// followed by an `if x == nil { else }` whose else-block is the
-    /// user's exit clause; the existing
-    /// (cref:ApplyEarlyExitNarrowings) path lifts each binding's
-    /// non-nil narrowing into [`persistentFrame`](paramref).
+    private func BindGuardLetElseBranch(
+        elseSyntax StatementSyntax,
+        aliasesForElse IReadOnlyCollection[VariableSymbol]
+    ) BoundStatement? {
+        let savedAliases = CaptureExternalCallableAliases()
+        let savedFrames = List[(Frame NarrowingFrame, Entries List[KeyValuePair[AccessPath, TypeSymbol]])](
+            binderCtx.NarrowedVariables.Count
+        )
+        for var f = 0; f < binderCtx.NarrowedVariables.Count; f++ {
+            let frame = binderCtx.NarrowedVariables[f]
+            savedFrames.Add((frame, List[KeyValuePair[AccessPath, TypeSymbol]](frame)))
+        }
+        let savedShadowOverlay = binderCtx.ShadowOverlay
+        let savedShadowBase = binderCtx.ShadowOverlayBase
+        let savedShadowSuppressed = Dictionary[AccessPath, int32](binderCtx.ShadowSuppressed)
+        try {
+            RestoreExternalCallableAliases(HashSet[VariableSymbol](aliasesForElse))
+            return BindStatement(elseSyntax)
+        } finally {
+            for (frame, entries) in savedFrames {
+                frame.Clear()
+                for kv in entries {
+                    frame[kv.Key] = kv.Value
+                }
+            }
+            binderCtx.ShadowOverlay = savedShadowOverlay
+            binderCtx.ShadowOverlayBase = savedShadowBase
+            binderCtx.ShadowSuppressed.Clear()
+            for kv in savedShadowSuppressed {
+                binderCtx.ShadowSuppressed[kv.Key] = kv.Value
+            }
+            RestoreExternalCallableAliases(savedAliases)
+        }
+    }
+
+    /// ADR-0071 / issue #708, issue #4968 / ADR-0201: bind `guard let` into the enclosing
+    /// statement builder so the synthesized locals, the bindings' narrowings, and any facts
+    /// or pattern variables proven by an optional `&& guard` extend the enclosing block.
     private func BindGuardLetStatementInBlock(
         syntax GuardLetStatementSyntax,
         statements ImmutableArray[BoundStatement].Builder,
         persistentFrame NarrowingFrame
-    ) {
+    ) Dictionary[AccessPath, TypeSymbol]? {
         // The else block must be re-bound once per binding arm because the
         // ControlFlowGraph builder demands that each BoundStatement appear
         // at most once in the tree (it keys block lookup by statement
@@ -615,14 +674,22 @@ internal partial class StatementBinder {
         // (issue #1637), so only the first bind's diagnostics are kept;
         // subsequent re-binds are truncated back to that point.
         var hasBoundElseOnce = false
-        for binding in syntax.Bindings {
+        var allExits = true
+        var lastElse BoundStatement? = nil
+        var lastElseAliases IReadOnlyCollection[VariableSymbol]? = nil
+        let headerBindings = List[(Variable VariableSymbol, Underlying TypeSymbol)]()
+        let savedFrameEntries = List[(Path AccessPath, Previous TypeSymbol?, HadPrevious bool)]()
+        for var i = 0; i < syntax.Bindings.Count; i++ {
+            let binding = syntax.Bindings[i]
             let aliasesAtEntry = externalCallableAliases.ToArray()
-            let (variable, underlying, decl) = BindIfLetBindingClause(binding)
+            let isFinalBeforeGuard = syntax.Guard != nil && i == syntax.Bindings.Count - 1
+            let (variable, underlying, decl) = BindIfLetBindingClause(binding, isFinalBeforeGuard)
             statements.Add(decl)
             // The initializer ran before the else block and the next binding: a getter in it can clear
             // storage that a guarded alias names (ADR-0208 R12).
             InvalidateNarrowingsForAssignedVariables(binding, decl, aliasesAtEntry: aliasesAtEntry)
             UpdateExternalCallableAliases(decl, aliasesAtEntry)
+            let aliasesAfterInitializer = externalCallableAliases.ToArray()
             if variable == nil || underlying == nil {
                 continue
             }
@@ -630,7 +697,7 @@ internal partial class StatementBinder {
             // ControlFlowGraph builder sees a unique BoundStatement
             // instance per arm.
             let diagMark = Diagnostics.Count
-            let armElse = BindStatement(syntax.ElseStatement)
+            let armElse = BindGuardLetElseBranch(syntax.ElseStatement, aliasesAfterInitializer)
             if hasBoundElseOnce {
                 Diagnostics.TruncateTo(diagMark)
             } else {
@@ -638,6 +705,11 @@ internal partial class StatementBinder {
                 if !EndsInUnconditionalExit(armElse) {
                     Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
                 }
+            }
+            lastElse = armElse
+            lastElseAliases = aliasesAfterInitializer
+            if !EndsInUnconditionalExit(armElse) {
+                allExits = false
             }
             // Build `if <var> == nil { else }`.
             let read = BoundVariableExpression(binding, variable)
@@ -654,30 +726,131 @@ internal partial class StatementBinder {
                 Invariant.Required(armElse, "a guard-let else arm has a bound statement", expression: "armElse"),
                 elseStatement: nil
             )
-            // Manually thread the persistent-frame narrowing for this
-            // binding. We *cannot* round-trip through
-            // ApplyEarlyExitNarrowings because that helper consumes
-            // entries from PendingEarlyExitFrames keyed by the if node;
-            // we have the data inline here, so just promote directly.
-            //
-            // Issue #4285 / ADR-0208 R6: lift the guard-let binding into the enclosing
-            // block's frame when the else branch unconditionally exits; any goto out of
-            // the else branch was bound before this lift and joins at its target label.
-            if EndsInUnconditionalExit(armElse) {
-                persistentFrame[variable] = underlying
-            }
+            // Narrow the binding in persistentFrame immediately so later initializers
+            // and an optional `&& guard` observe earlier bindings at their non-null
+            // underlying types (ADR-0201 / #4968).
+            let path = AccessPath.ForVariable(variable)
+            let hadPrevious = persistentFrame.TryGetValue(path, out var previousType)
+            savedFrameEntries.Add((path, previousType, hadPrevious))
+            persistentFrame[path] = underlying
+            headerBindings.Add((variable, underlying))
             statements.Add(ifStmt)
         }
-        // If every arm's binding clause failed (all `continue`d above), the
-        // else block was never bound and its diagnostics -- including
-        // GS0297 -- would silently vanish. Bind it once here, purely for
-        // diagnostics; it isn't wired into any statement since there's no
-        // successful binding left to guard.
+        var guardThenNarrow Dictionary[AccessPath, TypeSymbol]? = nil
+        var guardPatternThen = ImmutableArray[LocalVariableSymbol].Empty
+        if syntax.Guard != nil {
+            let (guardCondition, thenNarrow, _) = BindConditionWithEffects(syntax.Guard)
+            conditionRemovedFacts = nil
+            let callableWhenTrue = lastConditionWhenTrueAliases ?? CaptureExternalCallableAliases()
+            let callableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
+            lastConditionWhenTrueAliases = nil
+            lastConditionWhenFalseAliases = nil
+            guardThenNarrow = thenNarrow
+            guardPatternThen = PatternVariables.Classify(guardCondition).WhenTrue
+            let diagMark = Diagnostics.Count
+            let guardElse = BindGuardLetElseBranch(syntax.ElseStatement, callableWhenFalse)
+            if hasBoundElseOnce {
+                Diagnostics.TruncateTo(diagMark)
+            } else {
+                hasBoundElseOnce = true
+                if !EndsInUnconditionalExit(guardElse) {
+                    Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
+                }
+            }
+            RestoreExternalCallableAliases(callableWhenTrue)
+            lastElse = guardElse
+            lastElseAliases = callableWhenFalse
+            if !EndsInUnconditionalExit(guardElse) {
+                allExits = false
+            }
+            let negatedGuard BoundExpression = if guardCondition.Type == TypeSymbol.Bool && BoundUnaryOperator.Bind(
+                SyntaxKind.BangToken,
+                TypeSymbol.Bool
+            ) is {} notOp {
+                BoundUnaryExpression(nil, notOp, guardCondition)
+            } else {
+                guardCondition
+            }
+            let guardIfStmt = BoundIfStatement(
+                syntax,
+                negatedGuard,
+                Invariant.Required(guardElse, "a guard-let else arm has a bound statement", expression: "guardElse"),
+                elseStatement: nil
+            )
+            statements.Add(guardIfStmt)
+        }
+        // If every arm's binding clause failed (all `continue`d above) and there was no guard,
+        // the else block was never bound and its diagnostics -- including GS0297 -- would
+        // silently vanish. Bind it once here, purely for diagnostics.
         if !hasBoundElseOnce {
             let armElse = BindStatement(syntax.ElseStatement)
             if !EndsInUnconditionalExit(armElse) {
                 Diagnostics.ReportGuardLetElseMustExit(syntax.ElseStatement.Location)
             }
+            allExits = false
+        }
+        if !allExits {
+            for var i = savedFrameEntries.Count - 1; i >= 0; i-- {
+                let entry = savedFrameEntries[i]
+                if entry.HadPrevious && entry.Previous is {} previousType {
+                    persistentFrame[entry.Path] = previousType
+                } else {
+                    persistentFrame.Remove(entry.Path)
+                }
+            }
+            return nil
+        }
+        if !guardPatternThen.IsDefaultOrEmpty &&
+            !binderCtx.FunctionContainsUserGotoOrLabel &&
+            (lastElse == nil || !ContainsUserLabel(lastElse)) {
+            let block = syntax.Parent as BlockStatementSyntax
+            for variable in guardPatternThen {
+                if !$scope.TryDeclareVariable(variable) {
+                    if variable.DeclaringSyntax is SyntaxNode declaring {
+                        Diagnostics.ReportSymbolAlreadyDeclared(declaring.Location, variable.Name)
+                    }
+                    continue
+                }
+                if variable is PatternVariableSymbol patternVariable && block != nil {
+                    patternVariable.AddRegion(block, syntax.Span.End, block.Span.End)
+                }
+            }
+        }
+        let lifts = Dictionary[AccessPath, TypeSymbol]()
+        for (variable, underlying) in headerBindings {
+            lifts[AccessPath.ForVariable(variable)] = underlying
+        }
+        if guardThenNarrow != nil && (lastElse == nil || !ContainsUserLabel(lastElse)) {
+            var elseCollector AssignedRootsCollector? = nil
+            var elseDropAllMemberPaths = false
+            if lastElse != nil {
+                EnsureClosureAssignedNames(syntax.ElseStatement)
+                let candidateCollector = NewCollector(nil, lastElseAliases ?? externalCallableAliases)
+                candidateCollector.Visit(lastElse)
+                if !EndsInUnconditionalExit(lastElse, gotoExits: false) || candidateCollector.HasEscapingJump() {
+                    elseCollector = candidateCollector
+                    elseDropAllMemberPaths = SyntaxMayMutateMemberPaths(syntax.ElseStatement) ||
+                        candidateCollector.MayMutateMemberPaths
+                }
+            }
+            for kv in guardThenNarrow {
+                if elseCollector != nil &&
+                    StatementKillsPath(
+                    elseCollector,
+                    kv.Key,
+                    elseDropAllMemberPaths,
+                    elseCollector.MayMutateReferenceStorage
+                ) {
+                    continue
+                }
+                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
+                lifts[kv.Key] = kv.Value
+            }
+        }
+        return if lifts.Count > 0 {
+            lifts
+        } else {
+            default(Dictionary[AccessPath, TypeSymbol]?)
         }
     }
 

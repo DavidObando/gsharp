@@ -814,7 +814,7 @@ open partial class Parser {
 
     private func ParseGuardLetStatement() GuardLetStatementSyntax {
         let guardKeyword = MatchToken(SyntaxKind.GuardKeyword)
-        let (bindings, guardOperator, guard_) = ParseIfLetHeader(unsupportedGuardForm: "guard let")
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader()
         let elseKeyword = MatchToken(SyntaxKind.ElseKeyword)
         let elseStatement = ParseStatement()
         return GuardLetStatementSyntax(
@@ -1281,11 +1281,11 @@ open partial class Parser {
     }
 
     private func ParseWhileLetStatement() WhileLetStatementSyntax {
-        // ADR-0163 / issue #3352: the binding header reuses ADR-0071's
-        // clause grammar so typing, recovery, and body-brace disambiguation
+        // ADR-0163 / issue #3352 / #4968: the binding header reuses ADR-0071 / ADR-0201's
+        // clause and guard grammar so typing, recovery, and body-brace disambiguation
         // stay identical across if/guard/while let.
         let keyword = MatchToken(SyntaxKind.WhileKeyword)
-        let (bindings, guardOperator, guard_) = ParseIfLetHeader(unsupportedGuardForm: "while let")
+        let (bindings, guardOperator, guard_) = ParseIfLetHeader()
         let body = ParseStatement()
         return WhileLetStatementSyntax(syntaxTree, keyword, bindings, guardOperator, guard_, body)
     }

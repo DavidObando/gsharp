@@ -263,6 +263,100 @@ Run(Box{Builder: System.Text.StringBuilder()})
         Assert.NotNull(result)
     }
 
+    @Theory
+    @InlineData("struct", "this.owner.A = true\n            this.owner.B = true")
+    @InlineData("struct", "this.owner.A = true\n            let x = this.owner.B\n            this.owner.B = !x")
+    @InlineData("struct", "let a = !this.owner.A\n            this.owner.A = a\n            this.owner.B = a")
+    @InlineData("struct", "owner.A = true\n            owner.B = true")
+    @InlineData(
+        "struct",
+        "let a = owner.A\n            let b = owner.B\n            owner.A = !a\n            owner.B = !b"
+    )
+    @InlineData("class", "this.owner.A = true\n            this.owner.B = true")
+    @InlineData("class", "owner.A = true\n            owner.B = true")
+    func Issue5786_AutoPropertyWriteThroughNarrowedNullableField_KeepsNarrowing_AndNarrowsBareFieldReceiver(
+        aggregateKind string,
+        body string
+    ) {
+        let source = `package Probe5786
+class Owner {
+    prop A bool { get; set; }
+    prop B bool { get; set; }
+}
+AGGREGATE Token {
+    private let owner Owner?
+    init(owner Owner) {
+        this.owner = owner
+    }
+    func Restore() {
+        if owner != nil {
+            BODY
+        }
+    }
+}
+let o = Owner()
+Token(o).Restore()
+o.A && o.B`.Replace("AGGREGATE", aggregateKind).Replace("BODY", body)
+        let result = Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
+    @Theory
+    @InlineData("open class Owner {\n    open prop A bool { get; set; }\n    prop B bool { get; set; }\n}")
+    @InlineData(
+        "class Owner {\n    var a bool\n    prop A bool { get -> a set { a = value } }\n    prop B bool { get; set; }\n}"
+    )
+    func Issue5786_OverridableOrComputedPropertySetter_StillInvalidatesMemberPathNarrowing(ownerDecl string) {
+        let source = `package Probe5786Neg
+` + ownerDecl + `
+struct Token {
+    private let owner Owner?
+    init(owner Owner) {
+        this.owner = owner
+    }
+    func Restore() {
+        if owner != nil {
+            this.owner.A = true
+            this.owner.B = true
+        }
+    }
+}
+let o = Owner()
+Token(o).Restore()`
+        let result = Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Contains("B", diagnostic.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Issue5786_NonOverridableAutoPropertyWrite_StillInvalidatesRefParameterNarrowingUnderR12() {
+        let source = `package Probe5786Ref
+class Owner {
+    prop A string? { get; set; }
+    prop B bool { get; set; }
+}
+struct Token {
+    private let owner Owner?
+    init(owner Owner) {
+        this.owner = owner
+    }
+    func Mutate(ref alias string?) int32 {
+        if owner != nil && alias != nil {
+            owner.A = nil
+            owner.B = true
+            return alias.Length
+        }
+        return 0
+    }
+}
+var s string? = "abc"
+Token(Owner()).Mutate(ref s)`
+        let result = Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Contains("Length", diagnostic.Message, StringComparison.Ordinal)
+    }
+
     shared {
         private const Hierarchy string = `
 open class Animal {

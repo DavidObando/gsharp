@@ -310,7 +310,7 @@ internal shared class IfLetBindingSupport {
     /// (or any `a && b` meant as the initializer) becomes once the `&&` starts
     /// the guard, so it gets GS0624's parenthesize hint; any other type is the
     /// ordinary GS0296.
-    private func ReportFinalInitializerBeforeGuard(
+    internal func ReportFinalInitializerBeforeGuard(
         diagnostics DiagnosticBag,
         clause IfLetBindingClauseSyntax,
         initializer BoundExpression
@@ -331,7 +331,7 @@ internal shared class IfLetBindingSupport {
         }
     }
 
-    private func HasAmbiguousBooleanContinuation(expression BoundExpression, initializer ExpressionSyntax) bool {
+    internal func HasAmbiguousBooleanContinuation(expression BoundExpression, initializer ExpressionSyntax) bool {
         // Assignment values, coalescing tails and ternary false arms retain
         // the parser's logical boundary. Closed nested expressions do not.
         var hasContinuation = false

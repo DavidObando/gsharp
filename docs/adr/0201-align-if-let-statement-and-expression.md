@@ -224,9 +224,10 @@ non-null from the other branch alone.
 
 ### Not changed by this ADR
 
-- **`while let` / `guard let`.** They share the header parser (so they get the
-  initializer rule and GS0625/GS0626) but not the guard or the evaluation-order
-  change; see #4968.
+- **`while let` / `guard let`.** Originally kept without a guard in #4961;
+  amended by [#4968](https://github.com/DavidObando/gsharp/issues/4968) so
+  both forms also accept `&& guard` and `while let` shares left-to-right
+  short-circuiting bindings, retiring GS0625.
 
 ## Compatibility
 

@@ -743,6 +743,28 @@ open class IlVerifierTests {
         }
     }
 
+    @Fact
+    func FilterInFinally_AcceptsValidFilter_AndRejectsInvalidTailAfterFilterStart() {
+        let dir = Path.Combine(AppContext.BaseDirectory, "filter-tail-${Guid.NewGuid():N}")
+        Directory.CreateDirectory(dir)
+        try {
+            let validDll = CompileFilterInFinally(dir, invalidTail: false)
+            let validReport = StaticInterfaceReport(validDll)
+            Assert.True(IlVerifyFalsePositives.OnlyKnown(validDll, validReport, allowFilterInFinally: true))
+            IlVerifier.Verify(validDll)
+
+            let invalidDir = Path.Combine(dir, "invalid")
+            Directory.CreateDirectory(invalidDir)
+            let invalidDll = CompileFilterInFinally(invalidDir, invalidTail: true)
+            let invalidReport = StaticInterfaceReport(invalidDll)
+            Assert.False(IlVerifyFalsePositives.OnlyKnown(invalidDll, invalidReport, allowFilterInFinally: true))
+            let error = Assert.Throws[XunitException](() -> IlVerifier.Verify(invalidDll))
+            Assert.Contains("Stack underflow", error.Message, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(dir, recursive: true)
+        }
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

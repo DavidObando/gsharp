@@ -365,23 +365,126 @@ Run(true, false, "x", "y")`)
     }
 
     @Fact
-    func WhileLetAndGuardLet_Guard_ReportsGS0625_NotGS0157() {
-        let result = EmittedOracle.Evaluate(`func Run(value string?) int32 {
+    func WhileLetAndGuardLet_Guard_BindsAndRunsWithoutDiagnostics() {
+        let result = EmittedOracle.Evaluate(`import System
+class Box {
+    let Value string?
+    init(v string?) { Value = v }
+}
+func Run(flag bool, value string?, otherValue string?, b Box) int32 {
+    var other string? = otherValue
+    if other == nil {
+        return -2
+    }
+    if flag
+        guard let standalone = value && standalone.Length > 0 else {
+            return -1
+        }
     while let text = value && text.Length > 0 {
         break
     }
-    guard let other = value && other.Length > 0 else {
+    guard let v = value && other.Length > 0 && b.Value != nil else {
+        other = nil
+        Console.WriteLine("missing")
+        return 0
+    }
+    return v.Length + b.Value.Length
+}
+Run(true, "x", "ok", Box("abcd"))`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(5, result.Value)
+
+        let standaloneEscape = EmittedOracle.Evaluate(`func Run(flag bool, maybe string?, obj object) int32 {
+    if flag
+        guard let a = maybe && obj is string text else {
+            return 0
+        }
+    return text.Length
+}
+Run(false, "a", "b")`)
+        Assert.Contains(standaloneEscape.Diagnostics, (d Diagnostic) -> d.Id == "GS0125" || d.Id == "GS0532")
+    }
+
+    @Fact
+    func Issue4968_WhileLetAndGuardLet_ShortCircuit_Narrowings_PatternVariables_AndChannelGuard() {
+        let result = EmittedOracle.Evaluate(`package P4968
+func Second(s string, ref calls int32) int32? {
+    calls = calls + 1
+    return s.Length
+}
+func CheckGuard(n int32, ref calls int32) bool {
+    calls = calls + 1
+    return n > 1
+}
+func RunWhile(items []string?, extra string?, obj object, ref secondCalls int32, ref guardCalls int32) int32 {
+    var idx = 0
+    var sum = 0
+    while let a = items[idx], let n = Second(a, ref secondCalls) && CheckGuard(n, ref guardCalls) && extra != nil && obj is string tag {
+        sum = sum + a.Length + n + extra.Length + tag.Length
+        idx = idx + 1
+    }
+    return sum
+}
+func RunGuard(s string?, extra string?, obj object, ref secondCalls int32, ref guardCalls int32) int32 {
+    guard let a = s, let n = Second(a, ref secondCalls) && CheckGuard(n, ref guardCalls) && extra != nil && obj is string tag else {
+        return -1
+    }
+    return a.Length + n + extra.Length + tag.Length
+}
+func RunChannelGuard() int32 {
+    let ch = chan[int32](3)
+    ch <- 2
+    ch <- 5
+    ch <- 0
+    ch.Close()
+    var total = 0
+    while let v = <-ch && v > 0 {
+        total = total + v
+    }
+    return total * 10 + ch.Length()
+}
+var secondCalls = 0
+var guardCalls = 0
+let w = RunWhile([]string?{"ab", nil, "cde"}, "x", "yz", ref secondCalls, ref guardCalls)
+let gNil = RunGuard(nil, "x", "yz", ref secondCalls, ref guardCalls)
+let gFalse = RunGuard("a", "x", "yz", ref secondCalls, ref guardCalls)
+let gTrue = RunGuard("abcd", "x", "yz", ref secondCalls, ref guardCalls)
+let c = RunChannelGuard()
+"${w},${gNil},${gFalse},${gTrue},${secondCalls},${guardCalls},${c}"`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("7,-1,-1,11,3,3,70", result.Value)
+    }
+
+    @Fact
+    func Issue4968_WhileLetAndGuardLet_GuardDiagnostics_ReportGS0155AndGS0624() {
+        let nonBoolGuard = EmittedOracle.Evaluate(`func Run(x string?) int32 {
+    while let v = x && v.Length {
+        break
+    }
+    guard let w = x && w.Length else {
         return 0
     }
     return 1
 }
 Run("x")`)
-        let ids = Ids(result)
+        Assert.Equal([]string{"GS0155@2:24", "GS0155@5:24"}, Ids(nonBoolGuard))
+
+        let splitInit = EmittedOracle.Evaluate(`func Run(a bool, b bool, x string?, y string?) int32 {
+    while let p = a && b ? x : y {
+        break
+    }
+    guard let q = a && b ? x : y else {
+        return 0
+    }
+    return 1
+}
+Run(true, true, "x", "y")`)
+        let splitIds = Ids(splitInit)
         Assert.Equal(
-            []string{"GS0625@2:28", "GS0625@5:29"},
-            ids.Where((id string) -> id.StartsWith("GS0625")).ToArray()
+            []string{"GS0624@2:19", "GS0624@5:19"},
+            splitIds.Where((id string) -> id.StartsWith("GS0624")).ToArray()
         )
-        Assert.DoesNotContain(ids, (id string) -> id.StartsWith("GS0157"))
+        Assert.DoesNotContain(splitIds, (id string) -> id.StartsWith("GS0157") || id.StartsWith("GS0296"))
     }
 
     @Fact
@@ -429,6 +532,21 @@ Run(func() { }, "a")`)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
         Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
+
+        let guardInitAlias = EmittedOracle.Evaluate(`func Run(callback (() -> void), maybe string?) int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = callback
+    guard let m = func() string? { action = clear; return maybe }() else {
+        text = "safe"
+        action()
+        return text.Length
+    }
+    return m.Length
+}
+Run(func() { }, nil)`)
+        let guardDiag = Assert.Single(guardInitAlias.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", guardDiag.Location.Text!!.ToString(guardDiag.Location.Span))
     }
 
     shared {
