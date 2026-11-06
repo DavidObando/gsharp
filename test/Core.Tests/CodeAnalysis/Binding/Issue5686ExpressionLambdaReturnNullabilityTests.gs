@@ -82,6 +82,7 @@ func MaybeBox() Box? -> nil
 func MaybeThing() IThing? -> nil
 func MaybeInt() int32? -> nil
 func MaybePair() (string, int32)? -> nil
+func MaybePairElement() (string?, int32) -> (nil, 0)
 func TakeFunc(f () -> string) string -> f()
 func TakeClrFunc(f Func[string]) string -> f()
 func TakeNamedDelegate(f StringFunc) string -> f()
@@ -325,6 +326,16 @@ func Run(token Token) {
                 `func Run() Task[string] -> StrictSink5686.PickAsync(async () -> Maybe(), 1)`,
                 "Maybe()"
             )
+            yield Row(
+                "mixed-tuple-literal-delegate-and-expression-tree-overload",
+                `func Run() (string, int32) -> StrictSink5686.PickTuple(() -> (Maybe(), 0), 1)`,
+                "(Maybe(), 0)"
+            )
+            yield Row(
+                "mixed-tuple-value-delegate-and-expression-tree-overload",
+                `func Run() (string, int32) -> StrictSink5686.PickTuple(() -> MaybePairElement(), 1)`,
+                "MaybePairElement()"
+            )
         }
 
         func AcceptedRows() sequence[[]object] {
@@ -379,7 +390,8 @@ func Run() string? {
     let r = TakeLocalExpression((x) -> Box().MaybeName)
     let s = StrictSink5686.Pick(() -> Box().MaybeName, true)
     let t = StrictSink5686.PickArg((x) -> Box().MaybeName, true)
-    return e.Compile()() ?? p ?? q ?? r ?? s ?? t
+    let u = StrictSink5686.PickExpressionOrInt(() -> Box().MaybeName, 1)
+    return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u
 }`)
         }
 
@@ -418,7 +430,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v9.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v11.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -445,6 +457,12 @@ namespace Lib5686
         public static IComparable? PickComparable(Expression<Func<IComparable>> f, bool b) => f.Compile()();
         public static Task<string> PickAsync(Func<Task<string>> f, int n) => f();
         public static Task<string>? PickAsync(Expression<Func<Task<string>>> f, bool b) => f.Compile()();
+        public static (string, int) PickTuple(Func<(string, int)> f, int n) => f();
+        public static (string, int) PickTuple(Expression<Func<(string, int)>> f, bool b) => f.Compile()();
+        public static (Exception, int) PickExceptionTuple(Func<(Exception, int)> f, int n) => f();
+        public static (Exception, int) PickExceptionTuple(Expression<Func<(Exception, int)>> f, bool b) => f.Compile()();
+        public static string? PickExpressionOrInt(Expression<Func<string>> f, int n) => f.Compile()();
+        public static string? PickExpressionOrInt(int f, bool b) => null;
         public static string PickArg(Func<int, string> f, int n) => f(n);
         public static string? PickArg(Expression<Func<int, string>> f, bool b) => f.Compile()(1);
         public static string? TakeNullable(Func<string?> f) => f();

@@ -1562,6 +1562,8 @@ internal class LambdaBinder {
                 boundBody = converted
                 returnType = if boundBody is BoundErrorExpression {
                     TypeSymbol.Error
+                } else if isExpressionTreeTarget {
+                    returnType
                 } else {
                     placeholderReturnType
                 }
@@ -2570,6 +2572,11 @@ internal class LambdaBinder {
         let trailingLocation = (syntax.Body as BlockExpressionSyntax)?.Expression?.Location ?? syntax.Body.Location
         let trailingConverted = if trailing.Type == returnType {
             trailing
+        } else if trailing.Type is TupleTypeSymbol &&
+            returnType is TupleTypeSymbol &&
+            ConversionClassifier
+            .HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {
+            conversions.BindLambdaReturnTupleConversion(trailingLocation, trailing, returnType)
         } else {
             conversions.BindConversion(trailingLocation, trailing, returnType)
         }
@@ -4304,9 +4311,18 @@ internal class LambdaBinder {
                 var allCandidatesConvert = targetReturn != nil
                 if targetReturn != nil {
                     for candidate in candidates {
-                        if candidate != TypeSymbol.Error && !Conversion.Classify(candidate, targetReturn)
-                            .IsImplicit &&
-                            !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(candidate, targetReturn) {
+                        if candidate != TypeSymbol.Error &&
+                            (
+                            ConversionClassifier.HasReferenceNullabilityReturnMismatch(candidate, targetReturn) ||
+                                (
+                                !Conversion.Classify(candidate, targetReturn)
+                                    .IsImplicit &&
+                                    !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                                    candidate,
+                                    targetReturn
+                                )
+                            )
+                        ) {
                             allCandidatesConvert = false
                             break
                         }

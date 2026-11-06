@@ -323,6 +323,11 @@ namespace Demo
         public int Use(Func<T> read) => read() == null ? 1 : 2;
         public static T ReadStatic(Func<T> read) => read();
     }
+    public class Holder<T>
+    {
+        public Holder(Box<T> box) { Box = box; }
+        public Box<T> Box;
+    }
     public static class P
     {
         private static Dictionary<string, int>? cache;
@@ -342,6 +347,9 @@ namespace Demo
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
         static int ReadCtor() => new Lazy<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Value.Count;
         static int ReadStaticOnConstructedType() => Box<Dictionary<string, int>>.ReadStatic(() => Volatile.Read(ref full!)).Count;
+        static int UseVarNew() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)); return b.Use(() => Volatile.Read(ref full!)); }
+        static int UseConditional(Box<Dictionary<string, int>>? b) => b?.Use(() => Volatile.Read(ref full!)) ?? 0;
+        static int UseHolderField(Holder<Dictionary<string, int>> h) => h.Box.Use(() => Volatile.Read(ref full!));
         static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
         static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
         static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
@@ -352,7 +360,7 @@ namespace Demo
         static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
         public static string Run() =>
             Reassign() + " " + Use() + " " + UseChained() + " " + UseChainedExplicit() + " " + UseBlock() + " " + ReadInferred() + " " + ReadExplicit() + " " + ReadWithInputCount() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
-        static string ReadWithInputCount() => ReadFixedReturnWithInferredInput() + " " + ReadCtor() + " " + ReadStaticOnConstructedType();
+        static string ReadWithInputCount() => ReadFixedReturnWithInferredInput() + " " + ReadCtor() + " " + ReadStaticOnConstructedType() + " " + UseVarNew() + " " + UseConditional(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))) + " " + UseHolderField(new Holder<Dictionary<string, int>>(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))));
     }
 }`)
         let exprTreePrinted = Translate(`
@@ -382,6 +390,8 @@ namespace Demo
         Assert.Contains("ReadWithInput(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("Lazy[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Value.Count", printed)
         Assert.Contains("Box[Dictionary[string, int32]].ReadStatic(() -> Volatile.Read(&full)!!).Count", printed)
+        Assert.Contains("b?.Use(() -> Volatile.Read(&full)!!) ?? 0", printed)
+        Assert.Contains("h.Box.Use(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("var (d, n) = (Volatile.Read(&cache), 0)\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("var d = Id(Volatile.Read(&cache))\n        d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("return Volatile.Read(&full)!!\n", printed)
@@ -391,7 +401,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 1 2 2 2 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

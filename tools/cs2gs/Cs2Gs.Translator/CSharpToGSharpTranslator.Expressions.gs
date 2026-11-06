@@ -3558,11 +3558,19 @@ partial class CSharpToGSharpTranslator {
                     }
                 }: memberAccess.Expression
                 case ArgumentSyntax{
+                    Parent: ArgumentListSyntax{
+                        Parent: InvocationExpressionSyntax{Expression: MemberBindingExpressionSyntax memberBinding}
+                    }
+                }: this.GetConditionalBindingReceiver(memberBinding)
+                case ArgumentSyntax{
                     Parent: ArgumentListSyntax{Parent: BaseObjectCreationExpressionSyntax creation}
                 }: creation
                 case ArgumentSyntax{
                     Parent: BracketedArgumentListSyntax{Parent: ElementAccessExpressionSyntax elementAccess}
                 }: elementAccess.Expression
+                case ArgumentSyntax{
+                    Parent: BracketedArgumentListSyntax{Parent: ElementBindingExpressionSyntax elementBinding}
+                }: this.GetConditionalBindingReceiver(elementBinding)
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
             return this.ReceiverTypeArgumentsAreDeclared(receiver)
@@ -3574,6 +3582,9 @@ partial class CSharpToGSharpTranslator {
             let unwrapped = Unparenthesize(receiver)
             if unwrapped == nil {
                 return false
+            }
+            if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
+                return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull)
             }
             if unwrapped is BaseObjectCreationExpressionSyntax creation {
                 let createdType = this.context.GetTypeInfo(creation).Type
@@ -3599,13 +3610,74 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Type) {
-                    return invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
-                        this.ReceiverTypeArgumentsAreDeclared(memberAccess.Expression)
+                    let invocationReceiver = switch invocation.Expression {
+                        case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                        case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                            memberBinding
+                        )
+                        default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver)
                 }
                 return true
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
-            return symbol != nil && !(symbol is IMethodSymbol) && this.SlotTypeIsDeclared(symbol, unwrapped)
+            return switch symbol {
+                case namedType is INamedTypeSymbol: !ContainsTypeParameter(namedType)
+                case local is ILocalSymbol: this.LocalReceiverTypeArgumentsAreDeclared(local)
+                case field is IFieldSymbol: this.MemberReceiverTypeArgumentsAreDeclared(
+                    field.OriginalDefinition.Type,
+                    field.Type,
+                    unwrapped
+                )
+                case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
+                    property.OriginalDefinition.Type,
+                    property.Type,
+                    unwrapped
+                )
+                case parameter is IParameterSymbol: this.SlotTypeIsDeclared(parameter, unwrapped)
+                default: false
+            }
+        }
+
+        private func LocalReceiverTypeArgumentsAreDeclared(local ILocalSymbol) bool {
+            if ContainsTypeParameter(local.Type) {
+                return false
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is not VariableDeclaratorSyntax declarator {
+                return !IsImplicitlyTypedLocal(local)
+            }
+            if !IsImplicitlyTypedLocal(local) &&
+                (this.state.EmittedLocalTypeClauses.Contains(local) || declarator.Initializer?.Value == nil) {
+                return true
+            }
+            return declarator.Initializer?.Value is {} initializer && this.ReceiverTypeArgumentsAreDeclared(initializer)
+        }
+
+        private func MemberReceiverTypeArgumentsAreDeclared(
+            declaredType ITypeSymbol?,
+            constructedType ITypeSymbol?,
+            memberAccessSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            if ContainsTypeParameter(constructedType) {
+                return false
+            }
+            if !ContainsTypeParameter(declaredType) {
+                return true
+            }
+            let containingReceiver = switch memberAccessSyntax {
+                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(memberBinding)
+                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                case elementBinding is ElementBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                    elementBinding
+                )
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver)
         }
 
         private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {

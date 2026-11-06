@@ -3999,25 +3999,26 @@ internal class ConversionClassifier {
             sourceReturn = unwrappedSource
             targetReturn = unwrappedTarget
         }
-        if !(sourceReturn is NullableTypeSymbol sourceNullable) ||
-            targetReturn == TypeSymbol.Void ||
-            targetReturn == TypeSymbol.Error ||
-            TypeSymbol.ContainsTypeParameter(targetReturn) ||
-            targetReturn is NullableTypeSymbol ||
-            targetReturn is PlatformTypeSymbol ||
-            !(
-            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceNullable.UnderlyingType, targetReturn) ||
-                Conversion
-                .Classify(sourceNullable.UnderlyingType, targetReturn).IsImplicit
-        ) ||
-            Conversion
-            .Classify(sourceNullable, targetReturn)
-            .IsImplicit ||
-            HasUserDefinedImplicitConversionForTypes(sourceNullable, targetReturn) {
+        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn) {
             return false
         }
         lambdaSyntax = syntax
         return true
+    }
+
+    internal func BindLambdaReturnTupleConversion(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        targetType TypeSymbol
+    ) BoundExpression {
+        if expression is BoundTupleLiteralExpression &&
+            expression.Type is TupleTypeSymbol sourceTuple &&
+            targetType is TupleTypeSymbol targetTuple &&
+            sourceTuple.Arity == targetTuple.Arity {
+            return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit: false)
+        }
+        Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, targetType)
+        return BoundErrorExpression(expression.Syntax)
     }
 
     private func ContainsTupleFunctionLiteral(tuple BoundTupleLiteralExpression) bool {
@@ -5109,6 +5110,44 @@ internal class ConversionClassifier {
             } else {
                 expression
             }
+        }
+
+        func HasReferenceNullabilityReturnMismatch(sourceReturn TypeSymbol, targetReturn TypeSymbol) bool {
+            if sourceReturn == TypeSymbol.Void ||
+                sourceReturn == TypeSymbol.Error ||
+                targetReturn == TypeSymbol.Void ||
+                targetReturn == TypeSymbol.Error ||
+                TypeSymbol.ContainsTypeParameter(targetReturn) || object.ReferenceEquals(sourceReturn, targetReturn) ||
+                targetReturn is NullableTypeSymbol ||
+                targetReturn is PlatformTypeSymbol {
+                return false
+            }
+            if sourceReturn is TupleTypeSymbol sourceTuple &&
+                targetReturn is TupleTypeSymbol targetTuple &&
+                sourceTuple.Arity == targetTuple
+                .Arity {
+                for var i = 0; i < sourceTuple.Arity; i++ {
+                    if HasReferenceNullabilityReturnMismatch(sourceTuple.ElementTypes[i], targetTuple.ElementTypes[i]) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if Conversion.Classify(sourceReturn, targetReturn)
+                .IsImplicit ||
+                HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn) {
+                return false
+            }
+            if sourceReturn == TypeSymbol.Null {
+                return Conversion.Classify(TypeSymbol.Null, NullableTypeSymbol.Get(targetReturn)).IsImplicit
+            }
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceReturn, targetReturn) {
+                return true
+            }
+            if sourceReturn is NullableTypeSymbol sourceNullable {
+                return Conversion.Classify(sourceNullable.UnderlyingType, targetReturn).IsImplicit
+            }
+            return false
         }
 
         /// Checks the symbolic and CLR implicit conversion operators for a type pair.
