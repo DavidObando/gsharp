@@ -348,6 +348,12 @@ namespace Demo
             public int Use(Func<T> read) => read() == null ? 1 : 2;
         }
     }
+    public struct Token
+    {
+        public Action? Mutate;
+        public Token(Action mutate) { Mutate = mutate; }
+        public static implicit operator int(Token t) { t.Mutate?.Invoke(); return 1; }
+    }
     public class Closed : Box<Dictionary<string, int>>
     {
         private Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
@@ -373,9 +379,10 @@ namespace Demo
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
         static Pair<Dictionary<string, int>, U> MakePair<U>(U second) => new Pair<Dictionary<string, int>, U>(new Dictionary<string, int> { ["a"] = 1 }, second);
         static Pair<int, U> MakeIntPair<U>(U second) => new Pair<int, U>(1, second);
+        static (T, int) MakeTuple<T>(T value) => (value, 0);
         static Outer<T>.Inner WrapInner<T>(T value) => new Outer<T>.Inner();
         static bool Reassign() { var read = () => Volatile.Read(ref cache!); read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
-        static int ReassignFixedVar() { var read = () => new Dictionary<string, int>(); read = () => Volatile.Read(ref full!); return read().Count; }
+        static int ReassignFixedVar() { var read = () => { Volatile.Read(ref cache!); return new Dictionary<string, int>(); }; read = () => Volatile.Read(ref full!); return read().Count; }
         static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
         static int UseChained() => Wrap(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!));
         static int UseChainedExplicit() => Wrap<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!));
@@ -389,8 +396,9 @@ namespace Demo
         static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
         private static int propCalls;
         private static (string?, int) NextPair => ("a", ++propCalls);
-        static int UseExplicitNullableTuple((string?, int) explicitPair) { propCalls = 0; Func<(string, int)> readExplicit = () => explicitPair; Func<(string, int)> readProp = () => NextPair; var fromProp = readProp(); return readExplicit().Item1.Length + fromProp.Item1.Length + fromProp.Item2 + propCalls; }
-        static int UseTupleLocalResult() { var order = 0; int Tick() => ++order; (Dictionary<string, int>, int) Step((Dictionary<string, int>, int) p) { order = order * 10 + 2; return p; } var pair = (Volatile.Read(ref full!), 0); var nestedPair = ((Volatile.Read(ref full!), 0), 0); var namedPair = (First: (Volatile.Read(ref full!), 0), Second: 0); Func<(Dictionary<string, int>, int)> read = () => pair; Func<(Dictionary<string, int>, int)> readNested = () => nestedPair.Item1; Func<(Dictionary<string, int>, int)> readNamed = () => namedPair.First; Func<(Dictionary<string, int>, int)> readCall = () => Id(pair); Func<(int, (Dictionary<string, int>, int))> readOrder = () => (Tick(), Step(pair)); Func<bool, (Dictionary<string, int>, int)> readBranch = flag => flag ? (new Dictionary<string, int> { ["a"] = 1 }, 0) : Step(pair); Func<(Dictionary<string, int>, int)> readLiteral = () => (Volatile.Read(ref full!), 0); var ordered = readOrder(); var branched = readBranch(true); return read().Item1.Count + readNested().Item1.Count + readNamed().Item1.Count + UseExplicitNullableTuple(("a", 1)) + readCall().Item1.Count + readLiteral().Item1.Count + ordered.Item2.Item1.Count + branched.Item1.Count + order; }
+        static Func<(string, int)?> MakeNullableTuple((string?, int)? maybePair) => () => maybePair;
+        static int UseExplicitNullableTuple((string?, int) explicitPair) { propCalls = 0; Func<(string, int)> readExplicit = () => explicitPair; Func<(string, int)> readProp = () => NextPair; var fromProp = readProp(); var absent = MakeNullableTuple(null)(); var present = MakeNullableTuple(("b", 2))(); (Token, string?) mutatingPair = default; mutatingPair = (new Token(() => mutatingPair = (default, null)), "ok"); Func<(int, string)> readMutating = () => mutatingPair; var mutated = readMutating(); return readExplicit().Item1.Length + fromProp.Item1.Length + fromProp.Item2 + propCalls + (absent == null ? 1 : 0) + present.Value.Item1.Length + mutated.Item1 + mutated.Item2.Length; }
+        static int UseTupleLocalResult() { var order = 0; int Tick() => ++order; (Dictionary<string, int>, int) Step((Dictionary<string, int>, int) p) { order = order * 10 + 2; return p; } var pair = (Volatile.Read(ref full!), 0); var nestedPair = ((Volatile.Read(ref full!), 0), 0); var namedPair = (First: (Volatile.Read(ref full!), 0), Second: 0); Func<(Dictionary<string, int>, int)> read = () => pair; Func<(Dictionary<string, int>, int)> readNested = () => nestedPair.Item1; Func<(Dictionary<string, int>, int)> readNamed = () => namedPair.First; Func<(Dictionary<string, int>, int)> readCall = () => Id(pair); Func<(Dictionary<string, int>, int)> readMakeTuple = () => MakeTuple(Volatile.Read(ref full!)); Func<(int, (Dictionary<string, int>, int))> readOrder = () => (Tick(), Step(pair)); Func<bool, (Dictionary<string, int>, int)> readBranch = flag => flag ? (new Dictionary<string, int> { ["a"] = 1 }, 0) : Step(pair); Func<(Dictionary<string, int>, int)> readLiteral = () => (Volatile.Read(ref full!), 0); var ordered = readOrder(); var branched = readBranch(true); return read().Item1.Count + readNested().Item1.Count + readNamed().Item1.Count + UseExplicitNullableTuple(("a", 1)) + readCall().Item1.Count + readMakeTuple().Item1.Count + readLiteral().Item1.Count + ordered.Item2.Item1.Count + branched.Item1.Count + order; }
         static int UseInheritedOnClosedBase() => new Closed(Volatile.Read(ref full!)).UseInherited();
         static bool InferredCollectionAdd() => new Bag { () => Volatile.Read(ref cache!) }.LastWasNull;
         static int DeclaredCollectionAdd() => new List<Func<Dictionary<string, int>>> { () => Volatile.Read(ref full!) }[0]().Count;
@@ -448,11 +456,13 @@ namespace Demo
         Assert.Contains("ReadWithInput(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("ReadParams(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("UseTuple((() -> Volatile.Read(&full)!!, 0))", printed)
-        Assert.Contains("() -> (pair.Item1!!, pair.Item2)", printed)
-        Assert.Contains("() -> (explicitPair.Item1!!, explicitPair.Item2)", printed)
-        Assert.Contains("let tupleValue = NextPair", printed)
-        Assert.Contains("let tupleValue_2 = nestedPair.Item1", printed)
-        Assert.Contains("let tupleValue_3 = namedPair.Item1", printed)
+        Assert.Contains("let tupleValue = maybePair", printed)
+        Assert.Contains("if tupleValue != nil", printed)
+        Assert.Contains("let tupleValue_2 = explicitPair", printed)
+        Assert.Contains("let tupleValue_3 = NextPair", printed)
+        Assert.Contains("let tupleValue_4 = mutatingPair", printed)
+        Assert.Contains("(tupleValue_4.Item1, tupleValue_4.Item2!!)", printed)
+        Assert.Contains("MakeTuple(Volatile.Read(&full))", printed)
         Assert.Contains("(tupleValue.Item1!!, tupleValue.Item2)", printed)
         Assert.Contains("() -> (Volatile.Read(&full)!!, 0)", printed)
         Assert.Contains("MakePair(Volatile.Read(&cache)).Use(() -> Volatile.Read(&full)!!)", printed)
@@ -501,7 +511,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 23 3 3 1 2 True 1 1 1 2 2 2 2 5 3 2 True 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 29 3 3 1 2 True 1 1 1 2 2 2 2 5 3 2 True 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer
