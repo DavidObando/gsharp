@@ -7285,8 +7285,21 @@ internal partial class StatementBinder {
                 )
                 refKinds.Add(RefKind.None)
             }
-            let receiverScoped = (receiverOffset == 0 || !RefCapabilities.IsScoped(parameters[0])) &&
-                HasFunctionLocalEscapeScope(receiver)
+            let receiverScoped = if receiverOffset == 0 {
+                HasFunctionLocalEscapeScope(receiver) ||
+                    (
+                    RefCapabilities.HasUnscopedRef(method) && !Binder.IsReferenceTypeForConstraint(receiver.Type) &&
+                        (
+                        HasFunctionLocalRefScope(receiver) || RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
+                            receiver,
+                            RefCapabilities.IsReadOnlyMethod(method)
+                        )
+                    )
+                )
+            } else {
+                !RefCapabilities.IsScoped(parameters[0]) &&
+                    (HasFunctionLocalEscapeScope(receiver) || HasFunctionLocalEscapeScope(arguments[0]))
+            }
             for var i = 0; i < identifiers.Count; i++ {
                 // Issue #3705 (family 2): the extension-`Deconstruct` arm used a
                 // bare `FromClrType`, so a synthesised deconstruction local took

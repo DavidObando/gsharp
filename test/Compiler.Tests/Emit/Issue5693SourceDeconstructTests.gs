@@ -5,6 +5,8 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
+import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Collections.Generic
 import System.Diagnostics
@@ -87,6 +89,114 @@ open class Issue5693SourceDeconstructTests {
         let names = Rows().Select((row[]object) -> cast[string](row[0])).ToArray()
         Assert.NotEmpty(names)
         Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count())
+    }
+
+    @Fact
+    func ImportedUnscopedRefDeconstruct_EnforcesLocalAndDefensiveCopyStorageScope_AndRespectsReadOnlyMethod() {
+        let tempDir = Path.Combine(AppContext.BaseDirectory, "issue5693-imported-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir)
+        try {
+            let contractsPath = Path.Combine(tempDir, "ImportedDeconstructContracts.dll")
+            let csharpSource = `using System;
+using System.Diagnostics.CodeAnalysis;
+
+namespace ImportedDeconstructContracts;
+
+public struct MutableHolder
+{
+    public int Value;
+
+    [UnscopedRef]
+    public void Deconstruct(out Span<int> a, out int b)
+    {
+        a = new Span<int>(ref Value);
+        b = Value;
+    }
+}
+
+public struct ReadOnlyHolder
+{
+    public int Value;
+
+    [UnscopedRef]
+    public readonly void Deconstruct(out ReadOnlySpan<int> a, out int b)
+    {
+        a = new ReadOnlySpan<int>(in Value);
+        b = Value;
+    }
+}
+`
+            let compilation = CSharpCompilation.Create(
+                "ImportedDeconstructContracts",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(csharpSource, CSharpParseOptions(LanguageVersion.CSharp13))},
+                TrustedPlatformAssemblies().Select((p string) -> MetadataReference.CreateFromFile(p)),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let emitResult = compilation.Emit(contractsPath)
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+
+            let srcPath = Path.Combine(tempDir, "Consumer.gs")
+            let outPath = Path.Combine(tempDir, "Consumer.dll")
+            let gsharpSource = `import System
+import ImportedDeconstructContracts
+func BadLocal() Span[int32] {
+    var h = MutableHolder{Value: 1}
+    let (s, _) = h
+    return s
+}
+func BadInNonReadOnly(in h MutableHolder) Span[int32] {
+    let (s, _) = h
+    return s
+}
+func GoodInReadOnly(in h ReadOnlyHolder) ReadOnlySpan[int32] {
+    let (s, _) = h
+    return s
+}
+func GoodRefMutable(ref h MutableHolder) Span[int32] {
+    let (s, _) = h
+    return s
+}
+Console.WriteLine(0)`
+            File.WriteAllText(srcPath, gsharpSource)
+            let args = List[string]{
+                "/out:" + outPath,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/nowarn:GS9100",
+                "/reference:" + contractsPath
+            }
+            for reference in TrustedPlatformAssemblies() {
+                args.Add("/reference:" + reference)
+            }
+            args.Add(srcPath)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            try {
+                Program.Main(args.ToArray())
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let log = compileOut.ToString() + compileErr.ToString()
+            let actualDiagnostics = string.Join(
+                " ",
+                Regex
+                    .Matches(log, `\((\d+),(\d+),\d+,\d+\): (?:error|warning) (GS\d+)`)
+                    .Select((m Match) -> m.Groups[3].Value + "@" + m.Groups[1].Value + ":" + m.Groups[2].Value)
+                    .Where((d string) -> !d.StartsWith("GS9100", StringComparison.Ordinal))
+            )
+            Assert.True(
+                "GS0219@6:12 GS0219@10:12" == actualDiagnostics,
+                "Expected [GS0219@6:12 GS0219@10:12] but found [${actualDiagnostics}]. Log:\n${log}"
+            )
+            Assert.False(File.Exists(outPath), "Consumer must not compile. Log:\n${log}")
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
     }
 
     shared {
