@@ -1029,7 +1029,30 @@ partial class BoundScope {
                 }
             }
         }
-        return TryLookupQualifiedSourceType($import.Target, preferredArity, out type)
+        if TryLookupQualifiedSourceType($import.Target, preferredArity, out type) {
+            return true
+        }
+        // ADR-0115 §B.1: when cs2gs hoists a secondary C# namespace into a
+        // file's dominant G# package, an `import Alias = OriginalNs.Type`
+        // names a qualifier package that does not exist in the G# compilation.
+        // Fall back to the target's final simple name in the top-level type
+        // table when neither the target nor its qualifier prefix names a source
+        // package or CLR namespace.
+        let lastDot = $import.Target.LastIndexOf('.')
+        if lastDot > 0 {
+            let targetPrefix = $import.Target.Substring(0, lastDot)
+            let aliasSimpleName = $import.Target.Substring(lastDot + 1)
+            if !string.Equals(aliasSimpleName, $import.Name, StringComparison.Ordinal) &&
+                !TryMatchSourcePackagePrefix($import.Target, out _) &&
+                !TryMatchSourcePackagePrefix(targetPrefix, out _) &&
+                !(References?.ContainsNamespace($import.Target) ?? false) &&
+                !(References?.ContainsNamespace(targetPrefix) ?? false) &&
+                TryLookupTypeAlias(aliasSimpleName, preferredArity, out type) &&
+                TypeContainingType(type) == nil {
+                return true
+            }
+        }
+        return false
     }
 
     /// Resolves an explicit import alias whose target is a same-compilation
