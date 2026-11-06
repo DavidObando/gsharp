@@ -1738,7 +1738,7 @@ internal partial class StatementBinder {
                 filterWrites != nil &&
                     (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
             ) ||
-                StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayMutateReferenceStorage)
+                StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayWriteStorageOf(key))
             if drop &&
                 (
                 !IsNullableWidening(key, entry.Value) || StatementDischargesNullableWidening(prefix, key, entry.Value)

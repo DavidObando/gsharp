@@ -849,6 +849,35 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@18:14", "reject", ""}
+            yield[]object{"d37_5707_defer_storage_owner_effects_remove_global_fact", `import System
+class C { var Value int32 = 1 }
+struct Counter { func Bump() { } }
+class Host { var counter Counter }
+func Get() Host {
+    g = nil
+    return Host()
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    defer Get().counter.Bump()
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run())`, "GS0158@12:14", "reject", ""}
+            yield[]object{"d38_5707_defer_storage_index_effects_remove_global_fact", `import System
+class C { var Value int32 = 1 }
+struct Counter { func Bump() { } }
+func Index() int32 {
+    g = nil
+    return 0
+}
+func Run(items []Counter) int32 {
+    if g == nil { return 0 }
+    defer items[Index()].Bump()
+    return g.Value
+}
+var g C? = C{}
+Console.WriteLine(Run([]Counter{Counter{}}))`, "GS0158@11:14", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

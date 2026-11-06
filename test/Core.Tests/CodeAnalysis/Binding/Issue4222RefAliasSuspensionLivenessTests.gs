@@ -23,6 +23,26 @@ import Xunit
 /// `await`/`yield` suspension point.
 open class Issue4222RefAliasSuspensionLivenessTests {
     @Fact
+    func DeferredPointerReceiver_LiveAcrossAwait_ReportsGS0258() {
+        let source = `import System.Threading.Tasks
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+async func run() Task {
+    var counter = Counter{}
+    var pointer = &counter
+    defer (*pointer).Bump()
+    await Task.Delay(1)
+}
+`
+        let result = Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0258")
+        Assert.Equal(source.IndexOf("*pointer"), diagnostic.Location.Span.Start)
+        Assert.Equal("*pointer".Length, diagnostic.Location.Span.Length)
+    }
+
+    @Fact
     func LetRef_ArrayElementAlias_ConsumedBeforeAwait_IsPermitted() {
         // The issue's own async repro: the alias leaves its lexical block
         // (and is fully consumed) before the await, so it never needs a

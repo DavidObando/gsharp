@@ -128,7 +128,7 @@ internal partial class StatementBinder {
             EnclosingFilterWrites(syntax, effects)
         }
         for path in state.Paths {
-            if StatementKillsPath(effects, path, effects.MayMutateMemberPaths, effects.MayMutateReferenceStorage) ||
+            if StatementKillsPath(effects, path, effects.MayMutateMemberPaths, effects.MayWriteStorageOf(path)) ||
                 (filters != nil && (FilterWritesVariable(filters, path.Root) || MayBeMutatedByUnknownCallable(path))) {
                 let type = state.NarrowedType(path)!!
                 if !IsNullableWidening(path, type) || StatementDischargesNullableWidening(statement, path, type) {
@@ -217,7 +217,7 @@ internal partial class StatementBinder {
                     effects,
                     path,
                     syntaxMutates || effects.MayMutateMemberPaths,
-                    syntaxMutates || effects.MayMutateReferenceStorage
+                    syntaxMutates || effects.MayWriteStorageOf(path)
                 ) {
                     state = if held == nil {
                         state.Remove(path)

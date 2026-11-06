@@ -592,7 +592,7 @@ internal partial class StatementBinder {
                         continue
                     }
                     // Issue #5640: the receiver and arguments run at the `defer` statement. The deferred call runs when the block exits.
-                    let prefix = DeferPrefixBlock(deferSyntax, defer_.PrefixStatements)
+                    let prefix = defer_.OperandEffects!!
                     InvalidateNarrowingsForAssignedVariables(
                         statementSyntax,
                         prefix,

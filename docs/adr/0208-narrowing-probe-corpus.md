@@ -322,3 +322,21 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | t09 | `var x C?; let clear = func() { x = nil }; if x == nil { return }; for ... { total = total + x.Value + s.Length }` | rejected (`GS0158`) | accepted, prints `8` |
 | a09 | `if g == nil { return 0 }; while true { k = k + g.Value; if k > 3 { break }; switch k { case 1 { continue } default { } }; break }` (`C` a non-`open` class) | rejected (`GS0158`) | accepted, prints `2` |
 | q5d | `open class Base { var Count int32 }`, `class Derived : Base { prop Count int32 { get { clear(); return 0 } } }`; `if b is Derived { let c = b.Count }` in loop | rejected (`GS0158`) | rejected (`GS0158`) |
+
+
+
+
+## Row R20 (#5796, #5827): member writes and by-reference roots
+
+[#5827](https://github.com/DavidObando/gsharp/issues/5827): a source auto-property write that runs no user code keeps the facts on member paths (#5796), except on the member paths of a by-reference root whose storage the written location can hold (`StatementBinder.StorageWriteMayOverwriteRoot`). The rows are pinned by `Issue5827ValueTypeWriteOverByReferenceRootTests` (run output or diagnostic line) and its mutant witness.
+
+| Probe | Shape | 0.5.460 | After #5796 | Result now |
+| --- | --- | --- | --- | --- |
+| w1 | `struct Token { let owner Owner? }`, `if owner != nil { this.owner.A = true; this.owner.B = true }` (`prop A bool`, `prop B bool`) | rejected (`GS0158`) | accepted | accepted, runs |
+| w2 | `class Holder { prop Tok Token { get; set; } func Run() bool { return Tok.Restore(this, Token(nil)) } }`, in `Token.Restore`: `if owner != nil { h.Tok = fresh; return this.owner.A }` | rejected (`GS0158`) | accepted, throws `NullReferenceException` | rejected (`GS0158`) |
+| w3 | w2 with `prop Pair Wrapper`, `struct Wrapper { var tok Token }`, `h.Pair = fresh` | rejected (`GS0158`) | accepted, throws `NullReferenceException` | rejected (`GS0158`) |
+| w4 | w2 with a written property of type `(Token, int32)`, `Box[Token]` (a struct) or `Token?` | rejected (`GS0158`) | accepted | rejected (`GS0158`) |
+| w5 | `func Use(ref t Token, h Holder, fresh Token) { if t.owner != nil { h.Tok = fresh; return t.owner.A } }` | rejected (`GS0158`) | accepted | rejected (`GS0158`) |
+| w6 | w2 with the write in `if c { h.Tok = fresh }` before the read | rejected (`GS0158`) | accepted, throws `NullReferenceException` | rejected (`GS0158`) |
+| w7 | struct `this`, `h.Name = "x"` (`string?`), `h.Next = h` (a class) or `h.Count = 4` (`int32`) before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
+| w8 | class `this` (not a by-reference root), `h.Tok = fresh` or `h.Pair = pair` before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
