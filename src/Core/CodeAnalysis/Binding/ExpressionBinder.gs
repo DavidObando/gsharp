@@ -1951,30 +1951,7 @@ internal partial class ExpressionBinder {
                     implicitField.Field
                 )
             }
-            // Issue #208: apply any [MemberNotNull] post-call narrowing so that
-            // `field.Member` accesses after a [MemberNotNull] helper call are
-            // accepted without a nil-guard.
-            let narrowedFieldType = TryGetNarrowedType(implicitField)
-            let makeNarrowedField(TypeSymbol) -> BoundExpression = (
-                narrowedType TypeSymbol
-            ) -> BoundFieldAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitField.Receiver),
-                implicitField.StructType,
-                implicitField.Field,
-                narrowedType
-            )
-            return BuildNarrowedRead(
-                BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, implicitField.Receiver),
-                    implicitField.StructType,
-                    implicitField.Field
-                ),
-                implicitField.Field.Type,
-                narrowedFieldType,
-                makeNarrowedField
-            )
+            return BuildImplicitFieldRead(implicitField, nil)
         }
         // Issue #261: bare static field name inside a shared method body.
         if variable is ImplicitStaticFieldVariableSymbol implicitStaticField {
@@ -2025,15 +2002,54 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(syntax.IdentifierToken.Location, implicitProp.Property.Name)
                 return BoundErrorExpression(nil)
             }
-            return BoundPropertyAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitProp.Receiver),
-                implicitProp.StructType,
-                implicitProp.Property
-            )
+            return BuildImplicitPropertyRead(implicitProp, nil)
         }
         return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location)
     }
+
+    // Issues #208, #4287, #4310 and #5786: the one read of a bare instance field name, rebound as `this.field`.
+    // A `[MemberNotNull]` fact is on the implicit field symbol. A nil guard fact is on the member's access path.
+    // Value reads and the receivers of member and index writes use this read, so both facts apply to each of them.
+    private func BuildImplicitFieldRead(
+        implicitField ImplicitFieldVariableSymbol,
+        syntax SyntaxNode?,
+        location TextLocation? = nil
+    ) BoundExpression {
+        let makeNarrowedField(TypeSymbol) -> BoundExpression = (narrowedType TypeSymbol) -> BoundFieldAccessExpression(
+            syntax,
+            BoundVariableExpression(nil, implicitField.Receiver),
+            implicitField.StructType,
+            implicitField.Field,
+            narrowedType
+        )
+        return ApplyMemberNarrowing(
+            BuildNarrowedRead(
+                BoundFieldAccessExpression(
+                    syntax,
+                    BoundVariableExpression(nil, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field
+                ),
+                implicitField.Field.Type,
+                TryGetNarrowedType(implicitField, location),
+                makeNarrowedField
+            )
+        )
+    }
+
+    // Issues #4287, #4310 and #5786: the one read of a bare instance property name, rebound as `this.property`.
+    // A nil guard fact is on the member's access path. Value reads and write receivers use this read.
+    private func BuildImplicitPropertyRead(
+        implicitProperty ImplicitPropertyVariableSymbol,
+        syntax SyntaxNode?
+    ) BoundExpression -> ApplyMemberNarrowing(
+        BoundPropertyAccessExpression(
+            syntax,
+            BoundVariableExpression(nil, implicitProperty.Receiver),
+            implicitProperty.StructType,
+            implicitProperty.Property
+        )
+    )
 
     private func BuildNarrowedVariableRead(variable VariableSymbol, location TextLocation? = nil) BoundExpression {
         let makeNarrowedVariable(TypeSymbol) -> BoundExpression = (narrowedType TypeSymbol) -> BoundVariableExpression(

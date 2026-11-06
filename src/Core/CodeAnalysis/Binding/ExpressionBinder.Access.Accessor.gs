@@ -298,29 +298,7 @@ internal partial class ExpressionBinder {
                         implicitField.Field,
                         "${implicitField.StructType.Name}.${implicitField.Field.Name}"
                     )
-                    // Issue #208: apply any [MemberNotNull] narrowing so that
-                    // chained access like `_name.Length` after a [MemberNotNull]
-                    // call is accepted without a nil-guard.
-                    let makeNarrowedField(TypeSymbol) -> BoundExpression = (
-                        narrowedType TypeSymbol
-                    ) -> BoundFieldAccessExpression(
-                        leftName,
-                        BoundVariableExpression(nil, implicitField.Receiver),
-                        implicitField.StructType,
-                        implicitField.Field,
-                        narrowedType
-                    )
-                    receiver = BuildNarrowedRead(
-                        BoundFieldAccessExpression(
-                            leftName,
-                            BoundVariableExpression(nil, implicitField.Receiver),
-                            implicitField.StructType,
-                            implicitField.Field
-                        ),
-                        implicitField.Field.Type,
-                        TryGetNarrowedType(implicitField, leftName.Location),
-                        makeNarrowedField
-                    )
+                    receiver = BuildImplicitFieldRead(implicitField, leftName, leftName.Location)
                 } else if variable is ImplicitStaticFieldVariableSymbol implicitStaticField {
                     // Issue #261: bare static field name as accessor receiver
                     // inside a shared method body.
@@ -383,12 +361,7 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(leftName.IdentifierToken.Location, implicitProp.Property.Name)
                         return BoundErrorExpression(nil)
                     }
-                    receiver = BoundPropertyAccessExpression(
-                        nil,
-                        BoundVariableExpression(nil, implicitProp.Receiver),
-                        implicitProp.StructType,
-                        implicitProp.Property
-                    )
+                    receiver = BuildImplicitPropertyRead(implicitProp, leftName)
                 } else {
                     // Preserve the name anchor when this fast path bypasses
                     // BindExpression, so semantic lookup sees the selected local.
@@ -402,20 +375,13 @@ internal partial class ExpressionBinder {
                         makeNarrowedVariable
                     )
                 }
-                // Issues #4287 and #4310: a bare member name rebinds as
-                // `this.member` (or `Type.member`) above, and so does the nil
-                // test that guards it:
-                // `memo != nil` binds `memo` as a field access, and ADR-0069
-                // records that narrowing under the member's AccessPath, not under
-                // the implicit VariableSymbol the branches above look up. So
-                // `this.memo.TryGetValue(…)` was narrowed after the guard while
-                // `memo.TryGetValue(…)` was not. Consult the path too, the same way
-                // an explicit `this.memo` receiver does. This returns the read
+                // Issues #4287 and #4310: a nil guard records its fact under the
+                // member's AccessPath. `BuildImplicitFieldRead` and
+                // `BuildImplicitPropertyRead` consult that path for an instance
+                // member. Consult it for a static member too, the same way an
+                // explicit `Type.member` receiver does. This returns the read
                 // unchanged when it already carries a narrowing.
-                if variable is ImplicitFieldVariableSymbol ||
-                    variable is ImplicitStaticFieldVariableSymbol ||
-                    variable is ImplicitPropertyVariableSymbol ||
-                    variable is ImplicitStaticPropertyVariableSymbol {
+                if variable is ImplicitStaticFieldVariableSymbol || variable is ImplicitStaticPropertyVariableSymbol {
                     receiver!!.AnchorSyntax(leftName)
                     receiver = ApplyMemberNarrowing(receiver!!)
                 }

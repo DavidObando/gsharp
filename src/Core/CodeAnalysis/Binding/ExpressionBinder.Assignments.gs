@@ -1057,14 +1057,12 @@ internal partial class ExpressionBinder {
         // Expression and substitute the `this` parameter with the hoisted
         // `<>4__this` proxy field — routing through an expression receiver
         // makes the write path symmetric with the read path fixed in #655.
+        //
+        // Issue #5786: the receiver is the read that a bare member name binds to,
+        // so a nil guard on the member narrows the write receiver as it narrows a read.
         var implicitFieldReceiverExpr BoundExpression? = nil
         if variable is ImplicitFieldVariableSymbol implicitField {
-            implicitFieldReceiverExpr = BoundFieldAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitField.Receiver),
-                implicitField.StructType,
-                implicitField.Field
-            )
+            implicitFieldReceiverExpr = BuildImplicitFieldRead(implicitField, nil)
         } else if variable is ImplicitPropertyVariableSymbol implicitPropReceiver &&
             implicitPropReceiver
             .Property
@@ -1077,12 +1075,7 @@ internal partial class ExpressionBinder {
             // getter call) so the receiver carries a real BoundExpression —
             // for a reference-typed property this yields the live object whose
             // member the write then mutates, symmetric with the read path.
-            implicitFieldReceiverExpr = BoundPropertyAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitPropReceiver.Receiver),
-                implicitPropReceiver.StructType,
-                implicitPropReceiver.Property
-            )
+            implicitFieldReceiverExpr = BuildImplicitPropertyRead(implicitPropReceiver, nil)
         } else if variable is ImplicitStaticFieldVariableSymbol implicitStaticFieldReceiver {
             // Issue #3489: the STATIC counterparts of the two cases above. A
             // bare `shared` field/property name used as the receiver of a
@@ -3784,14 +3777,7 @@ internal partial class ExpressionBinder {
                     implicitField.Field
                 )
             } else {
-                cast[BoundExpression](
-                    BoundFieldAccessExpression(
-                        nil,
-                        BoundVariableExpression(nil, implicitField.Receiver),
-                        implicitField.StructType,
-                        implicitField.Field
-                    )
-                )
+                BuildImplicitFieldRead(implicitField, nil)
             }
             let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type)
@@ -3820,12 +3806,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportCannotAssign(syntax.TargetIdentifier.Location, implicitProp.Property.Name)
                 return BoundErrorExpression(nil)
             }
-            let propertyAccess = BoundPropertyAccessExpression(
-                nil,
-                BoundVariableExpression(nil, implicitProp.Receiver),
-                implicitProp.StructType,
-                implicitProp.Property
-            )
+            let propertyAccess = BuildImplicitPropertyRead(implicitProp, nil)
             let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
             let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, propertyAccess.Type)
             $scope.TryDeclareVariable(tempVar)
@@ -3887,13 +3868,7 @@ internal partial class ExpressionBinder {
         var target BoundExpression
         switch variable {
             case implicitField is ImplicitFieldVariableSymbol {
-                target = BoundFieldAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, implicitField.Receiver),
-                    implicitField.StructType,
-                    implicitField.Field,
-                    TryGetNarrowedType(implicitField)
-                )
+                target = BuildImplicitFieldRead(implicitField, nil)
             }
             case implicitStaticField is ImplicitStaticFieldVariableSymbol {
                 target = if implicitStaticField.InterfaceType != nil {
@@ -3913,12 +3888,14 @@ internal partial class ExpressionBinder {
                     Diagnostics.ReportCannotAssign(diagnosticLocation, implicitProperty.Property.Name)
                     return BoundErrorExpression(nil)
                 }
-                target = BoundPropertyAccessExpression(
-                    nil,
-                    BoundVariableExpression(nil, implicitProperty.Receiver),
-                    implicitProperty.StructType,
-                    implicitProperty.Property,
-                    TryGetNarrowedType(implicitProperty)
+                target = ApplyMemberNarrowing(
+                    BoundPropertyAccessExpression(
+                        nil,
+                        BoundVariableExpression(nil, implicitProperty.Receiver),
+                        implicitProperty.StructType,
+                        implicitProperty.Property,
+                        TryGetNarrowedType(implicitProperty)
+                    )
                 )
             }
             case implicitStaticProperty is ImplicitStaticPropertyVariableSymbol {
