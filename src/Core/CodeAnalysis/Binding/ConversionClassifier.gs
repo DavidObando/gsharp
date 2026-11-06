@@ -834,6 +834,9 @@ internal class ConversionClassifier {
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type!!, Diagnostics)
             return BoundConversionExpression(nil, type!!, expressionTreeLiteral)
         }
+        if !allowExplicit && RequiresRuntimeDelegateReturnValidation(expression, type, out var runtimeLambdaSyntax) {
+            return bindExpressionWithTargetType(runtimeLambdaSyntax!!, type!!)
+        }
         if expression is BoundFunctionLiteralExpression refContractLiteral {
             GetMethodGroupTargetRefKinds(
                 type!!,
@@ -2029,6 +2032,8 @@ internal class ConversionClassifier {
                     // its own expression-tree handling) unchanged.
                     let isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression &&
                         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
+                    let isRuntimeDelegateReturnMismatch = !isExpressionTreeLiteralTarget &&
+                        RequiresRuntimeDelegateReturnValidation(argument, rejectionTargetType, out _)
                     // Issue #2347: an unresolved method group's natural type is
                     // the Error sentinel (see
                     // ClrOverloadResolution.IsUnresolvedMethodGroupArgument), so
@@ -2068,6 +2073,8 @@ internal class ConversionClassifier {
                             call?.Location ?? default(TextLocation)
                         }
                         rebound = BindContextualOpenLiteral(location, argument, targetType)
+                    } else if isRuntimeDelegateReturnMismatch {
+                        rebound = BindConversion(rejectionLocation, argument, rejectionTargetType, allowExplicit: false)
                     } else if argument.Type != targetType &&
                         parameterConversion.IsExplicit &&
                         TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var implicitArg) {
@@ -3848,6 +3855,45 @@ internal class ConversionClassifier {
             }
         }
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit, trackNarrowing: false)
+    }
+
+    internal func RequiresRuntimeDelegateReturnValidation(
+        expression BoundExpression,
+        targetType TypeSymbol?,
+        @NotNullWhen(true) out lambdaSyntax LambdaExpressionSyntax?
+    ) bool {
+        lambdaSyntax = nil
+        if targetType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
+            return false
+        }
+        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) || literal == nil {
+            return false
+        }
+        let syntax = literal.Syntax as LambdaExpressionSyntax
+        let sourceFunction = literal.FunctionType as FunctionTypeSymbol
+        if syntax == nil || sourceFunction == nil || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+            targetType,
+            out var targetFunction
+        ) ||
+            targetFunction == nil {
+            return false
+        }
+        if sourceFunction.Arity != targetFunction.Arity || TypeSymbol.ContainsTypeParameter(
+            targetFunction.ReturnType
+        ) ||
+            object.ReferenceEquals(sourceFunction.ReturnType, targetFunction.ReturnType) ||
+            !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            sourceFunction.ReturnType,
+            targetFunction.ReturnType
+        ) ||
+            Conversion
+            .Classify(sourceFunction.ReturnType, targetFunction.ReturnType)
+            .IsImplicit ||
+            HasUserDefinedImplicitConversionForTypes(sourceFunction.ReturnType, targetFunction.ReturnType) {
+            return false
+        }
+        lambdaSyntax = syntax
+        return true
     }
 
     private func ContainsTupleFunctionLiteral(tuple BoundTupleLiteralExpression) bool {

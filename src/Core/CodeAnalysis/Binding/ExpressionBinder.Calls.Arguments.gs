@@ -2272,6 +2272,14 @@ internal partial class ExpressionBinder {
             if parameterTypeOverrides != nil {
                 parameterTypeOverrides.TryGetValue(paramIndex, out parameterTypeOverride)
             }
+            let parameterTargetSymbol = parameterTypeOverride ??
+                (
+                if paramIndex < parameters.Length {
+                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                } else {
+                    default(TypeSymbol?)
+                }
+            )
             var targetFunctionType FunctionTypeSymbol? = nil
             let hasTargetFunctionType = if parameterTypeOverride != nil {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeOverride, out targetFunctionType)
@@ -2282,7 +2290,13 @@ internal partial class ExpressionBinder {
                     out targetFunctionType
                 )
             }
-            if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
+            if parameterTargetSymbol != nil && conversions.RequiresRuntimeDelegateReturnValidation(
+                argument,
+                parameterTargetSymbol,
+                out var runtimeLambdaSyntax
+            ) {
+                rebound = BindExpression(runtimeLambdaSyntax!!, parameterTargetSymbol)
+            } else if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
                 hasTargetFunctionType &&
                 literal!!.FunctionType != targetFunctionType {
                 targetFunctionType = Invariant.Required(
