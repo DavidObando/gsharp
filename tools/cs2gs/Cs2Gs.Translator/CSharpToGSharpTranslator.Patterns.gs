@@ -854,23 +854,47 @@ partial class CSharpToGSharpTranslator {
                     return PatternTestExpression(receiver, pattern)
                 }
             }
-            // A pattern that binds a designation, or tests more than one
-            // sub-pattern, reads the translated scrutinee more than once:
-            // `BuildPatternNarrowingReplacement` substitutes it at every binder
-            // reference, a recursive/property pattern re-embeds it per member
-            // test, and `and`/`or`/parenthesized combinators re-embed it per
-            // branch. A non-trivial scrutinee (anything beyond a bare
-            // identifier/`this`/literal — e.g. a method call or a property read
-            // with a side effect) must then be evaluated exactly once into a
-            // local and reused, matching C# semantics (issue #1731). A pattern
-            // that reads the scrutinee at most once (a bare type test, a
-            // constant/relational pattern) is left untouched, avoiding an
-            // unnecessary temp. Some shapes (a single escaping/non-smart-
-            // castable declaration pattern over a reference type) are already
-            // hoisted more precisely by <see cref="TryBuildPositiveGuardHoist"/>/
-            // <see cref="TryBuildNegatedGuardHoist"/> before reaching here — for
-            // those, `receiver` is already a bare local and this is a no-op.
-            if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) {
+            if this.ReceiverValueIsPromotedNullable(isPattern.Expression) || this.NullableReferenceValueMayBeNull(
+                isPattern.Expression
+            ) {
+                this.state.GSharpNullablePatternReceivers.Add(receiver!!)
+            }
+            // Keep snapshots at the pattern's evaluation point, not ahead of earlier operands or arguments.
+            if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
+                isPattern.Expression,
+                receiver
+            ) {
+                if !PatternIntroducesBinding(isPattern.Pattern) {
+                    return this.BindPatternMemberOnce(
+                        receiver,
+                        (local GExpression) -> this.TranslatePatternTest(
+                            local,
+                            isPattern.Pattern,
+                            receiverType,
+                            isPattern.Expression
+                        )
+                    )
+                }
+                let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+                if declarations != nil && receiverType != nil && receiverType.TypeKind != TypeKind.Error {
+                    return this.StorePatternMemberOnce(
+                        receiver,
+                        receiverType,
+                        receiverType.IsReferenceType || this.IsGSharpNullablePatternReceiver(receiver),
+                        declarations,
+                        (local GExpression) -> this.MaterializeFallbackPatternBindings(
+                            isPattern,
+                            local,
+                            this.TranslatePatternTest(
+                                local,
+                                isPattern.Pattern,
+                                receiverType,
+                                isPattern.Expression,
+                                isNestedPatternMember: true
+                            )
+                        )
+                    )
+                }
                 receiver = this.SpillOperand(
                     receiver!!,
                     isPattern.Expression,
@@ -1106,8 +1130,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         /// Whether fallback lowering reuses a nested value that needs a snapshot.
-        /// Nullable values and type proofs need the same stored value at each read.
-        /// An unstable getter read more than once also needs a snapshot.
+        /// A subpattern can mutate even a field or auto-property between reads.
         /// @param pattern The nested pattern.
         /// @param receiverType The receiver's declared C# type, if known.
         /// @param receiver The translated receiver (for the analyzer-mode registry).
@@ -1118,7 +1141,6 @@ partial class CSharpToGSharpTranslator {
             receiver GExpression?
         ) bool {
             let gsharpNullable = this.IsGSharpNullablePatternReceiver(receiver)
-            let stableMember = this.IsStablePatternReceiver(receiver)
             let CountReads = func (current PatternSyntax?) int32 {
                 switch current {
                     case recursive is RecursivePatternSyntax {
@@ -1171,44 +1193,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            let nullableMember = gsharpNullable ||
-                (
-                receiverType != nil &&
-                    (
-                    (
-                        receiverType.IsReferenceType &&
-                            receiverType.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated
-                    ) ||
-                        receiverType
-                        .OriginalDefinition
-                        ?.SpecialType == SpecialType.System_Nullable_T
-                )
-            )
-            // A type proof must apply to the stored member value, not another getter result.
-            let inputType = UnwrapNullable(receiverType)
-            let typeTestedMember = pattern != nil &&
-                pattern
-                .DescendantNodesAndSelf()
-                .OfType[PatternSyntax]()
-                .Any(
-                (node PatternSyntax) -> {
-                    let narrowed = if node is ConstantPatternSyntax constant && this.IsTypeReferencePattern(
-                        constant.Expression
-                    ) {
-                        this.TypeTestNarrowing(
-                            this.context.GetSymbolInfo(constant.Expression).Symbol as ITypeSymbol,
-                            inputType
-                        )
-                    } else {
-                        this.GetTypeTestNarrowedType(node, inputType)
-                    }
-                    return narrowed != nil && !SymbolEqualityComparer.Default.Equals(narrowed, inputType)
-                }
-            )
-            return (nullableMember || typeTestedMember || !stableMember) && CountReads(pattern) > 1
+            return CountReads(pattern) > 1
         }
 
         /// Issue #4356: THE test for whether an extended-property-path link is
@@ -1426,11 +1411,11 @@ partial class CSharpToGSharpTranslator {
             .GSharpNullablePatternReceivers
             .Contains(receiver)
 
-        /// Issue #4356: binds a nested pattern member to a `let` local once,
+        /// Issue #4356: binds a nested pattern member to a native capture once,
         /// inside the test that reads it, and translates that test over the local.
         /// @param member The member value, e.g. `o.P`.
         /// @param test Builds the test over the bound local.
-        /// @returns `{ let t = member; test(t) }`.
+        /// @returns `member is var t && test(t)`.
         private func BindPatternMemberOnce(member GExpression?, test(GExpression) -> GExpression) GExpression {
             let temp = this.NewSpillName()
             let local = IdentifierExpression(temp)
@@ -1443,10 +1428,7 @@ partial class CSharpToGSharpTranslator {
             if member is IndexExpression {
                 this.state.BareSliceElementReads.Add(local)
             }
-            return BlockExpression(
-                List[GStatement]{LocalDeclarationStatement(BindingKind.Let, temp, type: nil, initializer: member)},
-                test(local)
-            )
+            return BinaryExpression(PatternTestExpression(member, VarPattern(temp)), "&&", test(local))
         }
 
         /// Issue #4356: as (cref:BindPatternMemberOnce), for a nested
@@ -1492,28 +1474,9 @@ partial class CSharpToGSharpTranslator {
             } else {
                 receiverType
             }
-            // Issue #4356: C# evaluates a subpattern's member ONCE and tests
-            // every nested subpattern against that one value; for a NULLABLE
-            // member (see LoweredPatternReadsReceiverMoreThanOnce) a re-read can
-            // be nil after the first read was proved non-nil. TranslateIsPattern
-            // applies that rule to the top-level scrutinee (it spills a
-            // non-trivial one into a local when the pattern reads it more than
-            // once); this is the same rule for a NESTED member (`o.P` in
-            // `{ P: { X: 0 } }`, `{ P: (0, 0) }`, `{ P: not { X: 1 } }`, a list
-            // element), which the lowering below would otherwise re-embed in a
-            // `!= nil` guard and in every member test — reading an unstable
-            // getter twice, where a value that is non-nil and then nil throws.
-            // The local is bound INSIDE the test (`{ let t = o.P; t != nil &&
-            // t.X == 0 }`), never in the statement prologue, so it is evaluated
-            // only after the enclosing guard has proved `o` non-nil; and a `let`
-            // local is smart-cast by that guard, so no `!!` is needed.
-            // A pattern that declares a designation needs its binder's
-            // replacement visible OUTSIDE the test, so its local is a `var`
-            // declared in the enclosing declaration seam and only ASSIGNED
-            // inside the test (`{ t = o.P; t != nil && t.X == 0 }`) — same
-            // single read, same evaluation order. In ADR-0169 analyzer mode a
-            // member whose G# counterpart is `T?` but whose Roslyn type is a
-            // struct counts as nullable here too (GSharpNullablePatternReceivers).
+            // C# stores each member value before testing its subpatterns. Later getters can mutate even fields and auto-properties.
+            // A native capture reads the member only after its enclosing guard, and keeps that value throughout the test.
+            // Escaping designations instead need outer storage, assigned at the same evaluation point.
             if isNestedPatternMember && !IsTrivialOperand(receiver!!) && this.LoweredPatternReadsReceiverMoreThanOnce(
                 pattern,
                 receiverType,
@@ -1811,8 +1774,7 @@ partial class CSharpToGSharpTranslator {
                     elementReceiver,
                     element,
                     elementType,
-                    isNestedPatternMember: isNestedPatternMember ||
-                        (PatternIntroducesBinding(element) && element is not VarPatternSyntax)
+                    isNestedPatternMember: true
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }

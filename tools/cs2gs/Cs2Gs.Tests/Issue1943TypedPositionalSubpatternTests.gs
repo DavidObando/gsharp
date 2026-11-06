@@ -137,7 +137,8 @@ namespace Corpus.Issue1943
 }
 `)
         Assert.Contains("case line is Line when", rendered, StringComparison.Ordinal)
-        Assert.Contains("line.Start.X == 0 && line.Start.Y == 0", rendered, StringComparison.Ordinal)
+        Assert.Contains("line.Start is var __spill0", rendered, StringComparison.Ordinal)
+        Assert.Contains("__spill0 is Point && __spill0.X == 0 && __spill0.Y == 0", rendered, StringComparison.Ordinal)
         Assert.DoesNotContain("CS2GS-GAP", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }

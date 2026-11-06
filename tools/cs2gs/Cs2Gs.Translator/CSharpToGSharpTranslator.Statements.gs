@@ -3310,10 +3310,14 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[IsPatternExpressionSyntax]() {
-                if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
-                    isPattern.Expression
-                ) &&
-                    !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)) {
+                if PatternIntroducesBinding(isPattern.Pattern) &&
+                    !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) &&
+                    !this.PatternReceiverCanBeDuplicated(isPattern.Expression) &&
+                    !(
+                    PatternUsesNativeVariableSyntax(isPattern.Pattern) && this.ConditionUsesNativePatternVariables(
+                        GetConditionRoot(isPattern)
+                    )
+                ) {
                     return true
                 }
             }

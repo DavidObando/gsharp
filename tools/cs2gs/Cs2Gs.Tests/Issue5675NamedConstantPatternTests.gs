@@ -440,6 +440,206 @@ namespace Demo
     }
 
     @Fact
+    func NegatedNestedGuard_SnapshotsImplicitGetter() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Row
+    {
+        public object Tag => 3;
+        public object Item => 7;
+    }
+    public class Probe
+    {
+        public int Reads;
+        public Row Value { get { Reads++; return new Row(); } }
+        public int Match()
+        {
+            if (Value is not { Tag: 3, Item: int item }) return -1;
+            return item;
+        }
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var value = new Probe();
+            return value.Match() + " " + value.Reads;
+        }
+    }
+}`, "7 1")
+    }
+
+    @Fact
+    func ListFallback_SnapshotsTypedElementsAndMutatedSlots() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class B
+    {
+        public double Number => double.NaN;
+    }
+    public class C
+    {
+        public object[] Slots = new object[0];
+        public object A { get { Slots[0] = new object(); return 1; } }
+        public object B => 3;
+    }
+    public static class P
+    {
+        static object[] Read() => new object[] { new B() };
+        public static string Run()
+        {
+            var child = new C();
+            child.Slots = new object[] { child };
+            bool typed = Read() is [B { Number: double.NaN }];
+            bool changed = child.Slots is [C { A: 1, B: 3 }];
+            return typed + " " + changed;
+        }
+    }
+}`, "True True")
+    }
+
+    @Fact
+    func PatternSnapshot_PreservesEagerOperandAndArgumentOrder() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Probe
+    {
+        object current = 0;
+        public string Log = "";
+        object Value { get { Log += "V"; return current; } }
+        bool Advance() { Log += "A"; current = 4; return true; }
+        static bool Both(bool left, bool right) => left & right;
+        public bool Eager() => Advance() & (Value is 3 or 4);
+        public bool Argument() => Both(Advance(), Value is 3 or 4);
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var first = new Probe();
+            var second = new Probe();
+            return first.Eager() + " " + first.Log + " " + second.Argument() + " " + second.Log;
+        }
+    }
+}`, "True AV True AV")
+    }
+
+    @Fact
+    func BindingPatternSnapshot_PreservesEagerOperandAndArgumentOrder() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Row
+    {
+        public object Tag;
+        public object Item;
+        public Row(int value) { Tag = value; Item = 7; }
+    }
+    public class Probe
+    {
+        Row current = new Row(0);
+        public string Log = "";
+        Row Value { get { Log += "V"; return current; } }
+        bool Advance() { Log += "A"; current = new Row(3); return true; }
+        static bool Both(bool left, bool right) => left & right;
+        public bool Eager() => Advance() & (Value is { Tag: 3, Item: int n });
+        public bool Argument() => Both(Advance(), Value is { Tag: 3, Item: int n });
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var first = new Probe();
+            var second = new Probe();
+            return first.Eager() + " " + first.Log + " " + second.Argument() + " " + second.Log;
+        }
+    }
+}`, "True AV True AV")
+    }
+
+    @Fact
+    func NestedFallback_SnapshotsMutableAutoProperty() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+namespace Demo
+{
+    public class Holder
+    {
+        public Child Child { get; set; } = new Child();
+    }
+    public class Child
+    {
+        public Holder? Owner;
+        public object Value = 3;
+        public object A
+        {
+            get
+            {
+                if (Owner != null) Owner.Child = new Child { Value = 0 };
+                return 1;
+            }
+        }
+        public object B => Value;
+    }
+    public static class P
+    {
+        static Holder Read(Holder value) => value;
+        public static string Run()
+        {
+            var value = new Holder();
+            value.Child.Owner = value;
+            return (Read(value) is { Child: { A: 1, B: 3 } }) + " " + value.Child.Value;
+        }
+    }
+}`, "True 0")
+    }
+
+    @Fact
+    func ObliviousListFallback_GuardsPromotedNullableReceiver() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable disable
+namespace Demo
+{
+    public static class P
+    {
+        static object[] Read() => null;
+        public static string Run() => (Read() is [3]).ToString();
+    }
+}`, "False")
+    }
+
+    @Fact
+    func MixedNativeBindingCondition_DoesNotHoistSkippedFallback() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Probe
+    {
+        public int Reads;
+        object Value { get { Reads++; throw new InvalidOperationException("unexpected getter"); } }
+        public bool Match(bool guard, object other) => guard && (Value is 3 or 4) && other is int n && n > 0;
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var value = new Probe();
+            return value.Match(false, 1) + " " + value.Reads;
+        }
+    }
+}`, "False 0")
+    }
+
+    @Fact
     func PropertySnapshots_StayBehindShortCircuitGuards() {
         Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
 #nullable enable
