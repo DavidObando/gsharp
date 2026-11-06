@@ -3784,6 +3784,20 @@ partial class CSharpToGSharpTranslator {
                 return this.ReceiverTypeArgumentsAreDeclared(initializedCreation, slotType)
             }
             if outermost?.Parent is ArgumentSyntax{
+                Parent: ArgumentListSyntax{Parent: ConstructorInitializerSyntax ctorInitializer}
+            } {
+                let ctorMethod = this.context.GetSymbolInfo(ctorInitializer).Symbol as IMethodSymbol
+                return ctorMethod != nil &&
+                    ctorMethod.ContainingType != nil &&
+                    !this.ReceiverTargetContainsTypeParameter(ctorMethod.ContainingType, slotType)
+            }
+            if outermost?.Parent is ArgumentSyntax{
+                Parent: ArgumentListSyntax{Parent: PrimaryConstructorBaseTypeSyntax primaryBase}
+            } {
+                let baseType = this.context.GetTypeInfo(primaryBase.Type).Type
+                return baseType is INamedTypeSymbol && !this.ReceiverTargetContainsTypeParameter(baseType, slotType)
+            }
+            if outermost?.Parent is ArgumentSyntax{
                 Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax{Expression: SimpleNameSyntax}}
             } {
                 return true
@@ -3956,7 +3970,23 @@ partial class CSharpToGSharpTranslator {
                     slotType,
                     activeMemo
                 )
-                case parameter is IParameterSymbol: this.SlotTypeIsDeclared(parameter, unwrapped)
+                case parameter is IParameterSymbol: !this.ReceiverTargetContainsTypeParameter(
+                    parameter.Type,
+                    slotType
+                ) &&
+                    (
+                    !(
+                        parameter
+                            .DeclaringSyntaxReferences
+                            .FirstOrDefault()
+                            ?.GetSyntax() is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ParameterSyntax{Type: nil}
+                    ) ||
+                        this.SlotTypeIsDeclared(parameter, unwrapped)
+                )
                 default: false
             }
         }
@@ -4818,8 +4848,9 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             for var i = 0; i < currentTuple.TupleElements.Length; i++ {
                 let elementType = currentTuple.TupleElements[i].Type
+                let unwrappedElement = this.UnwrapNullableValueTupleType(elementType)
                 let childPath = List[int32](path){i}
-                if elementType is INamedTypeSymbol{IsTupleType: true} nestedTuple {
+                if unwrappedElement is INamedTypeSymbol nestedTuple && nestedTuple.IsTupleType {
                     if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath, targetSymbol) {
                         return true
                     }
@@ -4841,26 +4872,57 @@ partial class CSharpToGSharpTranslator {
             for var i = 0; i < currentTuple.TupleElements.Length; i++ {
                 let elementAccess GExpression = MemberAccessExpression(tupleReceiver, "Item${i + 1}", isArrow: false)
                 let elementType = currentTuple.TupleElements[i].Type
+                let unwrappedElement = this.UnwrapNullableValueTupleType(elementType)
                 let childPath = List[int32](path){i}
-                if elementType is INamedTypeSymbol{IsTupleType: true} nestedTuple {
+                if unwrappedElement is INamedTypeSymbol nestedTuple && nestedTuple.IsTupleType {
                     if this.HasTupleElementRequiringBridge(value, nestedTuple, childPath, targetSymbol) {
-                        elements.Add(
-                            this.BuildBridgedTupleLiteral(value, elementAccess, nestedTuple, childPath, targetSymbol)
-                        )
+                        let targetNestedNullable = !SymbolEqualityComparer.Default.Equals(nestedTuple, elementType)
+                        let sourceNestedNullable = this.SourceTupleElementIsNullableTuple(value, childPath)
+                        if sourceNestedNullable && targetNestedNullable {
+                            let nestedTemp = this.FreshTupleValueName(value)
+                            let nestedReceiver GExpression = IdentifierExpression(nestedTemp)
+                            let nestedRebuilt = this.BuildBridgedTupleLiteral(
+                                value,
+                                nestedReceiver,
+                                nestedTuple,
+                                childPath,
+                                targetSymbol
+                            )
+                            let nestedStatements = List[GStatement]()
+                            nestedStatements.Add(
+                                LocalDeclarationStatement(BindingKind.Let, nestedTemp, initializer: elementAccess)
+                            )
+                            let nestedGuard GExpression = IfExpression(
+                                BinaryExpression(nestedReceiver, "!=", LiteralExpression.Null()),
+                                nestedRebuilt,
+                                LiteralExpression.Null()
+                            )
+                            elements.Add(BlockExpression(nestedStatements, nestedGuard))
+                        } else {
+                            let nestedTemp = this.FreshTupleValueName(value)
+                            let nestedReceiver GExpression = IdentifierExpression(nestedTemp)
+                            var nestedInit GExpression = elementAccess
+                            if sourceNestedNullable {
+                                nestedInit = NonNullAssertionExpression(elementAccess)
+                            }
+                            let nestedRebuilt = this.BuildBridgedTupleLiteral(
+                                value,
+                                nestedReceiver,
+                                nestedTuple,
+                                childPath,
+                                targetSymbol
+                            )
+                            let nestedStatements = List[GStatement]()
+                            nestedStatements.Add(
+                                LocalDeclarationStatement(BindingKind.Let, nestedTemp, initializer: nestedInit)
+                            )
+                            elements.Add(BlockExpression(nestedStatements, nestedRebuilt))
+                        }
                     } else {
                         elements.Add(elementAccess)
                     }
                 } else if this.TupleElementRequiresBridge(value, targetSymbol, elementType, childPath) {
-                    elements.Add(
-                        this.ReportStoreBridge(
-                            value,
-                            elementAccess,
-                            NonNullAssertionExpression(elementAccess),
-                            targetSymbol,
-                            elementType,
-                            projection: FormatTupleProjection(childPath)
-                        )!!
-                    )
+                    elements.Add(this.BuildBridgedTupleLeaf(value, elementAccess, targetSymbol, elementType, childPath))
                 } else {
                     elements.Add(elementAccess)
                 }
@@ -4873,33 +4935,169 @@ partial class CSharpToGSharpTranslator {
             targetSymbol ISymbol?,
             elementType ITypeSymbol,
             path List[int32]
-        ) bool -> elementType.IsReferenceType &&
-            elementType.NullableAnnotation != Microsoft
-            .CodeAnalysis
-            .NullableAnnotation
-            .Annotated &&
-            !ContainsTypeParameter(elementType) &&
-            !ObliviousNullabilityAnalyzer
-            .IsTupleElementTainted(this.context.Compilation, targetSymbol, path, this.context.SiblingCompilations) &&
-            (
-            this.SourceTupleElementIsAnnotatedNullable(value, path) ||
+        ) bool {
+            let sourceMayBeNil = this.SourceTupleElementIsAnnotatedNullable(value, path) ||
                 this.TupleElementYieldsNilableBeyondItsCSharpType(value, path)
-        )
+            let targetRequiresNonNull = elementType.IsReferenceType &&
+                elementType.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                !ContainsTypeParameter(elementType) &&
+                !ObliviousNullabilityAnalyzer
+                .IsTupleElementTainted(this.context.Compilation, targetSymbol, path, this.context.SiblingCompilations)
+            let conversionOperator = this.TryGetTupleElementConversionOperator(value, path, elementType)
+            if conversionOperator != nil {
+                return true
+            }
+            return targetRequiresNonNull && sourceMayBeNil
+        }
 
-        private func SourceTupleElementIsAnnotatedNullable(
+        private func BuildBridgedTupleLeaf(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            elementAccess GExpression,
+            targetSymbol ISymbol?,
+            elementType ITypeSymbol,
+            path List[int32]
+        ) GExpression {
+            let projection = FormatTupleProjection(path)
+            let conversionOperator = this.TryGetTupleElementConversionOperator(value, path, elementType)
+            if conversionOperator != nil {
+                let parameter = conversionOperator.Parameters[0]
+                let sourceMayBeNil = this.SourceTupleElementIsAnnotatedNullable(value, path) ||
+                    this.TupleElementYieldsNilableBeyondItsCSharpType(value, path)
+                var bridgedElement GExpression = elementAccess
+                if sourceMayBeNil &&
+                    parameter
+                    .Type
+                    .IsReferenceType &&
+                    parameter
+                    .Type
+                    .NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    !this
+                    .ShouldPromoteToNullableReference(parameter) {
+                    bridgedElement = this.ReportStoreBridge(
+                        value,
+                        bridgedElement,
+                        NonNullAssertionExpression(bridgedElement),
+                        parameter,
+                        parameter.Type,
+                        projection: projection
+                    )!!
+                }
+                let targetRequiresNonNull = elementType.IsReferenceType &&
+                    elementType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    !ContainsTypeParameter(elementType) &&
+                    !ObliviousNullabilityAnalyzer
+                    .IsTupleElementTainted(
+                    this.context.Compilation,
+                    targetSymbol,
+                    path,
+                    this.context.SiblingCompilations
+                )
+                let operatorReturnsNullable = conversionOperator
+                    .ReturnType
+                    .NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    this.ShouldPromoteToNullableReference(conversionOperator)
+                if targetRequiresNonNull && operatorReturnsNullable {
+                    var resultType GTypeReference? = this.MapDelegateLikeReturnType(
+                        conversionOperator,
+                        isAsync: false,
+                        value.GetLocation()
+                    )
+                    if !resultType!!.IsNullable {
+                        resultType = MakeNullable(resultType)
+                    }
+                    let converted GExpression = EnsureNonNullAssertion(
+                        ConversionExpression(resultType, bridgedElement)
+                    )!!
+                    this.state.MaterializedConversionResults[converted] = conversionOperator
+                    bridgedElement = this.ReportStoreBridge(
+                        value,
+                        elementAccess,
+                        converted,
+                        targetSymbol,
+                        elementType,
+                        projection: projection
+                    )!!
+                }
+                return bridgedElement
+            }
+            return this.ReportStoreBridge(
+                value,
+                elementAccess,
+                NonNullAssertionExpression(elementAccess),
+                targetSymbol,
+                elementType,
+                projection: projection
+            )!!
+        }
+
+        private func TryGetTupleElementConversionOperator(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32],
+            elementType ITypeSymbol
+        ) IMethodSymbol? {
+            let sourceElementType = this.ResolveSourceTupleElementType(value, path)
+            if sourceElementType == nil {
+                return nil
+            }
+            let conversion = this.context.Compilation.ClassifyConversion(sourceElementType, elementType)
+            if conversion.IsUserDefined && conversion.MethodSymbol is {Parameters: {Length: 1}} method {
+                return method
+            }
+            return nil
+        }
+
+        private func ResolveSourceTupleElementType(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             path List[int32]
-        ) bool {
+        ) ITypeSymbol? {
             var currentType ITypeSymbol? = this.UnwrapNullableValueTupleType(this.context.GetTypeInfo(value).Type)
             for index in path {
                 let tupleType = currentType as INamedTypeSymbol
                 if tupleType == nil || !tupleType.IsTupleType || index < 0 || index >= tupleType.TupleElements.Length {
-                    return false
+                    return nil
                 }
                 currentType = this.UnwrapNullableValueTupleType(tupleType.TupleElements[index].Type)
             }
-            return currentType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+            return currentType
         }
+
+        private func SourceTupleElementIsNullableTuple(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32]
+        ) bool {
+            var currentType ITypeSymbol? = this.context.GetTypeInfo(value).Type
+            for index in path {
+                let tupleType = this.UnwrapNullableValueTupleType(currentType) as INamedTypeSymbol
+                if tupleType == nil || !tupleType.IsTupleType || index < 0 || index >= tupleType.TupleElements.Length {
+                    return false
+                }
+                currentType = tupleType.TupleElements[index].Type
+            }
+            let unwrappedLeaf = this.UnwrapNullableValueTupleType(currentType)
+            return unwrappedLeaf != nil && !SymbolEqualityComparer.Default.Equals(unwrappedLeaf, currentType)
+        }
+
+        private func SourceTupleElementIsAnnotatedNullable(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32]
+        ) bool -> this
+            .ResolveSourceTupleElementType(value, path)
+            ?.NullableAnnotation == Microsoft
+            .CodeAnalysis
+            .NullableAnnotation
+            .Annotated
 
         private func TupleElementYieldsNilableBeyondItsCSharpType(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
@@ -4992,8 +5190,7 @@ partial class CSharpToGSharpTranslator {
                     if parameter == nil {
                         continue
                     }
-                    let paramPath = this.FindParameterTypeParameterPath(parameter.OriginalDefinition.Type, methodTp)
-                    if paramPath != nil {
+                    for paramPath in this.FindParameterTypeParameterPaths(parameter.OriginalDefinition.Type, methodTp) {
                         let combinedPath = List[int32](paramPath)
                         combinedPath.AddRange(path)
                         if this.TupleElementYieldsNilableBeyondItsCSharpType(
@@ -5023,25 +5220,26 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func FindParameterTypeParameterPath(parameterType ITypeSymbol?, targetTp ITypeParameterSymbol) List[
-            int32
-        ]? {
+        private func FindParameterTypeParameterPaths(parameterType ITypeSymbol?, targetTp ITypeParameterSymbol) List[
+            List[int32]
+        ] {
+            let paths = List[List[int32]]()
             let unwrapped = this.UnwrapNullableValueTupleType(parameterType)
             if SymbolEqualityComparer.Default.Equals(unwrapped, targetTp) {
-                return List[int32]()
+                paths.Add(List[int32]())
+                return paths
             }
             if unwrapped is INamedTypeSymbol tupleType && tupleType.IsTupleType {
                 for var i = 0; i < tupleType.TupleElements.Length; i++ {
-                    let subPath = this.FindParameterTypeParameterPath(tupleType.TupleElements[i].Type, targetTp)
-                    if subPath != nil {
+                    for subPath in this.FindParameterTypeParameterPaths(tupleType.TupleElements[i].Type, targetTp) {
                         let fullPath = List[int32]()
                         fullPath.Add(i)
                         fullPath.AddRange(subPath)
-                        return fullPath
+                        paths.Add(fullPath)
                     }
                 }
             }
-            return nil
+            return paths
         }
 
         private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string {
