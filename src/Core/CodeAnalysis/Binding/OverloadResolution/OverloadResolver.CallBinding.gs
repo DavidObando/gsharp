@@ -1114,6 +1114,9 @@ internal partial class OverloadResolver {
                 preArgumentsNarrowing
             )
         }
+        if syntax.NullableQuestionToken != nil {
+            intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
+        }
         return result
     }
 

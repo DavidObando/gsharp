@@ -124,6 +124,7 @@ internal partial class OverloadResolver {
     private let restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
     private let recordDeferredArgumentSnapshot((SyntaxNode) -> void)?
     private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
     private let verifyCallArgumentsAfterConversions(
         (
             GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
@@ -283,6 +284,7 @@ internal partial class OverloadResolver {
         restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
         recordDeferredArgumentSnapshot((SyntaxNode) -> void)? = nil,
         rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
         verifyCallArgumentsAfterConversions(
             (
                 GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
@@ -338,6 +340,7 @@ internal partial class OverloadResolver {
         this.restoreNarrowingSnapshot = restoreNarrowingSnapshot
         this.recordDeferredArgumentSnapshot = recordDeferredArgumentSnapshot
         this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.intersectNarrowingWithSnapshot = intersectNarrowingWithSnapshot
         this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
         this.captureCallArgumentPrebindRollback = captureCallArgumentPrebindRollback
     }

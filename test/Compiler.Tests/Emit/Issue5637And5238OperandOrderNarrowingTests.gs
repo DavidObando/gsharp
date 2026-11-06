@@ -1805,6 +1805,50 @@ func Run(dict Dictionary[string, string], ref target string?) int32 {
 }
 var t string? = "already"
 Console.WriteLine(Run(Dictionary[string, string](), ref t))`, "GS0158@9:18", "reject", ""}
+            yield[]object{"r90_5637_derived_callable_field_hiding_base_computed_property_keeps_argument_narrowing", `import System
+
+class Box(Value int32) {}
+open class BaseHost {
+    prop Callback (int32) -> int32 {
+        get {
+            g = nil
+            return (n int32) -> n
+        }
+    }
+}
+class DerivedHost : BaseHost {
+    let Callback (int32) -> int32 = (n int32) -> n + 10
+}
+func Run(d DerivedHost) int32 {
+    if g == nil { return 0 }
+    return d.Callback(g.Value)
+}
+var g Box? = Box(5)
+Console.WriteLine(Run(DerivedHost{}))`, "", "run", "15"}
+            yield[]object{"r91_5637_null_conditional_call_skipped_argument_keeps_nullable_widening", `import System
+import System.Collections.Generic
+
+func Run(dict Dictionary[string, string], cb ((string) -> void)?) int32 {
+    if dict.TryGetValue("k", out var value) {
+        return value.Length
+    }
+    cb?((value = "ok"))
+    return value.Length
+}
+Console.WriteLine(Run(Dictionary[string, string](), nil))`, "GS0158@9:18", "reject", ""}
+            yield[]object{"r92_5637_null_conditional_indirect_call_applies_callee_effect_before_argument", `import System
+
+class Box(Value int32) {}
+func GetAndClear() ((int32) -> int32)? {
+    g = nil
+    return (n int32) -> n
+}
+func Run() int32 {
+    if g == nil { return 0 }
+    return (GetAndClear())?(g.Value) ?? 0
+}
+var g Box? = Box(3)
+Console.WriteLine(Run())`, "GS0158@10:31", "reject", ""}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

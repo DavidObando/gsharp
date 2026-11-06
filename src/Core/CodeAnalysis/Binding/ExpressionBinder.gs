@@ -1084,11 +1084,13 @@ internal partial class ExpressionBinder {
 
     internal func BindPossiblySkippedOperand(bind() -> BoundExpression) BoundExpression {
         let before = CaptureExpressionNarrowingFrames()
+        let preSkippedSnapshot = CaptureNarrowingBindSnapshot()
         let entryAliases = GetCurrentExpressionCallableAliases()
         let result = bind()
         if !(result is BoundErrorExpression) {
             InvalidateExpressionNarrowingFrames(result, entryAliases)
             MergeBranchExpressionNarrowingFrames(before)
+            intersectNarrowingWithSnapshot?(preSkippedSnapshot)
             expressionExitAliases[result] = GetCurrentExpressionCallableAliases()
         }
         return result

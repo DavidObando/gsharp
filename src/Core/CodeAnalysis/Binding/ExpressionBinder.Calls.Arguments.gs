@@ -349,12 +349,38 @@ internal partial class ExpressionBinder {
         }
         if ownerType is {} nonNullOwner && (nonNullOwner is StructSymbol or InterfaceSymbol) {
             let query = if isStatic {
-                MemberQuery.Static(MemberKinds.Method)
+                if nonNullOwner is StructSymbol {
+                    MemberQuery.InheritedStatic(MemberKinds.Method)
+                } else {
+                    MemberQuery.Static(MemberKinds.Method)
+                }
             } else {
                 MemberQuery.Instance(MemberKinds.Method)
             }
             if !TypeMemberModel.GetMethods(nonNullOwner, methodName, query).IsDefaultOrEmpty {
                 return false
+            }
+            if isStatic {
+                if nonNullOwner is StructSymbol staticFieldStruct &&
+                    TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                    staticFieldStruct,
+                    methodName,
+                    out var matchedStaticField,
+                    out _
+                ) &&
+                    matchedStaticField != nil {
+                    return false
+                }
+                if nonNullOwner is InterfaceSymbol staticFieldIface &&
+                    (staticFieldIface.Definition ?? staticFieldIface).GetStaticField(methodName) != nil {
+                    return false
+                }
+            } else if nonNullOwner is StructSymbol instStruct {
+                for current in instStruct.GetHierarchy() {
+                    if current.TryGetField(methodName, out _) {
+                        return false
+                    }
+                }
             }
             var property PropertySymbol? = nil
             var declaringOwner TypeSymbol? = nil
@@ -418,6 +444,9 @@ internal partial class ExpressionBinder {
             }
         )
         if ClrTypeUtilities.SafeGetMethods(clrType, flags).Any((m MethodInfo) -> m.Name == methodName) {
+            return false
+        }
+        if ClrTypeUtilities.SafeGetField(clrType, methodName, flags) != nil {
             return false
         }
         if ClrTypeUtilities.SafeGetProperty(clrType, methodName, flags) is PropertyInfo prop &&

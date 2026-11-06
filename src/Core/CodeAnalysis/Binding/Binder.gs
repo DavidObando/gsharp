@@ -323,6 +323,8 @@ partial class Binder {
             recordDeferredArgumentSnapshot: (syntax SyntaxNode) -> Statements.RecordDeferredArgumentSnapshot(syntax),
             rebindDeferredArgumentWithSnapshot: (syntax SyntaxNode, bind() -> BoundExpression) ->
             Statements.RebindDeferredArgumentWithSnapshot(syntax, bind),
+            intersectNarrowingWithSnapshot: (snapshot StatementBinder.NarrowingBindSnapshot) ->
+            Statements.IntersectNarrowingWithSnapshot(snapshot),
             verifyCallArgumentsAfterConversions: (
                 arguments GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
                 boundCall BoundExpression?,

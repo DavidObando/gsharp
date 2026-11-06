@@ -1070,6 +1070,7 @@ internal partial class OverloadResolver {
         if TryReportNullableDelegateReceiver(callee.Type, calleeLocation, calleeName, nullSafeInvocation) {
             return BoundErrorExpression(nil)
         }
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
         let BindIndirectCallArgumentsAndDispatch = func () BoundExpression {
             var dispatchCallee = callee
             let boundArguments = ImmutableArray.CreateBuilder[BoundExpression](syntax.Arguments.Count)
@@ -1188,6 +1189,9 @@ internal partial class OverloadResolver {
                 BindIndirectCallArgumentsAndDispatch
             ) ??
                 invocation
+        }
+        if nullConditionalCallee != nil || syntax.NullableQuestionToken != nil {
+            intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
         }
         return if nullConditionalCallee == nil || invocation is BoundErrorExpression {
             invocation
