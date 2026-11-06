@@ -1193,7 +1193,27 @@ partial class A {
     partial func F(y int32) int32 { return y }
 }
 `)
-        Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == "GS0611")
+        let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0611")
+        Assert.Contains("parameter 1 ('x int32' vs 'y int32')", diagnostic.Message, StringComparison.Ordinal)
+        Assert.DoesNotContain("\u0001", diagnostic.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func PartsWithDifferentParameterNames_FormatsReadableParameterTextWithoutInternalKey_Issue4424() {
+        let diagnostics = Compile(`package App
+
+partial class A {
+    partial func F(a int32) int32;
+}
+
+partial class A {
+    partial func F(p0 int32) int32 { return p0 }
+}
+`)
+        let diagnostic = Assert.Single(diagnostics, (d Diagnostic) -> d.Id == "GS0611")
+        Assert.Contains("parameter 1 ('a int32' vs 'p0 int32')", diagnostic.Message, StringComparison.Ordinal)
+        Assert.DoesNotContain("68", diagnostic.Message, StringComparison.Ordinal)
+        Assert.DoesNotContain("\u0001", diagnostic.Message, StringComparison.Ordinal)
     }
 
     @Fact
