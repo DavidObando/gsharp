@@ -1747,7 +1747,7 @@ internal partial class ExpressionBinder {
             // type arguments so the lambda method returns `Foo` and the delegate
             // materialises as `Func<Foo>`.
             let inner = OverloadResolver.UnwrapNamedArgumentValue(syntax.Arguments[i])
-            if inner is LambdaExpressionSyntax ctorLambdaSyntax &&
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} ctorLambdaSyntax &&
                 openGenericDefinition != nil &&
                 TryResolveSymbolicDelegateTargetForCtor(
                 openGenericDefinition,
@@ -2599,7 +2599,7 @@ internal partial class ExpressionBinder {
         ) {
             return BindExpression(inner, blockTarget!!)
         }
-        if inner is LambdaExpressionSyntax lambdaSyntax &&
+        if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
             TryResolveDelegateTargetFromCandidates(
             candidateParameterLists,
             paramOffset,

@@ -306,6 +306,46 @@ func Run(token Token) {
     return f()
 }`, "Maybe()")
             yield Row(
+                "checked-wrapper-source-argument",
+                `func Run() string -> TakeFunc(checked(() -> Maybe()))`,
+                "Maybe()"
+            )
+            yield Row(
+                "unchecked-wrapper-source-argument",
+                `func Run() string -> TakeFunc(unchecked(() -> Maybe()))`,
+                "Maybe()"
+            )
+            yield Row(
+                "checked-wrapper-imported-argument",
+                `func Run() string -> StrictSink5686.Take(checked(() -> Maybe()))`,
+                "Maybe()"
+            )
+            yield Row(
+                "unchecked-wrapper-imported-argument",
+                `func Run() string -> StrictSink5686.Take(unchecked(() -> Maybe()))`,
+                "Maybe()"
+            )
+            yield Row(
+                "nullable-tuple-element-mismatch",
+                `func Make() () -> (string, int32)? -> () -> (Maybe(), 0)`,
+                "(Maybe(), 0)"
+            )
+            yield Row(
+                "nullable-tuple-value-element-mismatch",
+                `func Make() () -> (string, int32)? -> () -> MaybePairElement()`,
+                "MaybePairElement()"
+            )
+            yield Row(
+                "mixed-nullable-tuple-literal-delegate-and-expression-tree-overload",
+                `func Run() (string, int32)? -> StrictSink5686.PickNullableTuple(() -> (Maybe(), 0), 1)`,
+                "(Maybe(), 0)"
+            )
+            yield Row(
+                "mixed-nullable-tuple-value-delegate-and-expression-tree-overload",
+                `func Run() (string, int32)? -> StrictSink5686.PickNullableTuple(() -> MaybePairElement(), 1)`,
+                "MaybePairElement()"
+            )
+            yield Row(
                 "mixed-delegate-and-expression-tree-overload",
                 `func Run() string -> StrictSink5686.Pick(() -> Maybe(), 1)`,
                 "Maybe()"
@@ -367,6 +407,7 @@ func Run(token Token) {
             yield AcceptedRow("ok-nullable-clr-func-return", `func Run() Func[string?] -> () -> Maybe()`)
             yield AcceptedRow("ok-nullable-named-delegate-return", `func Run() NullableStringFunc -> () -> Maybe()`)
             yield AcceptedRow("ok-nullable-nil-return", `func Run() () -> string? -> () -> nil`)
+            yield AcceptedRow("ok-nullable-tuple-nil-return", `func Run() () -> (string, int32)? -> () -> nil`)
             yield AcceptedRow("ok-nonnull-return", `func Run() () -> string -> () -> "ok"`)
             yield AcceptedRow("ok-nonnull-into-nullable-return", `func Run() () -> string? -> () -> "ok"`)
             yield AcceptedRow(
@@ -454,7 +495,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v11.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v12.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -483,6 +524,8 @@ namespace Lib5686
         public static Task<string>? PickAsync(Expression<Func<Task<string>>> f, bool b) => f.Compile()();
         public static (string, int) PickTuple(Func<(string, int)> f, int n) => f();
         public static (string, int) PickTuple(Expression<Func<(string, int)>> f, bool b) => f.Compile()();
+        public static (string, int)? PickNullableTuple(Func<(string, int)?> f, int n) => f();
+        public static (string, int)? PickNullableTuple(Expression<Func<(string, int)?>> f, bool b) => f.Compile()();
         public static (Exception, int) PickExceptionTuple(Func<(Exception, int)> f, int n) => f();
         public static (Exception, int) PickExceptionTuple(Expression<Func<(Exception, int)>> f, bool b) => f.Compile()();
         public static string? PickExpressionOrInt(Expression<Func<string>> f, int n) => f.Compile()();

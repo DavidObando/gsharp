@@ -4055,9 +4055,26 @@ internal class ConversionClassifier {
     ) BoundExpression {
         if expression is BoundTupleLiteralExpression &&
             expression.Type is TupleTypeSymbol sourceTuple &&
-            targetType is TupleTypeSymbol targetTuple &&
-            sourceTuple.Arity == targetTuple.Arity {
-            return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit: false)
+            (targetType is TupleTypeSymbol || targetType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) {
+            let targetTuple = if targetType is TupleTypeSymbol directTarget {
+                directTarget
+            } else {
+                cast[TupleTypeSymbol](cast[NullableTypeSymbol](targetType).UnderlyingType)
+            }
+            if sourceTuple.Arity == targetTuple.Arity {
+                let convertedTuple = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    targetTuple,
+                    allowExplicit: false
+                )
+                return if convertedTuple is BoundErrorExpression || object.ReferenceEquals(targetType, targetTuple) {
+                    convertedTuple
+                } else {
+                    BoundConversionExpression(nil, targetType, convertedTuple, binderCtx.IsCheckedContext)
+                }
+            }
         }
         Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, targetType)
         return BoundErrorExpression(expression.Syntax)
@@ -5195,6 +5212,34 @@ internal class ConversionClassifier {
         }
 
         func HasReferenceNullabilityReturnMismatch(sourceReturn TypeSymbol, targetReturn TypeSymbol) bool {
+            let unwrappedSourceTuple = if sourceReturn is TupleTypeSymbol directSourceTuple {
+                directSourceTuple
+            } else if sourceReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableSourceTuple} {
+                nullableSourceTuple
+            } else {
+                default(TupleTypeSymbol?)
+            }
+            let unwrappedTargetTuple = if targetReturn is TupleTypeSymbol directTargetTuple {
+                directTargetTuple
+            } else if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableTargetTuple} {
+                nullableTargetTuple
+            } else {
+                default(TupleTypeSymbol?)
+            }
+            if unwrappedSourceTuple != nil &&
+                unwrappedTargetTuple != nil &&
+                unwrappedSourceTuple.Arity == unwrappedTargetTuple
+                .Arity {
+                for var i = 0; i < unwrappedSourceTuple.Arity; i++ {
+                    if HasReferenceNullabilityReturnMismatch(
+                        unwrappedSourceTuple.ElementTypes[i],
+                        unwrappedTargetTuple.ElementTypes[i]
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
             if sourceReturn == TypeSymbol.Void ||
                 sourceReturn == TypeSymbol.Error ||
                 targetReturn == TypeSymbol.Void ||
@@ -5204,17 +5249,6 @@ internal class ConversionClassifier {
                 NullableLifting.IsAnyValueTypeNullable(targetReturn as NullableTypeSymbol) ||
                 targetReturn is NullableTypeSymbol ||
                 targetReturn is PlatformTypeSymbol {
-                return false
-            }
-            if sourceReturn is TupleTypeSymbol sourceTuple &&
-                targetReturn is TupleTypeSymbol targetTuple &&
-                sourceTuple.Arity == targetTuple
-                .Arity {
-                for var i = 0; i < sourceTuple.Arity; i++ {
-                    if HasReferenceNullabilityReturnMismatch(sourceTuple.ElementTypes[i], targetTuple.ElementTypes[i]) {
-                        return true
-                    }
-                }
                 return false
             }
             if Conversion.Classify(sourceReturn, targetReturn)

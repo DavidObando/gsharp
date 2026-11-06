@@ -3495,7 +3495,9 @@ partial class CSharpToGSharpTranslator {
                     .GetTypeInfo(lambda)
                     .ConvertedType is INamedTypeSymbol{DelegateInvokeMethod: {}} &&
                     (
-                    this.LambdaFeedsDeclaredCollectionElement(lambda) || this.SlotTypeIsDeclared(
+                    this.LambdaHasExplicitDelegateCast(lambda) || this.LambdaFeedsDeclaredCollectionElement(lambda) ||
+                        this
+                        .SlotTypeIsDeclared(
                         this.ResolveValueSink(lambda) ??
                             (
                             this.FindResultLambda(lambda) is {} enclosingLambda ? this.GetLambdaTargetDelegateType(
@@ -3510,6 +3512,54 @@ partial class CSharpToGSharpTranslator {
                 true
             }
             default: false
+        }
+
+        private func LambdaHasExplicitDelegateCast(lambda AnonymousFunctionExpressionSyntax) bool {
+            var node Microsoft.CodeAnalysis.SyntaxNode? = lambda
+            while node != nil {
+                switch node.Parent {
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax {
+                        node = node.Parent
+                    }
+                    case conditional is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax when conditional.Condition != node {
+                        node = conditional
+                    }
+                    case arm is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax when arm.Expression == node {
+                        node = arm.Parent
+                    }
+                    case castExpr is CastExpressionSyntax {
+                        if this
+                            .context
+                            .GetTypeInfo(castExpr.Type)
+                            .Type is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
+                            !ContainsTypeParameter(invoke.ReturnType) {
+                            return true
+                        }
+                        node = castExpr
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            return false
         }
 
         private func MemberSlotIsDeclared(
@@ -3698,12 +3748,40 @@ partial class CSharpToGSharpTranslator {
         private func ReceiverTypeArgumentsAreDeclared(
             receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            let unwrapped = Unparenthesize(receiver)
+            var unwrapped = Unparenthesize(receiver)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedReceiver {
+                    unwrapped = Unparenthesize(checkedReceiver.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedReceiver {
+                    unwrapped = Unparenthesize(suppressedReceiver.Operand)
+                    continue
+                }
+                break
+            }
             if unwrapped == nil {
                 return false
             }
             if unwrapped is InstanceExpressionSyntax {
                 return true
+            }
+            if unwrapped is CastExpressionSyntax castExpression {
+                let castType = this.context.GetTypeInfo(castExpression.Type).Type
+                return castType is INamedTypeSymbol && !ContainsTypeParameter(castType)
+            }
+            if unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax binaryExpression &&
+                binaryExpression
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsExpression) {
+                let asType = this.context.GetTypeInfo(binaryExpression.Right).Type
+                return asType is INamedTypeSymbol && !ContainsTypeParameter(asType)
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
                 return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull)

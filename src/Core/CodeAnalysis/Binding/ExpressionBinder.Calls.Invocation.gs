@@ -648,10 +648,9 @@ internal partial class ExpressionBinder {
             ) {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                    if inner is LambdaExpressionSyntax lambdaSyntax && symbolicTargets!!.TryGetValue(
-                        idx,
-                        out var target
-                    ) {
+                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
+                        symbolicTargets!!
+                        .TryGetValue(idx, out var target) {
                         // Issue #2345: when this slot's return type was fully
                         // recovered (e.g. `void` for an Action-shaped
                         // parameter), bind against the real target so the
@@ -787,7 +786,7 @@ internal partial class ExpressionBinder {
             }
             for idx in deferredIndices {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                if inner is LambdaExpressionSyntax lambdaSyntax {
+                if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax {
                     let target = targets[idx]
                     let slotIndex = idx
                     boundArgs[idx] = BindLambdaWithCandidateTarget(
@@ -827,10 +826,9 @@ internal partial class ExpressionBinder {
             ) {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                    if inner is LambdaExpressionSyntax lambdaSyntax && partialTargets!!.TryGetValue(
-                        idx,
-                        out var target
-                    ) {
+                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
+                        partialTargets!!
+                        .TryGetValue(idx, out var target) {
                         boundArgs[idx] = lambdas.BindLambdaExpression(
                             lambdaSyntax,
                             target,
@@ -880,7 +878,7 @@ internal partial class ExpressionBinder {
         let argIndexByParamIndex = Dictionary[int32, int32]()
         for idx in deferredIndices {
             let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             let paramIndex = idx + offset
@@ -1025,7 +1023,7 @@ internal partial class ExpressionBinder {
         let arityByIndex = Dictionary[int32, int32]()
         for idx in deferredIndices {
             let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             arityByIndex[idx] = lambda.Parameters.Count
@@ -1732,8 +1730,8 @@ internal partial class ExpressionBinder {
                     )
                 } else if IsUntypedArrowLambda(inner) {
                     deferredArrowLambdaIndices.Add(argSlot)
-                    boundArguments.Add(BoundErrorExpression(inner))
-                } else if inner is LambdaExpressionSyntax {
+                    boundArguments.Add(BoundErrorExpression(OverloadResolver.GetLambdaArgumentSyntax(inner) ?? inner))
+                } else if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax {
                     let argName = if argumentNames.IsDefault {
                         default(string?)
                     } else {
@@ -1757,7 +1755,7 @@ internal partial class ExpressionBinder {
                         .TypeArguments
                         .Any(TypeSymbol.RequiresSymbolicProjection) {
                         deferredArrowLambdaIndices.Add(argSlot)
-                        boundArguments.Add(BoundErrorExpression(inner))
+                        boundArguments.Add(BoundErrorExpression(lambdaSyntax))
                         lambdaHandled = true
                     }
                     if !lambdaHandled && UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot) {
@@ -1783,14 +1781,13 @@ internal partial class ExpressionBinder {
                             blockedByOpenGenericParameter: out var blocked,
                             sawOpenGenericParameter: out var sawOpen
                         )
-                        let lambdaSyntax LambdaExpressionSyntax? = inner as LambdaExpressionSyntax
-                        if (lambdaSyntax?.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
+                        if (lambdaSyntax.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
                             (hasClosedTarget && sawOpen) {
                             deferredArrowLambdaIndices.Add(argSlot)
-                            boundArguments.Add(BoundErrorExpression(inner))
+                            boundArguments.Add(BoundErrorExpression(lambdaSyntax))
                             lambdaHandled = true
                         }
-                        if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
+                        if !lambdaHandled && hasClosedTarget {
                             let slotIndex = argSlot
                             boundArguments.Add(
                                 BindLambdaWithCandidateTarget(
@@ -4087,7 +4084,7 @@ internal partial class ExpressionBinder {
         /// lambda with at least one parameter whose type is omitted, so its
         /// parameter type(s) must be inferred from a target delegate.
         private func IsUntypedArrowLambda(inner ExpressionSyntax) bool {
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             for var i = 0; i < lambda.Parameters.Count; i++ {
@@ -4530,7 +4527,7 @@ internal partial class ExpressionBinder {
             let arities = [deferredIndices.Count]int32
             for var i = 0; i < deferredIndices.Count; i++ {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[deferredIndices[i]])
-                if inner is not LambdaExpressionSyntax lambda {
+                if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                     return methods
                 }
                 arities[i] = lambda.Parameters.Count

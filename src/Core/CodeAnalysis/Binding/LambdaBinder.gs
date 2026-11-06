@@ -996,6 +996,39 @@ internal class LambdaBinder {
         discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil,
         isExpressionTreeTarget bool = false
     ) BoundExpression {
+        var checkedParent = syntax.Parent
+        while checkedParent is ParenthesizedExpressionSyntax {
+            checkedParent = checkedParent.Parent
+        }
+        if checkedParent is CheckedExpressionSyntax checkedExpression {
+            using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
+            return BindLambdaExpressionCore(
+                syntax,
+                targetFunctionType,
+                inferReturnTypeFromBody,
+                acceptsNaturalType,
+                discardedTargetDiagnostics,
+                isExpressionTreeTarget
+            )
+        }
+        return BindLambdaExpressionCore(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType,
+            discardedTargetDiagnostics,
+            isExpressionTreeTarget
+        )
+    }
+
+    private func BindLambdaExpressionCore(
+        syntax LambdaExpressionSyntax,
+        targetFunctionType FunctionTypeSymbol? = nil,
+        inferReturnTypeFromBody bool = false,
+        acceptsNaturalType((TypeSymbol) -> bool)? = nil,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil,
+        isExpressionTreeTarget bool = false
+    ) BoundExpression {
         let startMark = Diagnostics.Count
         if bindLambdaBodyExpression == nil {
             throw InvalidOperationException(
@@ -2579,7 +2612,7 @@ internal class LambdaBinder {
         let trailingConverted = if trailing.Type == returnType {
             trailing
         } else if trailing.Type is TupleTypeSymbol &&
-            returnType is TupleTypeSymbol &&
+            (returnType is TupleTypeSymbol || returnType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) &&
             ConversionClassifier
             .HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {
             conversions.BindLambdaReturnTupleConversion(trailingLocation, trailing, returnType)
@@ -4370,11 +4403,18 @@ internal class LambdaBinder {
                 return TypeSymbol.Void
             }
             let resolvedResult = result ?? TypeSymbol.Error
-            return if resolvedResult != TypeSymbol.Null {
+            var finalResult = if resolvedResult != TypeSymbol.Null {
                 TupleTypeSymbol.ResolveNilElements(resolvedResult)
             } else {
                 resolvedResult
             }
+            if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} &&
+                finalResult is TupleTypeSymbol &&
+                Conversion
+                .Classify(finalResult, targetReturn).IsImplicit {
+                finalResult = NullableTypeSymbol.Get(finalResult)
+            }
+            return finalResult
         }
 
         // Issue #2152: recognizes every bound-node shape the binder uses to
