@@ -167,6 +167,18 @@ func tern(p string?) int32 {
     return s != nil ? consume(s.Length, (s = nil)) : 0
 }
 Console.WriteLine(tern("abc"))`, "3"}
+            yield[]object{"pure_from_end_index_assignment_preserves_member_narrowing_for_rhs", `import System
+class Box {
+    let Text string? = "abcd"
+}
+func Run(arr []int32, b Box) int32 {
+    if b.Text != nil {
+        arr[^1] = b.Text.Length
+        return arr[1]
+    }
+    return 0
+}
+Console.WriteLine(Run([]int32{1, 2}, Box{}))`, "4"}
         }
     }
 }

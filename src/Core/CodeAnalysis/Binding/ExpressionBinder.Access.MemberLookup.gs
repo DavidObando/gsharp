@@ -2296,7 +2296,6 @@ internal partial class ExpressionBinder {
                 if !TryBindSystemIndexValue(indexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
-                ApplySubExpressionNarrowingEffects(indexSyntax, boundSystemIndex!!)
                 let indexLocal = DeclareRangeTemp("index", boundSystemIndex!!.Type, boundSystemIndex!!, statements)
                 sharedIndex = BoundVariableExpression(nil, indexLocal)
             }
@@ -2839,7 +2838,6 @@ internal partial class ExpressionBinder {
             )
         }
         if boundIndexOverride == nil && TryBindSystemIndexValue(indexSyntax, out var systemIndex) {
-            ApplySubExpressionNarrowingEffects(indexSyntax, systemIndex!!)
             return BindSystemIndexAssignment(
                 variable,
                 target,
