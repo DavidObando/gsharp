@@ -603,7 +603,8 @@ internal class ClosureEmitter {
                 invokeMethod.ThisParameter,
                 "a closure Invoke method has an instance receiver",
                 expression: "invokeMethod.ThisParameter"
-            )
+            ),
+            body
         )
         let rewrittenBody = cast[BoundBlockStatement](rewriter.RewriteStatement(body))
         if rewriter.UnsupportedCapture != nil {
@@ -693,7 +694,8 @@ internal class ClosureEmitter {
                         info.InvokeMethod.ThisParameter,
                         "a closure Invoke method has an instance receiver",
                         expression: "info.InvokeMethod.ThisParameter"
-                    )
+                    ),
+                    originalBody
                 )
                 let rewrittenBody = cast[BoundBlockStatement](rewriter.RewriteStatement(originalBody))
                 this.lambdaBodies[info.InvokeMethod] = cast[BoundBlockStatement](Lowerer.Lower(rewrittenBody))
@@ -825,15 +827,24 @@ internal class ClosureEmitter {
         private let closureClass StructSymbol
         private let captureFields Dictionary[VariableSymbol, FieldSymbol]
         private let thisParam ParameterSymbol
+        private let liveGlobalStorage HashSet[BoundVariableExpression]?
 
         init(
             closureClass StructSymbol,
             captureFields Dictionary[VariableSymbol, FieldSymbol],
-            thisParam ParameterSymbol
+            thisParam ParameterSymbol,
+            body BoundStatement
         ) {
             this.closureClass = closureClass
             this.captureFields = captureFields
             this.thisParam = thisParam
+            this.liveGlobalStorage = if captureFields.Keys.Any(
+                (variable VariableSymbol) -> variable is GlobalVariableSymbol or ImplicitStaticFieldVariableSymbol
+            ) {
+                GoCapturedVariableCollector.CollectLiveGlobalStorageReferences(body)
+            } else {
+                nil
+            }
         }
 
         // Set when the rewriter encounters a captured variable in a context
@@ -851,6 +862,9 @@ internal class ClosureEmitter {
         }
 
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
+            if this.liveGlobalStorage?.Contains(node) == true {
+                return node
+            }
             if this.captureFields.TryGetValue(node.Variable, out var field) {
                 // Issue #2442: a read-only narrowed binding (see LambdaBinder's
                 // FilterNarrowingsSurvivingClosureCapture) carries a non-null

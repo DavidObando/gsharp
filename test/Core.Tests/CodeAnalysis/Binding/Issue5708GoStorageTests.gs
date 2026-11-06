@@ -7,6 +7,7 @@ package GSharp.Core.Tests.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System.Linq
@@ -55,15 +56,7 @@ class Worker : Parent {
     }
 }
 `
-        let tree = SyntaxTree.Parse(SourceText.From(source))
-        let compilation = Compilation(tree)
-        let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
-        let errors = tree
-            .Diagnostics
-            .Concat(compilation.GlobalScope.Diagnostics)
-            .Concat(program.Diagnostics)
-            .Where((d Diagnostic) -> d.IsError)
-            .ToArray()
+        let errors = BindErrors(source)
         let error = Assert.Single(errors)
         Assert.Equal("GS0460", error.Id)
         Assert.Equal(TextSpan(source.IndexOf("go ") + 3, operand.Length), error.Location.Span)
@@ -80,20 +73,75 @@ class Worker : Parent {
         let source = `package Issue5708Handler
 import GSharp.Core.Tests.Fixtures
 ` + keyword + " " + operand + "\n"
-        let tree = SyntaxTree.Parse(SourceText.From(source))
-        let compilation = Compilation(tree)
-        let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
-        let errors = tree
-            .Diagnostics
-            .Concat(compilation.GlobalScope.Diagnostics)
-            .Concat(program.Diagnostics)
-            .Where((d Diagnostic) -> d.IsError)
-            .ToArray()
+        let errors = BindErrors(source)
         let error = Assert.Single(errors)
         Assert.Equal("GS0460", error.Id)
         Assert.Equal(
             TextSpan(source.IndexOf(keyword + " " + operand) + keyword.Length + 1, operand.Length),
             error.Location.Span
         )
+    }
+
+    @Theory
+    @InlineData("go")
+    @InlineData("defer")
+    func UnmanagedPointerArguments_AreValues(keyword string) {
+        let source = `package Issue5708Pointer
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    let items = []int32{0}
+    ` + keyword + ` Write(&items[0])
+}
+`
+        Assert.Empty(BindErrors(source))
+    }
+
+    @Theory
+    @InlineData("go")
+    @InlineData("defer")
+    func UnforwardedByReferenceHandlers_ReportGS0460(keyword string) {
+        using let fixture = CSharpFixture(`namespace Handler5708 {
+    public static class Api {
+        public static void Use(ref System.Runtime.CompilerServices.DefaultInterpolatedStringHandler handler) {}
+    }
+}`)
+        using let references = fixture.RuntimeReferences()
+        let operand = `Api.Use("x=${42}")`
+        let source = "package Issue5708BareHandler\nimport Handler5708\n" + keyword + " " + operand + "\n"
+        let error = Assert.Single(BindErrors(source, references))
+        Assert.Equal("GS0460", error.Id)
+        Assert.Equal(TextSpan(source.IndexOf(operand), operand.Length), error.Location.Span)
+    }
+
+    @Theory
+    @InlineData("go Consume(*p)", "Consume(*p)")
+    @InlineData("async let r = Identity(*p)", "Identity(*p)")
+    func ManagedReferenceGlobals_StillReportCaptureEscape(statement string, operand string) {
+        let source = `package Issue5708ManagedGlobal
+func Identity(value int32) int32 -> value
+func Consume(value int32) {}
+var x = 1
+var p = &x
+scope {
+    ` + statement + `
+}
+`
+        let error = Assert.Single(BindErrors(source))
+        Assert.Equal("GS9004", error.Id)
+        Assert.Equal(TextSpan(source.IndexOf(operand), operand.Length), error.Location.Span)
+    }
+
+    shared {
+        private func BindErrors(source string, references ReferenceResolver? = nil)[]Diagnostic {
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            let compilation = Compilation(references, tree)
+            let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
+            return tree
+                .Diagnostics
+                .Concat(compilation.GlobalScope.Diagnostics)
+                .Concat(program.Diagnostics)
+                .Where((d Diagnostic) -> d.IsError)
+                .ToArray()
+        }
     }
 }

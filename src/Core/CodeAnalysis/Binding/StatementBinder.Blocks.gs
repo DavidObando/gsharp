@@ -1329,39 +1329,8 @@ internal partial class StatementBinder {
             expression,
             prefix,
             (receiver BoundExpression) -> CaptureCallReceiver(receiver, prefix, retainedVariables, retainRemaining),
-            func (argument BoundExpression) BoundExpression {
-                let captured = CaptureGoOperand(argument, prefix, retainedVariables, retainRemaining)
-                // Byref-like operands stay in the child, but their global value inputs must still be snapshots.
-                return if retainRemaining[0] {
-                    GoArgumentGlobalSnapshotRewriter(
-                        (value BoundExpression) -> SpillToReadOnlyLocal(
-                            value,
-                            "$$go$$arg$$${binderCtx.GoArgumentCounter++}",
-                            prefix
-                        )
-                    ).Rewrite(captured)
-                } else {
-                    captured
-                }
-            }
+            (argument BoundExpression) -> CaptureGoOperand(argument, prefix, retainedVariables, retainRemaining)
         )
-    }
-
-    private class GoArgumentGlobalSnapshotRewriter : BoundTreeRewriter {
-        private let capture Func[BoundExpression, BoundExpression]
-
-        init(capture Func[BoundExpression, BoundExpression]) {
-            this.capture = capture
-        }
-
-        func Rewrite(node BoundExpression) BoundExpression -> RewriteExpression(node)
-
-        protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression ->
-        if node.Variable is GlobalVariableSymbol {
-            this.capture(node)
-        } else {
-            node
-        }
     }
 
     // ADR-0030 / #5707 and ADR-0174 D5: defer and go share receiver-location capture.
@@ -3263,8 +3232,9 @@ internal partial class StatementBinder {
                 default: ImmutableArray[BoundExpression].Empty
             }
             for argument in arguments {
-                if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression) ||
-                    argument.Type is ByRefTypeSymbol {
+                // Interpolated handlers receive their managed address during lowering.
+                if argument.Type is ByRefTypeSymbol ||
+                    argument is BoundInterpolatedStringExpression{Handler: {HandlerRefKind: not RefKind.None}} {
                     return true
                 }
             }

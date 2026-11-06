@@ -335,6 +335,81 @@ scope {
         Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
     }
 
+    @Fact
+    func RetainedGlobalOperands_KeepDependenciesAndSeparateStorageFromValues() {
+        let source = `package Issue5708Retained
+` + Prelude + `
+struct Counter {
+    var n int32
+    func Add(span ReadOnlySpan[char], value int32) { n += value }
+}
+var x int32 = 0
+var items []int32 = []int32{7}
+var counter Counter = Counter{n: 7}
+var second Counter = Counter{n: 7}
+func Consume(span ReadOnlySpan[char], value int32) { Log.Add("write " + value.ToString()) }
+func Run(release ManualResetEventSlim) {
+    let original = items
+    scope {
+        go Consume("abc".AsSpan(), {
+            let _ = 0
+            x = 1
+            x
+        })
+        go items.AsSpan().Clear()
+        go counter.Add("abc".AsSpan(), counter.n)
+        go second.Add("abc".AsSpan(), second.n.ToString().Length)
+        items = []int32{99}
+        counter.n = 99
+        second.n = 99
+        release.Set()
+    }
+    Log.Add("arrays " + original[0].ToString() + "/" + items[0].ToString())
+    Log.Add("counter " + counter.n.ToString())
+    Log.Add("second " + second.n.ToString())
+}
+RestrictPool()
+Blocked((release ManualResetEventSlim) -> Run(release))
+`
+        AssertRuns(source, "Issue5708RetainedGlobals", `arrays 0/99
+counter 106
+second 100
+write 1
+`)
+    }
+
+    @Fact
+    func ManagedReferenceGlobal_AsyncLetReportsEscapeInsteadOfEmitFailure() {
+        let source = `package Issue5708ManagedDriver
+func Identity(value int32) int32 -> value
+var x = 1
+var p = &x
+scope {
+    async let r = Identity(*p)
+}
+`
+        let (exitCode, output) = TryCompile(source, "Issue5708ManagedGlobal")
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains("(6,19,6,31): error GS9004", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func UnmanagedPointerArgument_CompilesAndMutatesTheArray() {
+        let source = `package Issue5708PointerDriver
+import System
+var items []int32 = []int32{0}
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    scope { go Write(&items[0]) }
+    Console.WriteLine(items[0])
+}
+Run()
+`
+        let assemblyPath = Compile(source, "Issue5708PointerValue")
+        Assert.Equal("42\n".ReplaceLineEndings(Environment.NewLine), RunBounded(assemblyPath, "PointerValue"))
+    }
+
     /// A value-type receiver is storage: the containers that locate it (the
     /// object holding the field or CLR field, the tuple element chain, the
     /// array and its index) are evaluated and validated on the spawner before
