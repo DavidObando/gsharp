@@ -656,6 +656,19 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             changed |= rewritten != pair.Value
         }
         structSym.SetInstanceFieldInitializers(instanceInitializers.ToImmutable())
+        if !structSym.StaticInitializerStatements.IsDefaultOrEmpty {
+            let builder = ImmutableArray.CreateBuilder[BoundStatement](structSym.StaticInitializerStatements.Length)
+            var statementsChanged = false
+            for statement in structSym.StaticInitializerStatements {
+                let rewritten = this.RewriteStatement(statement)
+                statementsChanged |= rewritten != statement
+                builder.Add(rewritten)
+            }
+            if statementsChanged {
+                structSym.SetStaticInitializerStatements(builder.MoveToImmutable())
+                changed = true
+            }
+        }
         return changed
     }
 
@@ -755,6 +768,12 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
             }
             let statement = cast[BoundBlockStatement](lowerer.RewriteStatement(program.Statement))
             changed |= statement != program.Statement
+            let initializers = program.Initializers.ToBuilder()
+            // Issue #4663: deterministic order, never identity-hash order.
+            for pair in BoundProgramOrder.Initializers(program) {
+                initializers[pair.Key] = pair.Value.Rewrite(lowerer.RewriteExpression, lowerer.RewriteStatement)
+                changed |= initializers[pair.Key] != pair.Value
+            }
             // Issue #975: base-constructor-initializer arguments (`: base(args)`) are
             // stored on the constructor / struct symbols rather than inside a method
             // body, so they bypass the function-body rewrite above. Lower any
@@ -792,6 +811,7 @@ internal class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter {
                 program.Globals,
                 program.Delegates
             ){
+                Initializers = initializers.ToImmutable(),
                 Imports = program.Imports,
                 FriendAssemblies = program.FriendAssemblies,
                 AssemblyAttributes = program.AssemblyAttributes,
