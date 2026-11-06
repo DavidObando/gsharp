@@ -445,9 +445,50 @@ class Program {
             )
                 .Append(");\n")
         }
+        // Issue #5578: the fourth form returns a target-typed conditional whose branch calls the next level.
+        for shape in shapes {
+            source
+                .Append("    Console.Write(")
+                .Append(NestConditionalReturnLiterals(shape, 24, "() -> { return ", " }"))
+                .Append(")\n")
+            oracle
+                .Append("        Console.Write(")
+                .Append(NestConditionalReturnLiterals(OracleShape(shape), 2, "() => { return ", "; }"))
+                .Append(");\n")
+        }
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOO")
+        Check(fixture, source.ToString(), oracle.ToString(), "OOOOOOOOOOOOOOOO")
+    }
+
+    /// Issue #5604: sequential retried returns capture and restore operand-local deltas instead of copying the
+    /// accumulated labels and held returns of the body, so 800 sequential retried returns bind in linear time.
+    @Fact
+    func SequentialRetriedReturns_BindInLinearWork() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let body = SequentialRetriedReturnsBody(800, isOracle: false)
+        let oracleBody = SequentialRetriedReturnsBody(10, isOracle: true)
+        let source = "import System\nimport FunctionControl\nfunc Main() {\n    let flag = true\n" +
+            "    Console.Write(Calls.M(" +
+            body +
+            ", 1))\n" +
+            "    Console.Write(Calls.In(" +
+            body +
+            ", 1))\n}\n"
+        let oracle = "using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n        var flag = true;\n" +
+            "        Console.Write(Calls.M(" +
+            oracleBody +
+            ", 1));\n" +
+            "        Console.Write(Calls.In(" +
+            oracleBody +
+            ", 1));\n    }\n}\n"
+        let watch = Stopwatch.StartNew()
+        Check(fixture, source, oracle, "OO")
+        watch.Stop()
+        Assert.True(
+            watch.Elapsed < TimeSpan.FromSeconds(15),
+            "Sequential retried returns took " + watch.Elapsed.ToString()
+        )
     }
 
     /// Issue #5569 control (review of PR #5564): a literal whose parameter count no candidate's delegate accepts
@@ -574,6 +615,63 @@ class Program {
     }
 }
 `, "OOOOOOOOOOOOOOOOFFFF")
+    }
+
+    /// Issue #5578: a target-typed return value (conditional, `switch`, `if`, block or formattable interpolation)
+    /// that contains a function literal reuses the inner literal across its target and natural passes, so the
+    /// enclosing speculative literal falls back to its natural type and selects `object`, as in C#. With only a
+    /// delegate candidate, the target diagnostics are still reported.
+    @Fact
+    func TargetTypedReturnValue_ContainingFunctionLiteral_SelectsObject() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    let k = 1
+    let flag = true
+    Console.Write(Calls.M(() -> { return true ? Calls.M(() -> { return "s" }, 1) : "t" }, 1))
+    Console.Write(Calls.In(() -> { return true ? Calls.M(() -> { return "s" }, 1) : "t" }, 1))
+    Console.Write(C(() -> { return true ? Calls.M(() -> { return "s" }, 1) : "t" }, 1).Kind)
+    Console.Write(InCtor(() -> { return true ? Calls.M(() -> { return "s" }, 1) : "t" }, 1).Kind)
+    Console.Write(Calls.In(() -> { return true ? Calls.M(() -> 1, 1) : "t" }, 1))
+    Console.Write(Calls.M(() -> { return switch k { case 1: Calls.M(() -> { return "s" }, 1) default: "b" } }, 1))
+    Console.Write(Calls.In(() -> { return if true { Calls.M(() -> { return "s" }, 1) } else { "b" } }, 1))
+    Console.Write(Calls.M(() -> { return {
+        let q = "s"
+        Calls.M(() -> { return q }, 1)
+    } }, 1))
+    Console.Write(Calls.Fm(() -> {
+        if !flag {
+            return "s"
+        }
+        return "x${Calls.M(() -> 1, 1)}"
+    }, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        var k = 1;
+        var flag = true;
+        Console.Write(Calls.M(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
+        Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1));
+        Console.Write(new C(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
+        Console.Write(new InCtor(() => { return true ? Calls.M(() => { return "s"; }, 1) : "t"; }, 1).Kind);
+        Console.Write(Calls.In(() => { return true ? Calls.M(() => 1, 1) : "t"; }, 1));
+        Console.Write(Calls.M(() => { return k switch { 1 => Calls.M(() => { return "s"; }, 1), _ => "b" }; }, 1));
+        Console.Write(Calls.In(() => { return true ? Calls.M(() => { return "s"; }, 1) : "b"; }, 1));
+        Console.Write(Calls.M(() => { var q = "s"; return Calls.M(() => { return q; }, 1); }, 1));
+        Console.Write(Calls.Fm(() => { if (!flag) { return "s"; } return $"x{Calls.M(() => 1, 1)}"; }, 1));
+    }
+}
+`, "OOOOOOOOO<xF>")
+        let errors = RejectConsumerErrors(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.One(() -> { return true ? Calls.M(() -> { return "s" }, 1) : "t" }))
+}
+`)
+        Assert.Equal([](Code string, Line int32, Column int32){("GS0155", 4, 51), ("GS0155", 4, 86)}, errors)
     }
 
     /// Issue #5569: an explicit parameter type or a parameter count that the delegate does not accept makes the
@@ -876,19 +974,20 @@ class Program {
         }
     }
 
-    /// Issue #5569 (review of 7c9c7101): the backward `goto` check of a `return` value's conversion to the delegate
-    /// result waits for the choice of the function type. Here the other `return` makes the natural result
-    /// `string?`, which takes the nil `s`, so the check does not apply and the call binds as C# binds it. (A
-    /// `string` natural result keeps the check; see the test above.)
+    /// Issue #5569 (review of 7c9c7101) / #5604: the backward `goto` check of a `return` value's conversion to the
+    /// delegate result waits for the choice of the function type, including when the `return` value is retried
+    /// (conditional, `if`, `switch` or block). Here the other `return` makes the natural result `string?`, which
+    /// takes the nil `s`, so the check does not apply and the call binds as C# binds it. A conversion inside a
+    /// block return value that the natural pass also needs (`let x string = s`) still reports GS0155.
     @Fact
     func DeferredReturnNarrowingCheck_WaitsForTheNaturalType() {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
-        let literal = `() -> {
+        let template = `() -> {
         var s string? = "a"
         var n = 0
         if s != nil {
             L: if n > 0 {
-                return s
+                return |
             }
             n++
             s = nil
@@ -896,20 +995,44 @@ class Program {
         }
         return default(string?)
     }`
-        let oracleLiteral = "() => { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return s; } n++; " +
+        let oracleTemplate = "() => { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { return |; } n++; " +
             "s = null; goto L; } return default(string?); }"
+        let returnValues = [](Value string, Oracle string){
+            ("s", "s"),
+            ("n > 1 ? \"t\" : s", "n > 1 ? \"t\" : s"),
+            ("if n > 1 { \"t\" } else { s }", "n > 1 ? \"t\" : s"),
+            ("switch n { case 2: \"t\" default: s }", "n switch { 2 => \"t\", _ => s }"),
+            ("{\n                    n = n + 0\n                    s\n                }", "s")
+        }
         let source = StringBuilder("import System\nimport FunctionControl\nfunc Main() {\n")
         let oracle = StringBuilder("using System;\nusing FunctionControl;\nclass Program {\n    static void Main() {\n")
-        for shape in[]string{"Calls.Ns(|, 1)", "Calls.NsIn(|, 1)", "NsCtor(|, 1).Kind", "NsInCtor(|, 1).Kind"} {
-            source.Append("    Console.Write(").Append(shape.Replace("|", literal)).Append(")\n")
-            oracle
-                .Append("        Console.Write(")
-                .Append(OracleShape(shape).Replace("|", oracleLiteral))
-                .Append(");\n")
+        let expected = StringBuilder()
+        for (value, oracleValue) in returnValues {
+            let literal = template.Replace("|", value)
+            let oracleLiteral = oracleTemplate.Replace("|", oracleValue)
+            for shape in[]string{"Calls.Ns(|, 1)", "Calls.NsIn(|, 1)", "NsCtor(|, 1).Kind", "NsInCtor(|, 1).Kind"} {
+                source.Append("    Console.Write(").Append(shape.Replace("|", literal)).Append(")\n")
+                oracle
+                    .Append("        Console.Write(")
+                    .Append(OracleShape(shape).Replace("|", oracleLiteral))
+                    .Append(");\n")
+                expected.Append("F<null>")
+            }
         }
         source.Append("}\n")
         oracle.Append("    }\n}\n")
-        Check(fixture, source.ToString(), oracle.ToString(), "F<null>F<null>F<null>F<null>")
+        Check(fixture, source.ToString(), oracle.ToString(), expected.ToString())
+        let rejectedBlock = template.Replace(
+            "|",
+            "{\n                    let x string = s\n                    x\n                }"
+        )
+        let errors = RejectConsumerErrors(
+            fixture,
+            "import System\nimport FunctionControl\nfunc Main() {\n    Console.Write(Calls.NsIn(" +
+                rejectedBlock +
+                ", 1))\n}\n"
+        )
+        Assert.Equal([](Code string, Line int32, Column int32){("GS0155", 10, 36), ("GS0155", 18, 16)}, errors)
     }
 
     /// Issue #5603: a function literal with an inferred result checks a narrowed `return` value against a backward
@@ -1782,6 +1905,17 @@ func Main() {
     Console.Write(Calls.FmIn(` + mixed + `, 1))
     Console.Write(Calls.FmIn(` + mixedFlag + `, 1))
     Console.Write(Calls.FmIn(() -> { return "x${1}" }, 1))
+    Console.Write(Calls.Fm(() -> "x${1}", 1))
+    Console.Write(Calls.FmIn(() -> "x${1}", 1))
+    Console.Write(Calls.Fm(() -> ("x${1}"), 1))
+    let f Func[IFormattable] = () -> "x${1}"
+    let fs Func[FormattableString] = () -> "x${1}"
+    let g () -> IFormattable = () -> "x${1}"
+    Console.Write(f().ToString(nil, System.Globalization.CultureInfo.InvariantCulture))
+    Console.Write(fs().Format)
+    Console.Write(g().ToString(nil, System.Globalization.CultureInfo.InvariantCulture))
+    Console.Write(Calls.M(() -> "x${1}", 1))
+    Console.Write(Calls.In(() -> "x${1}", 1))
 }
 `, `using System;
 using FunctionControl;
@@ -1801,9 +1935,20 @@ class Program {
         Console.Write(Calls.FmIn(() => { if (!flag) { return "s"; } return $"x{1}"; }, 1));
         Console.Write(Calls.FmIn(() => { if (flag) { return "s"; } return $"x{1}"; }, 1));
         Console.Write(Calls.FmIn(() => { return $"x{1}"; }, 1));
+        Console.Write(Calls.Fm(() => $"x{1}", 1));
+        Console.Write(Calls.FmIn(() => $"x{1}", 1));
+        Console.Write(Calls.Fm(() => ($"x{1}"), 1));
+        Func<IFormattable> f = () => $"x{1}";
+        Func<FormattableString> fs = () => $"x{1}";
+        Func<IFormattable> g = () => $"x{1}";
+        Console.Write(f().ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        Console.Write(fs().Format);
+        Console.Write(g().ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        Console.Write(Calls.M(() => $"x{1}", 1));
+        Console.Write(Calls.In(() => $"x{1}", 1));
     }
 }
-`, "P<s>P<s>P<s>P<s>P<s>P<s>P<s>O[s]O[s]O<x1>O<x1>O<s>Fx1")
+`, "P<s>P<s>P<s>P<s>P<s>P<s>P<s>O[s]O[s]O<x1>O<x1>O<s>Fx1Fx1Fx1Fx1x1x{0}x1OO")
     }
 
     /// Issue #5569 control: with no other candidate, a target-typed block return value keeps the target bind and
@@ -2712,6 +2857,45 @@ class Program {
             value = "{\nif flag {\nreturn " + value + "\n}\n\"s\"\n}"
         }
         return value
+    }
+
+    /// Issue #5578: nests a block-bodied literal [`depth`](paramref) times inside the true branch of a
+    /// target-typed conditional `return` value.
+    private func NestConditionalReturnLiterals(shape string, depth int32, bodyStart string, bodyEnd string) string {
+        var call = shape.Replace("|", bodyStart + "true ? \"s\" : \"t\"" + bodyEnd)
+        for var level = 0; level < depth; level++ {
+            call = shape.Replace("|", bodyStart + "true ? " + call + " : \"t\"" + bodyEnd)
+        }
+        return call
+    }
+
+    /// Issue #5604: builds a block-bodied literal with [`count`](paramref) sequential labeled conditional returns.
+    private func SequentialRetriedReturnsBody(count int32, isOracle bool) string {
+        let builder = StringBuilder()
+        if isOracle {
+            builder.Append("() => {\n")
+            for var i = 0; i < count; i++ {
+                builder
+                    .Append("            L")
+                    .Append(i)
+                    .Append(": if (!flag) { return flag ? \"s")
+                    .Append(i)
+                    .Append("\" : \"t\"; }\n")
+            }
+            builder.Append("            return \"u\";\n        }")
+        } else {
+            builder.Append("() -> {\n")
+            for var i = 0; i < count; i++ {
+                builder
+                    .Append("        L")
+                    .Append(i)
+                    .Append(": if !flag { return flag ? \"s")
+                    .Append(i)
+                    .Append("\" : \"t\" }\n")
+            }
+            builder.Append("        return \"u\"\n    }")
+        }
+        return builder.ToString()
     }
 
     /// Issue #5569: an expression-bodied literal with one parameter, nested [`depth`](paramref) times, at a

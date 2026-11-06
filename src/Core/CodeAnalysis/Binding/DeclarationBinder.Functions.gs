@@ -2111,12 +2111,28 @@ internal partial class DeclarationBinder {
         // they are not republished into BoundGlobalScope.Variables.
         let inTopLevelContext = function == nil ||
             (function!!.IsTopLevelEntryPoint && object.ReferenceEquals($scope, binderCtx.InitialScope))
-        let variable = if inTopLevelContext {
-            cast[VariableSymbol](
-                GlobalVariableSymbol(name, isReadOnly, type, accessibility, declaringSyntax: identifier)
-            )
+        let retriedVariables = binderCtx.RetriedValueVariables
+        var variable VariableSymbol
+        if !inTopLevelContext && declare && retriedVariables != nil && retriedVariables.TryGetValue(
+            identifier,
+            out var existing
+        ) &&
+            existing is LocalVariableSymbol existingLocal &&
+            existingLocal.Name == name &&
+            existingLocal.IsReadOnly == isReadOnly &&
+            existingLocal.Type == type {
+            variable = existingLocal
         } else {
-            cast[VariableSymbol](LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier))
+            variable = if inTopLevelContext {
+                cast[VariableSymbol](
+                    GlobalVariableSymbol(name, isReadOnly, type, accessibility, declaringSyntax: identifier)
+                )
+            } else {
+                cast[VariableSymbol](LocalVariableSymbol(name, isReadOnly, type, declaringSyntax: identifier))
+            }
+            if !inTopLevelContext && declare && retriedVariables != nil {
+                retriedVariables[identifier] = variable
+            }
         }
         if declare && !$scope.TryDeclareVariable(variable) {
             Diagnostics.ReportSymbolAlreadyDeclared(identifier.Location, name)

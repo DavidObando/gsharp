@@ -281,6 +281,12 @@ internal class LambdaBinder {
         explicitName string? = nil,
         onSignatureBound((FunctionSymbol, FunctionTypeSymbol) -> void)? = nil
     ) BoundExpression {
+        let canCache = explicitName == nil && onSignatureBound == nil
+        let key = RetriedFunctionLiteralKey(syntax, nil, false, false)
+        if canCache && TryReuseRetriedFunctionLiteral(key, nil, nil, out var cached) {
+            return cached!!
+        }
+        let startMark = Diagnostics.Count
         // Issue #4219 (umbrella remainder): this general entry point is used
         // for a plain lambda argument, a `var`-declared literal, and the
         // ordinary (non-group) `let f = func ...` self-recursion path — none
@@ -290,11 +296,19 @@ internal class LambdaBinder {
         // reports GS0588 instead of silently accepting it.
         let signature = PrepareFunctionLiteralSignature(syntax, explicitName, allowRefReturn: false)
         if signature == nil {
-            return BoundErrorExpression(syntax)
+            let error = BoundErrorExpression(syntax)
+            if canCache {
+                RecordRetriedFunctionLiteral(key, error, startMark, nil, 0, false)
+            }
+            return error
         }
         let (synthetic, fnType) = signature
         onSignatureBound?(synthetic, fnType)
-        return BindFunctionLiteralBody(syntax, synthetic, fnType)
+        let bound = BindFunctionLiteralBody(syntax, synthetic, fnType)
+        if canCache {
+            RecordRetriedFunctionLiteral(key, bound, startMark, nil, 0, false)
+        }
+        return bound
     }
 
     private func PrepareFunctionLiteralSignature(
@@ -995,6 +1009,45 @@ internal class LambdaBinder {
         acceptsNaturalType((TypeSymbol) -> bool)? = nil,
         discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil
     ) BoundExpression {
+        let key = RetriedFunctionLiteralKey(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType != nil
+        )
+        if TryReuseRetriedFunctionLiteral(key, acceptsNaturalType, discardedTargetDiagnostics, out var cached) {
+            return cached!!
+        }
+        let startMark = Diagnostics.Count
+        let discardedStart = discardedTargetDiagnostics?.Count ?? 0
+        var keptNaturalType = false
+        let result = BindLambdaExpressionCore(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType,
+            discardedTargetDiagnostics,
+            &keptNaturalType
+        )
+        RecordRetriedFunctionLiteral(
+            key,
+            result,
+            startMark,
+            discardedTargetDiagnostics,
+            discardedStart,
+            keptNaturalType
+        )
+        return result
+    }
+
+    private func BindLambdaExpressionCore(
+        syntax LambdaExpressionSyntax,
+        targetFunctionType FunctionTypeSymbol?,
+        inferReturnTypeFromBody bool,
+        acceptsNaturalType((TypeSymbol) -> bool)?,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        ref keptNaturalType bool
+    ) BoundExpression {
         let startMark = Diagnostics.Count
         if bindLambdaBodyExpression == nil {
             throw InvalidOperationException(
@@ -1031,6 +1084,7 @@ internal class LambdaBinder {
                 discardedTargetDiagnostics,
                 out var natural
             ) {
+                keptNaturalType = true
                 return natural!!
             }
             Diagnostics.AddRange(arityDiagnostics)
@@ -1315,20 +1369,38 @@ internal class LambdaBinder {
             if pname != "_" && !seen.Add(pname) {
                 Diagnostics.ReportParameterAlreadyDeclared(p.Location, pname)
             }
-            let lambdaParam = ParameterSymbol(
-                pname,
-                parameterType,
-                isVariadic,
-                declaringSyntax: p.Identifier,
-                isScoped: p.IsScoped,
-                refKind: refKind
-            )
-            // ADR-0063 §5: arrow-lambda parameters can also declare a default
-            // value; the conversion classifier validates the constant-folded
-            // default at bind time the same way it does for function-literal
-            // parameters.
-            conversions.BindAndAttachParameterDefaultValue(p, lambdaParam)
-            AttachParameterAttributes(p, lambdaParam)
+            let retriedVariables = binderCtx.RetriedValueVariables
+            var lambdaParam ParameterSymbol
+            if p.Identifier != nil && retriedVariables != nil && retriedVariables.TryGetValue(
+                p.Identifier,
+                out var existingParam
+            ) &&
+                existingParam is ParameterSymbol reusedParam &&
+                reusedParam.Name == pname &&
+                reusedParam.Type == parameterType &&
+                reusedParam.IsVariadic == isVariadic &&
+                reusedParam.IsScoped == p.IsScoped &&
+                reusedParam.RefKind == refKind {
+                lambdaParam = reusedParam
+            } else {
+                lambdaParam = ParameterSymbol(
+                    pname,
+                    parameterType,
+                    isVariadic,
+                    declaringSyntax: p.Identifier,
+                    isScoped: p.IsScoped,
+                    refKind: refKind
+                )
+                // ADR-0063 §5: arrow-lambda parameters can also declare a default
+                // value; the conversion classifier validates the constant-folded
+                // default at bind time the same way it does for function-literal
+                // parameters.
+                conversions.BindAndAttachParameterDefaultValue(p, lambdaParam)
+                AttachParameterAttributes(p, lambdaParam)
+                if p.Identifier != nil && retriedVariables != nil {
+                    retriedVariables[p.Identifier] = lambdaParam
+                }
+            }
             parameterSymbols.Add(lambdaParam)
             parameterTypes.Add(parameterType)
         }
@@ -1343,6 +1415,7 @@ internal class LambdaBinder {
                     discardedTargetDiagnostics,
                     out var natural
                 ) {
+                    keptNaturalType = true
                     return natural!!
                 }
                 Diagnostics.AddRange(held)
@@ -1541,6 +1614,7 @@ internal class LambdaBinder {
                     naturalReturnType
                 )
             ) {
+                keptNaturalType = true
                 discardedTargetDiagnostics?.Add(targetDiagnostics)
                 Diagnostics.AddRange(deferredReturns.NaturalDiagnostics())
                 returnType = naturalReturnType
@@ -2615,6 +2689,115 @@ internal class LambdaBinder {
         return false
     }
 
+    internal struct RetriedFunctionLiteralKey : IEquatable[RetriedFunctionLiteralKey] {
+        internal let Syntax SyntaxNode
+        internal let Target FunctionTypeSymbol?
+        internal let InferReturn bool
+        internal let Speculative bool
+
+        init(syntax SyntaxNode, target FunctionTypeSymbol?, inferReturn bool, speculative bool) {
+            Syntax = syntax
+            Target = target
+            InferReturn = inferReturn
+            Speculative = speculative
+        }
+
+        func Equals(other RetriedFunctionLiteralKey) bool -> object.ReferenceEquals(Syntax, other.Syntax) &&
+            object.Equals(Target, other.Target) && InferReturn == other.InferReturn && Speculative == other.Speculative
+
+        override func Equals(obj object?) bool -> obj is RetriedFunctionLiteralKey other && Equals(other)
+
+        override func GetHashCode() int32 -> HashCode.Combine(
+            ReferenceEqualityComparer.Instance.GetHashCode(Syntax),
+            Target,
+            InferReturn,
+            Speculative
+        )
+    }
+
+    internal sealed class RetriedFunctionLiteralEntry {
+        internal let Bound BoundExpression
+        internal let Diagnostics ImmutableArray[Diagnostic]
+        internal let DiscardedTargetDiagnostics ImmutableArray[ImmutableArray[Diagnostic]]
+        internal let KeptNaturalType bool
+
+        init(
+            bound BoundExpression,
+            diagnostics ImmutableArray[Diagnostic],
+            discardedTargetDiagnostics ImmutableArray[ImmutableArray[Diagnostic]],
+            keptNaturalType bool
+        ) {
+            Bound = bound
+            Diagnostics = diagnostics
+            DiscardedTargetDiagnostics = discardedTargetDiagnostics
+            KeptNaturalType = keptNaturalType
+        }
+    }
+
+    private func TryReuseRetriedFunctionLiteral(
+        key RetriedFunctionLiteralKey,
+        acceptsNaturalType((TypeSymbol) -> bool)?,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        @NotNullWhen(true) out bound BoundExpression?
+    ) bool {
+        bound = nil
+        let cache = binderCtx.RetriedFunctionLiterals
+        if cache == nil || Diagnostics.SiblingRebindDepth > 0 || !cache.TryGetValue(key, out var entry) {
+            return false
+        }
+        if !CapturedVariablesMatchScope(entry.Bound, Scope) {
+            return false
+        }
+        if entry.KeptNaturalType && acceptsNaturalType != nil && !acceptsNaturalType(entry.Bound.Type) {
+            return false
+        }
+        if discardedTargetDiagnostics != nil && !entry.DiscardedTargetDiagnostics.IsDefaultOrEmpty {
+            for item in entry.DiscardedTargetDiagnostics {
+                discardedTargetDiagnostics.Add(item)
+            }
+        }
+        Diagnostics.AddRange(entry.Diagnostics)
+        bound = entry.Bound
+        return true
+    }
+
+    private func RecordRetriedFunctionLiteral(
+        key RetriedFunctionLiteralKey,
+        bound BoundExpression,
+        startMark int32,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        discardedStart int32,
+        keptNaturalType bool
+    ) {
+        let cache = binderCtx.RetriedFunctionLiterals
+        if cache == nil || Diagnostics.SiblingRebindDepth > 0 {
+            return
+        }
+        var discarded = ImmutableArray[ImmutableArray[Diagnostic]].Empty
+        if discardedTargetDiagnostics != nil && discardedTargetDiagnostics.Count > discardedStart {
+            let builder = ImmutableArray.CreateBuilder[ImmutableArray[Diagnostic]](
+                discardedTargetDiagnostics.Count - discardedStart
+            )
+            for var i = discardedStart; i < discardedTargetDiagnostics.Count; i++ {
+                builder.Add(discardedTargetDiagnostics[i])
+            }
+            discarded = builder.MoveToImmutable()
+        }
+        cache[key] = RetriedFunctionLiteralEntry(bound, Diagnostics.VisibleSince(startMark), discarded, keptNaturalType)
+    }
+
+    private func CapturedVariablesMatchScope(bound BoundExpression, $scope BoundScope) bool {
+        if bound is not BoundFunctionLiteralExpression literal {
+            return true
+        }
+        for captured in literal.CapturedVariables {
+            if !object.ReferenceEquals($scope.TryLookupSymbol(captured.Name), captured) {
+                return false
+            }
+        }
+        return true
+    }
+
     /// Issue #5569: the target-typed return values of a speculative literal body whose target typing failed.
     /// Each such return statement binds its value again with the natural type, so the body can give either
     /// function type after one bind of its statements. Issue #5603: a lambda body whose result type the lambda binder
@@ -2630,23 +2813,28 @@ internal class LambdaBinder {
 
         private let operands List[
             (
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             )
         ] = List[
             (
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             )
         ]()
 
-        // The target-typed value of each held return statement, by syntax identity.
-        private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression] = Dictionary[
-            ReturnStatementSyntax,
-            BoundExpression
-        ](ReferenceEqualityComparer.Instance)
+        // The target-typed value of each held return statement or trailing expression, by syntax identity.
+        private let targetValues Dictionary[SyntaxNode, BoundExpression] = Dictionary[SyntaxNode, BoundExpression](
+            ReferenceEqualityComparer.Instance
+        )
+
+        private let conversionHistory List[
+            (Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
+        ] = List[(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])]()
 
         // The target conversion of each return value, by bound value identity, so each pass's value keeps its own.
         private let targetConversions Dictionary[
@@ -2656,25 +2844,29 @@ internal class LambdaBinder {
             ReferenceEqualityComparer.Instance
         )
 
-        /// Records the target-typed value of a return statement and the diagnostics of both passes.
-        /// @param syntax The return statement.
+        internal prop OperandCount int32 -> operands.Count
+
+        internal prop ConversionCount int32 -> conversionHistory.Count
+
+        /// Records the target-typed value of a return statement or trailing expression and the diagnostics of both passes.
+        /// @param syntax The return statement or trailing expression.
         /// @param value The target-typed value.
         /// @param diagnostics The diagnostics of the target pass.
         /// @param naturalDiagnostics The diagnostics of the natural pass.
         internal func Hold(
-            syntax ReturnStatementSyntax,
+            syntax SyntaxNode,
             value BoundExpression,
             diagnostics ImmutableArray[Diagnostic],
             naturalDiagnostics ImmutableArray[Diagnostic]
         ) {
-            operands.Add((value, diagnostics, naturalDiagnostics))
+            operands.Add((syntax, value, diagnostics, naturalDiagnostics))
             targetValues[syntax] = value
         }
 
-        /// Gets a value indicating whether a return statement has a held target-typed value.
-        /// @param syntax The return statement.
+        /// Gets a value indicating whether a return statement or trailing expression has a held target-typed value.
+        /// @param syntax The return statement or trailing expression.
         /// @returns `true` when (cref:Hold) recorded a value for it.
-        internal func Holds(syntax ReturnStatementSyntax) bool -> targetValues.ContainsKey(syntax)
+        internal func Holds(syntax SyntaxNode) bool -> targetValues.ContainsKey(syntax)
 
         /// Records the conversion of a return value to the target, bound where the return value binds, as an eager
         /// bind converts it.
@@ -2686,6 +2878,7 @@ internal class LambdaBinder {
             converted BoundExpression,
             diagnostics ImmutableArray[Diagnostic]
         ) {
+            conversionHistory.Add((value, converted, diagnostics))
             targetConversions[value] = (converted, diagnostics)
         }
 
@@ -2714,27 +2907,70 @@ internal class LambdaBinder {
             return false
         }
 
-        /// Captures the held values and conversions, for a binder that discards a bind (see
-        /// `StatementBinder.CaptureSpeculativeBindState`).
-        /// @returns The captured collections.
-        internal func Capture() DeferredReturnSnapshot -> DeferredReturnSnapshot(
-            operands.ToArray(),
-            targetValues.ToArray(),
-            targetConversions.ToArray()
-        )
-
-        /// Puts back the collections that (cref:Capture) captured.
-        /// @param snapshot The captured collections.
-        internal func Restore(snapshot DeferredReturnSnapshot) {
-            operands.Clear()
-            operands.AddRange(snapshot.Operands)
-            targetValues.Clear()
-            for entry in snapshot.TargetValues {
-                targetValues.Add(entry.Key, entry.Value)
+        /// Rolls back operands and conversions added after the given watermarks.
+        internal func TruncateTo(operandCount int32, conversionCount int32) {
+            while operands.Count > operandCount {
+                let lastIndex = operands.Count - 1
+                targetValues.Remove(operands[lastIndex].Syntax)
+                operands.RemoveAt(lastIndex)
             }
-            targetConversions.Clear()
-            for entry in snapshot.TargetConversions {
-                targetConversions.Add(entry.Key, entry.Value)
+            while conversionHistory.Count > conversionCount {
+                let lastIndex = conversionHistory.Count - 1
+                targetConversions.Remove(conversionHistory[lastIndex].Source)
+                conversionHistory.RemoveAt(lastIndex)
+            }
+        }
+
+        /// Captures only the operands and conversions added since the given watermarks.
+        internal func CaptureDelta(operandCount int32, conversionCount int32) DeferredReturnSnapshot {
+            let addedOperands = if operands.Count > operandCount {
+                let slice = [operands.Count - operandCount](
+                    Syntax SyntaxNode,
+                    Value BoundExpression,
+                    Diagnostics ImmutableArray[Diagnostic],
+                    NaturalDiagnostics ImmutableArray[Diagnostic]
+                )
+                operands.CopyTo(operandCount, slice, 0, slice.Length)
+                slice
+            } else {
+                default(
+                    []?(
+                        Syntax SyntaxNode,
+                        Value BoundExpression,
+                        Diagnostics ImmutableArray[Diagnostic],
+                        NaturalDiagnostics ImmutableArray[Diagnostic]
+                    )
+                )
+            }
+            let addedConversions = if conversionHistory.Count > conversionCount {
+                let slice = [conversionHistory.Count - conversionCount](
+                    Source BoundExpression,
+                    Value BoundExpression,
+                    Diagnostics ImmutableArray[Diagnostic]
+                )
+                conversionHistory.CopyTo(conversionCount, slice, 0, slice.Length)
+                slice
+            } else {
+                default([]?(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic]))
+            }
+            return DeferredReturnSnapshot(operandCount, conversionCount, addedOperands, addedConversions)
+        }
+
+        /// Puts back the delta that (cref:CaptureDelta) captured.
+        /// @param snapshot The captured delta.
+        internal func Restore(snapshot DeferredReturnSnapshot) {
+            TruncateTo(snapshot.OperandCount, snapshot.ConversionCount)
+            if snapshot.AddedOperands != nil {
+                for item in snapshot.AddedOperands {
+                    operands.Add(item)
+                    targetValues[item.Syntax] = item.Value
+                }
+            }
+            if snapshot.AddedConversions != nil {
+                for item in snapshot.AddedConversions {
+                    conversionHistory.Add(item)
+                    targetConversions[item.Source] = (item.Value, item.Diagnostics)
+                }
             }
         }
 
@@ -2765,35 +3001,39 @@ internal class LambdaBinder {
             if operands.Count == 0 {
                 return body
             }
+            let bodySyntax = body.Syntax
+            if bodySyntax != nil && targetValues.TryGetValue(bodySyntax, out var targetBody) {
+                return targetBody
+            }
             let rewriter = TargetOperandRewriter(targetValues)
             if body is BoundBlockExpression block {
                 let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
                 for statement in block.Statements {
                     statements.Add(rewriter.RewriteStatement(statement))
                 }
-                return BoundBlockExpression(
-                    block.Syntax,
-                    statements.ToImmutable(),
+                let tailSyntax = block.Expression.Syntax
+                let tail = if tailSyntax != nil && targetValues.TryGetValue(tailSyntax, out var targetTail) {
+                    targetTail
+                } else {
                     rewriter.RewriteTail(block.Expression)
-                )
+                }
+                return BoundBlockExpression(block.Syntax, statements.ToImmutable(), tail)
             }
             return rewriter.RewriteTail(body)
         }
 
         private class TargetOperandRewriter : BoundTreeRewriter {
-            private let targetValues Dictionary[ReturnStatementSyntax, BoundExpression]
+            private let targetValues Dictionary[SyntaxNode, BoundExpression]
 
-            init(targetValues Dictionary[ReturnStatementSyntax, BoundExpression]) {
+            init(targetValues Dictionary[SyntaxNode, BoundExpression]) {
                 this.targetValues = targetValues
             }
 
             internal func RewriteTail(node BoundExpression) BoundExpression -> RewriteExpression(node)
 
             protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
-                if node.Syntax is ReturnStatementSyntax returnSyntax && targetValues.TryGetValue(
-                    returnSyntax,
-                    out var value
-                ) {
+                let returnSyntax = node.Syntax
+                if returnSyntax != nil && targetValues.TryGetValue(returnSyntax, out var value) {
                     return BoundReturnStatement(node.Syntax, value, node.IsRef)
                 }
                 return base.RewriteReturnStatement(node)
@@ -2801,34 +3041,37 @@ internal class LambdaBinder {
         }
     }
 
-    /// Issue #5569: the collections of a (cref:DeferredReturnState) at one point of a body bind.
+    /// Issue #5569 / #5604: the operand-local delta of a (cref:DeferredReturnState) across one pass of a return value.
     internal sealed class DeferredReturnSnapshot {
-        internal let Operands[](
+        internal let OperandCount int32
+        internal let ConversionCount int32
+        internal let AddedOperands[]?(
+            Syntax SyntaxNode,
             Value BoundExpression,
             Diagnostics ImmutableArray[Diagnostic],
             NaturalDiagnostics ImmutableArray[Diagnostic]
         )
-        internal let TargetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression]
-        internal let TargetConversions[]KeyValuePair[
-            BoundExpression,
-            (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-        ]
+        internal let AddedConversions[]?(
+            Source BoundExpression,
+            Value BoundExpression,
+            Diagnostics ImmutableArray[Diagnostic]
+        )
 
         init(
-            operands[](
+            operandCount int32,
+            conversionCount int32,
+            addedOperands[]?(
+                Syntax SyntaxNode,
                 Value BoundExpression,
                 Diagnostics ImmutableArray[Diagnostic],
                 NaturalDiagnostics ImmutableArray[Diagnostic]
             ),
-            targetValues[]KeyValuePair[ReturnStatementSyntax, BoundExpression],
-            targetConversions[]KeyValuePair[
-                BoundExpression,
-                (Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
-            ]
+            addedConversions[]?(Source BoundExpression, Value BoundExpression, Diagnostics ImmutableArray[Diagnostic])
         ) {
-            Operands = operands
-            TargetValues = targetValues
-            TargetConversions = targetConversions
+            OperandCount = operandCount
+            ConversionCount = conversionCount
+            AddedOperands = addedOperands
+            AddedConversions = addedConversions
         }
     }
 

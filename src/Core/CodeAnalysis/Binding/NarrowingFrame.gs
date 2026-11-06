@@ -38,7 +38,11 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
     /// Gets a read-only view of the entries.
     prop Entries IReadOnlyDictionary[AccessPath, TypeSymbol] -> entries
 
+    /// Gets the number of entries in this frame.
     prop Count int32 -> entries.Count
+
+    /// Gets a counter incremented on every mutation of this frame.
+    internal var Version int32
 
     prop Keys Dictionary[AccessPath, TypeSymbol].KeyCollection -> entries.Keys
 
@@ -50,12 +54,14 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
 
     func Add(path AccessPath, narrowedType TypeSymbol) {
         entries.Add(path, narrowedType)
+        Version++
         Owner?.FrameChanged(path)
     }
 
     func Remove(path AccessPath) bool {
         let removed = entries.Remove(path)
         if removed {
+            Version++
             Owner?.FrameChanged(path)
         }
         return removed
@@ -67,6 +73,7 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
         }
         let paths = entries.Keys.ToArray()
         entries.Clear()
+        Version++
         for path in paths {
             Owner?.FrameChanged(path)
         }
@@ -77,6 +84,7 @@ internal sealed class NarrowingFrame : IEnumerable[KeyValuePair[AccessPath, Type
         get -> entries[path]
         set {
             entries[path] = value
+            Version++
             Owner?.FrameChanged(path)
         }
     }

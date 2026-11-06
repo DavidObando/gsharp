@@ -91,6 +91,9 @@ internal sealed class NarrowingFlow {
         }
     }
 
+    /// Gets or sets a callback notified before a target's pending jump list is mutated.
+    internal var OnTargetTouching((string) -> void)?
+
     /// Records a `break` state on [`target`](paramref) with the cleanup regions still to run (ADR-0213 table 9, J1).
     func RecordBreak(target BoundLabel, state NarrowingJumpState) -> RecordJump("#" + target.Name, state)
 
@@ -99,6 +102,7 @@ internal sealed class NarrowingFlow {
 
     /// Records a forward jump state on [`target`](paramref) with the cleanup regions still to run.
     func RecordJump(target string, state NarrowingJumpState) {
+        OnTargetTouching?(target)
         if !pending.TryGetValue(target, out var states) {
             states = List[NarrowingJumpState]()
             pending[target] = states
@@ -108,10 +112,39 @@ internal sealed class NarrowingFlow {
 
     /// Removes and returns the recorded forward jump states for [`target`](paramref), or `nil`.
     func TakeJumps(target string) List[NarrowingJumpState]? {
+        if !pending.ContainsKey(target) {
+            return nil
+        }
+        OnTargetTouching?(target)
         if pending.Remove(target, out var states) {
             return states
         }
         return nil
+    }
+
+    /// Copies the recorded jump states for [`target`](paramref), or `nil`.
+    func CloneTarget(target string)[]?NarrowingJumpState {
+        if !pending.TryGetValue(target, out var states) {
+            return nil
+        }
+        let copy = [states.Count]NarrowingJumpState
+        for var i = 0; i < states.Count; i++ {
+            copy[i] = states[i].Clone()
+        }
+        return copy
+    }
+
+    /// Replaces the recorded jump states for [`target`](paramref) with a cloned snapshot.
+    func RestoreTarget(target string, snapshot[]?NarrowingJumpState) {
+        if snapshot == nil {
+            pending.Remove(target)
+            return
+        }
+        let list = List[NarrowingJumpState](snapshot.Length)
+        for state in snapshot {
+            list.Add(state.Clone())
+        }
+        pending[target] = list
     }
 
     /// Returns the recorded forward jump states for [`target`](paramref) without removing them, or `nil`.

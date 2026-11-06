@@ -137,6 +137,16 @@ partial class Binder {
                     if syntax !is BlockExpressionSyntax {
                         Statements.EnterBackwardJumpSpanIfFirstStatement(syntax)
                     }
+                    var bodyValue = syntax
+                    while bodyValue is ParenthesizedExpressionSyntax parenthesized {
+                        bodyValue = parenthesized.Expression
+                    }
+                    if bodyValue is InterpolatedStringExpressionSyntax interpolated &&
+                        targetType != nil &&
+                        ExpressionBinder
+                        .IsFormattableStringTargetType(targetType) {
+                        return Statements.BindFormattableReturnValue(interpolated, interpolated, targetType)
+                    }
                     return Expressions.BindLambdaBodyExpression(syntax, targetType)
                 }
             )

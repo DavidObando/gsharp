@@ -1344,6 +1344,9 @@ internal partial class StatementBinder {
             finallyBlock,
             finallyEntryExternalCallableAliases[finallyClause]
         )
+        if speculativeReturnDepth > 0 {
+            speculativeFinallySummaryLog.Add(finallyBlock)
+        }
         finallyFlowSummaries.Add(finallyBlock, summary)
         return summary
     }

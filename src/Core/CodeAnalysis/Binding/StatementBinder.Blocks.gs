@@ -481,6 +481,9 @@ internal partial class StatementBinder {
         if syntax.FinallyClause != nil {
             InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
             RestoreExternalCallableAliases(callableFinallyEntries)
+            if speculativeReturnDepth > 0 {
+                speculativeFinallyLog.Add(syntax.FinallyClause!!)
+            }
             finallyEntryExternalCallableAliases[syntax.FinallyClause!!] = callableExits?.ToImmutableArray() ??
                 ImmutableArray[VariableSymbol].Empty
             let inheritedReachability = currentStatementListFallsThrough
@@ -884,12 +887,15 @@ internal partial class StatementBinder {
     internal func BindNestedFunctionBody[T](bind() -> T) T {
         let inheritedFallthrough = currentStatementListFallsThrough
         let inheritedReachabilityGeneration = internalReachabilityGeneration
+        let inheritedSpeculativeReturnDepth = speculativeReturnDepth
         currentStatementListFallsThrough = true
+        speculativeReturnDepth = 0
         try {
             return OutsideExceptionHandlers(bind)
         } finally {
             currentStatementListFallsThrough = inheritedFallthrough
             internalReachabilityGeneration = inheritedReachabilityGeneration
+            speculativeReturnDepth = inheritedSpeculativeReturnDepth
         }
     }
 

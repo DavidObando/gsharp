@@ -166,6 +166,7 @@ internal partial class StatementBinder {
         this.reconcileGenericLocalFunctionGroupCaptures = reconcileGenericLocalFunctionGroupCaptures
         this.bindNullCoalescingAssignmentStatement = bindNullCoalescingAssignmentStatement
         this.bindRefArgumentExpression = bindRefArgumentExpression
+        this.binderCtx.NarrowingFlow.OnTargetTouching = NoteSpeculativeLabelTouched
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics

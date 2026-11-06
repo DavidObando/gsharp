@@ -3724,6 +3724,9 @@ internal partial class StatementBinder {
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
             ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement)
         }
+        if speculativeReturnDepth > 0 {
+            speculativeSpanEntryLog.Add(span)
+        }
         spanEntryStates[span] = SpanEntrySnapshot(
             binderCtx
                 .NarrowedVariables
