@@ -5,7 +5,9 @@
 package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import Xunit
@@ -361,14 +363,88 @@ func Run() {
 Run()`, "0\n4\n")
     }
 
+    @Fact
+    func GenericArrayReceivers_ProbeTheSelectedRuntimeKindWithoutBreakingCovariance() {
+        AssertRuns(`import System
+interface ICounter { func Bump(amount int32); }
+class RefCounter : ICounter {
+    var n int32
+    func Bump(amount int32) { n += amount }
+}
+struct Counter : ICounter {
+    var n int32
+    func Bump(amount int32) { n += amount }
+}
+func Amount() int32 {
+    Console.WriteLine("argument")
+    return 2
+}
+func Run[T ICounter](items []T, index int32) {
+    defer items[index].Bump(Amount())
+    Console.WriteLine("body")
+}
+let original = []RefCounter{RefCounter()}
+let covariant = cast[[]ICounter](original)
+Run[ICounter](covariant, 0)
+Console.WriteLine(original[0].n)
+let values = []Counter{Counter{}}
+Run[Counter](values, 0)
+Console.WriteLine(values[0].n)
+try {
+    Run[ICounter](covariant, 9)
+} catch (IndexOutOfRangeException) {
+    Console.WriteLine("bad index")
+}`, "argument\nbody\n2\nargument\nbody\n2\nbad index\n")
+    }
+
+    @Fact
+    func NullableBoxedReceivers_CaptureVariableAndSourceFieldReferences() {
+        using let fixture = CSharpFixture(`#nullable enable
+namespace Imported5707 {
+    public struct Counter {
+        public int n;
+        public void Bump() { n++; }
+    }
+}`)
+        AssertRuns(`import System
+import Imported5707
+class SourceBox {
+    let value object?
+    init(value object?) { this.value = value }
+}
+func Run(replacement object?) {
+    var value object? = Counter()
+    let original = value
+    if value is Counter {
+        defer value.Bump()
+        value = replacement
+    }
+    if original is Counter c { Console.WriteLine(c.n) }
+}
+Run("changed")
+Run(Counter())
+Run(nil)
+let source = SourceBox(Counter())
+if source.value is Counter {
+    defer source.value.Bump()
+}
+if source.value is Counter c { Console.WriteLine(c.n) }
+`, "1\n1\n1\n1\n", fixture.AssemblyPath)
+    }
+
     shared {
-        private func AssertRuns(source string, expected string) {
+        private func AssertRuns(source string, expected string, references ...string) {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5707", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
                 let sourcePath = Path.Combine(directory, "test.gs")
                 let assemblyPath = Path.Combine(directory, "test.dll")
                 File.WriteAllText(sourcePath, source)
+                let args = List[string]{"/out:" + assemblyPath, "/target:exe", "/targetframework:net10.0", sourcePath}
+                for reference in references {
+                    args.Add("/reference:" + reference)
+                    File.Copy(reference, Path.Combine(directory, Path.GetFileName(reference)))
+                }
                 using let log = StringWriter()
                 let previousOut = Console.Out
                 let previousErr = Console.Error
@@ -376,15 +452,13 @@ Run()`, "0\n4\n")
                 Console.SetOut(log)
                 Console.SetError(log)
                 try {
-                    exitCode = Program.Main(
-                        []string{"/out:" + assemblyPath, "/target:exe", "/targetframework:net10.0", sourcePath}
-                    )
+                    exitCode = Program.Main(args.ToArray())
                 } finally {
                     Console.SetOut(previousOut)
                     Console.SetError(previousErr)
                 }
                 Assert.True(exitCode == 0, log.ToString())
-                IlVerifier.Verify(assemblyPath)
+                IlVerifier.Verify(assemblyPath, references)
                 using let process = Process.Start(
                     ProcessStartInfo("dotnet"){
                         ArgumentList = {assemblyPath},

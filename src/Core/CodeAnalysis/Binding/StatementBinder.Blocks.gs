@@ -1341,12 +1341,7 @@ internal partial class StatementBinder {
             .IsInPlaceStorageWriteReceiver(rebuilt) {
             return rebuilt
         }
-        if NeedsLocationProbe(rebuilt) {
-            prefix.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, rebuilt)))
-        } else if TryGetStaticFieldRoot(rebuilt) is {} staticRoot {
-            prefix.Add(BoundExpressionStatement(nil, staticRoot))
-        }
-        return GSharp
+        let captured = GSharp
             .Core
             .CodeAnalysis
             .Lowering
@@ -1369,6 +1364,12 @@ internal partial class StatementBinder {
                 return local
             }
         )
+        if NeedsLocationProbe(captured) {
+            prefix.Add(BoundExpressionStatement(nil, BoundAddressOfExpression(nil, captured)))
+        } else if TryGetStaticFieldRoot(rebuilt) is {} staticRoot {
+            prefix.Add(BoundExpressionStatement(nil, staticRoot))
+        }
+        return captured
     }
 
     private func CaptureReceiverOperand(
@@ -1429,7 +1430,9 @@ internal partial class StatementBinder {
             )
             default: receiver
         }
-        if !object.ReferenceEquals(storageView, receiver) && Binder.IsReferenceTypeForConstraint(storageView.Type) {
+        if !object.ReferenceEquals(storageView, receiver) && Binder.IsReferenceTypeForConstraint(
+            storageView.Type.StripToBareShape()
+        ) {
             receiver.CopyStaticQualifierTo(storageView)
             let captured = CaptureReceiverOperand(storageView, prefix, retainedVariables, retainRemaining, isDefer)
             return if captured is BoundVariableExpression snapshot {
