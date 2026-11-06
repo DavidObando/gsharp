@@ -5354,13 +5354,6 @@ partial class CSharpToGSharpTranslator {
                 case ConditionalAccessExpressionSyntax {
                     return false
                 }
-                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
-                    return if UnwrapTranslatedValue(translated) is CheckedExpression translatedChecked {
-                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression, translatedChecked.Inner)
-                    } else {
-                        this.GSharpExpressionIsStaticallyNonNull(checkedExpression.Expression)
-                    }
-                }
                 case arrayElement is ElementAccessExpressionSyntax when this
                     .context
                     .GetSymbolInfo(arrayElement)
