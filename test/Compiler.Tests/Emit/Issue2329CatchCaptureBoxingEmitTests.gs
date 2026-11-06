@@ -382,6 +382,105 @@ func Main() {
         Assert.Equal("7${Environment.NewLine}", CompileAndRun(source))
     }
 
+    @Fact
+    func EndToEnd_Issue5380_CapturedUsingLocalAndCatchVariableInExceptionFilter_Runs() {
+        let source = `package Probe5380Filter
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+class Handle : IDisposable {
+    public var Id int32 = 42
+    public var HasExited bool = true
+    public var Disposed bool = false
+
+    public func Kill(entireProcessTree bool = false) {
+        if entireProcessTree {
+            throw InvalidOperationException("killed")
+        }
+    }
+
+    public func Dispose() {
+        Disposed = true
+    }
+}
+
+class Api {
+    shared {
+        public func Run() string {
+            var disposedAfter = false
+            var filterResult = ""
+            {
+                using let process = Handle{}
+                let read = Task.Run(() -> process.Id)
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (ex InvalidOperationException) when process.HasExited && ex.Message == "killed" {
+                    let msgReader = () -> ex.Message + ":" + read.GetAwaiter().GetResult().ToString()
+                    filterResult = msgReader()
+                }
+                disposedAfter = process.Disposed
+            }
+            return filterResult + ":" + disposedAfter.ToString()
+        }
+
+        async func RunAsync() Task[string] {
+            using let process = Handle{}
+            let read = Task.Run(() -> process.Id)
+            var first = ""
+            try {
+                await Task.Yield()
+                process.Kill(entireProcessTree: true)
+            } catch (ex InvalidOperationException) when true {
+                let msgReader = () -> ex.Message
+                first = msgReader()
+            }
+            var second = ""
+            try {
+                await Task.Yield()
+                process.Kill(entireProcessTree: true)
+            } catch (ex InvalidOperationException) when process.HasExited && (() -> ex.Message)() == "killed" {
+                let id = await read
+                let msgReader = () -> ex.Message + ":" + id.ToString()
+                second = msgReader()
+            }
+            return first + ":" + second
+        }
+
+        async func StreamAsync() IAsyncEnumerable[string] {
+            using let process = Handle{}
+            var caught = ""
+            try {
+                await Task.Yield()
+                process.Kill(entireProcessTree: true)
+            } catch (ex InvalidOperationException) when process.HasExited && (() -> ex.Message)() == "killed" {
+                let msgReader = () -> ex.Message
+                caught = msgReader()
+            }
+            yield caught
+        }
+
+        async func DrainAsync() Task[string] {
+            var result = ""
+            await for item in StreamAsync() {
+                result += item
+            }
+            return result
+        }
+    }
+}
+
+func Main() {
+    Console.WriteLine(Api.Run())
+    Console.WriteLine(Api.RunAsync().GetAwaiter().GetResult())
+    Console.WriteLine(Api.DrainAsync().GetAwaiter().GetResult())
+}`
+        Assert.Equal(
+            "killed:42:False${Environment.NewLine}killed:killed:42${Environment.NewLine}killed${Environment.NewLine}",
+            CompileAndRun(source)
+        )
+    }
+
     shared {
         /// Compiles source that is expected to fail binding (a diagnostic, not a
         /// crash) and returns the process exit code plus captured stdout/stderr,

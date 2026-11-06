@@ -221,6 +221,110 @@ open class AsyncIteratorRewriterTests {
         Assert.True(plan.IsEnumerable, "IAsyncEnumerable function should have IsEnumerable=true")
     }
 
+    @Fact
+    func Build_FilteredCatchWithHoistedVariable_InitializesHoistedFieldBeforeFilter() {
+        let asyncEnumerableType = TypeSymbol.FromClrType(typeof(IAsyncEnumerable[int32]))
+        let function = FunctionSymbol(
+            "filteredAsyncIter",
+            ImmutableArray[ParameterSymbol].Empty,
+            asyncEnumerableType,
+            $package: Package
+        )
+        let exceptionType = TypeSymbol.FromClrType(typeof(InvalidOperationException))
+        let ex = LocalVariableSymbol("ex", false, exceptionType)
+        let boxSeedLocal = LocalVariableSymbol("exSeed", false, exceptionType)
+        let filterBlock = BoundBlockExpression(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, boxSeedLocal, BoundVariableExpression(nil, ex))
+            ),
+            BoundLiteralExpression(nil, true)
+        )
+        let userTry = BoundTryStatement(
+            nil,
+            Block(BoundExpressionStatement(nil, BoundLiteralExpression(nil, 1))),
+            ImmutableArray.Create(
+                BoundCatchClause(
+                    exceptionType,
+                    ex,
+                    filterBlock,
+                    Block(BoundExpressionStatement(nil, BoundVariableExpression(nil, boxSeedLocal))),
+                    false
+                )
+            ),
+            finallyBlock: nil
+        )
+        let body = Block(userTry, BoundYieldStatement(nil, BoundLiteralExpression(nil, 42)))
+        let plan = Assert.Single(AsyncIteratorRewriter.Rewrite(MakeProgram(function, body)).Plans)
+
+        let stateField = FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public)
+        let currentField = FieldSymbol("<>2__current", TypeSymbol.Int32, Accessibility.Public)
+        let promiseField = FieldSymbol(
+            "<>v__promiseOfValueOrEnd",
+            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore[bool])),
+            Accessibility.Public
+        )
+        let disposeModeField = FieldSymbol("<>w__disposeMode", TypeSymbol.Bool, Accessibility.Public)
+        let disposeExceptionField = FieldSymbol(
+            "<>x__disposeException",
+            TypeSymbol.FromClrType(typeof(Exception)),
+            Accessibility.Public
+        )
+        let builderField = FieldSymbol(
+            "<>t__builder",
+            TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)),
+            Accessibility.Public
+        )
+        let exField = FieldSymbol("<ex>5__1", exceptionType, Accessibility.Public)
+        let seedField = FieldSymbol("<exSeed>5__2", exceptionType, Accessibility.Public)
+        let smClass = StructSymbol(
+            name: "<filteredAsyncIter>d__1",
+            fields: ImmutableArray.Create(
+                stateField,
+                currentField,
+                promiseField,
+                disposeModeField,
+                disposeExceptionField,
+                builderField,
+                exField,
+                seedField
+            ),
+            accessibility: Accessibility.Internal,
+            declaration: nil,
+            packageName: "main",
+            isData: false,
+            isInline: false,
+            isClass: true
+        )
+        let thisParam = ParameterSymbol("this", cast[TypeSymbol](smClass))
+        let fieldMap = Dictionary[VariableSymbol, FieldSymbol]{[ex] = exField, [boxSeedLocal] = seedField}
+
+        let moveNextBody = AsyncIteratorMoveNextBodyBuilder.Build(
+            plan,
+            smClass,
+            thisParam,
+            stateField,
+            currentField,
+            promiseField,
+            disposeModeField,
+            disposeExceptionField,
+            builderField,
+            fieldMap,
+            Dictionary[Type, FieldSymbol]()
+        )
+
+        let outerTry = moveNextBody.Statements.OfType[BoundTryStatement]().Single()
+        let innerTry = (cast[BoundBlockStatement](outerTry.TryBlock)).Statements.OfType[BoundTryStatement]().Single()
+        let clause = Assert.Single(innerTry.CatchClauses)
+        let rewrittenFilter = Assert.IsType[BoundBlockExpression](clause.Filter)
+        Assert.True(rewrittenFilter.Statements.Length >= 2)
+        let firstStmt = Assert.IsType[BoundExpressionStatement](rewrittenFilter.Statements[0])
+        let copyWrite = Assert.IsType[BoundFieldAssignmentExpression](firstStmt.Expression)
+        Assert.Same(exField, copyWrite.Field)
+        let copyRead = Assert.IsType[BoundVariableExpression](copyWrite.Value)
+        Assert.Same(ex, copyRead.Variable)
+    }
+
     shared {
         private let Package PackageSymbol = PackageSymbol("main", declaration: nil)
 

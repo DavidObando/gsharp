@@ -2769,6 +2769,76 @@ System.Console.WriteLine(value.Counts.Count)`)
         )
     }
 
+    @Fact
+    func Issue5785_RepeatedImportedAndLocalThemeLiterals_DoNotAliasDefaultNodes() {
+        const library = `package i5785lib
+
+public struct Swatch {
+    public var Shades []int32
+}
+
+public struct Palette {
+    public var Primary Swatch
+}
+
+public struct Theme(ControlRadius int32 = 4) {
+    public var Colors Palette
+}`
+        const source = `package i5785app
+import System
+import i5785lib
+
+class Defaults {
+    shared {
+        public var Map map[string, int32] = map[string, int32]{"radius": 7}
+        public var Key string = "radius"
+    }
+}
+
+struct Inset {
+    public var Left int32
+    public var Right int32
+}
+
+struct Corner {
+    public var Radius int32
+}
+
+struct Frame {
+    public var TopLeft Corner = Corner{Radius: 3}
+    public var Fallback Corner = default(Corner)
+}
+
+struct LocalTheme {
+    public var ControlRadius int32 = 5
+    public var MappedRadius int32 = Defaults.Map[Defaults.Key]
+    public var Padding Inset = Inset{Left: 2, Right: 6}
+    public var Border Frame = Frame{}
+}
+
+struct ThemeSeed {
+    public var ControlRadius int32
+}
+
+func Main() {
+    let first = Theme{}
+    let second = Theme{}
+    let localFirst = LocalTheme{}
+    let localSecond = LocalTheme{}
+    let seedA = ThemeSeed{ControlRadius: 10}
+    let seedB = ThemeSeed{ControlRadius: 20}
+    let projectedFirst = LocalTheme{...seedA}
+    let projectedSecond = LocalTheme{...seedB}
+    Console.WriteLine(first.ControlRadius + second.ControlRadius + first.Colors.Primary.Shades.Length + second.Colors.Primary.Shades.Length)
+    Console.WriteLine(localFirst.ControlRadius + localSecond.ControlRadius + localFirst.MappedRadius + localSecond.MappedRadius + localFirst.Padding.Left + localSecond.Padding.Right + localFirst.Border.TopLeft.Radius + localSecond.Border.TopLeft.Radius + localFirst.Border.Fallback.Radius)
+    Console.WriteLine(projectedFirst.ControlRadius + projectedSecond.ControlRadius + projectedFirst.MappedRadius + projectedSecond.MappedRadius + projectedFirst.Padding.Left + projectedSecond.Border.TopLeft.Radius)
+}`
+        Assert.Equal(
+            "0${Environment.NewLine}38${Environment.NewLine}49${Environment.NewLine}",
+            CompileAndRun(source, library, "i5785lib")
+        )
+    }
+
     shared {
         private func ExpectedConsoleBytes(lines string)[]uint8 -> System
             .Text

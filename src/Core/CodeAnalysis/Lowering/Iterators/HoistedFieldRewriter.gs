@@ -125,6 +125,53 @@ internal open class HoistedFieldRewriter : BoundTreeRewriter {
         return base.RewriteVariableDeclaration(node)
     }
 
+    protected open override func RewriteTryStatement(node BoundTryStatement) BoundStatement {
+        let result = cast[BoundTryStatement](base.RewriteTryStatement(node))
+        var needsCatchPatch = false
+        for clause in result.CatchClauses {
+            if clause.Variable is {} variable && this.fieldMap.ContainsKey(variable) {
+                needsCatchPatch = true
+                break
+            }
+        }
+        if !needsCatchPatch {
+            return result
+        }
+        let patchedClauses = ImmutableArray.CreateBuilder[BoundCatchClause](result.CatchClauses.Length)
+        for clause in result.CatchClauses {
+            if clause.Variable is {} variable && this.fieldMap.TryGetValue(variable, out var field) {
+                let copyToField = BoundExpressionStatement(
+                    nil,
+                    this.FieldWrite(field, BoundVariableExpression(nil, variable))
+                )
+                if clause.Filter is {} existingFilter {
+                    let patchedFilter = if existingFilter is BoundBlockExpression existingBlock {
+                        BoundBlockExpression(
+                            nil,
+                            ImmutableArray.Create[BoundStatement](copyToField).AddRange(existingBlock.Statements),
+                            existingBlock.Expression
+                        )
+                    } else {
+                        BoundBlockExpression(nil, ImmutableArray.Create[BoundStatement](copyToField), existingFilter)
+                    }
+                    patchedClauses.Add(clause.Update(patchedFilter, clause.Body))
+                } else {
+                    let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
+                    stmts.Add(copyToField)
+                    if clause.Body is BoundBlockStatement block {
+                        stmts.AddRange(block.Statements)
+                    } else {
+                        stmts.Add(clause.Body)
+                    }
+                    patchedClauses.Add(clause.WithBody(BoundBlockStatement(nil, stmts.ToImmutable())))
+                }
+            } else {
+                patchedClauses.Add(clause)
+            }
+        }
+        return BoundTryStatement(result.Syntax, result.TryBlock, patchedClauses.ToImmutable(), result.FinallyBlock)
+    }
+
     // Issue #887: an index assignment (`arr[i] = v`, `m[k] = v`) whose
     // target temp is hoisted into a state-machine field can't reference the
     // field through its VariableSymbol target. Switch to the expression
