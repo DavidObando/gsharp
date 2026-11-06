@@ -842,7 +842,7 @@ internal partial class StatementBinder {
                 // block — and nested blocks — see the non-nullable type until a
                 // later mutation invalidates it again. Runs last so it wins over
                 // the invalidation pass for the same statement.
-                ApplyAssignmentNarrowing(statement, memberNotNullFrame)
+                ApplyAssignmentNarrowing(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 UpdateExternalCallableAliases(statement, externalCallableAliasesAtEntry)
                 // Issue #2159: `if`-join narrowing. After invalidation (which
                 // drops any narrowing the `if` mutates), lift a nullable `var`

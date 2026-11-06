@@ -1131,7 +1131,11 @@ internal partial class StatementBinder {
     /// (cref:InvalidateNarrowingsForAssignedVariables) clears it on a
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
-    private func ApplyAssignmentNarrowing(statement BoundStatement?, persistentFrame NarrowingFrame) {
+    private func ApplyAssignmentNarrowing(
+        statement BoundStatement?,
+        persistentFrame NarrowingFrame,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -1159,14 +1163,17 @@ internal partial class StatementBinder {
             )
         }
         if statement is BoundExpressionStatement expressionStatement &&
-            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression) is {} assignments {
+            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliasesAtEntry) is {} assignments {
             for entry in assignments {
                 SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
             }
         }
     }
 
-    private func TryClassifyNestedAssignmentNarrowings(expression BoundExpression) Dictionary[AccessPath, TypeSymbol]? {
+    private func TryClassifyNestedAssignmentNarrowings(
+        expression BoundExpression,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
         var value = expression
         while value is BoundConversionExpression conversion {
             value = conversion.Expression
@@ -1190,7 +1197,11 @@ internal partial class StatementBinder {
             return nil
         }
         // The operand transfer also applies setter effects after the assigned value.
-        return TryClassifyConditionNonNullAssignments(expression)
+        var entryAliases IReadOnlyCollection[VariableSymbol] = aliasesAtEntry ?? Array.Empty[VariableSymbol]()
+        if expressionEntryAliases.TryGetValue(expression, out var recordedEntry) {
+            entryAliases = recordedEntry
+        }
+        return TryClassifyConditionNonNullAssignments(expression, entryAliases)
     }
 
     /// Issue #4519 / ADR-0213 section 11: joins the current narrowing state with forward jumps that
@@ -4877,15 +4888,7 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            if node is BoundMapLiteralExpression mapLiteral &&
-                !mapLiteral
-                .Entries
-                .IsDefaultOrEmpty &&
-                mapLiteral
-                .MapType
-                .KeyType != TypeSymbol.String &&
-                !TypeSymbol
-                .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+            if StatementBinder.NativeMapAccessRunsUserCode(node) {
                 MayMutateMemberPaths = true
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
@@ -9444,6 +9447,21 @@ internal partial class StatementBinder {
                 return true
             }
             return atStaticMemberAccess && definition.DeclaresNonLiteralSharedFieldInitializer
+        }
+
+        // Native map hashing and equality run after the key and stored value.
+        private func NativeMapAccessRunsUserCode(node BoundExpression) bool {
+            let mapType = switch node {
+                case literal is BoundMapLiteralExpression when !literal.Entries.IsDefaultOrEmpty: literal.MapType
+                case read is BoundIndexExpression: StripNullability(read.Target.Type) as MapTypeSymbol
+                case write is BoundIndexAssignmentExpression: StripNullability(
+                    write.TargetExpression?.Type ?? write.Target?.Type
+                ) as MapTypeSymbol
+                default: default(MapTypeSymbol?)
+            }
+            return mapType != nil && mapType.KeyType != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                mapType.KeyType
+            )
         }
 
         /// ADR-0208 R14 (#5215, #5599): the one predicate for a source property accessor. It is true when

@@ -95,6 +95,87 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
+            yield[]object{"nested_assignment_block_keeps_entry_external_aliases", `import System
+func External() { }
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = callback
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = clear
+        0
+    })
+    return text.Length
+}
+func Main() { Console.WriteLine(Run(External)) }`, "", "run", "4"}
+            yield[]object{"nested_assignment_block_uses_entry_callable_aliases", `import System
+func External() { }
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    var action = func() { text = nil }
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = callback
+        0
+    })
+    return text.Length
+}
+func Main() { Console.WriteLine(Run(External)) }`, "GS0158@13:17", "reject", ""}
+            yield[]object{"nested_assignment_native_map_hash_callback", `import System
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, string?]{}
+    m[key] = (text = "safe")
+    return text.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@15:17", "reject", ""}
+            yield[]object{"nested_assignment_block_native_map_read_callback", `import System
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, string?]{key: nil}
+    var n = 0
+    n = ({
+        text = "safe"
+        let unused = m[key]
+        0
+    })
+    return text.Length
+}
+func Main() { Console.WriteLine(Run()) }`, "GS0158@20:17", "reject", ""}
+            yield[]object{"nested_assignment_primitive_map_key_preserves_fact", `import System
+func Run() int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var m = map[int32, string?]{}
+    m[0] = (text = "safe")
+    let length = text.Length
+    clear()
+    return length
+}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "4"}
             yield[]object{"nested_assignment_discharges_failed_dictionary_lookup", `import System
 import System.Collections.Generic
 func Run(dict Dictionary[string, HashSet[string]]) int32 {

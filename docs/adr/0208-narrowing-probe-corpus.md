@@ -176,6 +176,9 @@ A non-null assignment discharges a failed dictionary lookup's nullable widening 
 The same operand transfer establishes nullable-local facts and applies setter effects after the right-hand side.
 A setter callback that writes the local still removes its proof.
 The positive probes fail on the preceding product; omitting setter effects kills the negative controls.
+Assignment replay starts with recorded expression-entry callable aliases, not the aliases at expression exit.
+Native-map hashing and equality remove callback-reachable facts after key and value evaluation.
+Primitive and string map keys do not add callback effects.
 
 ## Experiments on the deferred loop rule
 

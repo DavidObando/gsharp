@@ -25,6 +25,99 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func AssignmentBlockReplay_KeepsEntryExternalAliases() {
+        let result = Evaluate(`package T
+func External() { }
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = callback
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = clear
+        0
+    })
+    return text.Length
+}
+Console.WriteLine(Run(External))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func AssignmentBlockReplay_UsesEntryCallableAliases() {
+        let result = Evaluate(`package T
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    var action = func() { text = nil }
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = callback
+        0
+    })
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData(`m[key] = (text = "safe")`)
+    @InlineData(`n = ({
+        text = "safe"
+        let unused = m[key]
+        0
+    })`)
+    func NativeMapHashCallback_RemovesNestedAssignmentFacts(body string) {
+        let result = Evaluate(`package T
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, string?]{key: nil}
+    var n = 0
+    ` + body + `
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func PrimitiveMapKey_PreservesNestedAssignmentFacts() {
+        let result = Evaluate(`package T
+func Run() int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var m = map[int32, string?]{}
+    m[0] = (text = "safe")
+    let length = text.Length
+    clear()
+    return length
+}
+Console.WriteLine(Run())
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
     func DictionaryAssignmentValue_DischargesTheFailedLookupWidening() {
         let result = Evaluate(`package T
 import System.Collections.Generic

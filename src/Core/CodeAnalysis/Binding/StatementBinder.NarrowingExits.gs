@@ -163,7 +163,7 @@ internal partial class StatementBinder {
             exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
         }
         if statement is BoundExpressionStatement expressionStatement &&
-            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression) is {} assignments {
+            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliases) is {} assignments {
             exit = exit.WithAll(assignments)
         }
         if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
