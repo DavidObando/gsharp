@@ -27,6 +27,34 @@ import System
 /// `int[]?` field was rejected with GS0154.
 open class Issue4422ByRefNullableStorageBinderTests {
     @Theory
+    @InlineData("Write(&value)")
+    @InlineData("Writer().Write(&value)")
+    @InlineData("let sink = Sink(&value)")
+    func OutParameter_UsesDeclaredNullableStorageAfterAnExitingWrite(call string) {
+        let result = EmittedOracle.Evaluate(`
+func Write(out target string?) { target = nil }
+class Writer {
+    func Write(out target string?) { target = nil }
+}
+class Sink {
+    init(out target string?) { target = nil }
+}
+func Run(input string?) bool {
+    var value string? = input
+    if value == nil {
+        value = "unused"
+        return false
+    }
+    ` + call + `
+    return value == nil
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("True", result.Output.Trim())
+    }
+
+    @Theory
     @InlineData("var v string? = \"a\"\nRefS(&v)", "ref")
     @InlineData("var v string? = \"a\"\nInS(&v)", "in")
     @InlineData("var v string = \"a\"\nRefNs(&v)", "ref")

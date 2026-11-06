@@ -1292,7 +1292,8 @@ internal partial class OverloadResolver {
                         refArgumentLocation,
                         parameter,
                         pointee,
-                        paramType
+                        paramType,
+                        addrCtor
                     )
                 ) {
                     convertedArguments.Add(argument)
@@ -2271,7 +2272,8 @@ internal partial class OverloadResolver {
                         argLocation,
                         parameter,
                         pointee,
-                        parameter.Type
+                        parameter.Type,
+                        addrInit
                     )
                 ) {
                     convertedArgs.Add(argument)

@@ -489,7 +489,7 @@ func Run(stop bool) int32 {
     }
     return x.Value + y.Value
 }
-func Main() { Console.WriteLine(Run(false)) }`, "GS0612@23:16", "run", "2"}
+func Main() { Console.WriteLine(Run(false)) }`, "", "run", "2"}
             yield[]object{"review_5498_subtype_proof_weakened_by_later_call_and_nil_test_restores_base_only", `import System
 
 open class Base {
