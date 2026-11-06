@@ -515,6 +515,59 @@ internal open class Replacing : BoundTreeRewriter {
         return AnalyzerTestHelper.AssertDiagnosticsAsync(RewriterClonePreservationAnalyzer(), source)
     }
 
+    @Fact
+    func AcceptsReadsThroughChainedMemberAccess() Task {
+        // Issue #4395: G# right-nests chained member accesses (`rewritten.Candidates.Length`
+        // has `LeftPart = rewritten` and `RightPart = Candidates.Length`), so the member
+        // read off `rewritten` is `RightPart.GetFirstToken()`.
+        let source = `internal open class Node {
+}
+
+internal class MethodGroupNode : Node {
+    init(receiver Node, candidates []string, method string) {
+        Receiver = receiver
+        Candidates = candidates
+        Method = method
+    }
+
+    init(receiver Node, method string) {
+        Receiver = receiver
+        Candidates = []string{method}
+        Method = method
+    }
+
+    prop Receiver Node {
+        get;
+    }
+
+    prop Candidates []string {
+        get;
+    }
+
+    prop Method string {
+        get;
+    }
+}
+
+internal open class BoundTreeRewriter {
+    protected open func RewriteMethodGroup(node MethodGroupNode) Node {
+        return MethodGroupNode(node.Receiver, node.Candidates, node.Method)
+    }
+}
+
+internal open class ViaChainedMemberAccess : BoundTreeRewriter {
+    protected open override func RewriteMethodGroup(node MethodGroupNode) Node {
+        let rewritten = cast[MethodGroupNode](base.RewriteMethodGroup(node))
+        if rewritten.Candidates.Length != 1 {
+            return rewritten
+        }
+        return MethodGroupNode(rewritten.Receiver, rewritten.Method)
+    }
+}
+`
+        return AnalyzerTestHelper.AssertDiagnosticsAsync(RewriterClonePreservationAnalyzer(), source)
+    }
+
     shared {
         /// The node model the tests share: a two-form union, in the shape of
         /// `BoundFieldAssignmentExpression` — a variable-receiver form and an

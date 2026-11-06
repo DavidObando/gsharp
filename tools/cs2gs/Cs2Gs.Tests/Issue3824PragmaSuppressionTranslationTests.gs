@@ -128,6 +128,443 @@ public class Rewriter
         Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors))
     }
 
+    @Fact
+    func StatementScopedGsaPragmaInsideMethodBody_WrapsInSuppressDiagnosticBlockAndBinds() {
+        const source = `
+public class MemberLookup
+{
+    private static int Door(int x) => x + 1;
+
+    public static int MapOpenSignature(int x)
+    {
+        var before = x;
+#pragma warning disable GSA0007
+        var projected = Door(before);
+        var adjusted = projected + 1;
+#pragma warning restore GSA0007
+        return before;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        Assert.Equal(1, CountOccurrences(printed, "@SuppressDiagnostic(\"GSA0007\")"))
+        let roundTrip RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+        Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors))
+        let tree = GSharp
+            .Core
+            .CodeAnalysis
+            .Syntax
+            .SyntaxTree
+            .Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(printed))
+        let suppressionMap = GSharp
+            .Core
+            .CodeAnalysis
+            .Analyzers
+            .DiagnosticSuppressionMap
+            .Build([]GSharp.Core.CodeAnalysis.Syntax.SyntaxTree{tree})
+        let descriptor = GSharp
+            .Core
+            .CodeAnalysis
+            .DiagnosticDescriptor(
+            "GSA0007",
+            "Title",
+            "Message",
+            "InternalAnalyzers",
+            GSharp.Core.CodeAnalysis.DiagnosticSeverity.Warning,
+            isEnabledByDefault: true
+        )
+        let doorCallOffset = printed.IndexOf("Door(before)", StringComparison.Ordinal)
+        let returnOffset = printed.IndexOf("return before", StringComparison.Ordinal)
+        Assert.True(
+            suppressionMap.IsSuppressed(
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Diagnostic
+                    .Create(
+                    descriptor,
+                    GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Text
+                        .TextLocation(tree.Text, GSharp.Core.CodeAnalysis.Text.TextSpan(doorCallOffset, 4))
+                )
+            )
+        )
+        Assert.False(
+            suppressionMap.IsSuppressed(
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Diagnostic
+                    .Create(
+                    descriptor,
+                    GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Text
+                        .TextLocation(tree.Text, GSharp.Core.CodeAnalysis.Text.TextSpan(returnOffset, 6))
+                )
+            )
+        )
+    }
+
+    @Fact
+    func StatementScopedGsaPragmaOnLocalUsedLater_AnnotatesLocalDeclarationAndBinds() {
+        const source = `
+public class MemberLookup
+{
+    private static int Door(int x) => x + 1;
+
+    public static int MapOpenSignature(int x)
+    {
+#pragma warning disable GSA0007
+        var projected = Door(x);
+#pragma warning restore GSA0007
+        return projected;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") let projected", printed, StringComparison.Ordinal)
+        let roundTrip RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+        Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors))
+    }
+
+    @Fact
+    func MidExpressionGsaPragma_ReportsPragmaDroppedDiagnostic() {
+        const source = `
+public class MemberLookup
+{
+    private static int Door(int x) => x + 1;
+
+    public static int MapOpenSignature(int x)
+    {
+        return x +
+#pragma warning disable GSA0007
+            Door(x);
+#pragma warning restore GSA0007
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0007", dropped.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func PartiallyCoveredNextStatement_ReportsPragmaDroppedDiagnostic() {
+        const source = `
+public class MemberLookup
+{
+    private static int Door(int x) => x + 1;
+
+    public static int MapOpenSignature(int x)
+    {
+#pragma warning disable GSA0007
+        Door(x);
+        return Door(x) +
+#pragma warning restore GSA0007
+            1;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0007", dropped.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func GuardedFieldEarlyReturnUnderStatementPragma_DoesNotLeakOutOfScopeCapture() {
+        const source = `
+#nullable enable
+public class Holder
+{
+    public string? Name { get; }
+
+    public string Format()
+    {
+#pragma warning disable GSA0007
+        if (Name == null)
+        {
+            return "";
+        }
+#pragma warning restore GSA0007
+
+        return Name.ToUpperInvariant();
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        let roundTrip RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+        Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors) + "\n" + printed)
+    }
+
+    @Fact
+    func GetterOnlyPragmaOnReadWriteProperty_IsNotPromotedToWholeProperty() {
+        const source = `
+public class Sample
+{
+    private int _v;
+
+    public int Value
+    {
+#pragma warning disable GSA0007
+        get => _v;
+#pragma warning restore GSA0007
+        set => _v = value;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal)
+        Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+    }
+
+    @Fact
+    func MultiNamespacePackageSplit_OnlyReportsPragmasForOwnedPackage() {
+        const source = `
+namespace First
+{
+    public class A
+    {
+        public int Run(int x) => x;
+    }
+}
+
+namespace Second
+{
+    public class B
+    {
+        private static int Door(int x) => x + 1;
+
+        public int Run(int x)
+        {
+#pragma warning disable GSA0007
+            var v = Door(x);
+            return v;
+#pragma warning restore GSA0007
+        }
+    }
+}
+`
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Multi.cs", source)})
+        let document = Assert.Single(project.Documents)
+        let firstContext = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let firstTranslator = CSharpToGSharpTranslator(packageFilter: "First", includeGlobalNamespace: true)
+        let firstPrinted = GSharpPrinter.Print(firstTranslator.TranslateDocument(document, firstContext))
+        Assert.DoesNotContain(
+            firstContext.Diagnostics,
+            (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED"
+        )
+        Assert.DoesNotContain("@SuppressDiagnostic", firstPrinted, StringComparison.Ordinal)
+
+        let secondContext = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let secondTranslator = CSharpToGSharpTranslator(packageFilter: "Second", includeGlobalNamespace: false)
+        let secondPrinted = GSharpPrinter.Print(secondTranslator.TranslateDocument(document, secondContext))
+        Assert.DoesNotContain(
+            secondContext.Diagnostics,
+            (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED"
+        )
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", secondPrinted, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ExplicitNestedBlockStatementPragma_IsTranslatedWithoutDroppedWarning() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+        {
+#pragma warning disable GSA0007
+            x = Door(x);
+#pragma warning restore GSA0007
+        }
+        return x;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        let roundTrip RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+        Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors) + "\n" + printed)
+    }
+
+    @Fact
+    func BarePragmaWarningRestore_EndsStatementSuppressionRegion() {
+        const source = `
+public class Sample
+{
+    private static int FirstDoor(int x) => x + 1;
+    private static int SecondDoor(int x) => x + 2;
+
+    public int Run(int x)
+    {
+#pragma warning disable GSA0007
+        var a = FirstDoor(x);
+#pragma warning restore
+        var b = SecondDoor(a);
+        return b;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Equal(1, CountOccurrences(printed, "@SuppressDiagnostic(\"GSA0007\")"))
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") let a = FirstDoor(x)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain(
+            "@SuppressDiagnostic(\"GSA0007\") let b = SecondDoor(a)",
+            printed,
+            StringComparison.Ordinal
+        )
+        let roundTrip RoundTripResult? = TranslationTestValidation.AssertBinds(printed)
+        Assert.True(roundTrip!!.Success, string.Join(Environment.NewLine, roundTrip!!.Errors) + "\n" + printed)
+    }
+
+    @Fact
+    func ExpressionBodyOnlyPragma_IsReportedAsDroppedNotPromotedToWholeMember() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x) =>
+#pragma warning disable GSA0005
+        Door(x);
+#pragma warning restore GSA0005
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0005", dropped.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func PragmaCoveringIfConditionAndRestoredInsideIfBody_ReportsDroppedWarning() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+#pragma warning disable GSA0007
+        Door(1);
+        if (Door(2) > 0)
+        {
+#pragma warning restore GSA0007
+            x++;
+        }
+        return x;
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0007", dropped.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func MergedPartialParts_DoNotReportConsumedPragmaInSecondaryFileAsDropped() {
+        const part1 = `
+public partial class Sample
+{
+    private static int Door(int x) => x + 1;
+}
+`
+        const part2 = `
+public partial class Sample
+{
+    public int Run(int x)
+    {
+#pragma warning disable GSA0007
+        var v = Door(x);
+        return v;
+#pragma warning restore GSA0007
+    }
+}
+`
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Sample.Part1.cs", part1), ("Sample.Part2.cs", part2)}
+        )
+        let translator = CSharpToGSharpTranslator(preservePartialParts: false)
+        let diagnostics = System.Collections.Generic.List[TranslationDiagnostic]()
+        let printedUnits = System.Collections.Generic.List[string]()
+        for doc in project.Documents {
+            let ctx = TranslationContext(project.Compilation, doc.SemanticModel, doc.FilePath)
+            let unit = translator.TranslateDocument(doc, ctx)
+            printedUnits.Add(GSharpPrinter.Print(unit))
+            diagnostics.AddRange(ctx.Diagnostics)
+        }
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains(
+            printedUnits,
+            (u string) -> u.Contains("@SuppressDiagnostic(\"GSA0007\") {", StringComparison.Ordinal)
+        )
+    }
+
+    @Fact
+    func InactivePreprocessorBranchPragma_IsIgnoredBySuppressionAndDroppedReporting() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+#if FALSE
+#pragma warning disable GSA0005
+#endif
+#pragma warning disable GSA0007
+#if FALSE
+#pragma warning restore GSA0007
+#endif
+        var v = Door(x);
+        return v;
+#pragma warning restore GSA0007
+    }
+}
+`
+        let (printed, diagnostics) = TranslateWithDiagnostics(source)
+        Assert.DoesNotContain(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("@SuppressDiagnostic(\"GSA0007\") {", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("GSA0005", printed, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func SuppressedRunContainingLocalFunction_ReportsDroppedWarning() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+#pragma warning disable GSA0007
+        int Local(int v) => Door(v);
+        return Local(x);
+#pragma warning restore GSA0007
+    }
+}
+`
+        let (_, diagnostics) = TranslateWithDiagnostics(source)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0007", dropped.Message, StringComparison.Ordinal)
+    }
+
     shared {
         private func CountOccurrences(haystack string, needle string) int32 {
             var count = 0
@@ -140,11 +577,19 @@ public class Rewriter
         }
 
         private func Translate(source string) string {
+            let (printed, _) = TranslateWithDiagnostics(source)
+            return printed
+        }
+
+        private func TranslateWithDiagnostics(source string)(
+            Printed string,
+            Diagnostics System.Collections.Generic.IReadOnlyList[TranslationDiagnostic]
+        ) {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Program.cs", source)})
             let document = Assert.Single(project.Documents)
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
-            return GSharpPrinter.Print(unit)
+            return (GSharpPrinter.Print(unit), context.Diagnostics)
         }
     }
 }

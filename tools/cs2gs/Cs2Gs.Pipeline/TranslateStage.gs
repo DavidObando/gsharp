@@ -1232,7 +1232,8 @@ class TranslateStage : IMigrationStage {
             diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId ||
             diagnostic.DiagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId ||
             diagnostic.DiagnosticId == CSharpToGSharpTranslator.ConditionalCompilationDiagnosticId ||
-            diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId
+            diagnostic.DiagnosticId == CSharpToGSharpTranslator.GenericStoreBridgeDiagnosticId ||
+            diagnostic.DiagnosticId == CSharpToGSharpTranslator.PragmaSuppressionDroppedDiagnosticId
 
         /// True for an ordinary C# compiler error (`CS####`). cs2gs's own
         /// loader diagnostics share the `CS` prefix (`CS2GS0001`
