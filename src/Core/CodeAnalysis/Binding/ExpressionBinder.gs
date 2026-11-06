@@ -300,6 +300,30 @@ internal partial class ExpressionBinder {
             IsRebinding bool
         )
     ]()
+    private let applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)?
+    private let applyConditionEffectsAndHeaderAliases((SyntaxNode, BoundExpression) -> void)?
+    private let captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)?
+    private let restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
+    private let recordDeferredArgumentSnapshot((SyntaxNode) -> void)?
+    private let joinBranchNarrowingSnapshots(
+        (TypeSymbol?, StatementBinder.NarrowingBindSnapshot, TypeSymbol?, StatementBinder.NarrowingBindSnapshot) -> void
+    )?
+    private let intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)?
+    private let verifyCallArgumentsAfterConversions(
+        (
+            GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+            BoundExpression?,
+            (() -> BoundExpression)?
+        ) -> BoundExpression?
+    )?
+    private let rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)?
+    private let applyPendingMultiAssignmentValueSnapshot((SyntaxNode) -> void)?
+    private let recordExpressionEntryAliases((BoundExpression?, HashSet[VariableSymbol]?) -> void)?
+    private let recordAppliedBinaryLeft((BoundBinaryExpression, HashSet[VariableSymbol]?) -> void)?
+    private let compoundRhsEntrySnapshots Dictionary[SyntaxNode, StatementBinder.NarrowingBindSnapshot] = Dictionary[
+        SyntaxNode,
+        StatementBinder.NarrowingBindSnapshot
+    ](ReferenceEqualityComparer.Instance)
 
     // Issue #5569: the diagnostics of each discarded literal target bind in the calls that are binding now.
     private let literalTargetDiagnostics List[ImmutableArray[Diagnostic]] = List[ImmutableArray[Diagnostic]]()
@@ -365,7 +389,32 @@ internal partial class ExpressionBinder {
         classifyConditionNonNullAssignments(BoundExpression, IReadOnlyCollection[VariableSymbol]?) -> Dictionary[
             AccessPath,
             TypeSymbol
-        ]?
+        ]?,
+        applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)? = nil,
+        applyConditionEffectsAndHeaderAliases((SyntaxNode, BoundExpression) -> void)? = nil,
+        captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)? = nil,
+        restoreNarrowingSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
+        recordDeferredArgumentSnapshot((SyntaxNode) -> void)? = nil,
+        joinBranchNarrowingSnapshots(
+            (
+                TypeSymbol?,
+                StatementBinder.NarrowingBindSnapshot,
+                TypeSymbol?,
+                StatementBinder.NarrowingBindSnapshot
+            ) -> void
+        )? = nil,
+        intersectNarrowingWithSnapshot((StatementBinder.NarrowingBindSnapshot) -> void)? = nil,
+        verifyCallArgumentsAfterConversions(
+            (
+                GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList[ExpressionSyntax],
+                BoundExpression?,
+                (() -> BoundExpression)?
+            ) -> BoundExpression?
+        )? = nil,
+        rebindDeferredArgumentWithSnapshot((SyntaxNode, () -> BoundExpression) -> BoundExpression)? = nil,
+        applyPendingMultiAssignmentValueSnapshot((SyntaxNode) -> void)? = nil,
+        recordExpressionEntryAliases((BoundExpression?, HashSet[VariableSymbol]?) -> void)? = nil,
+        recordAppliedBinaryLeft((BoundBinaryExpression, HashSet[VariableSymbol]?) -> void)? = nil
     ) {
         this.binderCtx = binderCtx ?? throw ArgumentNullException("binderCtx")
         this.memberLookup = memberLookup ?? throw ArgumentNullException("memberLookup")
@@ -402,6 +451,45 @@ internal partial class ExpressionBinder {
         this.setCallableAliases = setCallableAliases
         this.dischargesNullableWidening = dischargesNullableWidening
         this.classifyConditionNonNullAssignments = classifyConditionNonNullAssignments
+        this.applySubExpressionEffects = applySubExpressionEffects
+        this.applyConditionEffectsAndHeaderAliases = applyConditionEffectsAndHeaderAliases
+        this.captureNarrowingSnapshot = captureNarrowingSnapshot
+        this.restoreNarrowingSnapshot = restoreNarrowingSnapshot
+        this.recordDeferredArgumentSnapshot = recordDeferredArgumentSnapshot
+        this.joinBranchNarrowingSnapshots = joinBranchNarrowingSnapshots
+        this.intersectNarrowingWithSnapshot = intersectNarrowingWithSnapshot
+        this.verifyCallArgumentsAfterConversions = verifyCallArgumentsAfterConversions
+        this.rebindDeferredArgumentWithSnapshot = rebindDeferredArgumentWithSnapshot
+        this.applyPendingMultiAssignmentValueSnapshot = applyPendingMultiAssignmentValueSnapshot
+        this.recordExpressionEntryAliases = recordExpressionEntryAliases
+        this.recordAppliedBinaryLeft = recordAppliedBinaryLeft
+    }
+
+    private func ApplySubExpressionNarrowingEffects(syntax SyntaxNode?, operand BoundExpression?) {
+        applySubExpressionEffects?(syntax, operand)
+    }
+
+    private func ApplyConditionEffectsAndHeaderAliases(syntax SyntaxNode, condition BoundExpression) {
+        applyConditionEffectsAndHeaderAliases?(syntax, condition)
+    }
+
+    private func CaptureNarrowingBindSnapshot() StatementBinder.NarrowingBindSnapshot -> if captureNarrowingSnapshot != nil {
+        captureNarrowingSnapshot!!()
+    } else {
+        default(StatementBinder.NarrowingBindSnapshot)
+    }
+
+    private func RestoreNarrowingBindSnapshot(snapshot StatementBinder.NarrowingBindSnapshot) {
+        restoreNarrowingSnapshot?(snapshot)
+    }
+
+    private func JoinBranchNarrowingSnapshots(
+        whenTrueType TypeSymbol?,
+        afterWhenTrue StatementBinder.NarrowingBindSnapshot,
+        whenFalseType TypeSymbol?,
+        afterWhenFalse StatementBinder.NarrowingBindSnapshot
+    ) {
+        joinBranchNarrowingSnapshots?(whenTrueType, afterWhenTrue, whenFalseType, afterWhenFalse)
     }
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
@@ -999,11 +1087,13 @@ internal partial class ExpressionBinder {
 
     internal func BindPossiblySkippedOperand(bind() -> BoundExpression) BoundExpression {
         let before = CaptureExpressionNarrowingFrames()
+        let preSkippedSnapshot = CaptureNarrowingBindSnapshot()
         let entryAliases = GetCurrentExpressionCallableAliases()
         let result = bind()
         if !(result is BoundErrorExpression) {
             InvalidateExpressionNarrowingFrames(result, entryAliases)
             MergeBranchExpressionNarrowingFrames(before)
+            intersectNarrowingWithSnapshot?(preSkippedSnapshot)
             expressionExitAliases[result] = GetCurrentExpressionCallableAliases()
         }
         return result
@@ -1219,6 +1309,21 @@ internal partial class ExpressionBinder {
         return false
     }
 
+    internal func BindInSavedCheckedContext(syntax SyntaxNode?, bind() -> BoundExpression) BoundExpression {
+        var current = syntax?.Parent
+        while current != nil {
+            if current is CheckedExpressionSyntax checkedExpr {
+                using let scope_ = binderCtx.PushCheckedContext(checkedExpr.IsChecked)
+                return bind()
+            }
+            if current is not ExpressionSyntax || current is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax {
+                break
+            }
+            current = current.Parent
+        }
+        return bind()
+    }
+
     internal func RebindInSavedScope(original BoundExpression, syntax ExpressionSyntax) BoundExpression {
         Diagnostics.EnterSiblingRebind()
         try {
@@ -1226,12 +1331,12 @@ internal partial class ExpressionBinder {
                 let currentScope = $scope
                 $scope = savedScope
                 try {
-                    return BindExpression(syntax)
+                    return BindInSavedCheckedContext(syntax, () -> BindExpression(syntax))
                 } finally {
                     $scope = currentScope
                 }
             }
-            return BindExpression(syntax)
+            return BindInSavedCheckedContext(syntax, () -> BindExpression(syntax))
         } finally {
             Diagnostics.LeaveSiblingRebind()
         }
@@ -1376,6 +1481,7 @@ internal partial class ExpressionBinder {
     }
 
     internal func BindExpression(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
+        applyPendingMultiAssignmentValueSnapshot?(syntax)
         let pushedRootFrame = !HasActiveExpressionNarrowings()
         if pushedRootFrame {
             PushExpressionNarrowingFrame(nil)
@@ -1391,6 +1497,7 @@ internal partial class ExpressionBinder {
             let exitStep = expressionBindStep
             if !(result is BoundErrorExpression) {
                 result.AnchorSyntax(syntax)
+                recordExpressionEntryAliases?(result, entryAliases)
                 let hadNarrowingOrAliases = HasActiveNarrowingEntriesOrAliases()
                 InvalidateExpressionNarrowingFrames(result, entryAliases)
                 if hadNarrowingOrAliases || HasActiveNarrowingEntriesOrAliases() {
@@ -1597,7 +1704,21 @@ internal partial class ExpressionBinder {
         return true
     }
 
+    internal func GetSavedEntrySnapshot(syntax SyntaxNode) StatementBinder.NarrowingBindSnapshot? {
+        if compoundRhsEntrySnapshots.TryGetValue(syntax, out var snapshot) {
+            return snapshot
+        }
+        return nil
+    }
+
     internal func BindExpression(syntax ExpressionSyntax, canBeVoid bool = false) BoundExpression {
+        applyPendingMultiAssignmentValueSnapshot?(syntax)
+        if syntax.Parent is EventSubscriptionExpressionSyntax ||
+            syntax.Parent is CompoundIndexAssignmentExpressionSyntax ||
+            syntax.Parent is IndirectCompoundAssignmentExpressionSyntax ||
+            syntax.Parent is RelationalPatternSyntax {
+            compoundRhsEntrySnapshots[syntax] = CaptureNarrowingBindSnapshot()
+        }
         let pushedRootFrame = !HasActiveExpressionNarrowings()
         if pushedRootFrame {
             PushExpressionNarrowingFrame(nil)
@@ -1626,6 +1747,7 @@ internal partial class ExpressionBinder {
             // re-binds and duplicated diagnostics.
             if !(result is BoundErrorExpression) {
                 result.AnchorSyntax(syntax)
+                recordExpressionEntryAliases?(result, entryAliases)
                 let hadNarrowingOrAliases = HasActiveNarrowingEntriesOrAliases()
                 InvalidateExpressionNarrowingFrames(result, entryAliases)
                 if hadNarrowingOrAliases || HasActiveNarrowingEntriesOrAliases() {
@@ -2792,6 +2914,7 @@ internal partial class ExpressionBinder {
     /// target-typeable branchy expression (so it can be re-bound against the
     /// resolved parameter type). See (cref:BinderContext.DeferTargetlessConditional).
     internal func BindArgumentDeferringBranchy(inner ExpressionSyntax) BoundExpression {
+        recordDeferredArgumentSnapshot?(inner)
         if IsTargetDependentBlockArgumentSyntax(inner) {
             return BoundErrorExpression(inner)
         }
@@ -3667,6 +3790,7 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportExpressionMustHaveValue(syntax.Expression.Location)
             return BoundErrorExpression(syntax)
         }
+        ApplySubExpressionNarrowingEffects(syntax.Expression, expression)
         var pattern = patterns.BindPattern(syntax.Pattern, expression.Type, allowBindings: false, preferTypeNames: true)
         if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
             let inspector = NativeProtocolPatternInspector(binderCtx.RootScope, sourceProtocol, syntax.Location)

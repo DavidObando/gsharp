@@ -2447,6 +2447,227 @@ public partial class Demo
         Assert.Equal(19, Regex.Matches(printed, `s!!`).Count)
     }
 
+    /// Issues #5637 and #5238: an accessor in an earlier operand of the same expression removes a by-reference fact
+    /// for a later operand (`b.P + s.Length`, `b.Auto + s.Length`), and an enclosing `catch ... when` filter that
+    /// writes a local removes its fact after a call in an earlier operand (`Resume() + s.Length`) or in an `if`
+    /// condition (`if (Resume() == 0) return s.Length;`), while a read in the first operand before the call stays bare.
+    @Fact
+    func SameExpressionOperandOrderAndEnclosingCatchFilter_AssertsOnlyAfterEffect() {
+        let printed = AssertRunsLikeCSharp(`
+using System;
+public class Base
+{
+    private int count;
+    public int P => ++count;
+    public virtual int Auto { get; set; } = 1;
+}
+public sealed class Bag : System.Collections.IEnumerable
+{
+    public int Count;
+    public void Add(int x) => Count += x;
+    public System.Collections.IEnumerator GetEnumerator() => System.Array.Empty<int>().GetEnumerator();
+}
+public class Demo
+{
+    static int Resume()
+    {
+        try { throw new FormatException(); }
+        catch (Exception) { return 0; }
+    }
+    static bool Touch(ref string? s)
+    {
+        s = "xy";
+        return false;
+    }
+    public static int AfterComputed(ref string? s, Base b)
+    {
+        if (s == null) return 0;
+        return b.P + s.Length;
+    }
+    public static int AfterOpenAuto(ref string? s, Base b)
+    {
+        if (s == null) return 0;
+        return b.Auto + s.Length;
+    }
+    public static int BeforeComputed(ref string? s, Base b)
+    {
+        if (s == null) return 0;
+        return s.Length + b.P;
+    }
+    public static int FilterOperand(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            return Resume() + s.Length;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterCondition(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            if (Resume() == 0) return s.Length;
+            return 0;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterControlBeforeCall(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            return s.Length + Resume();
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterControlUninvokedLocalFunction(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            int Local() => Resume();
+            return s.Length + Local();
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterControlTernaryBranch(string? seed, bool flag)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            return flag ? Resume() : s.Length;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int AfterSwitchArmGetter(ref string? s, Base b, int k)
+    {
+        if (s == null) return 0;
+        var v = k switch { 0 => b.P, _ => 1 };
+        return v + s.Length;
+    }
+    public static int FilterCollectionAddBeforeRead(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            var list = new System.Collections.Generic.List<int> { 1, s.Length };
+            return list.Count;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterFirstCollectionElementAfterCtor(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            var bag = new Bag { s.Length };
+            return bag.Count;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int FilterControlCallFreeSwitchExpression(string? seed, int k)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            var v = k switch { 0 => 1, _ => 2 };
+            return v + s.Length;
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    static T Id<T>(T value) => value;
+    public static int FilterControlGenericFirstArgument(string? seed)
+    {
+        var s = seed;
+        if (s == null) return 0;
+        try
+        {
+            return Id<int>(value: s.Length);
+        }
+        catch (FormatException) when (Touch(ref s))
+        {
+            return -1;
+        }
+    }
+    public static int ClosureAssignedAfterObjectCaseLabel(string? seed, object o)
+    {
+        var s = seed;
+        System.Action reset = () => s = null;
+        if (s == null) return 0;
+        var v = 0;
+        switch (o)
+        {
+            case 1:
+                v = 2;
+                break;
+            default:
+                v = 3;
+                break;
+        }
+        return v + s.Length;
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        var b = new Base();
+        return AfterComputed(ref text, b) + "," + AfterOpenAuto(ref text, b) + "," + BeforeComputed(ref text, b) + "," +
+            FilterOperand("abc") + "," + FilterCondition("abc") + "," + FilterControlBeforeCall("abc") + "," +
+            FilterControlUninvokedLocalFunction("abc") + "," + FilterControlTernaryBranch("abc", false) + "," +
+            AfterSwitchArmGetter(ref text, b, 0) + "," + FilterCollectionAddBeforeRead("abc") + "," +
+            FilterFirstCollectionElementAfterCtor("abc") + "," + FilterControlCallFreeSwitchExpression("abc", 0) + "," +
+            ClosureAssignedAfterObjectCaseLabel("abc", 1) + "," + FilterControlGenericFirstArgument("abc");
+    }
+}`)
+        Assert.Contains("return b.P + s!!.Length", printed)
+        Assert.Contains("return b.Auto + s!!.Length", printed)
+        Assert.Contains("return s.Length + b.P", printed)
+        Assert.Contains("return Resume() + s!!.Length", printed)
+        Assert.Contains("return s!!.Length\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("return s.Length + Resume()", printed)
+        Assert.Contains("return s.Length + Local()", printed)
+        Assert.Contains("return if flag { Resume() } else { s.Length }", printed)
+        Assert.Contains("return v + s!!.Length", printed)
+        Assert.Contains("{ 1, s!!.Length }", printed)
+        Assert.Contains("Bag(){ s!!.Length }", printed)
+        Assert.Contains("return v + s.Length", printed)
+        Assert.Contains("Id[int32](value: s.Length)", printed)
+        Assert.Equal(2, Regex.Matches(printed, `return v \+ s!!\.Length`).Count)
+    }
+
     shared {
         /// Runs `Demo.Run()` of the C# and of its translation and compares the output. [`library`](paramref) is C#
         /// that both reference as a prebuilt assembly (`Lib5617`), so its types are imported in the G#.

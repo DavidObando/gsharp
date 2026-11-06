@@ -1363,10 +1363,10 @@ internal partial class StatementBinder {
             }
         }
         if function?.IsExpressionInitializer == true {
-            if syntax.Expression == nil {
-                Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)
+            if syntax.Expression is {} returnExpr {
+                Diagnostics.ReportInvalidReturnExpression(returnExpr.Location, function!!.Name)
             } else {
-                Diagnostics.ReportInvalidReturnExpression(syntax.Expression.Location, function!!.Name)
+                Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)
             }
         } else if function == nil {
             Diagnostics.ReportInvalidReturn(syntax.ReturnKeyword.Location)

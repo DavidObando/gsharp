@@ -1489,7 +1489,15 @@ internal partial class ExpressionBinder {
     ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, receiver?.Type ?? classSymbol?.SymbolicReceiver)
         try {
-            let bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+            var bound = BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    ce.Arguments,
+                    bound,
+                    () -> BindAccessorCallWithReceiver(receiver, classSymbol, ce, receiverSyntax, receiverStart)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -1504,6 +1512,9 @@ internal partial class ExpressionBinder {
         receiverSyntax ExpressionSyntax?,
         receiverStart int32?
     ) BoundExpression {
+        if receiver != nil {
+            ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
+        }
         if receiver != nil && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _) {
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             let saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements)
@@ -1662,118 +1673,31 @@ internal partial class ExpressionBinder {
             explicitTypeArgs = nil
             typeArgSymbols = default(ImmutableArray[TypeSymbol])
         }
-        let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
-        let deferredArrowLambdaIndices = List[int32]()
-        var delegateTargetCandidateParams List[[]ParameterInfo]? = nil
-        var delegateTargetCandidatesComputed = false
-        var argSlot = 0
-        for argument in ce.Arguments {
-            let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
-            if inner is RefArgumentExpressionSyntax refArg {
-                boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
-            } else if IsTargetDependentBlockArgumentSyntax(inner) {
-                if !delegateTargetCandidatesComputed {
-                    delegateTargetCandidatesComputed = true
-                    delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(
-                        receiver,
-                        classSymbol,
-                        methodName
-                    )
-                }
-                let argumentName = if argumentNames.IsDefault {
-                    default(string?)
-                } else {
-                    argumentNames[argSlot]
-                }
-                boundArguments.Add(
-                    if TryResolveTargetDependentBlockTarget(
-                        Invariant.Required(
-                            delegateTargetCandidateParams,
-                            "target-dependent block resolution has collected candidate parameter lists",
-                            expression: "delegateTargetCandidateParams"
-                        ),
-                        parameterOffset: 0,
-                        ce.Arguments.Count,
-                        argSlot,
-                        argumentName,
-                        inner,
-                        out var blockTarget
-                    ) {
-                        BindExpression(inner, blockTarget!!)
-                    } else {
-                        cast[BoundExpression](BoundErrorExpression(inner))
-                    }
-                )
-            } else if IsUntypedArrowLambda(inner) {
-                // Issue #891: defer binding of an un-typed arrow lambda until
-                // the target delegate type is known. Binding it now would emit
-                // GS0304 (cannot infer parameter type) and produce an error-typed
-                // argument that aborts overload resolution — which is exactly why
-                // `list.Single((c) -> c.Id == "x")` reported "Cannot find function
-                // Single" while the explicit `func(c DoctorCheck) bool { ... }`
-                // form worked. The placeholder keeps argument positions aligned;
-                // the real binding happens once the (possibly generic) overload —
-                // including LINQ extension methods — has been resolved below.
-                deferredArrowLambdaIndices.Add(argSlot)
-                boundArguments.Add(BoundErrorExpression(inner))
-            } else if inner is LambdaExpressionSyntax {
-                // Issue #908: target-type an arrow lambda argument from the
-                // matching delegate-typed parameter of the applicable CLR
-                // static/instance/extension methods before binding it, mirroring
-                // the constructor path (BindCallArgumentWithDelegateTargetTyping).
-                // Without this, `Factory.CreateStatic(() -> MemoryStream())`
-                // binds the lambda with its body-derived return type
-                // (`() -> MemoryStream`) before overload resolution and fails to
-                // match a `Func<Stream>` parameter (GS0159). Pinning the return
-                // type from the delegate target yields `() -> Stream` directly so
-                // the call resolves and the produced delegate is created over a
-                // method whose return already matches the parameter.
-                //
-                // Issue #2193: but if a same-named user extension function has a
-                // function-typed parameter at this position, the CLR candidate
-                // set is not authoritative — target-typing the lambda to a CLR
-                // delegate (e.g. the void `SendOrPostCallback` of
-                // `SynchronizationContext.Send`) would erase the lambda's return
-                // type and break inference of the extension's result type
-                // parameter (GS0151). Bind the lambda with its natural type so
-                // both the CLR instance method and the user extension can compete
-                // (delegate-reshaping conversions still make it applicable to a
-                // concrete CLR delegate parameter when that path is chosen).
-                let argName = if argumentNames.IsDefault {
-                    default(string?)
-                } else {
-                    argumentNames[argSlot]
-                }
-                let symbolicReceiver ImportedTypeSymbol? = (
-                    if receiver?.Type is {} receiverTypeForProjection {
-                        MemberLookup.GetProjectionReceiverImportedType(receiverTypeForProjection)
-                    } else {
-                        default(ImportedTypeSymbol?)
-                    }
-                ) ??
-                    classSymbol?.SymbolicReceiver
-                var lambdaHandled = false
-                if !lambdaHandled &&
-                    symbolicReceiver != nil &&
-                    !symbolicReceiver
-                    .TypeArguments
-                    .IsDefaultOrEmpty &&
-                    symbolicReceiver
-                    .TypeArguments
-                    .Any(TypeSymbol.RequiresSymbolicProjection) {
-                    // Issue #2673 / #2810: a constructed imported instance or
-                    // static receiver can erase a symbolic type argument to
-                    // object in reflection. Defer the lambda so the symbolic
-                    // target pass recovers the open delegate signature.
-                    deferredArrowLambdaIndices.Add(argSlot)
-                    boundArguments.Add(BoundErrorExpression(inner))
-                    lambdaHandled = true
-                }
-                if !lambdaHandled && UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot) {
-                    boundArguments.Add(BindExpression(inner))
-                    lambdaHandled = true
-                }
-                if !lambdaHandled {
+        if receiver != nil {
+            ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
+        }
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        let preAppliedCallableProperty = ApplyPreArgumentsCallablePropertyEffects(
+            receiver,
+            receiver?.Type,
+            classSymbol,
+            methodName,
+            ce,
+            isStatic: receiver == nil
+        )
+        let bindArgumentsAndDispatch = func () BoundExpression {
+            let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+            let deferredArrowLambdaIndices = List[int32]()
+            var delegateTargetCandidateParams List[[]ParameterInfo]? = nil
+            var delegateTargetCandidatesComputed = false
+            var argSlot = 0
+            for argument in ce.Arguments {
+                let countBeforeArg = boundArguments.Count
+                let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
+                recordDeferredArgumentSnapshot?(inner)
+                if inner is RefArgumentExpressionSyntax refArg {
+                    boundArguments.Add(BindRefArgumentExpression(refArg, parameter: nil))
+                } else if IsTargetDependentBlockArgumentSyntax(inner) {
                     if !delegateTargetCandidatesComputed {
                         delegateTargetCandidatesComputed = true
                         delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(
@@ -1782,150 +1706,212 @@ internal partial class ExpressionBinder {
                             methodName
                         )
                     }
-                    // delegateTargetCandidateParams: assigned above whenever
-                    // delegateTargetCandidatesComputed transitions to true, which
-                    // just happened on this iteration or a previous one.
-                    let hasClosedTarget = TryResolveDelegateTargetFromCandidates(
-                        delegateTargetCandidateParams!!,
-                        paramOffset: 0,
-                        sourceArgIndex: argSlot,
-                        argName: argName,
-                        target: out var target,
-                        nominalTarget: out var nominalTarget,
-                        blockedByOpenGenericParameter: out var blocked,
-                        sawOpenGenericParameter: out var sawOpen
+                    let argumentName = if argumentNames.IsDefault {
+                        default(string?)
+                    } else {
+                        argumentNames[argSlot]
+                    }
+                    boundArguments.Add(
+                        if TryResolveTargetDependentBlockTarget(
+                            Invariant.Required(
+                                delegateTargetCandidateParams,
+                                "target-dependent block resolution has collected candidate parameter lists",
+                                expression: "delegateTargetCandidateParams"
+                            ),
+                            parameterOffset: 0,
+                            ce.Arguments.Count,
+                            argSlot,
+                            argumentName,
+                            inner,
+                            out var blockTarget
+                        ) {
+                            BindExpression(inner, blockTarget!!)
+                        } else {
+                            cast[BoundExpression](BoundErrorExpression(inner))
+                        }
                     )
-                    // Issue #2345: an explicitly-typed lambda whose matching
-                    // delegate parameter is an *open* generic (e.g. an imported
-                    // generic method's `Action<Builder<TColumns>>`, where
-                    // `TColumns` only closes once the method's type arguments
-                    // are inferred from the call's other arguments) cannot be
-                    // target-typed yet. Binding it now with no target is only
-                    // safe for an expression-bodied lambda (`-> expr`), whose
-                    // return type is unambiguously the expression's type either
-                    // way. A block-bodied lambda (`-> { ... }`) is different:
-                    // with no target, a trailing call expression-statement (e.g.
-                    // a fluent/self-returning builder method) is treated as the
-                    // block's *value*, producing a `Func<..., TResult>`-shaped
-                    // lambda instead of the `void`-returning `Action` the (still
-                    // unresolved) target actually expects — which mismatches the
-                    // real parameter and cascades into "cannot find function" at
-                    // the outer call. Defer such lambdas exactly like an
-                    // untyped arrow lambda so the staged inference below
-                    // (`ResolveDeferredArrowLambdaArguments`) can close the
-                    // generic method's type arguments from the other arguments
-                    // first, then bind this lambda against the now-closed
-                    // delegate target (its own explicit parameter types are
-                    // unaffected — only return-type inference depends on the
-                    // target).
-                    //
-                    // Issue #3149: a mixed open/closed set must also wait for
-                    // overload resolution. The closed candidate supplies the
-                    // shared function shape, but only the selected method can
-                    // determine whether the lambda needs a named delegate.
-                    let lambdaSyntax LambdaExpressionSyntax? = inner as LambdaExpressionSyntax
-                    if (lambdaSyntax?.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
-                        (hasClosedTarget && sawOpen) {
+                } else if IsUntypedArrowLambda(inner) {
+                    deferredArrowLambdaIndices.Add(argSlot)
+                    boundArguments.Add(BoundErrorExpression(inner))
+                } else if inner is LambdaExpressionSyntax {
+                    let argName = if argumentNames.IsDefault {
+                        default(string?)
+                    } else {
+                        argumentNames[argSlot]
+                    }
+                    let symbolicReceiver ImportedTypeSymbol? = (
+                        if receiver?.Type is {} receiverTypeForProjection {
+                            MemberLookup.GetProjectionReceiverImportedType(receiverTypeForProjection)
+                        } else {
+                            default(ImportedTypeSymbol?)
+                        }
+                    ) ??
+                        classSymbol?.SymbolicReceiver
+                    var lambdaHandled = false
+                    if !lambdaHandled &&
+                        symbolicReceiver != nil &&
+                        !symbolicReceiver
+                        .TypeArguments
+                        .IsDefaultOrEmpty &&
+                        symbolicReceiver
+                        .TypeArguments
+                        .Any(TypeSymbol.RequiresSymbolicProjection) {
                         deferredArrowLambdaIndices.Add(argSlot)
                         boundArguments.Add(BoundErrorExpression(inner))
                         lambdaHandled = true
                     }
-                    if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
-                        // target: non-null whenever hasClosedTarget is true
-                        // ([NotNullWhen(true)] on TryResolveDelegateTargetFromCandidates).
-                        let slotIndex = argSlot
-                        boundArguments.Add(
-                            BindLambdaWithCandidateTarget(
-                                lambdaSyntax,
-                                delegateTargetCandidateParams!!,
-                                (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
-                                target!!,
-                                false,
-                                (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
-                                    argument,
-                                    literal,
-                                    nominalTarget
-                                )
-                            )
-                        )
+                    if !lambdaHandled && UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot) {
+                        boundArguments.Add(BindExpression(inner))
                         lambdaHandled = true
                     }
                     if !lambdaHandled {
-                        boundArguments.Add(BindExpression(inner))
+                        if !delegateTargetCandidatesComputed {
+                            delegateTargetCandidatesComputed = true
+                            delegateTargetCandidateParams = CollectDelegateTargetCandidateParameterLists(
+                                receiver,
+                                classSymbol,
+                                methodName
+                            )
+                        }
+                        let hasClosedTarget = TryResolveDelegateTargetFromCandidates(
+                            delegateTargetCandidateParams!!,
+                            paramOffset: 0,
+                            sourceArgIndex: argSlot,
+                            argName: argName,
+                            target: out var target,
+                            nominalTarget: out var nominalTarget,
+                            blockedByOpenGenericParameter: out var blocked,
+                            sawOpenGenericParameter: out var sawOpen
+                        )
+                        let lambdaSyntax LambdaExpressionSyntax? = inner as LambdaExpressionSyntax
+                        if (lambdaSyntax?.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
+                            (hasClosedTarget && sawOpen) {
+                            deferredArrowLambdaIndices.Add(argSlot)
+                            boundArguments.Add(BoundErrorExpression(inner))
+                            lambdaHandled = true
+                        }
+                        if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
+                            let slotIndex = argSlot
+                            boundArguments.Add(
+                                BindLambdaWithCandidateTarget(
+                                    lambdaSyntax,
+                                    delegateTargetCandidateParams!!,
+                                    (parameters[]ParameterInfo) -> FindCandidateSlot(parameters, 0, slotIndex, argName),
+                                    target!!,
+                                    false,
+                                    (literal BoundExpression) -> ConvertLiteralToNominalDelegate(
+                                        argument,
+                                        literal,
+                                        nominalTarget
+                                    )
+                                )
+                            )
+                            lambdaHandled = true
+                        }
+                        if !lambdaHandled {
+                            boundArguments.Add(BindExpression(inner))
+                        }
+                    }
+                } else {
+                    boundArguments.Add(BindArgumentDeferringBranchy(inner))
+                }
+                if boundArguments.Count > countBeforeArg {
+                    ApplySubExpressionNarrowingEffects(inner, boundArguments[boundArguments.Count - 1])
+                }
+                argSlot++
+            }
+            if deferredArrowLambdaIndices.Count > 0 {
+                let mutableArgs = boundArguments.ToArray()
+                ResolveDeferredArrowLambdaArguments(
+                    receiver,
+                    classSymbol,
+                    methodName,
+                    ce,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    deferredArrowLambdaIndices,
+                    mutableArgs
+                )
+                ResolveDeferredArrowLambdaArgumentsFromUserMethods(
+                    receiver,
+                    methodName,
+                    ce,
+                    deferredArrowLambdaIndices,
+                    mutableArgs
+                )
+                for idx in deferredArrowLambdaIndices {
+                    let placeholder = mutableArgs[idx] as BoundErrorExpression
+                    let pendingLambda LambdaExpressionSyntax? = placeholder?.Syntax as LambdaExpressionSyntax
+                    if pendingLambda != nil {
+                        mutableArgs[idx] = lambdas.BindLambdaExpression(pendingLambda)
                     }
                 }
-            } else {
-                boundArguments.Add(BindArgumentDeferringBranchy(inner))
+                boundArguments.Clear()
+                boundArguments.AddRange(mutableArgs)
             }
-            argSlot++
-        }
-        if deferredArrowLambdaIndices.Count > 0 {
-            let mutableArgs = boundArguments.ToArray()
-            ResolveDeferredArrowLambdaArguments(
-                receiver,
-                classSymbol,
-                methodName,
-                ce,
-                explicitTypeArgs,
-                typeArgSymbols,
-                deferredArrowLambdaIndices,
-                mutableArgs
-            )
-            // Issue #951: the reflection-driven resolution above only covers CLR
-            // (imported) methods. When the receiver is a user-declared
-            // class/struct/interface, recover the target delegate shape from the
-            // user method's own parameter symbols so an arrow lambda passed to a
-            // user method with a delegate-typed parameter (e.g.
-            // `calc.Apply((x) -> x * 2)`) infers its parameter type too.
-            ResolveDeferredArrowLambdaArgumentsFromUserMethods(
-                receiver,
-                methodName,
-                ce,
-                deferredArrowLambdaIndices,
-                mutableArgs
-            )
-            // Any lambda whose target could not be inferred is now bound without
-            // a target so the established GS0304 diagnostic still surfaces.
-            for idx in deferredArrowLambdaIndices {
-                let placeholder = mutableArgs[idx] as BoundErrorExpression
-                let pendingLambda LambdaExpressionSyntax? = placeholder?.Syntax as LambdaExpressionSyntax
-                if pendingLambda != nil {
-                    mutableArgs[idx] = lambdas.BindLambdaExpression(pendingLambda)
+            let initialArguments = boundArguments.ToImmutable()
+            let overloadDiagMark = Diagnostics.Count
+            let prevPreArgsNarrowing = activePreCallArgumentsNarrowing
+            activePreCallArgumentsNarrowing = preArgumentsNarrowing
+            try {
+                var bound = BindAccessorCallCore(
+                    receiver,
+                    classSymbol,
+                    methodName,
+                    ce,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames,
+                    initialArguments,
+                    receiverSyntax,
+                    receiverStart
+                )
+                if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                    Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+                    bound = BindAccessorCallCore(
+                        receiver,
+                        classSymbol,
+                        methodName,
+                        ce,
+                        explicitTypeArgs,
+                        typeArgSymbols,
+                        argumentNames,
+                        refreshedArguments,
+                        receiverSyntax,
+                        receiverStart
+                    )
                 }
+                return bound
+            } finally {
+                activePreCallArgumentsNarrowing = prevPreArgsNarrowing
             }
-            boundArguments.Clear()
-            boundArguments.AddRange(mutableArgs)
         }
-        let initialArguments = boundArguments.ToImmutable()
-        let overloadDiagMark = Diagnostics.Count
-        var result = BindAccessorCallCore(
-            receiver,
-            classSymbol,
-            methodName,
-            ce,
-            explicitTypeArgs,
-            typeArgSymbols,
-            argumentNames,
-            initialArguments,
-            receiverSyntax,
-            receiverStart
-        )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
-            result = BindAccessorCallCore(
-                receiver,
-                classSymbol,
-                methodName,
-                ce,
-                explicitTypeArgs,
-                typeArgSymbols,
-                argumentNames,
-                refreshedArguments,
-                receiverSyntax,
-                receiverStart
-            )
+        let prevSelectedProp = lastSelectedCallablePropertyLoad
+        lastSelectedCallablePropertyLoad = nil
+        try {
+            var result = bindArgumentsAndDispatch()
+            if !preAppliedCallableProperty &&
+                lastSelectedCallablePropertyLoad is {} selectedPropLoad &&
+                ce
+                .Arguments
+                .Count > 0 {
+                lastSelectedCallablePropertyLoad = nil
+                result = Diagnostics.ReplaceDiagnosticsIn(
+                    ce.Location,
+                    () -> {
+                        for arg in ce.Arguments {
+                            $scope.RemoveVariablesDeclaredInSpan(arg.SyntaxTree, arg.Span)
+                        }
+                        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
+                        ApplySubExpressionNarrowingEffects(ce.Identifier, selectedPropLoad)
+                        return bindArgumentsAndDispatch()
+                    }
+                )
+            }
+            return result
+        } finally {
+            lastSelectedCallablePropertyLoad = prevSelectedProp
         }
-        return result
     }
 
     private func BindAccessorCallCore(

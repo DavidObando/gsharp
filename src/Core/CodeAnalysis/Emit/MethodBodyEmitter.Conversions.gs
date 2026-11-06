@@ -1679,11 +1679,9 @@ internal partial class MethodBodyEmitter {
         }
 
         internal func ReturnsValueTypeNullable(conversion BoundClrConversionCallExpression) bool {
-            if conversion.Function != nil {
-                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversion.Function.Type) ??
-                    conversion
-                    .Function
-                    .Type
+            if conversion.Function is {} conversionFunction {
+                let resultType = conversion.FunctionOwnerType?.SubstituteMemberType(conversionFunction.Type) ??
+                    conversionFunction.Type
                 return resultType is NullableTypeSymbol nullable && NullableLifting.IsAnyValueTypeNullable(nullable)
             }
             if TryGetSymbolicConversionReturnType(conversion, out var symbolicReturn) {

@@ -114,9 +114,9 @@ internal partial class ExpressionBinder {
         var typeSymbol TypeSymbol? = nil
         if typeClause.ReadOnlySpanModifier != nil &&
             (
-            typeClause.HasQualifier || typeClause.Identifier == nil || !binderCtx.CanUseSpanAlias(
+            typeClause.HasQualifier || typeClause.Identifier is not{} spanIdentifier || !binderCtx.CanUseSpanAlias(
                 $scope,
-                typeClause.Identifier,
+                spanIdentifier,
                 getCurrentFunction()
             )
         ) {
@@ -920,7 +920,10 @@ internal partial class ExpressionBinder {
         return BoundLiteralExpression(nil, value)
     }
 
-    private func BindInterpolatedStringExpression(syntax InterpolatedStringExpressionSyntax) BoundExpression {
+    private func BindInterpolatedStringExpression(
+        syntax InterpolatedStringExpressionSyntax,
+        customHandler InterpolatedStringHandlerInfo? = nil
+    ) BoundExpression {
         // ADR-0055 (Phase 2): bind `"a $x b ${expr,align:fmt} c"` to a dedicated
         // BoundInterpolatedStringExpression carrying the ordered literal/hole
         // parts. Lowering is deferred (late) so that format/alignment intent is
@@ -929,6 +932,16 @@ internal partial class ExpressionBinder {
         // pattern (issue #368). This replaces the legacy eager `+`-chain that
         // mis-asserted `string`/`string?` operand types and produced the #366
         // memory-unsafe IL.
+        if customHandler != nil {
+            ApplySubExpressionNarrowingEffects(
+                syntax.StringToken,
+                BoundInterpolatedStringExpression(
+                    syntax.StringToken,
+                    ImmutableArray[BoundInterpolatedStringPart].Empty,
+                    customHandler
+                )
+            )
+        }
         let parts = ImmutableArray.CreateBuilder[BoundInterpolatedStringPart](syntax.Segments.Length)
         for segment in syntax.Segments {
             if segment.IsExpression {
@@ -974,14 +987,45 @@ internal partial class ExpressionBinder {
                         Diagnostics.TruncateTo(diagMark)
                     }
                 }
-                parts.Add(
-                    BoundInterpolatedStringPart.FromHole(bound, segment.Alignment, segment.Format, segment.Expression)
+                let holePart = BoundInterpolatedStringPart.FromHole(
+                    bound,
+                    segment.Alignment,
+                    segment.Format,
+                    segment.Expression
                 )
+                let usesIncrementalHandler = customHandler != nil ||
+                    (
+                    $scope.References is {} interpolationRefs && DefaultInterpolatedStringHandlerShape.TryResolve(
+                        interpolationRefs,
+                        out _,
+                        out _
+                    )
+                )
+                if usesIncrementalHandler {
+                    ApplySubExpressionNarrowingEffects(
+                        segmentExpression,
+                        BoundInterpolatedStringExpression(syntax, ImmutableArray.Create(holePart), customHandler)
+                    )
+                } else {
+                    ApplySubExpressionNarrowingEffects(segmentExpression, bound)
+                }
+                parts.Add(holePart)
             } else {
-                parts.Add(BoundInterpolatedStringPart.FromLiteral(segment.Text ?? string.Empty))
+                let literalPart = BoundInterpolatedStringPart.FromLiteral(segment.Text ?? string.Empty)
+                if customHandler != nil {
+                    ApplySubExpressionNarrowingEffects(
+                        syntax.StringToken,
+                        BoundInterpolatedStringExpression(
+                            syntax.StringToken,
+                            ImmutableArray.Create(literalPart),
+                            customHandler
+                        )
+                    )
+                }
+                parts.Add(literalPart)
             }
         }
-        return BoundInterpolatedStringExpression(syntax, parts.ToImmutable())
+        return BoundInterpolatedStringExpression(syntax, parts.ToImmutable(), customHandler)
     }
 
     private func BindNaturalMethodGroupValue(expression BoundExpression, location TextLocation) BoundExpression {
@@ -1443,30 +1487,40 @@ internal partial class ExpressionBinder {
         syntax InterpolatedStringExpressionSyntax,
         targetType TypeSymbol?
     ) BoundExpression {
-        if !TryBuildInterpolationFormat(syntax, out var composite, out var holeValues) {
-            return BoundErrorExpression(nil)
-        }
-        let formatLiteral = BoundLiteralExpression(
-            nil,
-            Invariant.Required(
-                composite,
-                "a successful interpolation format has a composite string",
-                expression: "composite"
+        let bindCore = func () BoundExpression {
+            if !TryBuildInterpolationFormat(syntax, out var composite, out var holeValues) {
+                return BoundErrorExpression(nil)
+            }
+            let formatLiteral = BoundLiteralExpression(
+                nil,
+                Invariant.Required(
+                    composite,
+                    "a successful interpolation format has a composite string",
+                    expression: "composite"
+                )
             )
-        )
-        let argArray = BuildObjectArgumentArray(holeValues)
-        let factoryType = typeof(FormattableStringFactory)
-        let createMethod = Invariant.Required(
-            factoryType.GetMethod("Create", []Type{typeof(string), typeof([]object)}),
-            "FormattableStringFactory.Create has the expected signature",
-            expression: "factoryType.GetMethod(\"Create\", new[] { typeof(string), typeof(object[]) })"
-        )
-        let importedClass = ImportedClassSymbol(factoryType, declaration: nil)
-        let importedFn = ImportedFunctionSymbol(createMethod.Name, importedClass, createMethod, declaration: nil)
-        return BoundImportedCallExpression(
-            nil,
-            importedFn,
-            ImmutableArray.Create[BoundExpression](formatLiteral, argArray)
+            let argArray = BuildObjectArgumentArray(holeValues)
+            let factoryType = typeof(FormattableStringFactory)
+            let createMethod = Invariant.Required(
+                factoryType.GetMethod("Create", []Type{typeof(string), typeof([]object)}),
+                "FormattableStringFactory.Create has the expected signature",
+                expression: "factoryType.GetMethod(\"Create\", new[] { typeof(string), typeof(object[]) })"
+            )
+            let importedClass = ImportedClassSymbol(factoryType, declaration: nil)
+            let importedFn = ImportedFunctionSymbol(createMethod.Name, importedClass, createMethod, declaration: nil)
+            return BoundImportedCallExpression(
+                nil,
+                importedFn,
+                ImmutableArray.Create[BoundExpression](formatLiteral, argArray)
+            )
+        }
+        return Diagnostics.ReplaceDiagnosticsIn(
+            syntax.Location,
+            () -> if rebindDeferredArgumentWithSnapshot != nil {
+                rebindDeferredArgumentWithSnapshot!!(syntax, bindCore)
+            } else {
+                bindCore()
+            }
         )
     }
 
@@ -1560,11 +1614,12 @@ internal partial class ExpressionBinder {
                     TupleTypeSymbol.ResolveNilElements(bound.Type)
                 )
             }
+            ApplySubExpressionNarrowingEffects(segmentExpression, bound)
             let index = values.Count
             values.Add(bound)
             format.Append('{').Append(index.ToString(CultureInfo.InvariantCulture))
-            if (segment.Alignment != nil) {
-                format.Append(',').Append(segment.Alignment.ToString(CultureInfo.InvariantCulture))
+            if segment.Alignment is {} alignment {
+                format.Append(',').Append(alignment.ToString(CultureInfo.InvariantCulture))
             }
             if segment.Format != nil {
                 format.Append(':').Append(segment.Format)
@@ -1716,6 +1771,7 @@ internal partial class ExpressionBinder {
             if value is BoundErrorExpression {
                 hadError = true
             }
+            ApplySubExpressionNarrowingEffects(member.Value, value)
             memberNames.Add(name)
             memberValues.Add(value)
         }
@@ -2155,40 +2211,235 @@ internal partial class ExpressionBinder {
             } else {
                 // Infer from the initializer expression types matched against
                 // the corresponding field's declared type (first-seen wins,
-                // consistent with Phase 4.1 call-site inference).
-                for initSyntax in syntax.Initializers {
-                    var memberType TypeSymbol
-                    if TypeMemberModel.TryGetFieldIncludingInherited(
+                // consistent with Phase 4.1 call-site inference), following the
+                // final primary-then-construction-then-body evaluation order.
+                let inferenceDiagMark = Diagnostics.Count
+                let inferenceNarrowing = CaptureNarrowingBindSnapshot()
+                let inferenceCallsDataConstructor = structSymbol.UsesConstructorOwnedDataConstruction
+                let inferenceCallsPrimary = BoundStructLiteralExpression.UsesPrimaryConstructor(structSymbol)
+                let inferenceHasOrderedSteps = syntax.Elements.Any(
+                    (el SyntaxNode) -> el is StructLiteralContentElementSyntax ||
+                        (
+                        el is FieldInitializerSyntax fi &&
+                            fi.Value is CollectionInitializerExpressionSyntax and
+                            {Target: nil}
+                    )
+                )
+                let primaryInferenceInits = List[
+                    (
+                        InitSyntax FieldInitializerSyntax,
+                        MemberType TypeSymbol,
+                        HasField bool,
+                        Field FieldSymbol?,
+                        FieldDeclaringType StructSymbol?,
+                        Property PropertySymbol?
+                    )
+                ]()
+                let bodyInferenceSteps = List[
+                    (
+                        Content StructLiteralContentElementSyntax?,
+                        InitSyntax FieldInitializerSyntax?,
+                        MemberType TypeSymbol?,
+                        HasField bool,
+                        Field FieldSymbol?,
+                        FieldDeclaringType StructSymbol?,
+                        Property PropertySymbol?
+                    )
+                ]()
+                var inferenceScalarPrefix = true
+                for element in syntax.Elements {
+                    if element is StructLiteralContentElementSyntax contentElement {
+                        inferenceScalarPrefix = false
+                        bodyInferenceSteps.Add(
+                            (
+                                contentElement,
+                                default(FieldInitializerSyntax?),
+                                default(TypeSymbol?),
+                                false,
+                                default(FieldSymbol?),
+                                default(StructSymbol?),
+                                default(PropertySymbol?)
+                            )
+                        )
+                        continue
+                    }
+                    let initSyntax = cast[FieldInitializerSyntax](element)
+                    let fieldName = initSyntax.FieldIdentifier.ValueText
+                    let hasField = TypeMemberModel.TryGetFieldIncludingInherited(
                         structSymbol,
-                        initSyntax.FieldIdentifier.ValueText,
+                        fieldName,
                         MemberQuery.Instance(MemberKinds.Field),
                         out var field,
-                        out _
-                    ) {
-                        memberType = field.Type
-                    } else if TypeMemberModel.TryGetProperty(
+                        out var fieldDeclaringType
+                    )
+                    var property PropertySymbol? = nil
+                    if !hasField && !TypeMemberModel.TryGetProperty(structSymbol, fieldName, out property) &&
+                        !TypeMemberModel.TryGetInheritedDataPositionalProperty(
                         structSymbol,
-                        initSyntax.FieldIdentifier.ValueText,
-                        out var property
-                    ) ||
-                        TypeMemberModel
-                        .TryGetInheritedDataPositionalProperty(
-                        structSymbol,
-                        initSyntax.FieldIdentifier.ValueText,
+                        fieldName,
                         out property,
                         out _
                     ) {
-                        memberType = property!!.Type
+                        continue
+                    }
+                    if initSyntax.Value is CollectionInitializerExpressionSyntax and {Target: nil} {
+                        inferenceScalarPrefix = false
+                        let bracedType = if hasField {
+                            field!!.Type
+                        } else {
+                            property!!.Type
+                        }
+                        bodyInferenceSteps.Add(
+                            (
+                                default(StructLiteralContentElementSyntax?),
+                                initSyntax,
+                                bracedType,
+                                hasField,
+                                field,
+                                fieldDeclaringType,
+                                property
+                            )
+                        )
+                        continue
+                    }
+                    let primaryMember Symbol? = if inferenceCallsPrimary {
+                        BoundStructLiteralExpression.GetPrimaryMember(structSymbol, fieldName)
                     } else {
-                        continue
+                        default(Symbol?)
                     }
-                    // Concrete members cannot constrain this construction's
-                    // type arguments; bind them once in the final closed pass.
-                    if !TypeSymbol.ContainsTypeParameter(memberType) {
-                        continue
+                    let consumesPrimary = primaryMember != nil && (field == primaryMember || property == primaryMember)
+                    let memberType = if consumesPrimary {
+                        structSymbol
+                            .PrimaryConstructorParameters
+                            .First((parameter ParameterSymbol) -> parameter.Name == fieldName)
+                            .Type
+                    } else if hasField {
+                        field!!.Type
+                    } else {
+                        property!!.Type
                     }
-                    let valueExpr = BindExpression(initSyntax.Value)
-                    Binder.InferTypeArguments(memberType, valueExpr.Type, substitution)
+                    let isPrimaryStage = inferenceCallsPrimary &&
+                        (!inferenceHasOrderedSteps || inferenceScalarPrefix) &&
+                        (!inferenceCallsDataConstructor || consumesPrimary)
+                    if isPrimaryStage {
+                        primaryInferenceInits.Add(
+                            (initSyntax, memberType, hasField, field, fieldDeclaringType, property)
+                        )
+                    } else {
+                        bodyInferenceSteps.Add(
+                            (
+                                default(StructLiteralContentElementSyntax?),
+                                initSyntax,
+                                memberType,
+                                hasField,
+                                field,
+                                fieldDeclaringType,
+                                property
+                            )
+                        )
+                    }
+                }
+                let preInferenceScope = $scope
+                $scope = BoundScope($scope)
+                try {
+                    for primaryStep in primaryInferenceInits {
+                        let valueExpr = if TypeSymbol.ContainsTypeParameter(primaryStep.MemberType) {
+                            BindExpression(primaryStep.InitSyntax.Value)
+                        } else {
+                            BindExpression(primaryStep.InitSyntax.Value, primaryStep.MemberType)
+                        }
+                        if TypeSymbol.ContainsTypeParameter(primaryStep.MemberType) {
+                            Binder.InferTypeArguments(primaryStep.MemberType, valueExpr.Type, substitution)
+                        }
+                        ApplySubExpressionNarrowingEffects(primaryStep.InitSyntax.Value, valueExpr)
+                    }
+                    ApplySubExpressionNarrowingEffects(
+                        syntax.TypeIdentifier,
+                        BoundStructLiteralExpression(
+                            syntax.TypeIdentifier,
+                            initialStructSymbol,
+                            ImmutableArray[BoundFieldInitializer].Empty
+                        )
+                    )
+                    let inferenceLitTemp = LocalVariableSymbol(
+                        "$$inf_implit" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
+                            CultureInfo.InvariantCulture
+                        ),
+                        isReadOnly: false,
+                        initialStructSymbol
+                    )
+                    $scope.TryDeclareVariable(inferenceLitTemp)
+                    for bodyStep in bodyInferenceSteps {
+                        if bodyStep.Content is {} contentStep {
+                            if contentStep.Expression is SpreadElementExpressionSyntax spreadStep {
+                                let spreadStatements = BindCollectionSpreadStatements(inferenceLitTemp, spreadStep)
+                                ApplySubExpressionNarrowingEffects(
+                                    contentStep,
+                                    BoundBlockExpression(
+                                        contentStep,
+                                        spreadStatements,
+                                        BoundLiteralExpression(contentStep, 0, TypeSymbol.Void)
+                                    )
+                                )
+                            } else {
+                                let addCall = BindCollectionAddCall(
+                                    inferenceLitTemp,
+                                    contentStep,
+                                    ImmutableArray.Create(contentStep.Expression)
+                                )
+                                ApplySubExpressionNarrowingEffects(contentStep, addCall)
+                            }
+                            continue
+                        }
+                        let initSyntax = bodyStep.InitSyntax!!
+                        if initSyntax.Value is CollectionInitializerExpressionSyntax{Target: nil} bracedStep {
+                            let infBracedStatements = ImmutableArray.CreateBuilder[BoundStatement]()
+                            if !TryEmitMemberCollectionInitializer(
+                                BoundVariableExpression(initSyntax, inferenceLitTemp),
+                                initSyntax.FieldIdentifier.ValueText,
+                                initSyntax.FieldIdentifier,
+                                bracedStep,
+                                infBracedStatements
+                            ) {
+                                BindCollectionElementsForDiagnostics(bracedStep)
+                            }
+                            continue
+                        }
+                        let memberType = bodyStep.MemberType!!
+                        let valueExpr = if TypeSymbol.ContainsTypeParameter(memberType) {
+                            BindExpression(initSyntax.Value)
+                        } else {
+                            BindExpression(initSyntax.Value, memberType)
+                        }
+                        if TypeSymbol.ContainsTypeParameter(memberType) {
+                            Binder.InferTypeArguments(memberType, valueExpr.Type, substitution)
+                        }
+                        let boundInit = if bodyStep.HasField {
+                            BoundFieldInitializer(
+                                bodyStep.Field!!,
+                                valueExpr,
+                                if object.ReferenceEquals(bodyStep.FieldDeclaringType, initialStructSymbol) {
+                                    default(StructSymbol?)
+                                } else {
+                                    bodyStep.FieldDeclaringType
+                                }
+                            )
+                        } else {
+                            BoundFieldInitializer(bodyStep.Property!!, valueExpr)
+                        }
+                        ApplySubExpressionNarrowingEffects(
+                            initSyntax,
+                            BoundStructLiteralExpression(
+                                initSyntax,
+                                initialStructSymbol,
+                                ImmutableArray.Create(boundInit)
+                            )
+                        )
+                    }
+                } finally {
+                    $scope = preInferenceScope
+                    Diagnostics.TruncateTo(inferenceDiagMark)
+                    RestoreNarrowingBindSnapshot(inferenceNarrowing)
                 }
                 for tp in tps {
                     if !substitution.ContainsKey(tp) {
@@ -2332,6 +2583,29 @@ internal partial class ExpressionBinder {
         } else {
             default(List[StructLiteralOrderedStep]?)
         }
+        var appliedConstructionEffects = false
+        if orderedInitializers == nil && !callsPrimary && !callsDataConstructor {
+            ApplySubExpressionNarrowingEffects(
+                syntax.TypeIdentifier,
+                BoundStructLiteralExpression(
+                    syntax.TypeIdentifier,
+                    structSymbol!!,
+                    ImmutableArray[BoundFieldInitializer].Empty
+                )
+            )
+            appliedConstructionEffects = true
+        }
+        var deferredNonPrimaryInits List[
+            (
+                Index int32,
+                InitSyntax FieldInitializerSyntax,
+                InputType TypeSymbol,
+                HasField bool,
+                Field FieldSymbol?,
+                FieldDeclaringType StructSymbol?,
+                Property PropertySymbol?
+            )
+        ]? = nil
         for element in syntax.Elements {
             if element is StructLiteralContentElementSyntax contentElement {
                 // orderedInitializers is non-null here: hasContentElement (computed
@@ -2507,11 +2781,13 @@ internal partial class ExpressionBinder {
                 if !callsPrimary && !structSymbol!!.IsClass && structSymbol!!.PrimaryConstructorParameters.Any(
                     (parameter ParameterSymbol) -> parameter.Name == fieldName
                 ) {
+                    let primaryValue = BindExpression(initSyntax.Value, memberType)
+                    ApplySubExpressionNarrowingEffects(initSyntax.Value, primaryValue)
                     inits.Add(
                         if hasField {
                             BoundFieldInitializer(
                                 Invariant.Required(field, "a primary input targets its field", expression: "field"),
-                                BindExpression(initSyntax.Value, memberType)
+                                primaryValue
                             )
                         } else {
                             BoundFieldInitializer(
@@ -2520,7 +2796,7 @@ internal partial class ExpressionBinder {
                                     "a primary input targets its property",
                                     expression: "property"
                                 ),
-                                BindExpression(initSyntax.Value, memberType)
+                                primaryValue
                             )
                         }
                     )
@@ -2540,25 +2816,120 @@ internal partial class ExpressionBinder {
             }
             // Issue #3521: member type must reach target-dependent initializer
             // forms before they bind, not only their later conversion.
-            let valueExpr = BindExpression(initSyntax.Value, inputType)
-            inits.Add(
-                if hasField {
+            let isStagedPrimaryInput = callsPrimary && (!callsDataConstructor || consumesPrimaryArgument)
+            if !isStagedPrimaryInput && callsPrimary {
+                deferredNonPrimaryInits ??= List[
+                    (
+                        Index int32,
+                        InitSyntax FieldInitializerSyntax,
+                        InputType TypeSymbol,
+                        HasField bool,
+                        Field FieldSymbol?,
+                        FieldDeclaringType StructSymbol?,
+                        Property PropertySymbol?
+                    )
+                ]()
+                let placeholderField = field ?? structSymbol!!.Fields.FirstOrDefault()
+                let placeholderInit = if placeholderField != nil {
+                    BoundFieldInitializer(placeholderField, BoundErrorExpression(nil))
+                } else {
                     BoundFieldInitializer(
-                        Invariant.Required(field, "a resolved field has an initializer", expression: "field"),
+                        Invariant.Required(property, "a resolved property has an initializer", expression: "property"),
+                        BoundErrorExpression(nil)
+                    )
+                }
+                deferredNonPrimaryInits!!.Add(
+                    (inits.Count, initSyntax, inputType, hasField, field, fieldDeclaringType, property)
+                )
+                inits.Add(placeholderInit)
+                continue
+            }
+            if !isStagedPrimaryInput && !appliedConstructionEffects {
+                ApplySubExpressionNarrowingEffects(
+                    syntax.TypeIdentifier,
+                    BoundStructLiteralExpression(
+                        syntax.TypeIdentifier,
+                        structSymbol!!,
+                        ImmutableArray[BoundFieldInitializer].Empty
+                    )
+                )
+                appliedConstructionEffects = true
+            }
+            let valueExpr = BindExpression(initSyntax.Value, inputType)
+            let boundInit = if hasField {
+                BoundFieldInitializer(
+                    Invariant.Required(field, "a resolved field has an initializer", expression: "field"),
+                    valueExpr,
+                    if object.ReferenceEquals(fieldDeclaringType, structSymbol) {
+                        default(StructSymbol?)
+                    } else {
+                        fieldDeclaringType
+                    }
+                )
+            } else {
+                BoundFieldInitializer(
+                    Invariant.Required(property, "a resolved property has an initializer", expression: "property"),
+                    valueExpr
+                )
+            }
+            if isStagedPrimaryInput {
+                ApplySubExpressionNarrowingEffects(initSyntax.Value, valueExpr)
+            } else {
+                ApplySubExpressionNarrowingEffects(
+                    initSyntax,
+                    BoundStructLiteralExpression(initSyntax, structSymbol!!, ImmutableArray.Create(boundInit))
+                )
+            }
+            inits.Add(boundInit)
+        }
+        if deferredNonPrimaryInits != nil {
+            if !appliedConstructionEffects {
+                ApplySubExpressionNarrowingEffects(
+                    syntax.TypeIdentifier,
+                    BoundStructLiteralExpression(
+                        syntax.TypeIdentifier,
+                        structSymbol!!,
+                        ImmutableArray[BoundFieldInitializer].Empty
+                    )
+                )
+                appliedConstructionEffects = true
+            }
+            for deferredItem in deferredNonPrimaryInits {
+                let valueExpr = BindExpression(deferredItem.InitSyntax.Value, deferredItem.InputType)
+                let boundInit = if deferredItem.HasField {
+                    BoundFieldInitializer(
+                        Invariant.Required(
+                            deferredItem.Field,
+                            "a resolved field has an initializer",
+                            expression: "deferredItem.Field"
+                        ),
                         valueExpr,
-                        if object.ReferenceEquals(fieldDeclaringType, structSymbol) {
+                        if object.ReferenceEquals(deferredItem.FieldDeclaringType, structSymbol) {
                             default(StructSymbol?)
                         } else {
-                            fieldDeclaringType
+                            deferredItem.FieldDeclaringType
                         }
                     )
                 } else {
                     BoundFieldInitializer(
-                        Invariant.Required(property, "a resolved property has an initializer", expression: "property"),
+                        Invariant.Required(
+                            deferredItem.Property,
+                            "a resolved property has an initializer",
+                            expression: "deferredItem.Property"
+                        ),
                         valueExpr
                     )
                 }
-            )
+                ApplySubExpressionNarrowingEffects(
+                    deferredItem.InitSyntax,
+                    BoundStructLiteralExpression(
+                        deferredItem.InitSyntax,
+                        structSymbol!!,
+                        ImmutableArray.Create(boundInit)
+                    )
+                )
+                inits[deferredItem.Index] = boundInit
+            }
         }
         // Issue #948: a value-type (struct / data struct) composite literal
         // zero-initializes the storage and then assigns the listed fields. For
@@ -2682,6 +3053,7 @@ internal partial class ExpressionBinder {
                     expression: "step.MemberType"
                 )
                 let expression = BindExpression(member.Value, memberType)
+                ApplySubExpressionNarrowingEffects(member.Value, expression)
                 let name = "$$literalarg" + Interlocked.Increment(&binderCtx.SyntheticLocalCounter).ToString(
                     CultureInfo.InvariantCulture
                 )
@@ -2714,6 +3086,16 @@ internal partial class ExpressionBinder {
         }
         let structLiteral = BoundStructLiteralExpression(syntax, structSymbol!!, inits.ToImmutable())
         if orderedInitializers == nil {
+            if !appliedConstructionEffects {
+                ApplySubExpressionNarrowingEffects(
+                    syntax.TypeIdentifier,
+                    BoundStructLiteralExpression(
+                        syntax.TypeIdentifier,
+                        structSymbol!!,
+                        ImmutableArray[BoundFieldInitializer].Empty
+                    )
+                )
+            }
             return if argumentStatements == nil {
                 cast[BoundExpression](structLiteral)
             } else {
@@ -2740,13 +3122,31 @@ internal partial class ExpressionBinder {
             bracedStatements.AddRange(argumentStatements)
         }
         bracedStatements.Add(BoundVariableDeclaration(syntax, litTemp, structLiteral))
+        ApplySubExpressionNarrowingEffects(
+            syntax.TypeIdentifier,
+            BoundStructLiteralExpression(
+                syntax.TypeIdentifier,
+                structSymbol!!,
+                ImmutableArray[BoundFieldInitializer].Empty
+            )
+        )
         for initializer in orderedInitializers {
             if initializer.Content != nil {
                 let content = initializer.Content
                 if content.Expression is SpreadElementExpressionSyntax spread {
-                    bracedStatements.AddRange(BindCollectionSpreadStatements(litTemp, spread))
+                    let spreadStatements = BindCollectionSpreadStatements(litTemp, spread)
+                    ApplySubExpressionNarrowingEffects(
+                        content,
+                        BoundBlockExpression(
+                            content,
+                            spreadStatements,
+                            BoundLiteralExpression(content, 0, TypeSymbol.Void)
+                        )
+                    )
+                    bracedStatements.AddRange(spreadStatements)
                 } else {
                     let addCall = BindCollectionAddCall(litTemp, content, ImmutableArray.Create(content.Expression))
+                    ApplySubExpressionNarrowingEffects(content, addCall)
                     bracedStatements.Add(BoundExpressionStatement(content, addCall))
                 }
                 continue
@@ -2779,7 +3179,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             let converted = BindExpression(memberSyntax.Value, memberType)
-            let assignment BoundExpression = if initializer.Field != nil {
+            let assignment BoundExpression = if initializer.Field is {} initializerField {
                 cast[BoundExpression](
                     BoundFieldAssignmentExpression(
                         memberSyntax,
@@ -2789,7 +3189,7 @@ internal partial class ExpressionBinder {
                             "a resolved field has a declaring type",
                             expression: "initializer.FieldDeclaringType"
                         ),
-                        initializer.Field,
+                        initializerField,
                         converted
                     )
                 )
@@ -2808,6 +3208,7 @@ internal partial class ExpressionBinder {
                     )
                 )
             }
+            ApplySubExpressionNarrowingEffects(memberSyntax, assignment)
             bracedStatements.Add(BoundExpressionStatement(memberSyntax, assignment))
         }
         let litResult = BoundVariableExpression(syntax, litTemp)
@@ -3762,6 +4163,7 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
+            recordDeferredArgumentSnapshot?(e)
             var be = if hasTargetElements && IsNestedLambdaExpression(e) {
                 BindExpression(e, targetTuple!!.ElementTypes[i])
             } else {
@@ -3770,6 +4172,7 @@ internal partial class ExpressionBinder {
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
+            ApplySubExpressionNarrowingEffects(e, be)
             bound.Add(be)
             elementTypes.Add(be.Type)
         }
@@ -3790,7 +4193,7 @@ internal partial class ExpressionBinder {
             )
         }
         let tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable(), names)
-        return BoundTupleLiteralExpression(nil, tupleType, bound.MoveToImmutable())
+        return BoundTupleLiteralExpression(syntax, tupleType, bound.MoveToImmutable())
     }
 
     /// ADR-0172: validates declared tuple element names — duplicates
@@ -3986,7 +4389,25 @@ internal partial class ExpressionBinder {
                 }
             }
             let newHandler = handler.WithForwardedArguments(rewritten.ToImmutable())
-            argBuilder[argIndex] = interp.Update(interp.Parts, newHandler)
+            var updatedInterp = interp.Update(interp.Parts, newHandler)
+            if interp.Syntax is InterpolatedStringExpressionSyntax interpSyntax {
+                let rebound = Diagnostics.ReplaceDiagnosticsIn(
+                    interpSyntax.Location,
+                    () -> if rebindDeferredArgumentWithSnapshot != nil {
+                        rebindDeferredArgumentWithSnapshot!!(
+                            interpSyntax,
+                            () -> BindInterpolatedStringExpression(interpSyntax, newHandler)
+                        )
+                    } else {
+                        BindInterpolatedStringExpression(interpSyntax, newHandler)
+                    }
+                )
+                if rebound is BoundInterpolatedStringExpression reboundInterp {
+                    updatedInterp = reboundInterp
+                }
+            }
+            updatedInterp.ImplicitConversionOperand = interp
+            argBuilder[argIndex] = updatedInterp
         }
         updatedReceiver = capturedReceiver
         preludeStatements = preludeBuilder.ToImmutable()
@@ -4078,11 +4499,15 @@ internal partial class ExpressionBinder {
             }
             let boundDimensions = ImmutableArray.CreateBuilder[BoundExpression](dimensions.Count)
             for dimension in dimensions {
-                boundDimensions.Add(conversions.BindConversion(dimension, TypeSymbol.Int32))
+                let boundDimension = conversions.BindConversion(dimension, TypeSymbol.Int32)
+                ApplySubExpressionNarrowingEffects(dimension, boundDimension)
+                boundDimensions.Add(boundDimension)
             }
             let rectangularElements = ImmutableArray.CreateBuilder[BoundExpression](elementSyntaxes.Count)
             for elementSyntax in elementSyntaxes {
-                rectangularElements.Add(BindExpression(elementSyntax, elementType!!))
+                let boundElement = BindExpression(elementSyntax, elementType!!)
+                ApplySubExpressionNarrowingEffects(elementSyntax, boundElement)
+                rectangularElements.Add(boundElement)
             }
             var rectangularLengths = ImmutableArray[int32].Empty
             if elementSyntaxes.Count > 0 {
@@ -4138,7 +4563,9 @@ internal partial class ExpressionBinder {
             return BoundArrayCreationExpression(syntax, SliceTypeSymbol.Get(elementType), boundLength)
         }
         for elementSyntax in elementSyntaxes {
-            elements.Add(BindExpression(elementSyntax, elementType!!))
+            let boundElement = BindExpression(elementSyntax, elementType!!)
+            ApplySubExpressionNarrowingEffects(elementSyntax, boundElement)
+            elements.Add(boundElement)
         }
         if syntax.LengthToken == nil {
             return BoundArrayCreationExpression(nil, SliceTypeSymbol.Get(elementType), elements.ToImmutable())
@@ -4373,8 +4800,14 @@ internal partial class ExpressionBinder {
         let entries = ImmutableArray.CreateBuilder[BoundMapEntry](syntax.Entries.Count)
         for entrySyntax in syntax.Entries {
             let key = BindExpression(entrySyntax.Key, mts.KeyType)
+            ApplySubExpressionNarrowingEffects(entrySyntax.Key, key)
             let value = BindExpression(entrySyntax.Value, mts.ValueType)
-            entries.Add(BoundMapEntry(key, value))
+            let entry = BoundMapEntry(key, value)
+            ApplySubExpressionNarrowingEffects(
+                entrySyntax.Value,
+                BoundMapLiteralExpression(entrySyntax.Value, mts, ImmutableArray.Create(entry))
+            )
+            entries.Add(entry)
         }
         return BoundMapLiteralExpression(nil, mts, entries.ToImmutable())
     }

@@ -692,7 +692,15 @@ internal partial class OverloadResolver {
     func BindCallExpression(syntax CallExpressionSyntax, resolvedType TypeSymbol? = nil) BoundExpression {
         let frame = CallCandidateRecorder.Begin(syntax)
         try {
-            let bound = BindCallExpressionCore(syntax, resolvedType)
+            var bound = BindCallExpressionCore(syntax, resolvedType)
+            if verifyCallArgumentsAfterConversions != nil {
+                bound = verifyCallArgumentsAfterConversions!!(
+                    syntax.Arguments,
+                    bound,
+                    () -> BindCallExpressionCore(syntax, resolvedType)
+                ) ??
+                    bound
+            }
             CallCandidateRecorder.Stamp(frame, bound)
             return bound
         } finally {
@@ -906,17 +914,17 @@ internal partial class OverloadResolver {
             // speculatively here and again in the constructor binder can
             // duplicate capture/spill state even if diagnostics are truncated.
             let singleArgClass StructSymbol? = conversionType as StructSymbol
-            let typeArgumentList = syntax.TypeArgumentList
-            let typeArgumentsMatchConversionTarget = typeArgumentList == nil ||
-                (
+            let typeArgumentsMatchConversionTarget = if syntax.TypeArgumentList is {} callTypeArgumentList {
                 singleArgClass != nil &&
                     singleArgClass.IsGenericDefinition == true &&
-                    typeArgumentList
+                    callTypeArgumentList
                     .Arguments
                     .Count == singleArgClass
                     .TypeParameters
                     .Length
-            )
+            } else {
+                true
+            }
             if singleArgClass != nil &&
                 singleArgClass.IsClass &&
                 typeArgumentsMatchConversionTarget &&
@@ -987,8 +995,6 @@ internal partial class OverloadResolver {
         if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
-        let prebindDiagMark = Diagnostics.Count
-        let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
         var boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         // Issue #951: untyped arrow lambdas whose binding
         // is deferred until the callee's parameter types are known, so the
@@ -1004,72 +1010,6 @@ internal partial class OverloadResolver {
         // bind everything with parameter=null (the inline-out form falls back
         // to its declared type) and patch up the type later. The plain
         // lvalue ref/in/out form is parameter-independent.
-        for argument in syntax.Arguments {
-            // Issue #343: a named-argument wrapper carries the value expression
-            // we want to bind; unwrap it so the value is bound on its own.
-            let argSyntax = UnwrapNamedArgumentValue(argument)
-            let lambdaSyntax = GetLambdaArgumentSyntax(argSyntax)
-            var boundArgument BoundExpression
-            if argSyntax is RefArgumentExpressionSyntax refArg {
-                // The first binding pass has no resolved parameter for inline out arguments.
-                boundArgument = bindRefArgumentExpression(refArg, nil)
-            } else if bindLambdaWithTarget != nil &&
-                lambdaSyntax is {} deferredLambda &&
-                IsUntypedArrowLambda(deferredLambda) {
-                // Issue #951: defer; bind once the parameter delegate target is
-                // known (per-position loop below). A placeholder carrying the
-                // lambda syntax keeps argument positions aligned.
-                (
-                    (
-                        if deferredArrowLambdas == nil {
-                            (deferredArrowLambdas = HashSet[LambdaExpressionSyntax]())
-                        } else {
-                            deferredArrowLambdas
-                        }
-                    )!!
-                ).Add(deferredLambda)
-                boundArgument = BoundErrorExpression(deferredLambda)
-            } else {
-                boundArgument = BindOverloadArgumentValue(argSyntax)
-            }
-            boundArguments.Add(boundArgument)
-        }
-        let initialArguments = boundArguments.ToImmutable()
-        let overloadDiagMark = Diagnostics.Count
-        var result = BindCallExpressionAfterArguments(
-            syntax,
-            resolvedType,
-            argumentNames,
-            boundArguments,
-            deferredArrowLambdas,
-            rollbackPrebind,
-            prebindDiagMark
-        )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
-            result = BindCallExpressionAfterArguments(
-                syntax,
-                resolvedType,
-                argumentNames,
-                refreshedArguments.ToBuilder(),
-                deferredArrowLambdas,
-                rollbackPrebind,
-                prebindDiagMark
-            )
-        }
-        return result
-    }
-
-    private func BindCallExpressionAfterArguments(
-        syntax CallExpressionSyntax,
-        resolvedType TypeSymbol?,
-        argumentNames ImmutableArray[string],
-        boundArguments ImmutableArray[BoundExpression].Builder,
-        deferredArrowLambdas HashSet[LambdaExpressionSyntax]?,
-        rollbackPrebind Action?,
-        prebindDiagMark int32
-    ) BoundExpression {
-        var boundArguments = boundArguments
         let symbol Symbol? = Scope.TryLookupSymbol(syntax.Identifier.ValueText)
         if symbol is VariableSymbol callTarget && AccessibilityChecker.TryGetInaccessibleImplicitMemberRead(
             callTarget,
@@ -1106,6 +1046,93 @@ internal partial class OverloadResolver {
         } else {
             default(TypeSymbol?)
         }
+        if symbol is ImplicitPropertyVariableSymbol || symbol is ImplicitStaticPropertyVariableSymbol {
+            let preCalleeLoad = BuildCalleeLoad(cast[VariableSymbol](symbol), syntax.Identifier, narrowedCallTargetType)
+            ApplySubExpressionNarrowingEffects(syntax.Identifier, preCalleeLoad)
+        }
+        let prebindDiagMark = Diagnostics.Count
+        let rollbackPrebind = captureCallArgumentPrebindRollback?(syntax)
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        for argument in syntax.Arguments {
+            // Issue #343: a named-argument wrapper carries the value expression
+            // we want to bind; unwrap it so the value is bound on its own.
+            let argSyntax = UnwrapNamedArgumentValue(argument)
+            let lambdaSyntax = GetLambdaArgumentSyntax(argSyntax)
+            recordDeferredArgumentSnapshot?(argSyntax)
+            var boundArgument BoundExpression
+            if argSyntax is RefArgumentExpressionSyntax refArg {
+                // The first binding pass has no resolved parameter for inline out arguments.
+                boundArgument = bindRefArgumentExpression(refArg, nil)
+            } else if bindLambdaWithTarget != nil &&
+                lambdaSyntax is {} deferredLambda &&
+                IsUntypedArrowLambda(deferredLambda) {
+                // Issue #951: defer; bind once the parameter delegate target is
+                // known (per-position loop below). A placeholder carrying the
+                // lambda syntax keeps argument positions aligned.
+                (
+                    (
+                        if deferredArrowLambdas == nil {
+                            (deferredArrowLambdas = HashSet[LambdaExpressionSyntax]())
+                        } else {
+                            deferredArrowLambdas
+                        }
+                    )!!
+                ).Add(deferredLambda)
+                boundArgument = BoundErrorExpression(deferredLambda)
+            } else {
+                boundArgument = BindOverloadArgumentValue(argSyntax)
+            }
+            ApplySubExpressionNarrowingEffects(argSyntax, boundArgument)
+            boundArguments.Add(boundArgument)
+        }
+        let initialArguments = boundArguments.ToImmutable()
+        let overloadDiagMark = Diagnostics.Count
+        var result = BindCallExpressionAfterArguments(
+            syntax,
+            resolvedType,
+            argumentNames,
+            boundArguments,
+            deferredArrowLambdas,
+            rollbackPrebind,
+            prebindDiagMark,
+            symbol,
+            narrowedCallTargetType,
+            preArgumentsNarrowing
+        )
+        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+            result = BindCallExpressionAfterArguments(
+                syntax,
+                resolvedType,
+                argumentNames,
+                refreshedArguments.ToBuilder(),
+                deferredArrowLambdas,
+                rollbackPrebind,
+                prebindDiagMark,
+                symbol,
+                narrowedCallTargetType,
+                preArgumentsNarrowing
+            )
+        }
+        if syntax.NullableQuestionToken != nil {
+            intersectNarrowingWithSnapshot?(preArgumentsNarrowing)
+        }
+        return result
+    }
+
+    private func BindCallExpressionAfterArguments(
+        syntax CallExpressionSyntax,
+        resolvedType TypeSymbol?,
+        argumentNames ImmutableArray[string],
+        boundArguments ImmutableArray[BoundExpression].Builder,
+        deferredArrowLambdas HashSet[LambdaExpressionSyntax]?,
+        rollbackPrebind Action?,
+        prebindDiagMark int32,
+        symbol Symbol?,
+        narrowedCallTargetType TypeSymbol?,
+        preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot
+    ) BoundExpression {
+        var boundArguments = boundArguments
         // Issue #1566: an accessible in-scope member of the enclosing type
         // shadows a same-named top-level EXTENSION function for an unqualified,
         // receiver-less call — mirroring C#, where an in-scope member hides an
@@ -1147,6 +1174,7 @@ internal partial class OverloadResolver {
                 )
                 if !staticMethods.IsDefaultOrEmpty {
                     if bindUserTypeStaticCall != nil {
+                        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         return InvokeUserTypeStaticCall(
                             initializerReceiverType,
                             syntax,
@@ -1214,6 +1242,7 @@ internal partial class OverloadResolver {
                         // static user call (full optional/variadic/generic
                         // fidelity via the shared static-call finalizer).
                         if bindUserTypeStaticCall != nil {
+                            RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                             return InvokeUserTypeStaticCall(
                                 implicitReceiverStruct,
                                 syntax,
@@ -1374,6 +1403,7 @@ internal partial class OverloadResolver {
                     MemberQuery.Static(MemberKinds.Method)
                 )
                 if !implicitStaticStructOverloads.IsDefaultOrEmpty {
+                    RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                     return InvokeUserTypeStaticCall(implicitStaticStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
             }
@@ -1400,6 +1430,7 @@ internal partial class OverloadResolver {
                 // paths because lexical scope outranks imports.
                 if bindUserTypeStaticCall != nil &&
                     GetLexicallyEnclosingStaticCallOwner(syntax.Identifier.ValueText) is {} enclosingStruct {
+                    RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                     return InvokeUserTypeStaticCall(enclosingStruct, syntax, rollbackPrebind, prebindDiagMark)
                 }
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
@@ -1434,6 +1465,7 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedStaticImport != nil {
+                        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         return InvokeUserTypeStaticCall(matchedStaticImport, syntax, rollbackPrebind, prebindDiagMark)
                     }
                 }
@@ -1465,6 +1497,7 @@ internal partial class OverloadResolver {
                         return BoundErrorExpression(nil)
                     }
                     if matchedClrStaticImport != nil {
+                        RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                         return InvokeImportedClrStaticCall(
                             matchedClrStaticImport,
                             syntax,
@@ -1473,6 +1506,7 @@ internal partial class OverloadResolver {
                         )
                     }
                 }
+                RestoreNarrowingBindSnapshot(preArgumentsNarrowing)
                 if SubmissionBinding.TryBindCall(this, syntax, out var submissionCall) {
                     return submissionCall
                 }
