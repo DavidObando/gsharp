@@ -135,7 +135,9 @@ open class Issue5767FloatingConstantConversionTests {
 
     /// A `const` local keeps its folded conversion when a later emit pass moves the local: across an `await` or
     /// a `yield` into a state-machine field, and into a box cell when a function literal or an expression tree
-    /// captures it. On .NET 10, the runtime conversion of the moved value gave 44 for each row.
+    /// captures it. This includes a function literal in an instance or static field initializer, a base
+    /// constructor argument, and an interface static field. A capture in a static `init` block is #5797. On .NET 10, the runtime conversion of the moved value
+    /// gave 44 for each row.
     @Theory
     @InlineData(
         "import System.Threading.Tasks\nasync func F() Task[int8] {\n    const d float64 = 300.5\n    await Task.Yield()\n    return unchecked(int8(d))\n}\nF().Result",
@@ -151,6 +153,22 @@ open class Issue5767FloatingConstantConversionTests {
     )
     @InlineData(
         "import System\nimport System.Linq.Expressions\nfunc F() int8 {\n    const d float64 = 300.5\n    let e Expression[Func[int8]] = () -> unchecked(int8(d))\n    return e.Compile()()\n}\nF()",
+        "127"
+    )
+    @InlineData(
+        "import System\nclass K {\n    var I int8 = Run(() -> {\n        const d float64 = 300.5\n        let g = () -> unchecked(int8(d))\n        return g()\n    })\n    shared {\n        func Run(f Func[int8]) int8 {\n            return f()\n        }\n    }\n}\nK().I",
+        "127"
+    )
+    @InlineData(
+        "import System\nclass K {\n    shared {\n        let S int8 = Run(() -> {\n            const d float64 = 300.5\n            let g = () -> unchecked(int8(d))\n            return g()\n        })\n        func Run(f Func[int8]) int8 {\n            return f()\n        }\n    }\n}\nK.S",
+        "127"
+    )
+    @InlineData(
+        "import System\nopen class B {\n    let V int8\n    init(v int8) {\n        V = v\n    }\n}\nclass K : B {\n    init() : base(Run(() -> {\n        const d float64 = 300.5\n        let g = () -> unchecked(int8(d))\n        return g()\n    })) { }\n    shared {\n        func Run(f Func[int8]) int8 {\n            return f()\n        }\n    }\n}\nK().V",
+        "127"
+    )
+    @InlineData(
+        "import System\ninterface I {\n    shared {\n        let E int8 = Run(() -> {\n            const d float64 = 300.5\n            let g = () -> unchecked(int8(d))\n            return g()\n        })\n        func Run(f Func[int8]) int8 {\n            return f()\n        }\n    }\n}\nI.E",
         "127"
     )
     func MovedConstLocalConversion_EmitsFoldedValue(source string, expected string) {

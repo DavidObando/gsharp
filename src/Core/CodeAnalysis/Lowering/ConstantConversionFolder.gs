@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Lowering
 
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Immutable
 
 /// Replaces each conversion of a constant floating operand to an integer, `char`, or enum target with
@@ -15,6 +16,11 @@ import System.Collections.Immutable
 /// `yield` into a state-machine field read. Neither read is a constant, so a fold that runs after
 /// these passes emits a runtime conversion whose result depends on the host runtime. This pass runs
 /// first, so every later pass sees the folded literal.
+///
+/// The pass also rewrites the trees that the type symbols hold and that are not in a function body: the
+/// field initializers, the static initializer statements, and the base-constructor initializer arguments.
+/// The symbols are changed in place, as (cref:InterpolatedStringHandlerLowerer) changes them. The fold is
+/// idempotent, so a second emit of the same compilation sees the same literals.
 ///
 /// The decision and the folded shape come from
 /// (cref:ConstantExpressionEvaluator.TryFoldFloatingConstantConversionToLiteral), the same helper that
@@ -28,6 +34,82 @@ internal class ConstantConversionFolder : NestedFunctionBodyRewriter {
             return folded
         }
         return base.RewriteConversionExpression(node)
+    }
+
+    private func RewriteTypeTrees(structSym StructSymbol) bool {
+        var changed = false
+        let staticInitializers = RewriteFieldInitializers(structSym.StaticFieldInitializers)
+        if staticInitializers != nil {
+            structSym.SetStaticFieldInitializers(staticInitializers)
+            changed = true
+        }
+        let instanceInitializers = RewriteFieldInitializers(structSym.InstanceFieldInitializers)
+        if instanceInitializers != nil {
+            structSym.SetInstanceFieldInitializers(instanceInitializers)
+            changed = true
+        }
+        if !structSym.StaticInitializerStatements.IsDefaultOrEmpty {
+            let builder = ImmutableArray.CreateBuilder[BoundStatement](structSym.StaticInitializerStatements.Length)
+            var statementsChanged = false
+            for statement in structSym.StaticInitializerStatements {
+                let rewritten = RewriteStatement(statement)
+                statementsChanged |= rewritten != statement
+                builder.Add(rewritten)
+            }
+            if statementsChanged {
+                structSym.SetStaticInitializerStatements(builder.MoveToImmutable())
+                changed = true
+            }
+        }
+        let primary = RewriteBaseInitializer(structSym.BaseConstructorInitializer)
+        if primary != nil {
+            structSym.SetBaseConstructorInitializer(primary)
+            changed = true
+        }
+        for constructor in structSym.ExplicitConstructors {
+            let rewritten = RewriteBaseInitializer(constructor.BaseInitializer)
+            if rewritten != nil {
+                constructor.SetBaseInitializer(rewritten)
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    // Returns the rewritten initializers, or `nil` when no initializer changed.
+    private func RewriteFieldInitializers(
+        initializers ImmutableDictionary[FieldSymbol, BoundExpression]
+    ) ImmutableDictionary[FieldSymbol, BoundExpression]? {
+        var builder ImmutableDictionary[FieldSymbol, BoundExpression].Builder? = nil
+        // Issue #4663: deterministic order, never identity-hash order.
+        for pair in BoundProgramOrder.FieldInitializers(initializers) {
+            let rewritten = RewriteExpression(pair.Value)
+            if rewritten != pair.Value {
+                let target = builder ?? initializers.ToBuilder()
+                target[pair.Key] = rewritten
+                builder = target
+            }
+        }
+        return builder?.ToImmutable()
+    }
+
+    // Returns the initializer with rewritten arguments, or `nil` when no argument changed.
+    private func RewriteBaseInitializer(initializer BaseConstructorInitializer?) BaseConstructorInitializer? {
+        if initializer == nil || initializer.Arguments.IsDefaultOrEmpty {
+            return nil
+        }
+        let builder = ImmutableArray.CreateBuilder[BoundExpression](initializer.Arguments.Length)
+        var changed = false
+        for argument in initializer.Arguments {
+            let rewritten = RewriteExpression(argument)
+            changed |= rewritten != argument
+            builder.Add(rewritten)
+        }
+        return if changed {
+            initializer.WithArguments(builder.MoveToImmutable())
+        } else {
+            nil
+        }
     }
 
     shared {
@@ -52,6 +134,16 @@ internal class ConstantConversionFolder : NestedFunctionBodyRewriter {
             for pair in BoundProgramOrder.Initializers(program) {
                 initializers[pair.Key] = pair.Value.Rewrite(folder.RewriteExpression, folder.RewriteStatement)
                 changed |= initializers[pair.Key] != pair.Value
+            }
+            for structSym in program.Structs {
+                changed |= folder.RewriteTypeTrees(structSym)
+            }
+            for interfaceSym in program.Interfaces {
+                let interfaceInitializers = folder.RewriteFieldInitializers(interfaceSym.StaticFieldInitializers)
+                if interfaceInitializers != nil {
+                    interfaceSym.SetStaticFieldInitializers(interfaceInitializers)
+                    changed = true
+                }
             }
             if !changed {
                 return program
