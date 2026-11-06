@@ -1252,9 +1252,9 @@ internal class MethodBodyPlanner {
         /// Pre-scans [`body`](paramref) and populates
         /// [`constValues`](paramref) with every `const`-declared local
         /// that has a compile-time (cref:BoundVariableDeclaration.ConstantValue).
-        /// Called once before (cref:CollectLocalsAndLabels) so that
-        /// (cref:MethodBodyEmitter) can inline those values instead of loading
-        /// from a slot.
+        /// `MethodBodyEmitSession.Plan` and `MethodBodyEmitSession.PlanIndependent`
+        /// call it for each region they plan, so that (cref:MethodBodyEmitter) can
+        /// inline those values instead of loading from a slot.
         func CollectConstValues(body BoundStatement, constValues Dictionary[VariableSymbol, object]) {
             WalkStmtsForConsts(body, constValues)
         }
