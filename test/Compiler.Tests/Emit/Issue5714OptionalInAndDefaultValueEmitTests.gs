@@ -210,6 +210,8 @@ class Holder {
     }
 }
 
+delegate Read(x int32? = default(int32)) string;
+
 class Defaults {
     shared {
         func Integer(x int32? = default(int32)) string -> "${x.HasValue}:$x"
@@ -217,7 +219,7 @@ class Defaults {
         func Missing(x int32? = default(int32?)) bool -> x.HasValue
         func Money(x decimal? = default(decimal)) string -> "${x.HasValue}:$x"
         func Run() string {
-            let local = func(x int32? = default(int32)) string { return "${x.HasValue}:$x" }
+            let local Read = (x int32?) -> "${x.HasValue}:$x"
             return "${Integer()}|${Enum()}|${Missing()}|${Holder().Text}|${Holder()[1]}|${Missing(default(int32?))}|${local()}|${Money()}"
         }
     }
