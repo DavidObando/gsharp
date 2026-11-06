@@ -360,6 +360,9 @@ class BoundGlobalScope {
         get;
     }
 
+    /// Gets or sets the reference resolver that bound this global scope (#4729).
+    internal prop References ReferenceResolver?
+
     /// Gets the active preprocessor symbol set used by
     /// `[Conditional("SYMBOL")]` call-site elision (ADR-0047 §6 /
     /// issue #176). Threaded onto the bound global scope so that

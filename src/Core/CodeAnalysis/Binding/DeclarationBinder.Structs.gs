@@ -213,6 +213,7 @@ internal partial class DeclarationBinder {
         let memberBinding = CreateStructMemberBindingContext(structSymbol)
         BindStructInstanceMethods(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructProperties(syntax, $package, structSymbol, memberBinding)
+        StructLayoutBinder.ValidateExplicitLayoutAutoProperties(structSymbol, Diagnostics)
         BindStructEvents(syntax, $package, structSymbol, baseBinding, memberBinding)
         BindStructSharedBlock(syntax, $package, structSymbol, fieldBinding, memberBinding)
         RegisterStructConversionOperators($package, structSymbol, memberBinding.PendingConversionOperators)
@@ -402,7 +403,13 @@ internal partial class DeclarationBinder {
                 Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
                 continue
             }
-            let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
+            let fieldType TypeSymbol? = if fieldSyntax.Type is {} declaredFieldType {
+                bindTypeClause(declaredFieldType)
+            } else if fieldSyntax.IsConst {
+                TryInferLiteralInitializerType(fieldSyntax.Initializer) ?? TypeSymbol.Error
+            } else {
+                default(TypeSymbol?)
+            }
             if fieldType == nil {
                 continue
             }
@@ -2568,32 +2575,41 @@ internal partial class DeclarationBinder {
     /// (`-"x"`) calls a user-defined or extension operator, and anything else (a call, a name, a construction) is
     /// user code or may be, so it counts (ADR-0208 R11 and R15 read it through
     /// `DeclaresNonLiteralSharedFieldInitializer`). The answer reads only the syntax and the declared field type.
-    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool {
+    private func IsLiteralInitializerSyntax(initializer ExpressionSyntax, fieldType TypeSymbol) bool ->
+    TryInferLiteralInitializerType(initializer) != nil &&
+        IsBuiltInLiteralTarget(fieldType) ||
+        (
+        initializer is LiteralExpressionSyntax{LiteralToken: {Kind: SyntaxKind.NilKeyword}} &&
+            (fieldType is NullableTypeSymbol || !fieldType.IsValueType)
+    )
+
+    internal func TryInferLiteralInitializerType(initializer ExpressionSyntax?) TypeSymbol? {
+        if initializer == nil {
+            return nil
+        }
         let unaryOperators = List[SyntaxKind]()
         var current = initializer
         for var depth = 0; depth < 64; depth++ {
             if current is LiteralExpressionSyntax literal {
                 if literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
-                    return unaryOperators.Count == 0 && (fieldType is NullableTypeSymbol || !fieldType.IsValueType)
+                    return nil
                 }
-                return PredefinedUnaryResultType(unaryOperators, BuiltInLiteralType(literal.Value)) != nil &&
-                    IsBuiltInLiteralTarget(fieldType)
+                return PredefinedUnaryResultType(unaryOperators, BuiltInLiteralType(literal.Value))
             }
             if current is ParenthesizedExpressionSyntax parenthesized {
                 current = parenthesized.Expression
             } else if current is UnaryExpressionSyntax unary {
                 // `-2147483648` is the `int32` literal `int32.MinValue`, as the expression binder reads it.
                 if ExpressionBinder.IsNegatedInt32MinValueLiteral(unary.OperatorToken.Kind, unary.Operand) {
-                    return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int32) != nil &&
-                        IsBuiltInLiteralTarget(fieldType)
+                    return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int32)
                 }
                 unaryOperators.Add(unary.OperatorToken.Kind)
                 current = unary.Operand
             } else {
-                return false
+                return nil
             }
         }
-        return false
+        return nil
     }
 
     /// Issue #5520: the result type of [`operators`](paramref) (outermost first) applied from the innermost outwards
@@ -2682,7 +2698,13 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
                     continue
                 }
-                let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
+                let fieldType TypeSymbol? = if fieldSyntax.Type is {} declaredSharedFieldType {
+                    bindTypeClause(declaredSharedFieldType)
+                } else if fieldSyntax.IsConst {
+                    TryInferLiteralInitializerType(fieldSyntax.Initializer) ?? TypeSymbol.Error
+                } else {
+                    default(TypeSymbol?)
+                }
                 if fieldType == nil {
                     continue
                 }
@@ -4037,14 +4059,24 @@ internal partial class DeclarationBinder {
         fieldSyntaxNode FieldDeclarationSyntax,
         fieldType TypeSymbol
     )(Field FieldSymbol, Bound BoundExpression, Location TextLocation) {
+        var fieldType = fieldType
         let initializer = fieldSyntaxNode.Initializer ??
             throw InvalidOperationException("A deferred const field initializer must have an initializer expression.")
-        let boundInit = if initializer is BlockExpressionSyntax {
+        let boundInit = if initializer is BlockExpressionSyntax && fieldSyntaxNode.Type != nil {
             conversions.BindConversion(initializer, fieldType)
         } else {
             bindExpression(initializer)
         }
-        let convertedInit = if initializer is BlockExpressionSyntax {
+        if fieldSyntaxNode.Type == nil && boundInit.Type != TypeSymbol.Error {
+            fieldType = boundInit.Type
+            constField.SetType(fieldType)
+            if $scope.TryLookupSymbol(constField.Name) is ImplicitStaticFieldVariableSymbol implicitVar &&
+                object.ReferenceEquals(implicitVar.Field, constField) {
+                implicitVar.Type = fieldType
+            }
+        }
+        let convertedInit = if (initializer is BlockExpressionSyntax && fieldSyntaxNode.Type != nil) ||
+            fieldSyntaxNode.Type == nil {
             boundInit
         } else {
             conversions.BindConversion(initializer.Location, boundInit, fieldType)
@@ -4449,12 +4481,56 @@ internal partial class DeclarationBinder {
         constInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)],
         sharedConstInitializers List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]
     ) {
-        var pendingConstFolds = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
-        for (constField, fieldSyntaxNode, fieldType) in constInitializers {
-            pendingConstFolds.Add(BindConstFieldInitializer(constField, fieldSyntaxNode, fieldType))
+        let allItems = List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)](
+            constInitializers.Count + sharedConstInitializers.Count
+        )
+        allItems.AddRange(constInitializers)
+        allItems.AddRange(sharedConstInitializers)
+        var pendingConstFolds = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)](allItems.Count)
+        let boundByIndex = Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
+        while true {
+            var resolvedAnyType = false
+            var hasUnresolvedUntyped = false
+            for var i = 0; i < allItems.Count; i++ {
+                if boundByIndex.ContainsKey(i) {
+                    continue
+                }
+                let item = allItems[i]
+                if item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error {
+                    hasUnresolvedUntyped = true
+                }
+            }
+            for var i = 0; i < allItems.Count; i++ {
+                if boundByIndex.ContainsKey(i) {
+                    continue
+                }
+                let (constField, fieldSyntaxNode, _) = allItems[i]
+                let wasUntyped = fieldSyntaxNode.Type == nil && constField.Type == TypeSymbol.Error
+                let diagMark = Diagnostics.Count
+                let boundItem = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
+                if wasUntyped && constField.Type != TypeSymbol.Error {
+                    resolvedAnyType = true
+                    boundByIndex[i] = boundItem
+                } else if wasUntyped && hasUnresolvedUntyped && boundItem.Bound is BoundErrorExpression {
+                    Diagnostics.TruncateTo(diagMark)
+                } else {
+                    boundByIndex[i] = boundItem
+                }
+            }
+            if !resolvedAnyType {
+                for var i = 0; i < allItems.Count; i++ {
+                    if !boundByIndex.ContainsKey(i) {
+                        let (constField, fieldSyntaxNode, _) = allItems[i]
+                        boundByIndex[i] = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
+                    }
+                }
+                break
+            }
         }
-        for (constField, fieldSyntaxNode, fieldType) in sharedConstInitializers {
-            pendingConstFolds.Add(BindConstFieldInitializer(constField, fieldSyntaxNode, fieldType))
+        for var i = 0; i < allItems.Count; i++ {
+            if boundByIndex.TryGetValue(i, out var boundItem) {
+                pendingConstFolds.Add(boundItem)
+            }
         }
         var progress = true
         while progress && pendingConstFolds.Count > 0 {

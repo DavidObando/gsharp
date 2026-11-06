@@ -893,7 +893,13 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
                     continue
                 }
-                let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
+                let fieldType TypeSymbol? = if fieldSyntax.Type is {} declaredFieldType {
+                    bindTypeClause(declaredFieldType)
+                } else if fieldSyntax.IsConst {
+                    TryInferLiteralInitializerType(fieldSyntax.Initializer) ?? TypeSymbol.Error
+                } else {
+                    default(TypeSymbol?)
+                }
                 if fieldType == nil {
                     continue
                 }

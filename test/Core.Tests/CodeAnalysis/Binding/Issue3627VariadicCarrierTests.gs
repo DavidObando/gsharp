@@ -43,16 +43,18 @@ total(1, 2, 3)
     }
 
     @Fact
-    func ExplicitSliceCarrier_SameAsClassic() {
+    func SliceElementTypeVariadic_PacksSliceOfSlices() {
         let result = EmittedOracle.Evaluate(`
 func total(values ...[]int32) int32 {
     var t = 0
-    for v in values {
-        t = t + v
+    for row in values {
+        for v in row {
+            t = t + v
+        }
     }
     return t
 }
-total(4, 5)
+total([]int32{4}, []int32{5})
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(9, result.Value)
@@ -284,6 +286,134 @@ b.Count
 `)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(3, result.Value)
+    }
+
+    @Fact
+    func SliceElementType_PacksSliceOfSlices_WhileExplicitJaggedAndCollectionElementSliceCarriersPreserveCarrier() {
+        let result = EmittedOracle.Evaluate(`
+import System.Collections.Generic
+
+func join(parts ...[]uint8) int32 {
+    var n = 0
+    for p in parts {
+        n = n + p.Length
+    }
+    return n
+}
+func jagged(rows ...[][]int32) int32 {
+    var n = 0
+    for r in rows {
+        n = n + r.Length
+    }
+    return n
+}
+func lists(items ...[]List[int32]) int32 {
+    var n = 0
+    for l in items {
+        n = n + l.Count
+    }
+    return n
+}
+let a = []uint8{1, 2}
+let b = []uint8{3, 4, 5}
+let matrix = [][]uint8{a, b}
+let l1 = List[int32]()
+l1.Add(10)
+let l2 = List[int32]()
+l2.Add(20)
+l2.Add(30)
+join(a, b) * 100 + join(matrix) * 10 + jagged([]int32{1, 2}, []int32{3}) + lists(l1, l2)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(556, result.Value)
+    }
+
+    @Fact
+    func SharedAndBodyConstWithoutTypeClause_InfersTypeAndResolvesBySimpleName() {
+        let result = EmittedOracle.Evaluate(`
+interface Limits {
+    shared {
+        const Base = 3
+        func GetBase() int32 {
+            return Base
+        }
+    }
+}
+class Holder {
+    const Top = 7
+    shared {
+        const Reverse = Limit * 2
+        const Limit = 5
+        const Label = "ok"
+        func UseLimit() int32 -> Reverse + Limit + Top + Limits.GetBase() + Label.Length
+    }
+}
+Holder.UseLimit()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(27, result.Value)
+    }
+
+    @Fact
+    func ExplicitGenericConstructorCall_SubstitutesTypeParameterIntoLambdaTarget() {
+        let result = EmittedOracle.Evaluate(`
+import System
+
+class Box[T] {
+    private let handler (T) -> void
+    init(handler (T) -> void) {
+        this.handler = handler
+    }
+    func Fire(v T) {
+        this.handler(v)
+    }
+}
+class ActionBox[T] {
+    private let handler Action[T]
+    init(handler Action[T]) {
+        this.handler = handler
+    }
+    func Fire(v T) {
+        this.handler(v)
+    }
+}
+var total int64 = 0
+let b1 = Box[int64]((n int64) -> { total = total + n })
+let b2 = Box[int64](n -> { total = total + n })
+let b3 = ActionBox[int64]((n int64) -> { total = total + n })
+b1.Fire(4)
+b2.Fire(5)
+b3.Fire(6)
+total
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(15L, result.Value)
+    }
+
+    @Fact
+    func SourceNominalGenericDelegate_SupportsObjectUpcastCheckedDowncastAndTupleElementIdentity() {
+        let result = EmittedOracle.Evaluate(`
+import System
+
+delegate Factory[T]() T;
+
+func Present() (Text string, Code int32) -> ("ok", 7)
+
+let local Factory[(Text string, Code int32)] = Present
+let relabeled Factory[(Label string, Number int32)] = local
+let asObject object = relabeled
+let asDelegate Delegate = local
+let asMulticast MulticastDelegate = local
+let nullableLocal Factory[(Text string, Code int32)]? = local
+let fromNullable object = cast[object](nullableLocal)
+let converted = cast[Factory[(Text string, Code int32)]](asObject)
+let fromDel = cast[Factory[(Text string, Code int32)]](asDelegate)
+let fromMulti = cast[Factory[(Text string, Code int32)]](asMulticast)
+let item = converted()
+"${item.Text}:${item.Code}:${fromDel().Code}:${fromMulti().Code}:${fromNullable != nil}"
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("ok:7:7:7:True", result.Value)
     }
 
     shared {

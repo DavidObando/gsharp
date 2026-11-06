@@ -1812,11 +1812,12 @@ class StructSymbol : TypeSymbol {
                 var implemented = false
                 for var kk = 0; kk < k && !implemented; kk++ {
                     let derivedCls = levels[kk].Cls
-                    if derivedCls.Methods.IsDefaultOrEmpty {
+                    let derivedMethods = derivedCls.GetDeclaredInstanceMethods()
+                    if derivedMethods.IsDefaultOrEmpty {
                         continue
                     }
                     let candidateSubst = levels[kk].Subst
-                    for candidate in derivedCls.Methods {
+                    for candidate in derivedMethods {
                         if candidate.IsAbstract {
                             continue
                         }

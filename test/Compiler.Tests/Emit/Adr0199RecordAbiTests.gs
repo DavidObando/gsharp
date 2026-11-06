@@ -607,6 +607,127 @@ data class Circle(R int32) : Shape(1) {
     }
 
     @Fact
+    func AbstractBaseSlot_IsSatisfiedBySynthesizedDerivedDataClassPrintMembers() {
+        const source = `package W
+import System
+import System.Text
+
+abstract data class Shape(Id int32) {
+    protected open func PrintMembers(builder StringBuilder) bool;
+}
+data class Square(Side int32) : Shape(2)`
+        let assembly = Adr0199RecordAbiWitness.CompileGSharp(source)
+        let square = assembly.GetTypes().Single((t Type) -> t.Name == "Square")
+        let all = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+        let slot = Assert.Single(square.GetMethods(all), (m MethodInfo) -> m.Name == "PrintMembers")
+        Assert.True(
+            slot.IsFamily && slot.IsVirtual && (slot.Attributes & MethodAttributes.NewSlot) == 0 && !slot.IsFinal
+        )
+        Assert.Equal("Square { Side = 5 }", Activator.CreateInstance(square, 5)!!.ToString())
+    }
+
+    @Fact
+    func ImportedNonDataIntermediary_BetweenImportedRecordAndDataClass_PreservesInheritedPrintMembersSlot() {
+        const extSource = `package Ext4877
+import System.Text
+
+public open data class Root(Id int32)
+public open class CustomMiddle : Root {
+    public init(id int32) : base(id) {}
+    protected init(original CustomMiddle) : base(original.Id) {}
+    protected open override func PrintMembers(builder StringBuilder) bool {
+        builder.Append("CustomMiddle: ")
+        return base.PrintMembers(builder)
+    }
+}
+public open class PassThroughMiddle : Root {
+    public init(id int32) : base(id) {}
+    protected init(original PassThroughMiddle) : base(original.Id) {}
+}
+public open data class GenericRoot[T](Item T)
+public open class GenericMiddle[T] : GenericRoot[T] {
+    public init(item T) : base(item) {}
+    protected init(original GenericMiddle[T]) : base(original.Item) {}
+}`
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4877_").FullName
+        try {
+            let extSrcPath = Path.Combine(tempDir, "Ext4877.gs")
+            let extPath = Path.Combine(tempDir, "Ext4877.dll")
+            File.WriteAllText(extSrcPath, extSource)
+            let extExit = Program.Main(
+                []string{
+                    "/out:" + extPath,
+                    "/assemblyname:Ext4877",
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    extSrcPath
+                }
+            )
+            Assert.Equal(0, extExit)
+            let extBytes = File.ReadAllBytes(extPath)
+            const gsSource = `package W
+import Ext4877
+
+data class CustomLeaf(Side int32) : CustomMiddle(1)
+data class PassThroughLeaf(Side int32) : PassThroughMiddle(2)
+data class GenericLeaf(Side int32) : GenericMiddle[string]("tag")
+
+func Run() string {
+    return "${CustomLeaf(5)}|${PassThroughLeaf(6)}|${GenericLeaf(7)}"
+}`
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, gsSource)
+            let exit = Program.Main(
+                []string{
+                    "/out:" + outPath,
+                    "/assemblyname:test",
+                    "/target:library",
+                    "/targetframework:net10.0",
+                    "/reference:" + extPath,
+                    srcPath
+                }
+            )
+            Assert.Equal(0, exit)
+            IlVerifier.Verify(outPath, []string{extPath})
+            let outBytes = File.ReadAllBytes(outPath)
+            let alc = System
+                .Runtime
+                .Loader
+                .AssemblyLoadContext("Issue4877_" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            try {
+                using let extLoadStream = MemoryStream(extBytes)
+                alc.LoadFromStream(extLoadStream)
+                using let outLoadStream = MemoryStream(outBytes)
+                let asm = alc.LoadFromStream(outLoadStream)
+                let declared = BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.NonPublic |
+                BindingFlags.DeclaredOnly
+                for typeName in[]string{"W.CustomLeaf", "W.PassThroughLeaf", "W.GenericLeaf"} {
+                    let leafType = asm.GetType(typeName, throwOnError: true)!!
+                    let slot = Assert.Single(leafType.GetMethods(declared), (m MethodInfo) -> m.Name == "PrintMembers")
+                    Assert.True(
+                        slot.IsFamily &&
+                            slot.IsVirtual &&
+                            (slot.Attributes & MethodAttributes.NewSlot) == 0 &&
+                            !slot.IsFinal
+                    )
+                }
+                let result = asm.GetType("W.<Program>", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)
+                Assert.Equal(
+                    "CustomLeaf { CustomMiddle: Id = 1, Side = 5 }|PassThroughLeaf { Id = 2, Side = 6 }|GenericLeaf { Item = tag, Side = 7 }",
+                    result
+                )
+            } finally {
+                alc.Unload()
+            }
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
+    @Fact
     func SuspendingIntermediarySlot_IsNotTheInheritedSlot() {
         const source = `package W
 import System

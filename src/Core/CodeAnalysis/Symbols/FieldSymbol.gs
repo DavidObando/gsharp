@@ -85,6 +85,10 @@ class FieldSymbol : Symbol {
         private set;
     }
 
+    internal func SetType(type TypeSymbol) {
+        Type = type
+    }
+
     /// Gets the field accessibility.
     prop Accessibility Accessibility {
         get;

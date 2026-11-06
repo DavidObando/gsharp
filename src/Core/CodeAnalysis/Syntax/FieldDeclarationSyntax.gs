@@ -24,7 +24,7 @@ partial class FieldDeclarationSyntax : SyntaxNode {
         accessibilityModifier SyntaxToken?,
         varOrLetKeyword SyntaxToken?,
         identifier SyntaxToken,
-        type TypeClauseSyntax,
+        type TypeClauseSyntax?,
         equalsToken SyntaxToken? = nil,
         initializer ExpressionSyntax? = nil
     ) : base(syntaxTree) {
@@ -86,8 +86,8 @@ partial class FieldDeclarationSyntax : SyntaxNode {
         get;
     }
 
-    /// Gets the field type clause.
-    prop Type TypeClauseSyntax {
+    /// Gets the field type clause, or `null` when an initialized `const` field omits it (#4837).
+    prop Type TypeClauseSyntax? {
         get;
     }
 

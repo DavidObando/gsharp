@@ -61,13 +61,47 @@ internal shared class VariadicCarriers {
     }
 
     /// Returns whether [`type`](paramref) is a supported variadic
-    /// carrier shape (array family or an allowlisted single-argument
-    /// collection).
+    /// carrier shape (an explicit nested/collection-element array or an
+    /// allowlisted single-argument collection). A 1D slice `...[]T` whose
+    /// element `T` is not itself a slice/array or collection carrier is the
+    /// element type of a slice-of-slices variadic `[][]T` (issue #4836).
     /// @param type The candidate type.
     /// @returns `true` for carrier shapes.
-    internal func IsCarrierType(type TypeSymbol) bool -> type is SliceTypeSymbol ||
-        type is ArrayTypeSymbol ||
+    internal func IsCarrierType(type TypeSymbol) bool -> IsExplicitArrayCarrier(type) ||
         TryClassifyCollectionCarrier(type, out _)
+
+    private func IsExplicitArrayCarrier(type TypeSymbol) bool {
+        let bare = StripReferenceNullability(type)
+        let element TypeSymbol? = switch bare {
+            case slice is SliceTypeSymbol: slice.ElementType
+            case array is ArrayTypeSymbol: array.ElementType
+            default: default(TypeSymbol?)
+        }
+        if element == nil {
+            return false
+        }
+        let bareElement = StripReferenceNullability(element)
+        return bareElement is SliceTypeSymbol ||
+            bareElement is ArrayTypeSymbol ||
+            TryClassifyCollectionCarrier(bareElement, out _)
+    }
+
+    private func StripReferenceNullability(type TypeSymbol) TypeSymbol {
+        var current = type
+        while true {
+            switch current {
+                case nullable is NullableTypeSymbol when !nullable.UnderlyingType.IsValueType {
+                    current = nullable.UnderlyingType
+                }
+                case platform is PlatformTypeSymbol when !platform.UnderlyingType.IsValueType {
+                    current = platform.UnderlyingType
+                }
+                default {
+                    return current
+                }
+            }
+        }
+    }
 
     /// Gets the carrier kind for a variadic parameter's declared type.
     /// A non-carrier type (only possible for error recovery) reports Array.

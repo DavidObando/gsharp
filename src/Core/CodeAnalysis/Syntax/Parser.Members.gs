@@ -1354,7 +1354,12 @@ open partial class Parser {
             Diagnostics.ReportFieldDeclarationRequiresVarOrLet(Current.Location)
         }
         let fieldIdentifier = MatchToken(SyntaxKind.IdentifierToken)
-        let fieldType = ParseTypeClause()
+        let fieldType TypeClauseSyntax? = if varOrLetKeyword?.Kind == SyntaxKind.ConstKeyword &&
+            Current.Kind == SyntaxKind.EqualsToken {
+            default(TypeClauseSyntax?)
+        } else {
+            ParseTypeClause()
+        }
         // Issue #262: optional initializer for static field declarations.
         var equalsToken SyntaxToken? = nil
         var initializer ExpressionSyntax? = nil

@@ -110,30 +110,62 @@ internal shared class DataPrintMembersModel {
                 return ancestor
             }
             // Only an imported record / data base owns the slot; an ordinary CLR class
-            // that happens to expose a matching virtual method does not.
-            if DataEqualityMemberModel.GetImportedDataBase(ancestor) is not{} importedDataBase {
+            // that happens to expose a matching virtual method does not. Walk the
+            // imported base chain so a non-data intermediary above an imported
+            // record/data class does not hide the inherited slot (issue #4877).
+            if !(ancestor.ImportedBaseType is {ClrType: {} directClrBase} importedBase) ||
+                !HasImportedDataAncestor(directClrBase) {
                 continue
             }
-            let (importedBase, clrBase) = importedDataBase
-            for method in ClrTypeUtilities.SafeGetMethods(
-                clrBase,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
-            ) {
-                let parameters = method.GetParameters()
-                if method.Name == Name &&
-                    method.IsVirtual &&
-                    !method.IsFinal &&
-                    !method.IsGenericMethod &&
-                    (method.IsFamily || method.IsFamilyOrAssembly) &&
-                    ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool)) &&
-                    parameters.Length == 1 &&
-                    ClrTypeUtilities.AreSame(parameters[0].ParameterType, typeof(StringBuilder)) {
-                    importedMethod = method
-                    return importedBase
+            var currentClr Type? = directClrBase
+            while currentClr != nil && !ClrTypeUtilities.AreSame(currentClr, typeof(object)) {
+                for method in ClrTypeUtilities.SafeGetMethods(
+                    currentClr,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly
+                ) {
+                    let parameters = method.GetParameters()
+                    if method.Name == Name &&
+                        method.IsVirtual &&
+                        !method.IsGenericMethod &&
+                        (method.IsFamily || method.IsFamilyOrAssembly) &&
+                        ClrTypeUtilities.AreSame(method.ReturnType, typeof(bool)) &&
+                        parameters.Length == 1 &&
+                        ClrTypeUtilities
+                        .AreSame(parameters[0].ParameterType, typeof(StringBuilder)) {
+                        if method.IsFinal {
+                            return nil
+                        }
+                        importedMethod = method
+                        return MemberLookup.GetClrMemberDeclaringTypeSymbol(importedBase, method)
+                    }
+                }
+                try {
+                    currentClr = currentClr.BaseType
+                } catch {
+                    currentClr = nil
                 }
             }
         }
         return nil
+    }
+
+    private func HasImportedDataAncestor(clrType Type) bool {
+        var current Type? = clrType
+        while current != nil && !ClrTypeUtilities.AreSame(current, typeof(object)) {
+            if (
+                ImportedAssemblySemantics.TryGetTypeSemantics(current, out var semantics) ||
+                    ImportedAssemblySemantics.TryDetectCSharpRecordSemantics(current, out semantics)
+            ) &&
+                semantics!!.IsData {
+                return true
+            }
+            try {
+                current = current.BaseType
+            } catch {
+                return false
+            }
+        }
+        return false
     }
 
     /// Tests whether the inherited slot is abstract, so a synthesized override
