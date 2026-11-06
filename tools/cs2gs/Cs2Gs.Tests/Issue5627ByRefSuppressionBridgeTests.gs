@@ -330,6 +330,18 @@ namespace Demo
         public Holder(Box<T> box) { Box = box; }
         public Box<T> Box;
     }
+    public class Closed : Box<Dictionary<string, int>>
+    {
+        private Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        public Closed(Dictionary<string, int> value) : base(value) { }
+        public int UseInherited() => Use(() => Volatile.Read(ref full!));
+    }
+    public class Bag : System.Collections.IEnumerable
+    {
+        public bool LastWasNull;
+        public void Add<T>(Func<T> read) { LastWasNull = read() == null; }
+        public System.Collections.IEnumerator GetEnumerator() { yield break; }
+    }
     public static class P
     {
         private static Dictionary<string, int>? cache;
@@ -338,6 +350,8 @@ namespace Demo
         static T Id<T>(T value) => value;
         static T Read<T>(Func<T> f) => f();
         static Dictionary<string, int> ReadWithInput<T>(T x, Func<T, Dictionary<string, int>> f) => f(x);
+        static Dictionary<string, int> ReadParams<T>(T x, params Func<T, Dictionary<string, int>>[] fs) => fs[0](x);
+        static int UseTuple<T>((Func<Dictionary<string, int>> Read, T Value) pair) => pair.Read().Count + (pair.Value == null ? 0 : 1);
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
         static bool Reassign() { var read = () => Volatile.Read(ref cache!); read = () => { return Volatile.Read(ref cache!); }; return read() == null; }
         static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
@@ -347,6 +361,11 @@ namespace Demo
         static bool ReadInferred() => Read(() => Volatile.Read(ref cache!)) == null;
         static int ReadExplicit() => Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count;
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
+        static int ReadExpandedParamsFixedReturn() => ReadParams(1, x => Volatile.Read(ref full!)).Count;
+        static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
+        static int UseInheritedOnClosedBase() => new Closed(Volatile.Read(ref full!)).UseInherited();
+        static bool InferredCollectionAdd() => new Bag { () => Volatile.Read(ref cache!) }.LastWasNull;
+        static int DeclaredCollectionAdd() => new List<Func<Dictionary<string, int>>> { () => Volatile.Read(ref full!) }[0]().Count;
         static int ReadCtor() => new Lazy<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Value.Count;
         static int ReadStaticOnConstructedType() => Box<Dictionary<string, int>>.ReadStatic(() => Volatile.Read(ref full!)).Count;
         static int UseVarNew() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)); return b.Use(() => Volatile.Read(ref full!)); }
@@ -365,7 +384,7 @@ namespace Demo
         static int TypedReassign() { Dictionary<string, int> d = Volatile.Read(ref full!); d = Volatile.Read(ref full!); return d.Count; }
         public static string Run() =>
             Reassign() + " " + Use() + " " + UseChained() + " " + UseChainedExplicit() + " " + UseBlock() + " " + ReadInferred() + " " + ReadExplicit() + " " + ReadWithInputCount() + " " + Deconstruct() + " " + TypedThenGeneric() + " " + FixedField() + " " + FixedFieldExpr() + " " + NestedFixedExpr() + " " + TypedReassign() + " " + AsDelegate() + " " + AsDelegateExpr();
-        static string ReadWithInputCount() => ReadFixedReturnWithInferredInput() + " " + ReadCtor() + " " + ReadStaticOnConstructedType() + " " + UseVarNew() + " " + UseConditional(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))) + " " + UseHolderField(new Holder<Dictionary<string, int>>(new Box<Dictionary<string, int>>(Volatile.Read(ref full!)))) + " " + AssignGenericMember(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))) + " " + AssignInferredGenericMember() + " " + ExplicitDelegateArray();
+        static string ReadWithInputCount() => ReadFixedReturnWithInferredInput() + " " + ReadExpandedParamsFixedReturn() + " " + UseTupleFixedDelegate() + " " + UseInheritedOnClosedBase() + " " + InferredCollectionAdd() + " " + DeclaredCollectionAdd() + " " + ReadCtor() + " " + ReadStaticOnConstructedType() + " " + UseVarNew() + " " + UseConditional(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))) + " " + UseHolderField(new Holder<Dictionary<string, int>>(new Box<Dictionary<string, int>>(Volatile.Read(ref full!)))) + " " + AssignGenericMember(new Box<Dictionary<string, int>>(Volatile.Read(ref full!))) + " " + AssignInferredGenericMember() + " " + ExplicitDelegateArray();
     }
 }`)
         let exprTreePrinted = Translate(`
@@ -393,6 +412,11 @@ namespace Demo
         Assert.Contains("Read(() -> Volatile.Read(&cache)) == nil", printed)
         Assert.Contains("Read[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("ReadWithInput(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)
+        Assert.Contains("ReadParams(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)
+        Assert.Contains("UseTuple((() -> Volatile.Read(&full)!!, 0))", printed)
+        Assert.Contains("Use(() -> Volatile.Read(&full)!!)", printed)
+        Assert.Contains("Bag(){ () -> Volatile.Read(&cache) }", printed)
+        Assert.Contains("List[() -> Dictionary[string, int32]]{ () -> Volatile.Read(&full)!! }", printed)
         Assert.Contains("Lazy[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Value.Count", printed)
         Assert.Contains("Box[Dictionary[string, int32]].ReadStatic(() -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("b?.Use(() -> Volatile.Read(&full)!!) ?? 0", printed)
@@ -410,7 +434,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 1 2 2 2 2 True 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 2 True 1 1 1 2 2 2 2 True 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

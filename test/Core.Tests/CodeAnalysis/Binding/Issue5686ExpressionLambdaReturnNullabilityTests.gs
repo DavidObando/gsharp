@@ -153,6 +153,20 @@ func TakeNullableDelegate(f (() -> string)?) string -> if f != nil { f() } else 
             yield Row("return-statement", `func Run() () -> string {
     return () -> Maybe()
 }`, "Maybe()")
+            yield Row("return-checked-wrapper", `func Run() () -> string {
+    return checked(() -> Maybe())
+}`, "Maybe()")
+            yield Row("return-unchecked-wrapper", `func Run() () -> string {
+    return unchecked(() -> Maybe())
+}`, "Maybe()")
+            yield Row("cast-arrow-delegate", `func Run() string {
+    let f = cast[() -> string](() -> Maybe())
+    return f()
+}`, "Maybe()")
+            yield Row("cast-named-delegate", `func Run() string {
+    let f = cast[StringFunc](() -> Maybe())
+    return f()
+}`, "Maybe()")
             yield Row("return-nullable-delegate", `func Run() (() -> string)? {
     return () -> Maybe()
 }`, "Maybe()")

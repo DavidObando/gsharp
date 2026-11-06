@@ -3550,34 +3550,82 @@ partial class CSharpToGSharpTranslator {
                 ContainsTypeParameter(converted!!.DelegateInvokeMethod!!.ReturnType) {
                 return false
             }
-            var initializer = OutermostTransparentNode(lambda)?.Parent as InitializerExpressionSyntax
-            while initializer?.Parent is InitializerExpressionSyntax outerInitializer {
-                initializer = outerInitializer
+            let outermost = OutermostTransparentNode(lambda)
+            if outermost?.Parent is not InitializerExpressionSyntax initializer {
+                return false
             }
-            return switch initializer?.Parent {
-                case arrayCreation is Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .ArrayCreationExpressionSyntax: this
-                    .context
-                    .GetTypeInfo(arrayCreation)
-                    .Type is IArrayTypeSymbol arrayType &&
+            if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
+                return this.ArrayTypeOfInitializer(initializer) is {} arrayType &&
                     !ContainsTypeParameter(arrayType.ElementType)
-                case creation is BaseObjectCreationExpressionSyntax: this.ReceiverTypeArgumentsAreDeclared(creation)
-                default: false
             }
+            if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression) ||
+                (
+                initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ComplexElementInitializerExpression) &&
+                    initializer
+                    .Parent
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression)
+            ) {
+                let complex = initializer.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ComplexElementInitializerExpression
+                )
+                let element = if complex {
+                    cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](initializer)
+                } else {
+                    cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](outermost)
+                }
+                let addMethod = this
+                    .context
+                    .SemanticModel
+                    .GetCollectionInitializerSymbolInfo(element)
+                    .Symbol as IMethodSymbol
+                let index = if complex {
+                    initializer.Expressions.IndexOf(
+                        cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](outermost)
+                    )
+                } else {
+                    0
+                }
+                return addMethod != nil && this.TryGetCollectionInitializerArgumentTarget(
+                    cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](outermost),
+                    index,
+                    addMethod,
+                    addMethod,
+                    out _,
+                    out var parameter
+                ) &&
+                    parameter != nil &&
+                    this.ParameterSlotIsDeclared(parameter, lambda)
+            }
+            return false
         }
 
         private func ParameterSlotIsDeclared(
             parameter IParameterSymbol,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
-            let declaredType = EffectiveDeclaredSlotType(parameter.OriginalDefinition.Type, value)
+            let enclosingArgument = if value != nil {
+                EnclosingInvocationArgument(value) ?? this.FindEnclosingArgumentThroughReferenceCasts(value)
+            } else {
+                default(ArgumentSyntax?)
+            }
+            let expandedParams = parameter.IsParams &&
+                enclosingArgument != nil &&
+                this.TryGetExpandedParamsElementTarget(enclosingArgument, parameter, out _, out _)
+            let rawDeclared = if expandedParams {
+                GetParamsElementType(parameter.OriginalDefinition) ?? parameter.OriginalDefinition.Type
+            } else {
+                parameter.OriginalDefinition.Type
+            }
+            let declaredType = EffectiveDeclaredSlotType(rawDeclared, value)
             if !ContainsTypeParameter(declaredType) {
                 return true
             }
-            let constructedType = EffectiveDeclaredSlotType(parameter.Type, value)
+            let rawConstructed = if expandedParams {
+                GetParamsElementType(parameter) ?? parameter.Type
+            } else {
+                parameter.Type
+            }
+            let constructedType = EffectiveDeclaredSlotType(rawConstructed, value)
             if ContainsTypeParameter(constructedType) {
                 return false
             }
@@ -3597,19 +3645,32 @@ partial class CSharpToGSharpTranslator {
             slotType ITypeSymbol?,
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) ITypeSymbol? {
+            let bridged = GetBridgedSlotType(value, slotType)
             if value is AnonymousFunctionExpressionSyntax &&
-                slotType is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
+                bridged is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} {
                 return invoke.ReturnType
             }
-            return slotType
+            return bridged
         }
 
         private func CallReceiverSlotIsDeclared(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
             if value == nil {
                 return false
             }
-            let receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch OutermostTransparentNode(value)
-                ?.Parent {
+            let outermost = OutermostTransparentNode(value)
+            var initializer = outermost?.Parent as InitializerExpressionSyntax
+            while initializer?.Parent is InitializerExpressionSyntax outerInitializer {
+                initializer = outerInitializer
+            }
+            if initializer?.Parent is BaseObjectCreationExpressionSyntax initializedCreation {
+                return this.ReceiverTypeArgumentsAreDeclared(initializedCreation)
+            }
+            if outermost?.Parent is ArgumentSyntax{
+                Parent: ArgumentListSyntax{Parent: InvocationExpressionSyntax{Expression: SimpleNameSyntax}}
+            } {
+                return true
+            }
+            let receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch outermost?.Parent {
                 case ArgumentSyntax{
                     Parent: ArgumentListSyntax{
                         Parent: InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess}
@@ -3641,6 +3702,9 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
+            if unwrapped is InstanceExpressionSyntax {
+                return true
+            }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
                 return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull)
             }
@@ -3668,6 +3732,9 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 if MentionedTypeParameterKind(declaredReturn, TypeParameterKind.Type) {
+                    if invocation.Expression is SimpleNameSyntax {
+                        return true
+                    }
                     let invocationReceiver = switch invocation.Expression {
                         case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
                         case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(
@@ -3723,7 +3790,7 @@ partial class CSharpToGSharpTranslator {
             if ContainsTypeParameter(constructedType) {
                 return false
             }
-            if !ContainsTypeParameter(declaredType) {
+            if !ContainsTypeParameter(declaredType) || memberAccessSyntax is SimpleNameSyntax {
                 return true
             }
             let containingReceiver = switch memberAccessSyntax {

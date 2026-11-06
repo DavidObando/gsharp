@@ -383,7 +383,10 @@ internal class ConversionClassifier {
         // Issue #3355: bind a block against its target before converting so
         // target-only trailing forms (`default`, untyped lambdas, branchy
         // expressions) receive their expected type.
-        if syntax is BlockExpressionSyntax || (!allowExplicit && type != nil && ContainsNestedLambdaSyntax(syntax)) {
+        let targetsLambda = type != nil &&
+            ContainsNestedLambdaSyntax(syntax) &&
+            (!allowExplicit || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _))
+        if syntax is BlockExpressionSyntax || targetsLambda {
             return bindExpressionWithTargetType(syntax, type!!)
         }
         // ADR-0055 Tier 4: contextual conversion of an interpolated string to
@@ -958,7 +961,7 @@ internal class ConversionClassifier {
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type!!, Diagnostics)
             return BoundConversionExpression(nil, type!!, expressionTreeLiteral)
         }
-        if !allowExplicit && RequiresRuntimeDelegateReturnValidation(expression, type, out var runtimeLambdaSyntax) {
+        if RequiresRuntimeDelegateReturnValidation(expression, type, out var runtimeLambdaSyntax) {
             return bindExpressionWithTargetType(runtimeLambdaSyntax!!, type!!)
         }
         if expression is BoundFunctionLiteralExpression refContractLiteral {
@@ -4166,19 +4169,26 @@ internal class ConversionClassifier {
                         } else {
                             elementSyntax
                         }
+                        let elementTargetsLambda = ContainsNestedLambdaSyntax(unwrappedSyntax) &&
+                            (
+                            !allowExplicit || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                                targetTuple.ElementTypes[i],
+                                out _
+                            )
+                        )
                         if earlierElementChangedNarrowing {
                             Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
-                            element = if !allowExplicit && ContainsNestedLambdaSyntax(unwrappedSyntax) {
+                            element = if elementTargetsLambda {
                                 bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
                             } else if rebindTupleElement != nil {
                                 rebindTupleElement!!(element, unwrappedSyntax)
                             } else {
                                 bindExpression(unwrappedSyntax)
                             }
-                        } else if !allowExplicit &&
-                            ContainsNestedLambdaSyntax(unwrappedSyntax) &&
-                            !object
-                            .ReferenceEquals(element.Type, targetTuple.ElementTypes[i]) {
+                        } else if elementTargetsLambda && !object.ReferenceEquals(
+                            element.Type,
+                            targetTuple.ElementTypes[i]
+                        ) {
                             Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
                             element = bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
                         }

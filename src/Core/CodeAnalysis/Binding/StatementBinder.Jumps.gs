@@ -1285,8 +1285,12 @@ internal partial class StatementBinder {
             // as the target type so the result type can unify to the return type
             // (C#-style target-typing) before the conversion below.
             var returnExpression = syntax.Expression
-            while returnExpression is ParenthesizedExpressionSyntax parenthesized {
-                returnExpression = parenthesized.Expression
+            while returnExpression is ParenthesizedExpressionSyntax || returnExpression is CheckedExpressionSyntax {
+                returnExpression = if returnExpression is ParenthesizedExpressionSyntax parenthesized {
+                    parenthesized.Expression
+                } else {
+                    cast[CheckedExpressionSyntax](returnExpression).Expression
+                }
             }
             let targetTypesLambdaReturn = returnExpression is LambdaExpressionSyntax lambdaReturn &&
                 (
