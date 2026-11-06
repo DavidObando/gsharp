@@ -168,6 +168,10 @@ internal shared class GoCapturedVariableCollector {
         }
 
         private func CaptureIfFree(variable VariableSymbol) {
+            // Global receiver storage stays live; argument capture handles eager value reads.
+            if variable is GlobalVariableSymbol or ImplicitStaticFieldVariableSymbol {
+                return
+            }
             if !this.declared.Contains(variable) && this.seen.Add(variable) {
                 this.captured.Add(variable)
             }

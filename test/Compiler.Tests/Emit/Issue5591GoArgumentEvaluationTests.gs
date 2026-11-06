@@ -126,8 +126,6 @@ class Spawner : Base {
     var order string = ""
     var spanCreated int32 = 0
     var posSpanCreated int32 = 0
-    var refOrder string = ""
-    let refItems []int32 = []int32{0, 0}
 
     override func Report(tag string, v int32) { Log.Add(tag + " derived " + v.ToString()) }
 
@@ -145,21 +143,8 @@ class Spawner : Base {
         return "abcde"
     }
     func ReadPosSpanCreated() int32 -> posSpanCreated
-    func NextRefIndex() int32 {
-        refOrder += "idx;"
-        return 1
-    }
-    func NextRefValue() int32 {
-        refOrder += "val;"
-        return 9
-    }
-    func PutRef(ref slot int32, value int32) {
-        slot = value
-        Log.Add("ref-order " + refOrder + " item1=" + refItems[1].ToString())
-    }
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
-    func PairIn(in a int32, b int32) { Log.Add("named-in a=" + a.ToString() + " b=" + b.ToString()) }
     func ConsumeSpan(value ReadOnlySpan[char], extra int32) { Log.Add("named-span len=" + value.Length.ToString() + " extra=" + extra.ToString()) }
     func ConsumeSpan3(value ReadOnlySpan[char], extra int32, last int32) {
         Log.Add("named-span3 len=" + value.Length.ToString() + " extra=" + extra.ToString() + " last=" + last.ToString())
@@ -182,7 +167,7 @@ class Spawner : Base {
             go handler(count)
             go Three(Next("a"), Next("b"), Next("c"))
             go Pair(b: Next("d"), a: Next("e"))
-            go PairIn(b: Next("f"), a: Next("g"))
+            go Pair(b: Next("f"), a: Next("g"))
             go ConsumeSpan(extra: Next("h"), value: label.AsSpan())
             go Show("span-block", {
                 let s = (order += "i").AsSpan()
@@ -208,7 +193,6 @@ class Spawner : Base {
             }, 12)
             go ConsumeSpan3(extra: Next("l"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
             go ConsumeSpan(MakePosSpanString().AsSpan(), ReadPosSpanCreated())
-            go PutRef(ref refItems[NextRefIndex()], NextRefValue())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -241,7 +225,7 @@ inferred old
 interface A 41
 method first 41
 named a=5 b=4
-named-in a=7 b=6
+named a=7 b=6
 named-span len=3 extra=12
 named-span len=3 extra=8
 named-span len=4 extra=11
@@ -249,10 +233,106 @@ named-span len=5 extra=5
 named-span3 len=4 extra=12 last=4
 order abcdefghijkl|
 positional 123
-ref-order idx;val; item1=9
 span-block 9
 suspending 7
 `)
+    }
+
+    @Fact
+    func GlobalValueTypeReceivers_UseLiveStorageButArgumentsCaptureValues() {
+        let source = `package Issue5708Globals
+` + Prelude + `
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+struct Outer { var inner Counter }
+var global Counter
+var nested Outer
+var value Counter = Counter{n: 7}
+var text string = "old"
+class Holder {
+    shared {
+        var staticCounter Counter
+        func Spawn() {
+            scope { go staticCounter.Bump() }
+        }
+    }
+}
+class Target {
+    let name string
+    init(name string) { this.name = name }
+    func Report() { Log.Add("receiver " + name) }
+}
+var target Target = Target("first")
+func Print(n int32) { Log.Add("argument " + n.ToString()) }
+func Inc(ref n int32) { n++ }
+func PrintSpan(span ReadOnlySpan[char], n int32) {
+    Log.Add("span " + span.Length.ToString() + " scalar " + n.ToString())
+}
+func Run(release ManualResetEventSlim) {
+    scope {
+        go global.Bump()
+        go nested.inner.Bump()
+        go Holder.staticCounter.Bump()
+        go Print(value.n)
+        go target.Report()
+        go PrintSpan(text.AsSpan(), value.n)
+        go {
+            var local = 0
+            Inc(&local)
+            Log.Add("child ref " + local.ToString())
+        }
+        value.n = 99
+        text = "changed"
+        target = Target("second")
+        release.Set()
+    }
+    Log.Add("global " + global.n.ToString())
+    Log.Add("nested " + nested.inner.n.ToString())
+    Log.Add("static " + Holder.staticCounter.n.ToString())
+}
+RestrictPool()
+Blocked((release ManualResetEventSlim) -> Run(release))
+Holder.Spawn()
+Console.WriteLine("bare static " + Holder.staticCounter.n.ToString())
+`
+        AssertRuns(source, "Issue5708GlobalStorage", `argument 7
+child ref 1
+global 1
+nested 1
+receiver first
+span 3 scalar 7
+static 1
+bare static 2
+`)
+    }
+
+    @Theory
+    @InlineData("Inc(&x)")
+    @InlineData("Out(&x)")
+    @InlineData("worker.RefMethod(&x)")
+    @InlineData("Read(x)")
+    func ByReferenceGoArguments_AreRejectedByTheDriver(operand string) {
+        let source = `package Issue5708Driver
+func Inc(ref slot int32) { slot++ }
+func Out(out slot int32) { slot = 1 }
+func Read(in slot int32) int32 -> slot
+class Worker { func RefMethod(ref slot int32) { slot++ } }
+var x = 0
+let worker = Worker()
+scope {
+    go ` + operand + `
+}
+`
+        let (exitCode, output) = TryCompile(source, "Issue5708ByRef")
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains(
+            "(9,8,9," + (8 + operand.Length).ToString() + "): error GS0460",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
     }
 
     /// A value-type receiver is storage: the containers that locate it (the

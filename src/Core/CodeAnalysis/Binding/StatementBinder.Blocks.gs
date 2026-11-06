@@ -1329,8 +1329,39 @@ internal partial class StatementBinder {
             expression,
             prefix,
             (receiver BoundExpression) -> CaptureCallReceiver(receiver, prefix, retainedVariables, retainRemaining),
-            (argument BoundExpression) -> CaptureGoOperand(argument, prefix, retainedVariables, retainRemaining)
+            func (argument BoundExpression) BoundExpression {
+                let captured = CaptureGoOperand(argument, prefix, retainedVariables, retainRemaining)
+                // Byref-like operands stay in the child, but their global value inputs must still be snapshots.
+                return if retainRemaining[0] {
+                    GoArgumentGlobalSnapshotRewriter(
+                        (value BoundExpression) -> SpillToReadOnlyLocal(
+                            value,
+                            "$$go$$arg$$${binderCtx.GoArgumentCounter++}",
+                            prefix
+                        )
+                    ).Rewrite(captured)
+                } else {
+                    captured
+                }
+            }
         )
+    }
+
+    private class GoArgumentGlobalSnapshotRewriter : BoundTreeRewriter {
+        private let capture Func[BoundExpression, BoundExpression]
+
+        init(capture Func[BoundExpression, BoundExpression]) {
+            this.capture = capture
+        }
+
+        func Rewrite(node BoundExpression) BoundExpression -> RewriteExpression(node)
+
+        protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression ->
+        if node.Variable is GlobalVariableSymbol {
+            this.capture(node)
+        } else {
+            node
+        }
     }
 
     // ADR-0030 / #5707 and ADR-0174 D5: defer and go share receiver-location capture.
@@ -1340,8 +1371,8 @@ internal partial class StatementBinder {
     // array and its indices — on the spawner, probe the reconstructed location
     // before evaluating the call's arguments, and leave only the field, tuple-
     // element or array-element step to the child. Static storage needs no
-    // evaluation, and a variable is its own location: the work item captures it
-    // as it captures any variable. An opaque ref-returning receiver is captured
+    // evaluation. Variables keep their locations; global storage stays live instead of entering the work item's capture set.
+    // An opaque ref-returning receiver is captured
     // as a `ref` alias; go capture legality rejects its escape, while defer keeps the scoped alias.
     // A receiver that is a value rather than storage (a call or property
     // result) is copied.
@@ -2010,6 +2041,12 @@ internal partial class StatementBinder {
                 syntax.Expression.Location,
                 "Gsharp.Concurrency.GoroutineRuntime"
             )
+            return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
+        }
+        if HasByRefArgument(expression) {
+            let captured = GoCapturedVariableCollector.CollectCapturedVariables(expression)
+            ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Expression.Location)
+            Diagnostics.ReportCapturedCallHasByRefArgument(syntax.Expression.Location, "go")
             return BoundExpressionStatement(syntax, BoundErrorExpression(nil))
         }
         let prefix = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3216,23 +3253,18 @@ internal partial class StatementBinder {
             expression is BoundImportedCallExpression ||
             expression is BoundImportedInstanceCallExpression
 
-        // A ref/out/in argument is bound as the ADDRESS of its target storage —
-        // a BoundAddressOfExpression or BoundConditionalAddressExpression — for
-        // every deferable call kind (user function, imported function/method).
-        // Detecting the argument shape directly (rather than only consulting
-        // ArgumentRefKinds, which not every call kind historically carried) catches every
-        // by-ref argument regardless of which call kind wraps it.
+        // Check the bound arguments, including address-valued blocks from named-argument ordering and implicit `in` conversions.
         private func HasByRefArgument(expression BoundExpression) bool {
             let arguments = switch expression {
-                case call is BoundCallExpression: call.Arguments
-                case call is BoundImportedCallExpression: call.Arguments
-                case call is BoundUserInstanceCallExpression: call.Arguments
-                case call is BoundImportedInstanceCallExpression: call.Arguments
+                case call is BoundCallOperationExpression: call.Arguments
                 case call is BoundIndirectCallExpression: call.Arguments
+                case call is BoundBaseClassCallExpression: call.Arguments
+                case call is BoundFunctionPointerInvocationExpression: call.Arguments
                 default: ImmutableArray[BoundExpression].Empty
             }
             for argument in arguments {
-                if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression) {
+                if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression) ||
+                    argument.Type is ByRefTypeSymbol {
                     return true
                 }
             }

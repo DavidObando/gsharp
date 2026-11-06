@@ -189,20 +189,20 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         DiagnosticDescriptors.DeferOperandIsNotACall
     )
 
-    /// Reports that the operand of a `defer` statement is a call with
-    /// one or more `ref`/`out`/`in` arguments (issue #1635 NB-1).
-    /// Eager argument capture spills each argument's evaluated value into a
-    /// fresh readonly local ahead of the deferred invocation; a by-ref
-    /// argument's value IS the address of its target storage, which cannot
-    /// be spilled into an ordinary local without either aliasing an
-    /// unrelated temp (silently breaking the by-ref contract) or requiring
-    /// verifiable-IL support for spilled managed pointers that the emitter
-    /// does not have. Rather than mis-defer the call, `defer` on such a call
-    /// is rejected outright.
+    /// Reports a by-reference argument that `defer` cannot capture.
     /// @param location The text location of the operand.
-    func ReportDeferOperandHasByRefArgument(location TextLocation) -> Report(
+    func ReportDeferOperandHasByRefArgument(location TextLocation) -> ReportCapturedCallHasByRefArgument(
         location,
-        DiagnosticDescriptors.DeferOperandHasByRefArgument
+        "defer"
+    )
+
+    /// Reports a by-reference argument that `defer` or `go` cannot capture (issues #1635 and #5708).
+    /// @param location The text location of the operand.
+    /// @param keyword The statement keyword: `defer` or `go`.
+    internal func ReportCapturedCallHasByRefArgument(location TextLocation, keyword string) -> Report(
+        location,
+        DiagnosticDescriptors.CapturedCallHasByRefArgument,
+        keyword
     )
 
     /// Reports that the operand of a `lock` statement is not a

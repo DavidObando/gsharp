@@ -2340,7 +2340,7 @@ above retain their longer explanations and examples.
 | GS0422 | Error | A ref-kind parameter (`ref`/`out`/`in`) cannot appear on an `async`, `sequence`, or `async sequence` function. | `async func f(ref x int32) { }` — the state-machine rewriter cannot hoist a managed pointer into a field. Previously misfiled under GS0226. |
 | GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
 | GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Previously misfiled under GS0241. |
-| GS0460 | Error | The operand of a `defer` statement is a call with one or more `ref`, `out`, or `in` arguments.  | |
+| GS0460 | Error | The operand of a `defer` or `go` statement is a call with one or more `ref`, `out`, or `in` arguments, including implicit `in`. | Pass values instead, or create and use the reference inside a `go` block. |
 | GS0461 | Error | A `lock` statement's operand is not a reference type.  | |
 | GS0462 | Error | A generic local function is not declared as a `let`-bound function literal.  | |
 | GS0463 | Error | A generic local function captures a variable from its enclosing scope.  | |
