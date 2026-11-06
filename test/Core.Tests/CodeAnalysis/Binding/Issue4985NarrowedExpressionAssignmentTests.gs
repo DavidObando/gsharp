@@ -135,6 +135,17 @@ func Run(arr []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 5, 46}
+            yield[]object{"parenthesized_from_end_native_slice_assignment_invalidates_rhs", `import System
+func Run(backing []int32, seed string?) int32 {
+    var s = seed
+    let sp = span[int32](backing)
+    if s != nil {
+        sp[(^((s = nil) == nil ? 1 : 2))] = s.Length
+        return sp[0]
+    }
+    return 0
+}
+Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 6, 47}
         }
 
         func AcceptedControlShapes() IEnumerable[[]object] {
@@ -179,6 +190,35 @@ func Run(arr []int32, b Box) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, Box{}))`, "4"}
+            yield[]object{
+                "parenthesized_from_end_native_slice_and_array_assignment_preserves_member_narrowing_for_rhs",
+                `import System
+class Box {
+    let Text string? = "abcd"
+}
+func Run(backing []int32, arr []int32, b Box) int32 {
+    let sp = span[int32](backing)
+    let sl = slice[int32]{1, 2}
+    if b.Text != nil {
+        sp[(^1)] = b.Text.Length
+    }
+    if b.Text != nil {
+        sp[(^2)] += b.Text.Length
+    }
+    if b.Text != nil {
+        sl[(^1)] = b.Text.Length
+    }
+    if b.Text != nil {
+        sl[(^2)] += b.Text.Length
+    }
+    if b.Text != nil {
+        arr[(^1)] = b.Text.Length
+    }
+    return sp[0] + sp[1] + sl[0] + sl[1] + arr[1]
+}
+Console.WriteLine(Run([]int32{1, 2}, []int32{10, 20}, Box{}))`,
+                "22"
+            }
         }
     }
 }

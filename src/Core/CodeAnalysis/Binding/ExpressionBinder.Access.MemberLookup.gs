@@ -1806,7 +1806,11 @@ internal partial class ExpressionBinder {
         if boundIndexOverride != nil && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(Index)) {
             return BindSystemIndexAccess(target, boundIndexOverride, targetLocation)
         }
-        if boundIndexOverride == nil && indexSyntax is FromEndIndexExpressionSyntax fromEndSyntax {
+        var unwrappedIndexSyntax = indexSyntax
+        while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedIndexSyntax = parenthesized.Expression
+        }
+        if boundIndexOverride == nil && unwrappedIndexSyntax is FromEndIndexExpressionSyntax fromEndSyntax {
             return BindFromEndIndex(target, fromEndSyntax, targetLocation)
         }
         // Issue #1038: an index whose value is a `System.Range` slices the
@@ -2292,8 +2296,13 @@ internal partial class ExpressionBinder {
                 return BoundErrorExpression(nil)
             }
             var sharedIndex BoundExpression? = nil
-            if indexSyntax is FromEndIndexExpressionSyntax {
-                if !TryBindSystemIndexValue(indexSyntax, out var boundSystemIndex) {
+            var unwrappedIndexSyntax = indexSyntax
+            while unwrappedIndexSyntax is ParenthesizedExpressionSyntax parenthesized {
+                unwrappedIndexSyntax = parenthesized.Expression
+            }
+            let isFromEndIndex = unwrappedIndexSyntax is FromEndIndexExpressionSyntax
+            if isFromEndIndex {
+                if !TryBindSystemIndexValue(unwrappedIndexSyntax, out var boundSystemIndex) {
                     return BoundErrorExpression(nil)
                 }
                 let indexLocal = DeclareRangeTemp("index", boundSystemIndex!!.Type, boundSystemIndex!!, statements)
@@ -2332,7 +2341,17 @@ internal partial class ExpressionBinder {
                 }
             }
             let compoundTarget = indexRead
-            ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
+            if !isFromEndIndex || compoundTarget is not BoundBlockExpression {
+                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
+            } else if compoundTarget is BoundBlockExpression{Expression: BoundClrIndexExpression clrIdx} &&
+                StatementBinder.ClrAccessRunsUserCode(clrIdx) {
+                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
+            } else if compoundTarget is BoundBlockExpression{
+                Expression: BoundDereferenceExpression{Operand: BoundClrIndexExpression derefClrIdx}
+            } &&
+                StatementBinder.ClrAccessRunsUserCode(derefClrIdx) {
+                ApplySubExpressionNarrowingEffects(indexSyntax, compoundTarget)
+            }
             if compoundRhsSyntax is not{} resolvedCompoundRhsSyntax {
                 return BoundErrorExpression(nil)
             }
@@ -3377,7 +3396,11 @@ internal partial class ExpressionBinder {
         syntax ExpressionSyntax,
         @NotNullWhen(true) out indexValue BoundExpression?
     ) bool {
-        if syntax is FromEndIndexExpressionSyntax fromEnd {
+        var unwrappedSyntax = syntax
+        while unwrappedSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedSyntax = parenthesized.Expression
+        }
+        if unwrappedSyntax is FromEndIndexExpressionSyntax fromEnd {
             let indexCtor = typeof(Index).GetConstructor([]Type{typeof(int32), typeof(bool)})
             let indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(Index), NullabilityFreeReason.TypeLiteral)
             let offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)

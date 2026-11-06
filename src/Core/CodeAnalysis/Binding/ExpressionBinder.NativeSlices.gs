@@ -294,7 +294,11 @@ internal partial class ExpressionBinder {
         let receiver = BoundVariableExpression(nil, saved)
         var arguments ImmutableArray[BoundExpression]
         var indexer PropertyInfo
-        if boundIndex == nil && syntax is FromEndIndexExpressionSyntax fromEnd {
+        var unwrappedSyntax = syntax
+        while unwrappedSyntax is ParenthesizedExpressionSyntax parenthesized {
+            unwrappedSyntax = parenthesized.Expression
+        }
+        if boundIndex == nil && unwrappedSyntax is FromEndIndexExpressionSyntax fromEnd {
             let fromEndOperand = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32)
             ApplySubExpressionNarrowingEffects(fromEnd.Operand, fromEndOperand)
             arguments = ImmutableArray.Create[BoundExpression](fromEndOperand, BoundLiteralExpression(nil, true))
