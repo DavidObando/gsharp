@@ -540,6 +540,11 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return false
                 }
+                for var i = startIndex; i <= endIndex; i++ {
+                    if ordered[i] is LocalFunctionStatementSyntax {
+                        return false
+                    }
+                }
                 if endIndex >= ordered.Count - 1 {
                     return true
                 }

@@ -544,6 +544,27 @@ public class Sample
         Assert.DoesNotContain("GSA0005", printed, StringComparison.Ordinal)
     }
 
+    @Fact
+    func SuppressedRunContainingLocalFunction_ReportsDroppedWarning() {
+        const source = `
+public class Sample
+{
+    private static int Door(int x) => x + 1;
+
+    public int Run(int x)
+    {
+#pragma warning disable GSA0007
+        int Local(int v) => Door(v);
+        return Local(x);
+#pragma warning restore GSA0007
+    }
+}
+`
+        let (_, diagnostics) = TranslateWithDiagnostics(source)
+        let dropped = Assert.Single(diagnostics, (d TranslationDiagnostic) -> d.DiagnosticId == "CS2GS-PRAGMA-DROPPED")
+        Assert.Contains("GSA0007", dropped.Message, StringComparison.Ordinal)
+    }
+
     shared {
         private func CountOccurrences(haystack string, needle string) int32 {
             var count = 0

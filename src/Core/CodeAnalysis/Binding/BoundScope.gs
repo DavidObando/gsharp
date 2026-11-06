@@ -1029,30 +1029,35 @@ partial class BoundScope {
                 }
             }
         }
-        if TryLookupQualifiedSourceType($import.Target, preferredArity, out type) {
-            return true
-        }
+        return TryLookupQualifiedSourceType($import.Target, preferredArity, out type)
+    }
+
+    internal func TryLookupHoistedNamespaceSourceTypeAliasTarget(
+        $import ImportSymbol,
+        preferredArity int32,
+        @NotNullWhen(true) out type TypeSymbol?
+    ) bool {
+        type = nil
         // ADR-0115 §B.1: when cs2gs hoists a secondary C# namespace into a
         // file's dominant G# package, an `import Alias = OriginalNs.Type`
         // names a qualifier package that does not exist in the G# compilation.
         // Fall back to the target's final simple name in the top-level type
         // table when neither the target nor its qualifier prefix names a source
-        // package or CLR namespace.
+        // package, a CLR namespace, or a source type.
         let lastDot = $import.Target.LastIndexOf('.')
-        if lastDot > 0 {
-            let targetPrefix = $import.Target.Substring(0, lastDot)
-            let aliasSimpleName = $import.Target.Substring(lastDot + 1)
-            if !string.Equals(aliasSimpleName, $import.Name, StringComparison.Ordinal) &&
-                !TryMatchSourcePackagePrefix($import.Target, out _) &&
-                !TryMatchSourcePackagePrefix(targetPrefix, out _) &&
-                !(References?.ContainsNamespace($import.Target) ?? false) &&
-                !(References?.ContainsNamespace(targetPrefix) ?? false) &&
-                TryLookupTypeAlias(aliasSimpleName, preferredArity, out type) &&
-                TypeContainingType(type) == nil {
-                return true
-            }
+        if lastDot <= 0 {
+            return false
         }
-        return false
+        let targetPrefix = $import.Target.Substring(0, lastDot)
+        let aliasSimpleName = $import.Target.Substring(lastDot + 1)
+        return !string.Equals(aliasSimpleName, $import.Name, StringComparison.Ordinal) &&
+            !TryMatchSourcePackagePrefix($import.Target, out _) &&
+            !TryMatchSourcePackagePrefix(targetPrefix, out _) &&
+            !(References?.ContainsNamespace($import.Target) ?? false) &&
+            !(References?.ContainsNamespace(targetPrefix) ?? false) &&
+            !TryLookupTypeAlias(targetPrefix, out _) &&
+            TryLookupTypeAlias(aliasSimpleName, preferredArity, out type) &&
+            TypeContainingType(type) == nil
     }
 
     /// Resolves an explicit import alias whose target is a same-compilation
@@ -1112,8 +1117,11 @@ partial class BoundScope {
             }
             match = candidate
         }
-        type = match
-        return match != nil
+        if match != nil {
+            type = match
+            return true
+        }
+        return TryLookupHoistedNamespaceSourceTypeAliasTarget(import_!!, requestedArity, out type)
     }
 
     /// Gets an immutable array of all the declared variables.
