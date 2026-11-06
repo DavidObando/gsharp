@@ -351,8 +351,9 @@ interface Limits {
 }
 class Early {
     const Cross = Late.Computed + 1
+    const Narrowed uint8 = Late.Computed
     shared {
-        func GetCross() int32 -> Cross
+        func GetCross() int32 -> Cross + int32(Narrowed)
     }
 }
 class Late {
@@ -380,7 +381,13 @@ class Holder {
 Holder.UseLimit("a")
 `)
         Assert.Empty(result.Diagnostics)
-        Assert.Equal(39, result.Value)
+        Assert.Equal(42, result.Value)
+        let nilConstDiagnostics = Errors(`
+class Bad {
+    const Missing = nil
+}
+`)
+        Assert.Contains(nilConstDiagnostics, (d Diagnostic) -> d.Id == "GS0375")
     }
 
     @Fact

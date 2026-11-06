@@ -624,6 +624,25 @@ data class Square(Side int32) : Shape(2)`
             slot.IsFamily && slot.IsVirtual && (slot.Attributes & MethodAttributes.NewSlot) == 0 && !slot.IsFinal
         )
         Assert.Equal("Square { Side = 5 }", Activator.CreateInstance(square, 5)!!.ToString())
+        const publicAbstractPrintMembers = `package W
+import System.Text
+
+abstract class Base {
+    public open func PrintMembers(builder StringBuilder) bool;
+}
+data class Leaf(Side int32) : Base`
+        let (pubExit, pubOut) = Adr0199RecordAbiWitness.TryCompileGSharp(publicAbstractPrintMembers)
+        Assert.NotEqual(0, pubExit)
+        Assert.Contains("GS0387", pubOut, StringComparison.Ordinal)
+        const abstractSelfEquals = `package W
+
+abstract class Base {
+    public open func Equals(other Leaf?) bool;
+}
+data class Leaf(Side int32) : Base`
+        let (eqExit, eqOut) = Adr0199RecordAbiWitness.TryCompileGSharp(abstractSelfEquals)
+        Assert.NotEqual(0, eqExit)
+        Assert.Contains("GS0387", eqOut, StringComparison.Ordinal)
     }
 
     @Fact

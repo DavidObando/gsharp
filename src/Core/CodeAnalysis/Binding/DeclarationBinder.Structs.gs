@@ -3582,38 +3582,26 @@ internal partial class DeclarationBinder {
         let fieldInitPrimaryCtorParameters = primaryCtorParameters
         let fieldInitPackageName = $package.Name
         if fieldInitConstInitializers.Count > 0 || fieldInitSharedConstInitializers.Count > 0 {
+            let batchItems = List[(Field FieldSymbol, Syntax FieldDeclarationSyntax)](
+                fieldInitConstInitializers.Count + fieldInitSharedConstInitializers.Count
+            )
             for (constField, fieldSyntaxNode, _) in fieldInitConstInitializers {
-                let capturedConstField = constField
-                let capturedFieldSyntax = fieldSyntaxNode
-                RegisterPendingConstInitializer(
-                    capturedConstField,
-                    capturedFieldSyntax,
-                    (action() -> void) -> RunInStructInitializerContext(
-                        structSymbol,
-                        structDeclaration,
-                        fieldInitScope,
-                        fieldInitPackageName,
-                        fieldInitUnsafeContext,
-                        action
-                    )
-                )
+                batchItems.Add((constField, fieldSyntaxNode))
             }
             for (constField, fieldSyntaxNode, _) in fieldInitSharedConstInitializers {
-                let capturedConstField = constField
-                let capturedFieldSyntax = fieldSyntaxNode
-                RegisterPendingConstInitializer(
-                    capturedConstField,
-                    capturedFieldSyntax,
-                    (action() -> void) -> RunInStructInitializerContext(
-                        structSymbol,
-                        structDeclaration,
-                        fieldInitScope,
-                        fieldInitPackageName,
-                        fieldInitUnsafeContext,
-                        action
-                    )
-                )
+                batchItems.Add((constField, fieldSyntaxNode))
             }
+            RegisterPendingConstInitializerBatch(
+                batchItems,
+                (action() -> void) -> RunInStructInitializerContext(
+                    structSymbol,
+                    structDeclaration,
+                    fieldInitScope,
+                    fieldInitPackageName,
+                    fieldInitUnsafeContext,
+                    action
+                )
+            )
         }
         if fieldInitInstanceInitializers.Count > 0 || fieldInitZeroValueInstanceFields.Count > 0 {
             if fieldInitInstanceInitializers.Count > 0 {
@@ -4099,6 +4087,12 @@ internal partial class DeclarationBinder {
             bindExpression(initializer)
         }
         if fieldSyntaxNode.Type == nil && boundInit.Type != TypeSymbol.Error {
+            if boundInit.Type == TypeSymbol.Null || boundInit.Type == TypeSymbol.Void || TypeSymbol.ContainsNeverType(
+                boundInit.Type
+            ) {
+                Diagnostics.ReportConstFieldRequiresInitializer(fieldSyntaxNode.Identifier.Location, constField.Name)
+                return (constField, BoundErrorExpression(initializer), initializer.Location)
+            }
             fieldType = boundInit.Type
             constField.SetType(fieldType)
             if $scope.TryLookupSymbol(constField.Name) is ImplicitStaticFieldVariableSymbol implicitVar &&
@@ -4401,87 +4395,116 @@ internal partial class DeclarationBinder {
         if pendingConstInitializerBindings.Count == 0 && (!reportUnfolded || pendingCrossTypeConstFolds.Count == 0) {
             return
         }
-        let allItems = pendingConstInitializerBindings.ToArray()
+        let batches = pendingConstInitializerBindings.ToArray()
         pendingConstInitializerBindings.Clear()
-        let boundByIndex = Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
+        var unfoldedBoundItems = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
         while true {
             var resolvedAnyType = false
-            var hasUnresolvedUntyped = false
-            for var i = 0; i < allItems.Length; i++ {
-                if boundByIndex.ContainsKey(i) {
+            var foldedAnyValue = false
+            for batch in batches {
+                if batch.BoundItems.Count >= batch.Items.Count {
                     continue
                 }
-                let item = allItems[i]
-                if item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error {
-                    hasUnresolvedUntyped = true
-                }
-            }
-            for var i = 0; i < allItems.Length; i++ {
-                if boundByIndex.ContainsKey(i) {
-                    continue
-                }
-                let item = allItems[i]
-                let wasUntyped = item.Syntax.Type == nil && item.Field.Type == TypeSymbol.Error
-                let (boundItem, hadDiagnostics) = item.Bind(!hasUnresolvedUntyped)
-                let failed = hadDiagnostics || boundItem.Bound.Type == TypeSymbol.Error
-                if !failed {
-                    if wasUntyped && item.Field.Type != TypeSymbol.Error {
-                        resolvedAnyType = true
+                batch.RunInContext(
+                    () -> {
+                        for var i = 0; i < batch.Items.Count; i++ {
+                            if batch.BoundItems.ContainsKey(i) {
+                                continue
+                            }
+                            let (constField, fieldSyntaxNode) = batch.Items[i]
+                            let wasUntyped = fieldSyntaxNode.Type == nil && constField.Type == TypeSymbol.Error
+                            let diagMark = Diagnostics.Count
+                            let boundItem = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
+                            let hadDiagnostics = Diagnostics.Count > diagMark
+                            let failed = hadDiagnostics || boundItem.Bound.Type == TypeSymbol.Error
+                            if !failed {
+                                if wasUntyped && constField.Type != TypeSymbol.Error {
+                                    resolvedAnyType = true
+                                }
+                                batch.BoundItems[i] = boundItem
+                                if ConstantExpressionEvaluator.TryFold(
+                                    boundItem.Bound,
+                                    constField.Type,
+                                    out var constantValue
+                                ) {
+                                    constField.SetConstantValue(constantValue)
+                                    ReportDeferredFloatingConstantChecks(constField)
+                                    foldedAnyValue = true
+                                } else {
+                                    unfoldedBoundItems.Add(boundItem)
+                                }
+                            } else {
+                                Diagnostics.TruncateTo(diagMark)
+                                deferredFloatingConstantChecks.Remove(constField)
+                                if wasUntyped {
+                                    constField.SetType(TypeSymbol.Error)
+                                    if $scope.TryLookupSymbol(constField.Name) is ImplicitStaticFieldVariableSymbol v &&
+                                        object.ReferenceEquals(v.Field, constField) {
+                                        v.Type = TypeSymbol.Error
+                                    }
+                                }
+                            }
+                        }
                     }
-                    boundByIndex[i] = boundItem
-                } else if !hasUnresolvedUntyped {
-                    boundByIndex[i] = boundItem
-                } else if wasUntyped {
-                    item.Field.SetType(TypeSymbol.Error)
-                }
+                )
             }
-            if !resolvedAnyType {
-                for var i = 0; i < allItems.Length; i++ {
-                    if !boundByIndex.ContainsKey(i) {
-                        let (boundItem, _) = allItems[i].Bind(true)
-                        boundByIndex[i] = boundItem
+            var foldProgress = true
+            while foldProgress && unfoldedBoundItems.Count > 0 {
+                foldProgress = false
+                let stillUnfolded = List[(Field FieldSymbol, Bound BoundExpression, Location TextLocation)]()
+                for item in unfoldedBoundItems {
+                    if ConstantExpressionEvaluator.TryFold(item.Bound, item.Field.Type, out var constantValue) {
+                        item.Field.SetConstantValue(constantValue)
+                        ReportDeferredFloatingConstantChecks(item.Field)
+                        foldProgress = true
+                        foldedAnyValue = true
+                    } else {
+                        stillUnfolded.Add(item)
                     }
+                }
+                unfoldedBoundItems = stillUnfolded
+            }
+            if !resolvedAnyType && !foldedAnyValue {
+                for batch in batches {
+                    if batch.BoundItems.Count >= batch.Items.Count {
+                        continue
+                    }
+                    batch.RunInContext(
+                        () -> {
+                            for var i = 0; i < batch.Items.Count; i++ {
+                                if !batch.BoundItems.ContainsKey(i) {
+                                    let (constField, fieldSyntaxNode) = batch.Items[i]
+                                    let boundItem = BindConstFieldInitializer(
+                                        constField,
+                                        fieldSyntaxNode,
+                                        constField.Type
+                                    )
+                                    batch.BoundItems[i] = boundItem
+                                    unfoldedBoundItems.Add(boundItem)
+                                }
+                            }
+                        }
+                    )
                 }
                 break
             }
         }
-        for var i = 0; i < allItems.Length; i++ {
-            if boundByIndex.TryGetValue(i, out var boundItem) {
-                pendingCrossTypeConstFolds.Add(boundItem)
-            }
-        }
+        pendingCrossTypeConstFolds.AddRange(unfoldedBoundItems)
         FoldCrossTypeConstInitializers(reportUnfolded)
     }
 
-    internal func RegisterPendingConstInitializer(
-        constField FieldSymbol,
-        fieldSyntaxNode FieldDeclarationSyntax,
+    internal func RegisterPendingConstInitializerBatch(
+        items List[(Field FieldSymbol, Syntax FieldDeclarationSyntax)],
         runInContext(() -> void) -> void
     ) {
+        if items.Count == 0 {
+            return
+        }
         pendingConstInitializerBindings.Add(
             (
-                constField,
-                fieldSyntaxNode,
-                (commitDiagnostics bool) -> {
-                    var boundItem = (
-                        Field: constField,
-                        Bound: cast[BoundExpression](BoundErrorExpression(fieldSyntaxNode)),
-                        Location: fieldSyntaxNode.Identifier.Location
-                    )
-                    var hadDiagnostics = false
-                    runInContext(
-                        () -> {
-                            let diagMark = Diagnostics.Count
-                            boundItem = BindConstFieldInitializer(constField, fieldSyntaxNode, constField.Type)
-                            hadDiagnostics = Diagnostics.Count > diagMark
-                            if !commitDiagnostics && (hadDiagnostics || boundItem.Bound.Type == TypeSymbol.Error) {
-                                Diagnostics.TruncateTo(diagMark)
-                                deferredFloatingConstantChecks.Remove(constField)
-                            }
-                        }
-                    )
-                    return (boundItem, hadDiagnostics)
-                }
+                items,
+                Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)](),
+                runInContext
             )
         )
     }

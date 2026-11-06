@@ -1812,19 +1812,24 @@ class StructSymbol : TypeSymbol {
                 var implemented = false
                 for var kk = 0; kk < k && !implemented; kk++ {
                     let derivedCls = levels[kk].Cls
-                    let derivedMethods = derivedCls.GetDeclaredInstanceMethods()
-                    if derivedMethods.IsDefaultOrEmpty {
-                        continue
-                    }
                     let candidateSubst = levels[kk].Subst
-                    for candidate in derivedMethods {
-                        if candidate.IsAbstract {
-                            continue
+                    if !derivedCls.Methods.IsDefaultOrEmpty {
+                        for candidate in derivedCls.Methods {
+                            if candidate.IsAbstract {
+                                continue
+                            }
+                            if AbstractMethodSatisfiedBy(abstractMethod, subst, candidate, candidateSubst) {
+                                implemented = true
+                                break
+                            }
                         }
-                        if AbstractMethodSatisfiedBy(abstractMethod, subst, candidate, candidateSubst) {
-                            implemented = true
-                            break
-                        }
+                    }
+                    if !implemented &&
+                        derivedCls.DataPrintMembers is {IsOverride: true} synthesizedPrintMembers &&
+                        abstractMethod.Accessibility == synthesizedPrintMembers.Accessibility &&
+                        AbstractMethodSatisfiedBy(abstractMethod, subst, synthesizedPrintMembers, candidateSubst) {
+                        implemented = true
+                        break
                     }
                 }
                 if !implemented {

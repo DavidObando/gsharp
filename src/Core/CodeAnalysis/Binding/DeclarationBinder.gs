@@ -82,15 +82,15 @@ internal partial class DeclarationBinder {
     // scope and the enclosing type's static-member scope before binding.
     private let pendingConstInitializerBindings List[
         (
-            Field FieldSymbol,
-            Syntax FieldDeclarationSyntax,
-            Bind(bool) -> (Item(Field FieldSymbol, Bound BoundExpression, Location TextLocation), HadDiagnostics bool)
+            Items List[(Field FieldSymbol, Syntax FieldDeclarationSyntax)],
+            BoundItems Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)],
+            RunInContext(() -> void) -> void
         )
     ] = List[
         (
-            Field FieldSymbol,
-            Syntax FieldDeclarationSyntax,
-            Bind(bool) -> (Item(Field FieldSymbol, Bound BoundExpression, Location TextLocation), HadDiagnostics bool)
+            Items List[(Field FieldSymbol, Syntax FieldDeclarationSyntax)],
+            BoundItems Dictionary[int32, (Field FieldSymbol, Bound BoundExpression, Location TextLocation)],
+            RunInContext(() -> void) -> void
         )
     ]()
 
