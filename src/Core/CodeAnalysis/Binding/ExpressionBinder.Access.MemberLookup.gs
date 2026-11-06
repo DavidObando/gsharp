@@ -4392,11 +4392,7 @@ internal partial class ExpressionBinder {
         if lengthReported {
             return BoundErrorExpression(nil)
         }
-        let returnType = SliceResultType(
-            target,
-            sliceMethod.ReturnType,
-            MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
-        )
+        let returnType = MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
         let call = BoundImportedInstanceCallExpression(
             nil,
             srcRef,
@@ -4413,11 +4409,7 @@ internal partial class ExpressionBinder {
         indexer PropertyInfo
     ) BoundExpression {
         let rangeValue = BuildSystemRangeValue($range)
-        let resultType = SliceResultType(
-            target,
-            indexer.PropertyType,
-            MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
-        )
+        let resultType = MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer)
         return BoundClrIndexExpression($range, target, indexer, ImmutableArray.Create(rangeValue), resultType)
     }
 
@@ -4545,11 +4537,7 @@ internal partial class ExpressionBinder {
         )
         if clrType != nil {
             if TryFindRangeIndexer(clrType, out var rangeIndexer) {
-                let resultType = SliceResultType(
-                    target,
-                    rangeIndexer.PropertyType,
-                    MemberLookup.GetClrPropertyTypeSymbol(target.Type, rangeIndexer)
-                )
+                let resultType = MemberLookup.GetClrPropertyTypeSymbol(target.Type, rangeIndexer)
                 return BoundClrIndexExpression(nil, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType)
             }
             if TryFindSliceShape(clrType, out var lengthMember, out var sliceMethod) {
@@ -4573,11 +4561,7 @@ internal partial class ExpressionBinder {
                 if lengthReported {
                     return BoundErrorExpression(nil)
                 }
-                let returnType = SliceResultType(
-                    target,
-                    sliceMethod.ReturnType,
-                    MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
-                )
+                let returnType = MemberLookup.GetClrMethodReturnTypeSymbol(target.Type, sliceMethod)
                 let call = BoundImportedInstanceCallExpression(
                     nil,
                     srcRef,
@@ -6705,28 +6689,6 @@ internal partial class ExpressionBinder {
         /// away: `destination[1..]` produced a `Span[object]` that no
         /// longer converted back into the `Span[T]` slot it was sliced
         /// from.
-        ///
-        /// Every slice shape in the BCL — `Span<T>`,
-        /// `ReadOnlySpan<T>`, `Memory<T>`,
-        /// `ReadOnlyMemory<T>`, `string` — yields the RECEIVER'S
-        /// OWN type, so when the reflected result is identical to the receiver's
-        /// CLR type the symbolic answer is just the receiver's symbolic type,
-        /// which still carries `T`. Deliberately guarded on that identity:
-        /// a slice member returning anything else keeps the reflected answer
-        /// unchanged, and a receiver whose type argument is already concrete
-        /// (`Span[int32]`) gets back the same symbol it had before.
-        /// @param target The sliced receiver.
-        /// @param reflectedResult The slice member's reflected result type.
-        /// @param readResult The slice member's result type, read through the funnel.
-        /// @returns The slice expression's static type.
-        private func SliceResultType(target BoundExpression, reflectedResult Type, readResult TypeSymbol) TypeSymbol {
-            let targetType = target.Type
-            if targetType?.ClrType != nil && targetType.ClrType.IsSameAs(reflectedResult) {
-                return targetType
-            }
-            return readResult
-        }
-
         private func BuildSystemRangeValue(lower RangeBound?, upper RangeBound?) BoundExpression {
             let indexCtor = typeof(Index).GetConstructor([]Type{typeof(int32), typeof(bool)})!!
             let rangeCtor = typeof(Range).GetConstructor([]Type{typeof(Index), typeof(Index)})!!

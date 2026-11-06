@@ -188,7 +188,150 @@ func Main() {
         }
     }
 
+    /// Issues #4403, #4429, #4473, and #4487 through the real `gsc` CLI driver:
+    /// - #4403: optional null-default method and indexer parameters on generic receivers lift to `T?`;
+    /// - #4429: nested `params T?[]` (expanded and normal array forms), `ref T?` / `in T?`, and `IEnumerable<T?>` / `IList<T?>` infer `T := X` from `X?` arguments;
+    /// - #4473: range slices returning the receiver's own type preserve `[Nullable(2)]` (`T?`) and `[NullableContext(0)]` (`T!`);
+    /// - #4487: imported CLR unary and binary operators preserve their declared nullable reference return.
+    @Fact
+    func ImportedOptionalNullDefault_NestedNullableInference_RangeSlice_And_OperatorNullability_WorkThroughCli() {
+        let directory = Path.Combine(
+            AppContext.BaseDirectory,
+            "Adr0186NullabilitySwitchTests",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        try {
+            let libraryPath = EmitImportedContractsLibrary(directory)
+            let validSource = Path.Combine(directory, "valid.gs")
+            File.WriteAllText(validSource, `package P
+import System
+import System.Collections.Generic
+import Adr0186.Switch.Library
+
+func Check(
+    box OptionalBox[string],
+    maybe1 string?,
+    maybe2 string?,
+    arr []string?,
+    seq IEnumerable[string?],
+    list IList[string?],
+    buf NullableBuffer,
+    obuf ObliviousBuffer,
+    tag Tag
+) (string?, string, string?, string, string, string, string, string, NullableBuffer?, ObliviousBuffer, string?) {
+    box.Put(nil)
+    let indexed string? = box[0, nil]
+    let p1 string = NestedInference.Last(maybe1, maybe2)
+    let p2 string? = NestedInference.Pick(maybe1, nil)
+    let p3 string = NestedInference.Last(arr)
+    let p4 string = NestedInference.FromEnumerable(seq)
+    let p5 string = NestedInference.FromList(list)
+    var refLocal string? = maybe1
+    let p6 string = NestedInference.FromRef(ref refLocal)
+    let p7 string = NestedInference.FromIn(in maybe1)
+    let sliced NullableBuffer? = buf[1..3]
+    let oblSliced ObliviousBuffer = obuf[1..3]
+    let opResult string? = tag + tag
+    return (indexed, p1, p2, p3, p4, p5, p6, p7, sliced, oblSliced, opResult)
+}
+
+func Main() {
+}`)
+            let (validExit, validOut, validErr) = RunGscWith(
+                directory,
+                []string{validSource, "/r:" + libraryPath, "/out:" + Path.Combine(directory, "valid.dll")}
+            )
+            Assert.Equal(0, validExit)
+            Assert.DoesNotContain("GS0155", validOut + validErr, StringComparison.Ordinal)
+
+            for (name, badExpr) in[](string, string){
+                ("slice_nullable", "let bad NullableBuffer = buf[1..3]"),
+                ("op_binary", "let bad string = tag + tag"),
+                ("op_unary", "let bad string = -tag")
+            } {
+                let invalidSource = Path.Combine(directory, name + ".gs")
+                File.WriteAllText(
+                    invalidSource,
+                    "package P\nimport Adr0186.Switch.Library\n\nfunc Main(buf NullableBuffer, tag Tag) {\n    " +
+                        badExpr +
+                        "\n}\n"
+                )
+                let (badExit, badOut, badErr) = RunGscWith(
+                    directory,
+                    []string{invalidSource, "/r:" + libraryPath, "/out:" + Path.Combine(directory, name + ".dll")}
+                )
+                Assert.NotEqual(0, badExit)
+                Assert.Contains("GS0155", badOut + badErr, StringComparison.Ordinal)
+            }
+        } finally {
+            try {
+                Directory.Delete(directory, recursive: true)
+            } catch (IOException) { }
+        }
+    }
+
     shared {
+        private func EmitImportedContractsLibrary(directory string) string {
+            const source = `#nullable enable
+namespace Adr0186.Switch.Library
+{
+    public sealed class OptionalBox<T>
+    {
+        public void Put(T value = default!) { }
+        public T? this[int index, T fallback = default!] => fallback;
+    }
+
+    public static class NestedInference
+    {
+        public static T Last<T>(params T?[] values) where T : class => values[0]!;
+        public static T? Pick<T>(params T?[] values) where T : class => values.Length > 0 ? values[0] : null;
+        public static T FromEnumerable<T>(System.Collections.Generic.IEnumerable<T?> items) where T : class => default!;
+        public static T FromList<T>(System.Collections.Generic.IList<T?> items) where T : class => items[0]!;
+        public static T FromRef<T>(ref T? value) where T : class => value!;
+        public static T FromIn<T>(in T? value) where T : class => value!;
+    }
+
+    public sealed class NullableBuffer
+    {
+        public int Length => 4;
+        public NullableBuffer? Slice(int start, int length) => null;
+    }
+
+    public sealed class Tag
+    {
+        public static string? operator +(Tag a, Tag b) => null;
+        public static string? operator -(Tag a) => null;
+    }
+#nullable disable
+    public sealed class ObliviousBuffer
+    {
+        public int Length => 4;
+        public ObliviousBuffer Slice(int start, int length) => null;
+    }
+}`
+            let references = (
+                (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)?.Split(Path.PathSeparator) ??
+                    Array.Empty[string]()
+            )
+                .Where((path string) -> path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                .Select((path string) -> MetadataReference.CreateFromFile(path))
+                .ToImmutableArray()
+            let compilation = CSharpCompilation.Create(
+                "Adr0186.Switch.Library.Contracts",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest))},
+                references,
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+            let path = Path.Combine(directory, "Adr0186.Switch.Library.Contracts.dll")
+            let result = compilation.Emit(path)
+            Assert.True(
+                result.Success,
+                string.Join(Environment.NewLine, result.Diagnostics.Select((d Diagnostic) -> d.ToString()))
+            )
+            return path
+        }
+
         /// Emits a C# library with <b>no</b> nullable context at all, so every
         /// reference position in it is genuinely oblivious — the one input this
         /// fixture's discriminator needs and that the annotated BCL cannot

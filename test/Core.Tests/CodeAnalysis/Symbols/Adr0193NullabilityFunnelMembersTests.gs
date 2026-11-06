@@ -53,7 +53,7 @@ class Adr0193NullabilityFunnelMembersTests {
             "ClrNullability.GetFieldTypeSymbol(FieldInfo)",
             "ClrNullability.GetGenericParameterConstraintTypeSymbols(Type, Func`2)",
             "ClrNullability.GetInterfaceTypeSymbols(Type, Func`2)",
-            "ClrNullability.GetParameterDeclaredState(ParameterInfo)",
+            "ClrNullability.GetParameterDeclaredState(ParameterInfo, Int32)",
             "ClrNullability.GetParameterTypeSymbol(ParameterInfo)",
             "ClrNullability.GetPropertyElementTypeSymbol(PropertyInfo, Type)",
             "ClrNullability.GetPropertyTypeSymbol(PropertyInfo)",

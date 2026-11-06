@@ -927,6 +927,8 @@ internal class MemberLookup {
         }
     }
 
+    private data class DelegateArgLayout(Layout Type?, FlagPosition int32, ParentLayouts[]?DelegateArgLayout) { }
+
     shared {
         // Preserve the kind of provisional evidence across argument sites without
         // extending the substitution's lifetime or changing its dictionary API.
@@ -5360,7 +5362,7 @@ internal class MemberLookup {
                 let openParameters[]?ParameterInfo = openIndexer?.GetIndexParameters()
                 if openParameters != nil && parameterIndex < openParameters.Length {
                     let openParameter = openParameters[parameterIndex]
-                    return TupleElementNamesReader.ApplyNames(
+                    let mapped = TupleElementNamesReader.ApplyNames(
                         NullableFlagsBuilder.MergeDeclarationNullability(
                             MapOpenClrTypeToSymbolic(
                                 ClrNullability.GetSignatureType(openParameter),
@@ -5373,6 +5375,11 @@ internal class MemberLookup {
                         openParameter,
                         openParameter.ParameterType
                     )
+                    return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                        NullabilityImportRule.ApplyNullDefaultLift(mapped)
+                    } else {
+                        mapped
+                    }
                 }
             }
             let closedParameterType = closedParameter.ParameterType
@@ -5970,19 +5977,24 @@ internal class MemberLookup {
                             "a by-ref parameter type has an element type",
                             expression: "openParameterType.GetElementType()"
                         )
+                        let pointee = TupleElementNamesReader.ApplyNames(
+                            NullableFlagsBuilder.MergeDeclarationNullability(
+                                MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
+                                pointeeType,
+                                parameterFlags
+                            ),
+                            openParameter,
+                            pointeeType
+                        )
                         return ByRefTypeSymbol.Get(
-                            TupleElementNamesReader.ApplyNames(
-                                NullableFlagsBuilder.MergeDeclarationNullability(
-                                    MapOpenClrTypeToSymbolic(pointeeType, openDefinition, declaringTypeArguments),
-                                    pointeeType,
-                                    parameterFlags
-                                ),
-                                openParameter,
-                                pointeeType
-                            )
+                            if ClrNullability.HasOptionalNullDefault(openParameter) {
+                                NullabilityImportRule.ApplyNullDefaultLift(pointee)
+                            } else {
+                                pointee
+                            }
                         )
                     }
-                    return TupleElementNamesReader.ApplyNames(
+                    let mapped = TupleElementNamesReader.ApplyNames(
                         NullableFlagsBuilder.MergeDeclarationNullability(
                             MapOpenClrTypeToSymbolic(openParameterType, openDefinition, declaringTypeArguments),
                             openParameterType,
@@ -5991,6 +6003,11 @@ internal class MemberLookup {
                         openParameter,
                         openParameterType
                     )
+                    return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                        NullabilityImportRule.ApplyNullDefaultLift(mapped)
+                    } else {
+                        mapped
+                    }
                 }
             }
             // Issue #3705 (family 2): same omission as GetClrMethodReturnTypeSymbol,
@@ -6373,7 +6390,7 @@ internal class MemberLookup {
             } else {
                 openType
             }
-            return TupleElementNamesReader.ApplyNames(
+            let mapped = TupleElementNamesReader.ApplyNames(
                 NullableFlagsBuilder.MergeDeclarationNullability(
                     MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments),
                     layout,
@@ -6382,6 +6399,11 @@ internal class MemberLookup {
                 openParameter,
                 layout
             )
+            return if ClrNullability.HasOptionalNullDefault(openParameter) {
+                NullabilityImportRule.ApplyNullDefaultLift(mapped)
+            } else {
+                mapped
+            }
         }
 
         /// ADR-0193 Phase 2: (cref:GetClrOpenParameterPointeeTypeSymbol)
@@ -8382,67 +8404,49 @@ internal class MemberLookup {
                 let paramsIndex = openParams.Length - 1
                 let fixedPairs = Math.Min(paramsIndex, argumentCount)
                 for var i = 0; i < fixedPairs; i++ {
+                    let layoutParameter = ClrNullability.GetOpenParameterDefinition(openParams[i])
                     UnifyForMethodTypeArgs(
                         openParams[i].ParameterType,
-                        OpenSlotInferenceArgument(
-                            openParams[i],
-                            ArgumentForInference(openParams[i], paramsElement: false, i)
-                        ),
+                        ArgumentForInference(openParams[i], paramsElement: false, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParameter,
+                        layoutParameter.ParameterType,
+                        flagPosition: 0
                     )
                 }
+                let layoutParams = ClrNullability.GetOpenParameterDefinition(openParams[^1])
+                let layoutParamsElement = layoutParams.ParameterType.GetElementType()
                 for var i = paramsIndex; i < argumentCount; i++ {
                     UnifyForMethodTypeArgs(
                         paramsElementType,
                         ArgumentForInference(openParams[^1], paramsElement: true, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParams,
+                        layoutParamsElement,
+                        flagPosition: 1
                     )
                 }
             } else {
                 let pairs = Math.Min(openParams.Length, argumentCount)
                 for var i = 0; i < pairs; i++ {
+                    let layoutParameter = ClrNullability.GetOpenParameterDefinition(openParams[i])
                     UnifyForMethodTypeArgs(
                         openParams[i].ParameterType,
-                        OpenSlotInferenceArgument(
-                            openParams[i],
-                            ArgumentForInference(openParams[i], paramsElement: false, i)
-                        ),
+                        ArgumentForInference(openParams[i], paramsElement: false, i),
                         openMethod,
                         bounds,
-                        ArgumentBoundKind(i)
+                        ArgumentBoundKind(i),
+                        layoutParameter,
+                        layoutParameter.ParameterType,
+                        flagPosition: 0
                     )
                 }
             }
             return FixSymbolicMethodTypeArguments(openMethod, bounds, out requiresRecoveredInference)
-        }
-
-        /// The argument a top-level parameter contributes to method type-argument
-        /// inference. When the parameter is a bare method type parameter the
-        /// declaration annotates (`T? value`), a `X?` argument infers
-        /// `T := X`, as in C#, rather than `T := X?`, which would make
-        /// `Invariant.Required(p.DeclaringType, …)` return `Type?`.
-        /// (cref:NullabilityImportRule.InferOpenSlotArgument) decides it, as
-        /// the inverse of the rule that widens the same slot on the way in. A
-        /// source method's parameter is already typed `T?` and unifies
-        /// through the nullable wrapper, so only imported methods need this.
-        /// @param openParameter The open definition's parameter.
-        /// @param argument The argument's symbolic type.
-        /// @returns The type to unify against the parameter's CLR type.
-        private func OpenSlotInferenceArgument(openParameter ParameterInfo, argument TypeSymbol?) TypeSymbol? {
-            if !(argument is NullableTypeSymbol) ||
-                openParameter.ParameterType is not{IsGenericParameter: true, DeclaringMethod: not nil} {
-                return argument
-            }
-            // The slot as DECLARED: GetParameterTypeSymbol also widens a parameter
-            // with a null default, and `T value = default` must not strip `?`.
-            return NullabilityImportRule.InferOpenSlotArgument(
-                argument,
-                ClrNullability.GetParameterDeclaredState(openParameter)
-            )
         }
 
         private func FixSymbolicMethodTypeArguments(
@@ -8858,12 +8862,76 @@ internal class MemberLookup {
             default: SymbolicInferenceBoundKind.Exact
         }
 
+        private func NextFlagPosition(flagPosition int32, delta int32) int32 -> if flagPosition < 0 {
+            -1
+        } else {
+            flagPosition + delta
+        }
+
+        private func GetGenericArgumentFlagPosition(
+            layoutClr Type?,
+            layoutArgs[]?Type,
+            flagPosition int32,
+            argumentIndex int32
+        ) int32 {
+            if flagPosition < 0 ||
+                layoutClr == nil ||
+                layoutArgs == nil ||
+                uint32(argumentIndex) >= uint32(layoutArgs.Length) {
+                return -1
+            }
+            var current = flagPosition +
+                (
+                if NullableLifting.GetValueTypeNullableUnderlyingClr(layoutClr) != nil {
+                    0
+                } else {
+                    1
+                }
+            )
+            for var i = 0; i < argumentIndex; i++ {
+                current += ClrNullability.CountNullabilityBytes(layoutArgs[i])
+            }
+            return current
+        }
+
+        private func ResolveLayoutStep(
+            nextLayout Type?,
+            nextFlagPosition int32,
+            delegateArgLayouts[]?DelegateArgLayout
+        )(Layout Type?, FlagPosition int32, DelegateArgLayouts[]?DelegateArgLayout) {
+            var currentLayout = nextLayout
+            var currentFlagPosition = nextFlagPosition
+            var currentDelegateLayouts = delegateArgLayouts
+            while currentDelegateLayouts != nil {
+                let stripped = if currentLayout != nil && currentLayout.IsByRef == true {
+                    currentLayout.GetElementType()
+                } else {
+                    currentLayout
+                }
+                if stripped == nil ||
+                    stripped.IsGenericParameter != true ||
+                    stripped.DeclaringMethod != nil ||
+                    uint32(stripped.GenericParameterPosition) >= uint32(currentDelegateLayouts.Length) {
+                    break
+                }
+                let entry = currentDelegateLayouts[stripped.GenericParameterPosition]
+                currentLayout = entry.Layout
+                currentFlagPosition = entry.FlagPosition
+                currentDelegateLayouts = entry.ParentLayouts
+            }
+            return (currentLayout, currentFlagPosition, currentDelegateLayouts)
+        }
+
         private func UnifyForMethodTypeArgs(
             openClr Type?,
             actual TypeSymbol?,
             openMethod MethodInfo,
             bounds SymbolicInferenceBounds,
-            boundKind SymbolicInferenceBoundKind = SymbolicInferenceBoundKind.Lower
+            boundKind SymbolicInferenceBoundKind = SymbolicInferenceBoundKind.Lower,
+            openParameter ParameterInfo? = nil,
+            layoutClr Type? = nil,
+            flagPosition int32 = -1,
+            delegateArgLayouts[]?DelegateArgLayout = nil
         ) {
             var actual = actual
             if openClr == nil || actual == nil {
@@ -8873,6 +8941,35 @@ internal class MemberLookup {
                 return
             }
             if object.ReferenceEquals(actual, TypeSymbol.Error) {
+                return
+            }
+            if openClr.IsByRef {
+                let openPointee = openClr.GetElementType()
+                let layoutPointee = if layoutClr != nil && layoutClr.IsByRef == true {
+                    layoutClr.GetElementType()
+                } else {
+                    layoutClr
+                }
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutPointee,
+                    flagPosition,
+                    delegateArgLayouts
+                )
+                UnifyForMethodTypeArgs(
+                    openPointee,
+                    if actual is ByRefTypeSymbol bf {
+                        bf.PointeeType
+                    } else {
+                        actual
+                    },
+                    openMethod,
+                    bounds,
+                    SymbolicInferenceBoundKind.Exact,
+                    openParameter,
+                    nextLayout,
+                    nextFlagPosition,
+                    nextDelegateLayouts
+                )
                 return
             }
             var actualForHierarchyProjection = actual
@@ -8892,17 +8989,30 @@ internal class MemberLookup {
             // nullable-reference wrappers are removed for outer structural
             // matching. Multiple inference sources join compatible nullable
             // evidence instead of depending on argument order.
+            //
+            // Issues #4425 / #4429: when an imported parameter position (top-level
+            // or nested inside an array, by-ref, tuple, or generic parameter) is
+            // explicitly annotated `T?` (`[Nullable(2)]`), a reference-typed `X?`
+            // argument infers `T := X`, as in C#, via `InferOpenSlotArgument`.
             if openClr.IsGenericParameter && openClr.DeclaringMethod != nil {
                 if actual == TypeSymbol.Void || TypeSymbol.ContainsNeverType(actual) ||
                     TypeSymbol.ContainsNullLiteralType(actual) {
                     return
+                }
+                let inferredActual = if openParameter != nil && flagPosition >= 0 && actual is NullableTypeSymbol {
+                    NullabilityImportRule.InferOpenSlotArgument(
+                        actual,
+                        ClrNullability.GetParameterDeclaredState(openParameter, flagPosition)
+                    )
+                } else {
+                    actual
                 }
                 if object.ReferenceEquals(openClr.DeclaringMethod, openMethod) ||
                     openClr.DeclaringMethod!!.MetadataToken == openMethod
                     .MetadataToken {
                     let pos = openClr.GenericParameterPosition
                     if uint32(pos) < uint32(bounds.Arity) {
-                        bounds.Add(pos, NormalizeRecoveredNullability(actual), boundKind)
+                        bounds.Add(pos, NormalizeRecoveredNullability(inferredActual), boundKind)
                     }
                 }
                 return
@@ -8939,12 +9049,30 @@ internal class MemberLookup {
                 if actual is RectangularArrayTypeSymbol actualRectangular &&
                     actualRectangular.Rank == openClr
                     .GetArrayRank() {
+                    let layoutElement = if layoutClr != nil && layoutClr.IsArray == true {
+                        layoutClr.GetElementType()
+                    } else {
+                        default(Type?)
+                    }
+                    let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                        layoutElement,
+                        if layoutElement != nil {
+                            NextFlagPosition(flagPosition, 1)
+                        } else {
+                            -1
+                        },
+                        delegateArgLayouts
+                    )
                     UnifyForMethodTypeArgs(
                         openClr.GetElementType(),
                         actualRectangular.ElementType,
                         openMethod,
                         bounds,
-                        boundKind
+                        boundKind,
+                        openParameter,
+                        nextLayout,
+                        nextFlagPosition,
+                        nextDelegateLayouts
                     )
                 }
                 return
@@ -8955,24 +9083,42 @@ internal class MemberLookup {
                     return
                 }
                 let openElement = openClr.GetElementType()
-                let actualElement TypeSymbol? = TryGetElementType(actual!!)
-                if actualElement != nil {
-                    UnifyForMethodTypeArgs(openElement, actualElement, openMethod, bounds, boundKind)
+                let layoutElement = if layoutClr != nil && layoutClr.IsArray == true {
+                    layoutClr.GetElementType()
+                } else {
+                    default(Type?)
                 }
-                return
-            }
-            if openClr.IsByRef {
-                let openPointee = openClr.GetElementType()
-                if actual is ByRefTypeSymbol bf {
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutElement,
+                    if layoutElement != nil {
+                        NextFlagPosition(flagPosition, 1)
+                    } else {
+                        -1
+                    },
+                    delegateArgLayouts
+                )
+                let actualElement TypeSymbol? = TryGetElementType(actual!!) ??
+                    (
+                    if (annotatedActualForProjection ?? actual) is {} arrayCarrier &&
+                        arrayCarrier.ClrType is {IsSZArray: true} &&
+                        arrayCarrier.GetElementPositions() is [var carrierElement] {
+                        carrierElement
+                    } else {
+                        default(TypeSymbol?)
+                    }
+                )
+                if actualElement != nil {
                     UnifyForMethodTypeArgs(
-                        openPointee,
-                        bf.PointeeType,
+                        openElement,
+                        actualElement,
                         openMethod,
                         bounds,
-                        SymbolicInferenceBoundKind.Exact
+                        boundKind,
+                        openParameter,
+                        nextLayout,
+                        nextFlagPosition,
+                        nextDelegateLayouts
                     )
-                } else {
-                    UnifyForMethodTypeArgs(openPointee, actual, openMethod, bounds, SymbolicInferenceBoundKind.Exact)
                 }
                 return
             }
@@ -8986,6 +9132,20 @@ internal class MemberLookup {
                 // through the pointee, tolerating an actual that is already the
                 // pointee rather than a pointer.
                 let openPointerPointee = openClr.GetElementType()
+                let layoutPointerPointee = if layoutClr != nil && layoutClr.IsPointer == true {
+                    layoutClr.GetElementType()
+                } else {
+                    default(Type?)
+                }
+                let (nextLayout, nextFlagPosition, nextDelegateLayouts) = ResolveLayoutStep(
+                    layoutPointerPointee,
+                    if layoutPointerPointee != nil {
+                        NextFlagPosition(flagPosition, 1)
+                    } else {
+                        -1
+                    },
+                    delegateArgLayouts
+                )
                 UnifyForMethodTypeArgs(
                     openPointerPointee,
                     if actual is PointerTypeSymbol actualPointer {
@@ -8995,13 +9155,43 @@ internal class MemberLookup {
                     },
                     openMethod,
                     bounds,
-                    SymbolicInferenceBoundKind.Exact
+                    SymbolicInferenceBoundKind.Exact,
+                    openParameter,
+                    nextLayout,
+                    nextFlagPosition,
+                    nextDelegateLayouts
                 )
                 return
             }
             if openClr.IsGenericType && !openClr.IsGenericTypeDefinition {
                 let openDef = openClr.GetGenericTypeDefinition()
                 let openArgs = openClr.GetGenericArguments()
+                let layoutArgs = if layoutClr != nil &&
+                    layoutClr.IsGenericType &&
+                    !layoutClr.IsGenericTypeDefinition &&
+                    ClrTypeUtilities.AreSame(layoutClr.GetGenericTypeDefinition(), openDef) {
+                    layoutClr.GetGenericArguments()
+                } else {
+                    default([]?Type)
+                }
+                let LayoutArgAt = func (index int32) Type? {
+                    return if layoutArgs != nil && uint32(index) < uint32(layoutArgs.Length) {
+                        layoutArgs[index]
+                    } else {
+                        default(Type?)
+                    }
+                }
+                let StepGenericArg = func (index int32)(
+                    Layout Type?,
+                    FlagPosition int32,
+                    DelegateArgLayouts[]?DelegateArgLayout
+                ) {
+                    return ResolveLayoutStep(
+                        LayoutArgAt(index),
+                        GetGenericArgumentFlagPosition(layoutClr, layoutArgs, flagPosition, index),
+                        delegateArgLayouts
+                    )
+                }
                 var foundHierarchyProjection = false
                 if (annotatedActualForProjection != nil || actual is ImportedTypeSymbol) &&
                     TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
@@ -9011,12 +9201,17 @@ internal class MemberLookup {
                     out foundHierarchyProjection
                 ) {
                     for var i = 0; i < openArgs.Length && i < hierarchyProjection.Length; i++ {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(i)
                         UnifyForMethodTypeArgs(
                             openArgs[i],
                             hierarchyProjection[i],
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, i, boundKind)
+                            GetNestedInferenceBoundKind(openDef, i, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                     }
                     return
@@ -9035,7 +9230,18 @@ internal class MemberLookup {
                     .ElementTypes
                     .Length {
                     for var i = 0; i < openArgs.Length; i++ {
-                        UnifyForMethodTypeArgs(openArgs[i], tuple.ElementTypes[i], openMethod, bounds, boundKind)
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(i)
+                        UnifyForMethodTypeArgs(
+                            openArgs[i],
+                            tuple.ElementTypes[i],
+                            openMethod,
+                            bounds,
+                            boundKind,
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
+                        )
                     }
                     return
                 }
@@ -9072,12 +9278,17 @@ internal class MemberLookup {
                 if openArgs.Length == 1 && ChannelTypeSymbol.IsChannelClrDefinitionName(openDef.FullName) &&
                     ChannelTypeSymbol
                     .TryGetChannelShape(actual, out var channelActualElement, out _, out _) {
+                    let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
                     UnifyForMethodTypeArgs(
                         openArgs[0],
                         channelActualElement,
                         openMethod,
                         bounds,
-                        GetNestedInferenceBoundKind(openDef, 0, boundKind)
+                        GetNestedInferenceBoundKind(openDef, 0, boundKind),
+                        openParameter,
+                        argLayout,
+                        argFlagPosition,
+                        argDelegateLayouts
                     )
                     return
                 }
@@ -9115,12 +9326,17 @@ internal class MemberLookup {
                     .Length == openArgs
                     .Length {
                     for var j = 0; j < openArgs.Length; j++ {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                         UnifyForMethodTypeArgs(
                             openArgs[j],
                             projectedImp.TypeArguments[j],
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, j, boundKind)
+                            GetNestedInferenceBoundKind(openDef, j, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                     }
                     return
@@ -9146,7 +9362,18 @@ internal class MemberLookup {
                     "System.Linq.Expressions.Expression`1",
                     StringComparison.Ordinal
                 ) {
-                    UnifyForMethodTypeArgs(openArgs[0], actual, openMethod, bounds, boundKind)
+                    let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
+                    UnifyForMethodTypeArgs(
+                        openArgs[0],
+                        actual,
+                        openMethod,
+                        bounds,
+                        boundKind,
+                        openParameter,
+                        argLayout,
+                        argFlagPosition,
+                        argDelegateLayouts
+                    )
                     return
                 }
                 // Issue #2643: infer through the Invoke signature rather than
@@ -9156,30 +9383,59 @@ internal class MemberLookup {
                 if actual is FunctionTypeSymbol namedDelegateFunction && ClrTypeUtilities.IsDelegateType(openClr) {
                     let invoke MethodInfo? = openClr.GetMethodSafe("Invoke")
                     let invokeParameters[]?ParameterInfo = invoke?.GetParameters()
+                    let openInvoke MethodInfo? = openDef.GetMethodSafe("Invoke")
+                    let openInvokeParameters[]?ParameterInfo = openInvoke?.GetParameters()
+                    let slotLayouts = [openArgs.Length]DelegateArgLayout
+                    for var k = 0; k < openArgs.Length; k++ {
+                        let (argLayout, argFlagPosition, parentLayouts) = StepGenericArg(k)
+                        slotLayouts[k] = DelegateArgLayout(argLayout, argFlagPosition, parentLayouts)
+                    }
                     if invoke != nil &&
                         invokeParameters != nil &&
                         invokeParameters.Length == namedDelegateFunction
                         .ParameterTypes
                         .Length {
                         for var j = 0; j < invokeParameters.Length; j++ {
+                            let (paramLayout, paramFlagPosition, paramDelegateLayouts) = ResolveLayoutStep(
+                                if openInvokeParameters != nil && uint32(j) < uint32(openInvokeParameters.Length) {
+                                    openInvokeParameters[j].ParameterType
+                                } else {
+                                    default(Type?)
+                                },
+                                -1,
+                                slotLayouts
+                            )
                             UnifyForMethodTypeArgs(
                                 invokeParameters[j].ParameterType,
                                 namedDelegateFunction.ParameterTypes[j],
                                 openMethod,
                                 bounds,
-                                ReverseInferenceBoundKind(boundKind)
+                                ReverseInferenceBoundKind(boundKind),
+                                openParameter,
+                                paramLayout,
+                                paramFlagPosition,
+                                paramDelegateLayouts
                             )
                         }
                         if !FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType) &&
                             !invoke
                             .ReturnType
                             .IsSameAs(typeof(Void)) {
+                            let (returnLayout, returnFlagPosition, returnDelegateLayouts) = ResolveLayoutStep(
+                                openInvoke?.ReturnType,
+                                -1,
+                                slotLayouts
+                            )
                             UnifyForMethodTypeArgs(
                                 invoke.ReturnType,
                                 namedDelegateFunction.ReturnType,
                                 openMethod,
                                 bounds,
-                                boundKind
+                                boundKind,
+                                openParameter,
+                                returnLayout,
+                                returnFlagPosition,
+                                returnDelegateLayouts
                             )
                         }
                     }
@@ -9207,21 +9463,32 @@ internal class MemberLookup {
                     }
                     if openArgs.Length == expectedArgs {
                         for var j = 0; j < fn.ParameterTypes.Length; j++ {
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                             UnifyForMethodTypeArgs(
                                 openArgs[j],
                                 fn.ParameterTypes[j],
                                 openMethod,
                                 bounds,
-                                ReverseInferenceBoundKind(boundKind)
+                                ReverseInferenceBoundKind(boundKind),
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                         if !fnVoid {
+                            let returnArgIndex = openArgs.Length - 1
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(returnArgIndex)
                             UnifyForMethodTypeArgs(
-                                openArgs[openArgs.Length - 1],
+                                openArgs[returnArgIndex],
                                 fn.ReturnType,
                                 openMethod,
                                 bounds,
-                                boundKind
+                                boundKind,
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                     }
@@ -9233,12 +9500,17 @@ internal class MemberLookup {
                 if openArgs.Length == 1 {
                     let actualElement TypeSymbol? = TryGetElementType(actual!!)
                     if actualElement != nil {
+                        let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(0)
                         UnifyForMethodTypeArgs(
                             openArgs[0],
                             actualElement,
                             openMethod,
                             bounds,
-                            GetNestedInferenceBoundKind(openDef, 0, boundKind)
+                            GetNestedInferenceBoundKind(openDef, 0, boundKind),
+                            openParameter,
+                            argLayout,
+                            argFlagPosition,
+                            argDelegateLayouts
                         )
                         return
                     }
@@ -9251,12 +9523,17 @@ internal class MemberLookup {
                     projectedImp2 != nil {
                     if TryMapThroughImplemented(projectedImp2, openDef, out var liftedArgs) {
                         for var j = 0; j < openArgs.Length && j < liftedArgs.Length; j++ {
+                            let (argLayout, argFlagPosition, argDelegateLayouts) = StepGenericArg(j)
                             UnifyForMethodTypeArgs(
                                 openArgs[j],
                                 liftedArgs[j],
                                 openMethod,
                                 bounds,
-                                GetNestedInferenceBoundKind(openDef, j, boundKind)
+                                GetNestedInferenceBoundKind(openDef, j, boundKind),
+                                openParameter,
+                                argLayout,
+                                argFlagPosition,
+                                argDelegateLayouts
                             )
                         }
                     }
