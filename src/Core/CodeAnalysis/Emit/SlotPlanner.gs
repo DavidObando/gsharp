@@ -1118,10 +1118,12 @@ internal class SlotPlanner {
         // To preserve the assignment-as-expression result semantics without
         // a re-read, the emitter spills the value to a temp local.
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            if node.Variable is ParameterSymbol ps && ps.RefKind != RefKind.None {
-                this.sink.Add(node)
-            } else if node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None {
-                this.sink.Add(node)
+            if node.Expression.Type != TypeSymbol.Never {
+                if node.Variable is ParameterSymbol ps && ps.RefKind != RefKind.None {
+                    this.sink.Add(node)
+                } else if node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None {
+                    this.sink.Add(node)
+                }
             }
             base.VisitAssignmentExpression(node)
         }
@@ -1447,6 +1449,15 @@ internal class SlotPlanner {
         // emitter both call this so they agree on the slot.
         internal func SwitchExpressionHasResult(node BoundSwitchExpression) bool -> node.Type != TypeSymbol.Void &&
             node.Type != TypeSymbol.Never
+
+        internal func ContainsLabel(node BoundNode?) bool {
+            if node == nil {
+                return false
+            }
+            let labels = HashSet[BoundLabel]()
+            ExpressionBlockLabelCollector(labels).Visit(node)
+            return labels.Count > 0
+        }
 
         // Issue #1516: a `??` whose LHS is a bare reference-typed type
         // parameter (NOT wrapped in a `NullableTypeSymbol`). This shape arises

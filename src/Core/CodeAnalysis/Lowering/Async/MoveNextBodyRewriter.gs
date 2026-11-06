@@ -257,6 +257,9 @@ shared class MoveNextBodyRewriter {
             }
 
             protected override func RewriteReturnStatement(node BoundReturnStatement) BoundStatement {
+                if node.Expression != nil && node.Expression.Type == TypeSymbol.Never {
+                    return BoundExpressionStatement(node.Syntax, RewriteExpression(node.Expression))
+                }
                 let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
                 if node.Expression != nil && ctx.retValLocal != nil {
                     let rewrittenExpr = RewriteExpression(node.Expression)
