@@ -3809,8 +3809,10 @@ partial class CSharpToGSharpTranslator {
         private func ReceiverTypeArgumentsAreDeclared(
             receiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             slotType ITypeSymbol? = nil,
-            memo Dictionary[ILocalSymbol, bool]? = nil
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]? = nil
         ) bool {
+            let activeMemo = memo ??
+                Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]](SymbolEqualityComparer.Default)
             var unwrapped = Unparenthesize(receiver)
             while true {
                 if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedReceiver {
@@ -3844,23 +3846,23 @@ partial class CSharpToGSharpTranslator {
                         !this.ReceiverTargetContainsTypeParameter(asType, slotType)
                 }
                 if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
-                    return this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Left, slotType, memo) &&
-                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right, slotType, memo)
+                    return this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Left, slotType, activeMemo) &&
+                        this.ReceiverTypeArgumentsAreDeclared(binaryExpression.Right, slotType, activeMemo)
                 }
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
-                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue, slotType, memo) &&
-                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse, slotType, memo)
+                return this.ReceiverTypeArgumentsAreDeclared(conditional.WhenTrue, slotType, activeMemo) &&
+                    this.ReceiverTypeArgumentsAreDeclared(conditional.WhenFalse, slotType, activeMemo)
             }
             if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
                     (
                         arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
-                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression, slotType, memo)
+                    ) -> this.ReceiverTypeArgumentsAreDeclared(arm.Expression, slotType, activeMemo)
                 )
             }
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
-                return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull, slotType, memo)
+                return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull, slotType, activeMemo)
             }
             if unwrapped is Microsoft
                 .CodeAnalysis
@@ -3879,7 +3881,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(innerElementAccess)
                 .Symbol == nil {
-                return this.ReceiverTypeArgumentsAreDeclared(innerElementAccess.Expression, slotType, memo)
+                return this.ReceiverTypeArgumentsAreDeclared(innerElementAccess.Expression, slotType, activeMemo)
             }
             if unwrapped is BaseObjectCreationExpressionSyntax creation {
                 let createdType = this.context.GetTypeInfo(creation).Type
@@ -3921,27 +3923,31 @@ partial class CSharpToGSharpTranslator {
                         )
                         default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
                     }
-                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver, projectedDeclaredReturn)
+                    return this.ReceiverTypeArgumentsAreDeclared(
+                        invocationReceiver,
+                        projectedDeclaredReturn,
+                        activeMemo
+                    )
                 }
                 return true
             }
             let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
             return switch symbol {
                 case namedType is INamedTypeSymbol: !this.ReceiverTargetContainsTypeParameter(namedType, slotType)
-                case local is ILocalSymbol: this.LocalReceiverTypeArgumentsAreDeclared(local, slotType, memo)
+                case local is ILocalSymbol: this.LocalReceiverTypeArgumentsAreDeclared(local, slotType, activeMemo)
                 case field is IFieldSymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     field.OriginalDefinition.Type,
                     field.Type,
                     unwrapped,
                     slotType,
-                    memo
+                    activeMemo
                 )
                 case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
                     property.OriginalDefinition.Type,
                     property.Type,
                     unwrapped,
                     slotType,
-                    memo
+                    activeMemo
                 )
                 case parameter is IParameterSymbol: this.SlotTypeIsDeclared(parameter, unwrapped)
                 default: false
@@ -3951,9 +3957,9 @@ partial class CSharpToGSharpTranslator {
         private func LocalReceiverTypeArgumentsAreDeclared(
             local ILocalSymbol,
             slotType ITypeSymbol? = nil,
-            memo Dictionary[ILocalSymbol, bool]? = nil
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]? = nil
         ) bool {
-            if memo != nil && memo.TryGetValue(local, out var cached) {
+            if TryGetReceiverLocalMemo(memo, local, slotType, out var cached) {
                 return cached
             }
             if this.ReceiverTargetContainsTypeParameter(local.Type, slotType) {
@@ -3972,10 +3978,11 @@ partial class CSharpToGSharpTranslator {
             if declarator.Initializer?.Value is not{} initializer {
                 return false
             }
-            let activeMemo = memo ?? Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
-            activeMemo[local] = false
+            let activeMemo = memo ??
+                Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]](SymbolEqualityComparer.Default)
+            SetReceiverLocalMemo(activeMemo, local, slotType, false)
             let result = this.ReceiverTypeArgumentsAreDeclared(initializer, slotType, activeMemo)
-            activeMemo[local] = result
+            SetReceiverLocalMemo(activeMemo, local, slotType, result)
             return result
         }
 
@@ -3984,7 +3991,7 @@ partial class CSharpToGSharpTranslator {
             constructedType ITypeSymbol?,
             memberAccessSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             slotType ITypeSymbol? = nil,
-            memo Dictionary[ILocalSymbol, bool]? = nil
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]? = nil
         ) bool {
             if this.ReceiverTargetContainsTypeParameter(constructedType, slotType) {
                 return false
@@ -4002,7 +4009,48 @@ partial class CSharpToGSharpTranslator {
                 )
                 default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }
-            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver, projectedDeclared)
+            let activeMemo = memo ??
+                Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]](SymbolEqualityComparer.Default)
+            return this.ReceiverTypeArgumentsAreDeclared(containingReceiver, projectedDeclared, activeMemo)
+        }
+
+        private func TryGetReceiverLocalMemo(
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]?,
+            local ILocalSymbol,
+            slotType ITypeSymbol?,
+            out result bool
+        ) bool {
+            result = false
+            if memo == nil || !memo.TryGetValue(local, out var entries) {
+                return false
+            }
+            for entry in entries {
+                if SymbolEqualityComparer.Default.Equals(entry.Slot, slotType) {
+                    result = entry.Result
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func SetReceiverLocalMemo(
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]],
+            local ILocalSymbol,
+            slotType ITypeSymbol?,
+            result bool
+        ) {
+            if !memo.TryGetValue(local, out var entries) {
+                entries = List[(Slot ITypeSymbol?, Result bool)]()
+                memo[local] = entries
+            } else {
+                for var i = 0; i < entries.Count; i++ {
+                    if SymbolEqualityComparer.Default.Equals(entries[i].Slot, slotType) {
+                        entries[i] = (slotType, result)
+                        return
+                    }
+                }
+            }
+            entries.Add((slotType, result))
         }
 
         private func ReceiverTargetContainsTypeParameter(
@@ -4627,12 +4675,7 @@ partial class CSharpToGSharpTranslator {
             let localStatements = List[GStatement]()
             if !(translated is IdentifierExpression) {
                 let tempName = this.FreshTupleValueName(value)
-                let decl = LocalDeclarationStatement(BindingKind.Let, tempName, initializer: translated)
-                if this.state.PendingSpillPrologue != nil {
-                    this.state.PendingSpillPrologue!!.Add(decl)
-                } else {
-                    localStatements.Add(decl)
-                }
+                localStatements.Add(LocalDeclarationStatement(BindingKind.Let, tempName, initializer: translated))
                 tupleReceiver = IdentifierExpression(tempName)
             }
             let rebuilt = this.BuildBridgedTupleLiteral(value, tupleReceiver, targetTuple, List[int32](), targetSymbol)

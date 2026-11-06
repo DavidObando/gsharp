@@ -322,6 +322,8 @@ namespace Demo
         public T Value;
         public Func<T> Read;
         public Func<T> ReadProp { get; set; }
+        public Box<T> Next => this;
+        public Box<T> NextCall() => this;
         public int Use(Func<T> read) => read() == null ? 1 : 2;
         public static T ReadStatic(Func<T> read) => read();
     }
@@ -383,7 +385,7 @@ namespace Demo
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
         static int ReadExpandedParamsFixedReturn() => ReadParams(1, x => Volatile.Read(ref full!)).Count;
         static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
-        static int UseTupleLocalResult() { var pair = (Volatile.Read(ref full!), 0); Func<(Dictionary<string, int>, int)> read = () => pair; Func<(Dictionary<string, int>, int)> readCall = () => Id(pair); Func<(Dictionary<string, int>, int)> readLiteral = () => (Volatile.Read(ref full!), 0); return read().Item1.Count + readCall().Item1.Count + readLiteral().Item1.Count; }
+        static int UseTupleLocalResult() { var order = 0; int Tick() => ++order; (Dictionary<string, int>, int) Step((Dictionary<string, int>, int) p) { order = order * 10 + 2; return p; } var pair = (Volatile.Read(ref full!), 0); Func<(Dictionary<string, int>, int)> read = () => pair; Func<(Dictionary<string, int>, int)> readCall = () => Id(pair); Func<(int, (Dictionary<string, int>, int))> readOrder = () => (Tick(), Step(pair)); Func<bool, (Dictionary<string, int>, int)> readBranch = flag => flag ? (new Dictionary<string, int> { ["a"] = 1 }, 0) : Step(pair); Func<(Dictionary<string, int>, int)> readLiteral = () => (Volatile.Read(ref full!), 0); var ordered = readOrder(); var branched = readBranch(true); return read().Item1.Count + readCall().Item1.Count + readLiteral().Item1.Count + ordered.Item2.Item1.Count + branched.Item1.Count + order; }
         static int UseInheritedOnClosedBase() => new Closed(Volatile.Read(ref full!)).UseInherited();
         static bool InferredCollectionAdd() => new Bag { () => Volatile.Read(ref cache!) }.LastWasNull;
         static int DeclaredCollectionAdd() => new List<Func<Dictionary<string, int>>> { () => Volatile.Read(ref full!) }[0]().Count;
@@ -393,7 +395,7 @@ namespace Demo
         static int UseConditional(Box<Dictionary<string, int>>? b) => b?.Use(() => Volatile.Read(ref full!)) ?? 0;
         static int UseHolderField(Holder<Dictionary<string, int>> h) => h.Box.Use(() => Volatile.Read(ref full!));
         static int UseCastReceiver(object o) => ((Box<Dictionary<string, int>>)o).Use(() => Volatile.Read(ref full!));
-        static int UseTernaryReceiver(bool flag, Box<Dictionary<string, int>> a, Box<Dictionary<string, int>> b) { var chosen = flag ? a : b; var chosen2 = flag ? chosen : chosen; var chosen3 = flag ? chosen2 : chosen2; var inferredChosen = flag ? Wrap(Volatile.Read(ref cache!)) : Wrap(Volatile.Read(ref cache!)); return (flag ? a : b).Use(() => Volatile.Read(ref full!)) + chosen3.Use(() => Volatile.Read(ref full!)) + inferredChosen.Use(() => Volatile.Read(ref cache!)); }
+        static int UseTernaryReceiver(bool flag, Box<Dictionary<string, int>> a, Box<Dictionary<string, int>> b) { var chosen = flag ? a : b; var chosen2 = flag ? chosen.Next : chosen.Next; var chosen3 = flag ? chosen2.NextCall() : chosen2.NextCall(); var inferredChosen = flag ? Wrap(Volatile.Read(ref cache!)) : Wrap(Volatile.Read(ref cache!)); return (flag ? a : b).Use(() => Volatile.Read(ref full!)) + chosen3.Use(() => Volatile.Read(ref full!)) + inferredChosen.Use(() => Volatile.Read(ref cache!)); }
         static int CastInitializer() { var read = (Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!)); Func<Dictionary<string, int>> checkedRead = () => (checked(Volatile.Read(ref full!))); Func<Dictionary<string, int>> uncheckedRead = () => (unchecked(Volatile.Read(ref full!))); return read().Count + checkedRead().Count + uncheckedRead().Count; }
         static int AssignGenericMember(Box<Dictionary<string, int>> b) { b.Read = () => Volatile.Read(ref full!); b.ReadProp = () => Volatile.Read(ref full!); return b.Read().Count + b.ReadProp().Count; }
         static bool AssignInferredGenericMember() { var b = Wrap(Volatile.Read(ref cache!)); b.Read = () => Volatile.Read(ref cache!); return b.Read() == null; }
@@ -489,7 +491,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 3 2 3 1 2 True 1 1 1 2 2 2 2 5 3 2 True 1 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 17 2 3 1 2 True 1 1 1 2 2 2 2 5 3 2 True 1 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer
