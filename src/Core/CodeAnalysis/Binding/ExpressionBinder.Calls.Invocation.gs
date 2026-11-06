@@ -407,11 +407,7 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 let paramType = candidate.Parameters[paramPos].Type
-                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    paramType,
-                    out var fn
-                ) ||
-                    fn == nil {
+                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var fn) || fn == nil {
                     continue
                 }
                 isExpressionTreeTarget |= MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _)
