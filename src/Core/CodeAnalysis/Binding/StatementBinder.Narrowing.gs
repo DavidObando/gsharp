@@ -4712,8 +4712,10 @@ internal partial class StatementBinder {
                 return
             }
             let isStableSystemIndexOp = StatementBinder.IsStableSystemIndexOperation(node)
+            // ADR-0208 R20 and R21 (#5796, #5786): a source property or field write is classified below.
             if !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
-                node is not BoundPropertyAssignmentExpression {
+                node is not BoundPropertyAssignmentExpression &&
+                node is not BoundFieldAssignmentExpression {
                 MayMutateMemberPaths = true
                 if node is not BoundFieldAssignmentExpression {
                     MayMutateImplicitMembers = true
@@ -4733,7 +4735,10 @@ internal partial class StatementBinder {
             let sourcePropertyRunsUserCode = StatementBinder.SourcePropertyAccessRunsUserCode(node)
             let writesStableAutoProperty = node is BoundPropertyAssignmentExpression propAssign &&
                 (!propAssign.Property.HasSetter || propAssign.Property.IsInitOnly)
-            if sourcePropertyRunsUserCode || writesStableAutoProperty {
+            // ADR-0208 R21 (#5786): a write of a `var` field stores no link of a stable path
+            // (SmartCastStability.IsStableField). A constructor write of a `let` field can store a link.
+            let writesStableField = node is BoundFieldAssignmentExpression fieldAssign && fieldAssign.Field.IsReadOnly
+            if sourcePropertyRunsUserCode || writesStableAutoProperty || writesStableField {
                 MayMutateMemberPaths = true
                 if sourcePropertyRunsUserCode {
                     MayMutateImplicitMembers = true
@@ -4741,7 +4746,10 @@ internal partial class StatementBinder {
             }
             if StatementBinder.IsMemberStorageWriteExpression(node.Kind) &&
                 (
-                node is not BoundPropertyAssignmentExpression || sourcePropertyRunsUserCode || writesStableAutoProperty
+                (node is not BoundPropertyAssignmentExpression && node is not BoundFieldAssignmentExpression) ||
+                    sourcePropertyRunsUserCode ||
+                    writesStableAutoProperty ||
+                    writesStableField
             ) {
                 HasMemberStorageWrite = true
             }

@@ -292,9 +292,9 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 
 
 
-## Row R20 (#5796, #5827): member writes and by-reference roots
+## Rows R20 and R21 (#5796, #5827, #5786): member writes and by-reference roots
 
-[#5827](https://github.com/DavidObando/gsharp/issues/5827): a source auto-property write that runs no user code keeps the facts on member paths (#5796), except on the member paths of a by-reference root whose storage the written location can hold (`StatementBinder.StorageWriteMayOverwriteRoot`). The rows are pinned by `Issue5827ValueTypeWriteOverByReferenceRootTests` (run output or diagnostic line) and its mutant witness.
+[#5827](https://github.com/DavidObando/gsharp/issues/5827): a source auto-property write that runs no user code keeps the facts on member paths (#5796), except on the member paths of a by-reference root whose storage the written location can hold (`StatementBinder.StorageWriteMayOverwriteRoot`). Row R21 (#5786) extends the property rule to writes of fields that are not `let` (rows w9 to w12). The rows are pinned by `Issue5827ValueTypeWriteOverByReferenceRootTests`, `Issue5786FieldWriteStableMemberPathTests` and `Issue1180SmartCastMembersBinderTests` (run output or diagnostic line) and their mutant witnesses.
 
 | Probe | Shape | 0.5.460 | After #5796 | Result now |
 | --- | --- | --- | --- | --- |
@@ -306,3 +306,7 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | w6 | w2 with the write in `if c { h.Tok = fresh }` before the read | rejected (`GS0158`) | accepted, throws `NullReferenceException` | rejected (`GS0158`) |
 | w7 | struct `this`, `h.Name = "x"` (`string?`), `h.Next = h` (a class) or `h.Count = 4` (`int32`) before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
 | w8 | class `this` (not a by-reference root), `h.Tok = fresh` or `h.Pair = pair` before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
+| w9 | `class Box { var Other int32 let Pet Animal }`, `if b.Pet !is Dog { return "" }; b.Other = 1; return b.Pet.Bark()` (R21) | rejected (`GS0159`) | rejected (`GS0159`) | accepted, prints `woof` |
+| w10 | w1 with `var A bool` and `var B bool` fields instead of auto properties, bare or through `this` (R21) | rejected (`GS0158`) | rejected (`GS0158`) | accepted, runs |
+| w11 | `init(first Owner, second Owner?) { this.owner = first; if owner != nil { this.owner = second; owner.A = true } }` (R21, a `let` link) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
+| w12 | w2 with `var tok Token` in `Holder`, `tok.Restore(this, ...)` and `h.tok = fresh` (R20 over R21) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
