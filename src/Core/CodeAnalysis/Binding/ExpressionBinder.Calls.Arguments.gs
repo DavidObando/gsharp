@@ -320,6 +320,109 @@ internal partial class ExpressionBinder {
         return nil
     }
 
+    private var activePreCallArgumentsNarrowing StatementBinder.NarrowingBindSnapshot?
+
+    private func ApplyCallableMemberNarrowing(load BoundExpression) BoundExpression {
+        if activePreCallArgumentsNarrowing is not{} saved {
+            return ApplyMemberNarrowing(load)
+        }
+        let current = CaptureNarrowingBindSnapshot()
+        RestoreNarrowingBindSnapshot(saved)
+        let narrowed = ApplyMemberNarrowing(load)
+        RestoreNarrowingBindSnapshot(current)
+        return narrowed
+    }
+
+    internal func ApplyPreArgumentsCallablePropertyEffects(
+        receiver BoundExpression?,
+        ownerType TypeSymbol?,
+        classSymbol ImportedClassSymbol?,
+        methodName string,
+        ce CallExpressionSyntax,
+        isStatic bool
+    ) {
+        if ownerType is {} nonNullOwner && (nonNullOwner is StructSymbol or InterfaceSymbol) {
+            let query = if isStatic {
+                MemberQuery.Static(MemberKinds.Method)
+            } else {
+                MemberQuery.Instance(MemberKinds.Method)
+            }
+            if !TypeMemberModel.GetMethods(nonNullOwner, methodName, query).IsDefaultOrEmpty {
+                return
+            }
+            var property PropertySymbol? = nil
+            var declaringOwner TypeSymbol? = nil
+            var foundProperty = false
+            if isStatic {
+                if nonNullOwner is StructSymbol staticStruct {
+                    foundProperty = TypeMemberModel.TryGetStaticPropertyIncludingInherited(
+                        staticStruct,
+                        methodName,
+                        out property,
+                        out var declaringStruct
+                    )
+                    declaringOwner = declaringStruct
+                } else if nonNullOwner is InterfaceSymbol staticIface {
+                    let propOwner = staticIface.Definition ?? staticIface
+                    property = propOwner.Properties.FirstOrDefault(
+                        (candidate PropertySymbol) -> candidate.IsStatic &&
+                            !candidate.IsIndexer &&
+                            candidate.Name == methodName &&
+                            candidate.HasGetter &&
+                            candidate.GetterSymbol != nil
+                    )
+                    foundProperty = property != nil
+                    declaringOwner = propOwner
+                }
+            } else {
+                foundProperty = TypeMemberModel.TryGetPropertyWithOwner(
+                    nonNullOwner,
+                    methodName,
+                    out property,
+                    out declaringOwner
+                )
+            }
+            if foundProperty && property is {} matchedProp && matchedProp.HasGetter {
+                let propAccess = BoundPropertyAccessExpression(
+                    ce.Identifier,
+                    receiver,
+                    declaringOwner as StructSymbol,
+                    matchedProp,
+                    matchedProp.Type,
+                    narrowedType: nil,
+                    interfaceType: declaringOwner as InterfaceSymbol
+                )
+                ApplySubExpressionNarrowingEffects(ce.Identifier, propAccess)
+            }
+            return
+        }
+        let clrType = if isStatic {
+            classSymbol?.ClassType
+        } else {
+            ownerType?.ClrType
+        }
+        if clrType == nil {
+            return
+        }
+        let flags = BindingFlags.Public | (
+            if isStatic {
+                BindingFlags.Static
+            } else {
+                BindingFlags.Instance
+            }
+        )
+        if ClrTypeUtilities.SafeGetMethods(clrType, flags).Any((m MethodInfo) -> m.Name == methodName) {
+            return
+        }
+        if ClrTypeUtilities.SafeGetProperty(clrType, methodName, flags) is PropertyInfo prop &&
+            prop
+            .GetIndexParameters().Length == 0 && prop.CanRead {
+            let propType = MemberLookup.GetClrMemberValueTypeSymbol(prop)
+            let clrAccess = BoundClrPropertyAccessExpression(ce.Identifier, receiver, prop, propType)
+            ApplySubExpressionNarrowingEffects(ce.Identifier, clrAccess)
+        }
+    }
+
     private func TryBindUserCallableMemberInvocation(
         receiver BoundExpression?,
         receiverType TypeSymbol,
@@ -476,7 +579,7 @@ internal partial class ExpressionBinder {
         } else {
             return false
         }
-        memberLoad = ApplyMemberNarrowing(memberLoad)
+        memberLoad = ApplyCallableMemberNarrowing(memberLoad)
         let effectiveMemberType = switch memberLoad {
             case BoundFieldAccessExpression{NarrowedType: TypeSymbol narrowedField}: narrowedField
             case BoundPropertyAccessExpression{NarrowedType: TypeSymbol narrowedProperty}: narrowedProperty
@@ -842,7 +945,7 @@ internal partial class ExpressionBinder {
             return false
         }
         let memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member)
-        var delegateLoad = ApplyMemberNarrowing(
+        var delegateLoad = ApplyCallableMemberNarrowing(
             BoundClrPropertyAccessExpression(nil, receiver, member, memberTypeSymbol)
         )
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
@@ -967,7 +1070,9 @@ internal partial class ExpressionBinder {
             return false
         }
         let memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member!!)
-        var delegateLoad = ApplyMemberNarrowing(BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol))
+        var delegateLoad = ApplyCallableMemberNarrowing(
+            BoundClrPropertyAccessExpression(nil, nil, member!!, memberTypeSymbol)
+        )
         if !ClrTypeUtilities.IsDelegateType(memberClrType) {
             // Static imports have the same Member[index](args) ambiguity as
             // instance members; reuse their index recovery before Invoke.

@@ -1646,6 +1646,15 @@ internal partial class ExpressionBinder {
         if receiver != nil {
             ApplySubExpressionNarrowingEffects(receiverSyntax ?? receiver.Syntax, receiver)
         }
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        ApplyPreArgumentsCallablePropertyEffects(
+            receiver,
+            receiver?.Type,
+            classSymbol,
+            methodName,
+            ce,
+            isStatic: receiver == nil
+        )
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         let deferredArrowLambdaIndices = List[int32]()
         var delegateTargetCandidateParams List[[]ParameterInfo]? = nil
@@ -1887,20 +1896,10 @@ internal partial class ExpressionBinder {
         }
         let initialArguments = boundArguments.ToImmutable()
         let overloadDiagMark = Diagnostics.Count
-        var result = BindAccessorCallCore(
-            receiver,
-            classSymbol,
-            methodName,
-            ce,
-            explicitTypeArgs,
-            typeArgSymbols,
-            argumentNames,
-            initialArguments,
-            receiverSyntax,
-            receiverStart
-        )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+        let prevPreArgsNarrowing = activePreCallArgumentsNarrowing
+        activePreCallArgumentsNarrowing = preArgumentsNarrowing
+        var result BoundExpression
+        try {
             result = BindAccessorCallCore(
                 receiver,
                 classSymbol,
@@ -1909,10 +1908,27 @@ internal partial class ExpressionBinder {
                 explicitTypeArgs,
                 typeArgSymbols,
                 argumentNames,
-                refreshedArguments,
+                initialArguments,
                 receiverSyntax,
                 receiverStart
             )
+            if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+                result = BindAccessorCallCore(
+                    receiver,
+                    classSymbol,
+                    methodName,
+                    ce,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames,
+                    refreshedArguments,
+                    receiverSyntax,
+                    receiverStart
+                )
+            }
+        } finally {
+            activePreCallArgumentsNarrowing = prevPreArgsNarrowing
         }
         return result
     }

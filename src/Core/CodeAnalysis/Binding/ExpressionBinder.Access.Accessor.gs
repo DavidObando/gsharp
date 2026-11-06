@@ -3622,6 +3622,15 @@ internal partial class ExpressionBinder {
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
+        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        ApplyPreArgumentsCallablePropertyEffects(
+            receiver: nil,
+            ownerType,
+            classSymbol: nil,
+            methodName,
+            ce,
+            isStatic: true
+        )
         let boundArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         var deferredStaticLambdaIndices List[int32]? = nil
         var staticArgIndex = 0
@@ -3655,18 +3664,10 @@ internal partial class ExpressionBinder {
         }
         let initialArguments = boundArguments.ToImmutable()
         let overloadDiagMark = Diagnostics.Count
-        var result = BindUserTypeStaticCallAfterArguments(
-            ownerType,
-            structSym,
-            ifaceSym,
-            methodName,
-            ce,
-            argumentNames,
-            initialArguments,
-            deferredStaticLambdaIndices
-        )
-        if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
-            Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+        let prevPreArgsNarrowing = activePreCallArgumentsNarrowing
+        activePreCallArgumentsNarrowing = preArgumentsNarrowing
+        var result BoundExpression
+        try {
             result = BindUserTypeStaticCallAfterArguments(
                 ownerType,
                 structSym,
@@ -3674,9 +3675,24 @@ internal partial class ExpressionBinder {
                 methodName,
                 ce,
                 argumentNames,
-                refreshedArguments,
+                initialArguments,
                 deferredStaticLambdaIndices
             )
+            if conversions.TryRefreshReboundArguments(initialArguments, out var refreshedArguments) {
+                Diagnostics.TruncateNonReboundSince(overloadDiagMark)
+                result = BindUserTypeStaticCallAfterArguments(
+                    ownerType,
+                    structSym,
+                    ifaceSym,
+                    methodName,
+                    ce,
+                    argumentNames,
+                    refreshedArguments,
+                    deferredStaticLambdaIndices
+                )
+            }
+        } finally {
+            activePreCallArgumentsNarrowing = prevPreArgsNarrowing
         }
         return result
     }

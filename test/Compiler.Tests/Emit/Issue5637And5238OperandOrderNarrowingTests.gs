@@ -1760,6 +1760,22 @@ func Run(s string?) int32 {
     return Step() + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + s.Length
 }
 Console.WriteLine(Run("abcd"))`, "", "run", "15"}
+            yield[]object{"r87_5637_qualified_callable_member_invocation_uses_pre_argument_narrowing", `import System
+
+class Src { prop N int32 -> 7 }
+class Inner {
+    let H Action[Src]?
+    init(h Action[Src]?) { H = h }
+}
+class Outer {
+    let B Inner
+    init(b Inner) { B = b }
+}
+let write Action[Src] = (s Src) -> Console.WriteLine(s.N)
+let outer = Outer(Inner(write))
+if outer.B.H != nil {
+    outer.B.H(Src())
+}`, "", "run", "7"}
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {
