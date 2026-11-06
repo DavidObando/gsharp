@@ -568,7 +568,13 @@ class ByteStringRuntimeTests {
     @Fact
     func WarmLiteralFactoriesAndValueIterationAllocateNoByteBuffers() {
         let key = "0041FF"
-        ByteString.FromLiteral(key)
+        var warmupChecksum = 0
+        for var warmup = 0; warmup < 100; warmup++ {
+            for value in ByteString.FromLiteral(key) {
+                warmupChecksum += value
+            }
+        }
+        Assert.Equal(32_000, warmupChecksum)
         var checksum = 0
         let before = GC.GetAllocatedBytesForCurrentThread()
         for var i = 0; i < 10_000; i++ {
