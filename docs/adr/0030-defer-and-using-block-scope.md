@@ -15,6 +15,16 @@ Add `defer call(arg1, arg2, …)` as a statement. The operand must bind to a cal
 
 Deferred call arguments are evaluated eagerly when the `defer` statement executes. Binding synthesizes immutable locals using names with the `$defer$arg$` prefix, initializes each local from the corresponding argument expression at the defer point, and substitutes those locals into the call that runs later.
 
+The function value or receiver is evaluated before the arguments, at the `defer` statement.
+A reference-type receiver and a value-type rvalue are captured by value.
+A value-type storage receiver keeps its location instead of copying its value (issue #5707).
+For a field chain, binding captures the reference-type owner eagerly and preserves the remaining value-type field accesses.
+For an array element, binding captures the array and indices eagerly and preserves the element access.
+Locals, parameters, `ref` aliases, globals, and static fields keep their storage.
+Binding probes the location before evaluating arguments, so an invalid location fails at the `defer` statement.
+An unconstrained generic receiver captures reference-type instantiations by value and preserves value-type storage.
+The deferred method body runs only at block exit; only the eager operands affect narrowing at the `defer` statement.
+
 `defer` is block-scoped and LIFO. A `defer` runs when the enclosing block exits normally or exceptionally. Multiple `defer` statements in the same block lower to nested `try/finally` statements so later source declarations execute first at exit.
 
 `using` declarations share the same block cleanup lowering. `using let x = expr` binds the declaration at the point it appears, then wraps the remaining statements in the enclosing block in `try/finally` with `x.Dispose()` in the `finally`. Interleaved `defer` and `using` declarations compose as one LIFO cleanup stack.

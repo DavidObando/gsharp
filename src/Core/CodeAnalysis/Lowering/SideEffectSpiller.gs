@@ -797,9 +797,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 snapshot
                 .Name
                 .StartsWith("$$go$$Generic$$", StringComparison.Ordinal) || snapshot.Name.StartsWith(
-                "$$postfix$$Generic$$",
+                "$$defer$$Generic$$",
                 StringComparison.Ordinal
-            )
+            ) ||
+                snapshot
+                .Name
+                .StartsWith("$$postfix$$Generic$$", StringComparison.Ordinal)
         )
 
         internal func CaptureRuntimeGenericStorageReceiver(
