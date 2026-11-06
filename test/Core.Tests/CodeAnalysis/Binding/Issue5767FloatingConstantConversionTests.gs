@@ -136,8 +136,8 @@ open class Issue5767FloatingConstantConversionTests {
     /// A `const` local keeps its folded conversion when a later emit pass moves the local: across an `await` or
     /// a `yield` into a state-machine field, and into a box cell when a function literal or an expression tree
     /// captures it. This includes a function literal in an instance or static field initializer, a base
-    /// constructor argument, and an interface static field. A capture in a static `init` block is #5797. On .NET 10, the runtime conversion of the moved value
-    /// gave 44 for each row.
+    /// constructor argument, an interface static field, and a static `init` block (#5797). On .NET 10, the
+    /// runtime conversion of the moved value gave 44 for each row.
     @Theory
     @InlineData(
         "import System.Threading.Tasks\nasync func F() Task[int8] {\n    const d float64 = 300.5\n    await Task.Yield()\n    return unchecked(int8(d))\n}\nF().Result",
@@ -169,6 +169,10 @@ open class Issue5767FloatingConstantConversionTests {
     )
     @InlineData(
         "import System\ninterface I {\n    shared {\n        let E int8 = Run(() -> {\n            const d float64 = 300.5\n            let g = () -> unchecked(int8(d))\n            return g()\n        })\n        func Run(f Func[int8]) int8 {\n            return f()\n        }\n    }\n}\nI.E",
+        "127"
+    )
+    @InlineData(
+        "class K {\n    shared {\n        var S int8 = 0\n        init {\n            const d float64 = 300.5\n            let g = () -> unchecked(int8(d))\n            S = g()\n        }\n    }\n}\nK.S",
         "127"
     )
     func MovedConstLocalConversion_EmitsFoldedValue(source string, expected string) {
