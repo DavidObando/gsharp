@@ -376,7 +376,7 @@ public static class Consumer
                 let csDirectory = Path.Combine(directory, "csref")
                 Directory.CreateDirectory(csDirectory)
                 File.WriteAllText(Path.Combine(csDirectory, "Lib.cs"), csSource)
-                File.WriteAllText(Path.Combine(csDirectory, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
+                DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(Path.Combine(csDirectory, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>

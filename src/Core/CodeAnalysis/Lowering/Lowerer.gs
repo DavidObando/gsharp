@@ -506,7 +506,14 @@ class Lowerer : BoundTreeRewriter {
         // }
         let stream = RewriteExpression(node.Stream)
         let body = RewriteStatement(node.Body)
-        let lowered = LowerAwaitForRange(node.ValueVariable, stream, body, node.BreakLabel, node.ContinueLabel)
+        let lowered = LowerAwaitForRange(
+            node.Syntax,
+            node.ValueVariable,
+            stream,
+            body,
+            node.BreakLabel,
+            node.ContinueLabel
+        )
         return RewriteStatement(lowered)
     }
 
@@ -615,6 +622,7 @@ class Lowerer : BoundTreeRewriter {
     }
 
     private func LowerAwaitForRange(
+        syntax SyntaxNode?,
         valueVariable VariableSymbol,
         stream BoundExpression,
         body BoundStatement,
@@ -853,7 +861,7 @@ class Lowerer : BoundTreeRewriter {
             valueTaskBoolType,
             ImmutableArray[BoundExpression].Empty
         )
-        let moveNextAwait = BoundAwaitExpression(nil, moveNextCall, TypeSymbol.Bool)
+        let moveNextAwait = BoundAwaitExpression(syntax, moveNextCall, TypeSymbol.Bool)
         let moreDecl = BoundVariableDeclaration(nil, moreSymbol, moveNextAwait)
         let currentAccess = BoundClrPropertyAccessExpression(nil, enumeratorExpr, currentMember, currentType)
         // The iteration binding is a fresh lexical local on every pass.
@@ -884,7 +892,7 @@ class Lowerer : BoundTreeRewriter {
             valueTaskType,
             ImmutableArray[BoundExpression].Empty
         )
-        let disposeAwait = BoundAwaitExpression(nil, disposeCall, TypeSymbol.Void)
+        let disposeAwait = BoundAwaitExpression(syntax, disposeCall, TypeSymbol.Void)
         let finallyBlock = BoundBlockStatement(
             nil,
             ImmutableArray.Create[BoundStatement](BoundExpressionStatement(nil, disposeAwait))

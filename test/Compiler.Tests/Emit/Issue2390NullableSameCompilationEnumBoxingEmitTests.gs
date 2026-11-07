@@ -221,7 +221,7 @@ stderr:
         private func CompileCsReference(source string, assemblyName string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_2390_ref_").FullName
             File.WriteAllText(Path.Combine(tempDir, "Lib.cs"), source)
-            File.WriteAllText(Path.Combine(tempDir, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
+            DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(Path.Combine(tempDir, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>` + "$assemblyName" + `</AssemblyName>

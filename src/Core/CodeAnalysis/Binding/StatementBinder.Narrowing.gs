@@ -2740,7 +2740,7 @@ internal partial class StatementBinder {
                 (
                 FilterWritesVariable(filterWrites, path.Root) ||
                     MayBeMutatedByUnknownCallable(
-                    if path.HasMembers && !IsExternalStorageAlias(path.Root) {
+                    if path.HasMembers && !IsExternalStorageAlias(path.Root) && HasSeparateMemberPathLinks(path) {
                         rootPath
                     } else {
                         path
@@ -2768,12 +2768,13 @@ internal partial class StatementBinder {
         }
     }
 
-    // ADR-0208 R5, R12, R20 and R21 (#5832): the one rule for a fact on a member path whose root names no external
-    // storage, at an operand of a condition. Its links are stable, so a call replaces the fact only by replacing the
-    // root. A member write that is not separate (a type with explicit layout, an imported type, a `let` link, an
-    // index, indirect or imported write: `HasMemberStorageWrite`) or a separate write through another
+    // ADR-0208 R5, R12, R20 and R21 (#5832, #5843): the one rule for a fact on a member path whose root names no
+    // external storage, at an operand of a condition. Its links are stable, so a call replaces the fact only by
+    // replacing the root or when a link is declared in a type with explicit or unknown layout, where another field can
+    // share the link's storage. A member write that is not separate (a type with explicit layout, an imported type, a
+    // `let` link, an index, indirect or imported write: `HasMemberStorageWrite`) or a separate write through another
     // by-reference root (`ByReferenceWritesReach`) can store into a link, as in a statement (`StatementKillsPath`).
-    private func OperandKillsStableMemberPath(
+    internal func OperandKillsStableMemberPath(
         collector AssignedRootsCollector,
         path AccessPath,
         syntaxMutatesMembers bool
@@ -2783,7 +2784,10 @@ internal partial class StatementBinder {
             path
         ) ||
             MayBeMutatedByUnknownWrite(collector, rootPath) ||
-            ((syntaxMutatesMembers || collector.MayMutateMemberPaths) && MayBeMutatedByUnknownCallable(rootPath))
+            (
+            (syntaxMutatesMembers || collector.MayMutateMemberPaths) &&
+                (MayBeMutatedByUnknownCallable(rootPath) || !HasSeparateMemberPathLinks(path))
+        )
     }
 
     // An unknown callable can reach a member path, a global or an implicit
@@ -9441,6 +9445,46 @@ internal partial class StatementBinder {
                 !clr.IsArray &&
                 !clr.IsByRef &&
                 !clr.IsPointer
+        }
+
+        // ADR-0208 R5 (#5843): whether every link of [`path`](paramref) is declared in a type whose layout is known
+        // not to be explicit. In a type with explicit layout, a `let` field can share storage with a `var` field.
+        internal func HasSeparateMemberPathLinks(path AccessPath) bool {
+            if !path.HasMembers {
+                return true
+            }
+            for member in path.Members {
+                if !IsSeparateMemberPathLink(member) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsSeparateMemberPathLink(member PathMember) bool -> switch member.SourceSymbol {
+            case field is FieldSymbol: if field.ExplicitOffset != nil {
+                false
+            } else if field.ImportedMember is FieldInfo importedField {
+                importedField.DeclaringType is Type declaringType && !declaringType.IsExplicitLayout
+            } else {
+                ((field.OriginalDefinition ?? field).ContainingType ?? field.ContainingType) is StructSymbol owner &&
+                    (owner.IsAnonymousLiteral || IsSeparateStorageOwner(owner))
+            }
+            case property is PropertySymbol: if property.ImportedMember is PropertyInfo importedProperty {
+                importedProperty.DeclaringType is Type declaringType && !declaringType.IsExplicitLayout
+            } else {
+                (
+                    property.BackingFieldDeclaringType ??
+                        ((property.OriginalDefinition ?? property).ContainingType ?? property.ContainingType) as
+                    StructSymbol ?? property.GetterSymbol?.ReceiverType as StructSymbol
+                ) is StructSymbol owner &&
+                    (owner.IsAnonymousLiteral || IsSeparateStorageOwner(owner))
+            }
+            default: switch member.ClrMember {
+                case clrMember is MemberInfo: clrMember.DeclaringType is Type declaringType &&
+                    !declaringType.IsExplicitLayout
+                default: false
+            }
         }
 
         /// ADR-0208 R20 and R21 (#5796, #5786, #5832): whether the source field or property write

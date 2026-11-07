@@ -885,9 +885,17 @@ shared class GSharpFormatter {
             return FormatResult(nil, ImmutableArray[TextEdit].Empty, validationDiagnostics, Changed: false)
         }
         let originalString = original.ToString()
-        if formatted == originalString {
+        if formatted.Replace("\r\n", "\n", StringComparison.Ordinal) == originalString.Replace(
+            "\r\n",
+            "\n",
+            StringComparison.Ordinal
+        ) {
             return FormatResult(
-                formattedText,
+                if span == nil {
+                    formattedText
+                } else {
+                    original
+                },
                 ImmutableArray[TextEdit].Empty,
                 ImmutableArray[Diagnostic].Empty,
                 Changed: false
