@@ -113,15 +113,22 @@ Console.WriteLine(ReadSelection(Environment.GetEnvironmentVariable("SELECTION"))
 enum Selection { None; Enabled; }
 
 func RunSwitchExpression(value string?) {
-  if value == "enabled" {
-    goto JumpIntoSwitchExprArm
-  }
   let selected = switch value {
-    case "guard" when throw ArgumentException("Guard failed"): {
+    case "enabled" when ({
+      goto JumpInsideGuard
+      throw ArgumentException("Guard failed")
+      JumpInsideGuard:
+      let _ = 0
+      true
+    }): {
       JumpIntoSwitchExprArm:
+      if false {
+        goto JumpIntoSwitchExprArm
+      }
       Console.Error.WriteLine("Selection: " + (value ?? "none"))
       Selection.Enabled
     }
+    case "guard" when throw ArgumentException("Guard failed"): Selection.None
     default: throw ArgumentException("Unknown selection")
   }
   Console.WriteLine("expr:" + selected.ToString())

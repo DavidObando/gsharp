@@ -1313,6 +1313,26 @@ public static class Use
             })
     }
 
+    /// Issue #5567: a coalesce whose right operand is a platform-typed element
+    /// read (`Node.Holes(p)[1] ?? Node.Lines(p)[0]`, nested jagged or generic
+    /// collection indexer reads) is already typed non-null by `gsc`, so cs2gs
+    /// omits the redundant outer `!!` (GS0536).
+    @Fact
+    func Coalesce_With_Platform_Typed_Element_Read_Omits_Redundant_Outer_Assertion() {
+        this.Check("Issue5567", `using ObLib;
+
+public static class Use
+{
+    public static int CoalStr(string p) { string s; s = Node.Holes(p)[1] ?? Node.Lines(p)[0]; return s.Length; }
+    public static int CoalJagged(string p) { string s; s = Node.Jagged(p)[0][1] ?? Node.Jagged(p)[0][0]; return s.Length; }
+    public static int CoalNested(string p) { string s; s = Node.Nested(p)[0][1] ?? Node.Nested(p)[0][0]; return s.Length; }
+}`, []string{
+                "s = Node.Holes(p)!![1] ?? Node.Lines(p)!![0]\n",
+                "s = Node.Jagged(p)!![0]!![1] ?? Node.Jagged(p)!![0]!![0]\n",
+                "s = Node.Nested(p)!![0]!![1] ?? Node.Nested(p)!![0]!![0]\n"
+            }, []string{"CoalStr", "2", "CoalJagged", "2", "CoalNested", "2"})
+    }
+
     // Translates the C#, checks the printed form, compiles and verifies the G#, and
     // compares each named method with the C# oracle and the expected result.
     private func Check(name string, source string, printedFragments[]string, expectations[]string) {

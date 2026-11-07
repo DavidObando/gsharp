@@ -19,6 +19,11 @@ import System.Reflection
 import System.Threading
 
 internal partial class StatementBinder {
+    internal prop HasInvalidUserGoto bool {
+        get;
+        private set;
+    }
+
     private func BindGotoStatement(syntax GotoStatementSyntax) BoundStatement {
         let labelName = syntax.LabelIdentifier.ValueText
         let labelDefined = binderCtx.DefinedUserLabels.Contains(labelName)
@@ -30,6 +35,9 @@ internal partial class StatementBinder {
         let label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location)
         userGotoHandlerRegions.Add(
             (labelName, syntax.LabelIdentifier.Location, exceptionHandlerRegions.Reverse().ToImmutableArray())
+        )
+        binderCtx.UserGotoBlockRegions.Add(
+            (labelName, syntax.LabelIdentifier.Location, GetEnclosingBlockExpressions(syntax))
         )
         return BoundGotoStatement(syntax, label)
     }
@@ -79,6 +87,7 @@ internal partial class StatementBinder {
         NoteSpeculativeLabelTouched(labelName)
         binderCtx.DefinedUserLabels.Add(labelName)
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray()
+        binderCtx.UserLabelBlockRegions[labelName] = GetEnclosingBlockExpressions(syntax)
         let wasReachable = currentStatementListFallsThrough
         let incomingJumps = JoinForwardJumpsAtLabel(labelName, currentStatementListFallsThrough)
         let hadIncomingForwardJump = incomingJumps != nil && incomingJumps.Count > 0
@@ -111,16 +120,29 @@ internal partial class StatementBinder {
     /// constructor/accessor body, or — for top-level statements — once after
     /// all global statements share the synthesized entry point's body).
     internal func FinalizeUserLabels() {
+        var hasInvalidGoto = false
         for entry in binderCtx.UnresolvedGotoLabels {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key)
+            hasInvalidGoto = true
         }
         for branch in userGotoHandlerRegions {
             if userLabelHandlerRegions.TryGetValue(branch.LabelName, out var targetRegions) &&
                 !IsHandlerRegionPrefix(targetRegions, branch.SourceRegions) {
                 Diagnostics.ReportGotoIntoExceptionHandler(branch.Location, branch.LabelName)
+                hasInvalidGoto = true
             }
         }
+        for branch in binderCtx.UserGotoBlockRegions {
+            if binderCtx.UserLabelBlockRegions.TryGetValue(branch.LabelName, out var targetRegions) &&
+                !IsHandlerRegionPrefix(targetRegions, branch.SourceRegions) {
+                Diagnostics.ReportGotoIntoNestedBlock(branch.Location, branch.LabelName)
+                hasInvalidGoto = true
+            }
+        }
+        HasInvalidUserGoto = hasInvalidGoto
         binderCtx.UnresolvedGotoLabels.Clear()
+        binderCtx.UserGotoBlockRegions.Clear()
+        binderCtx.UserLabelBlockRegions.Clear()
         binderCtx.NarrowingFlow.Clear()
         branchyArgumentEntries.Clear()
         boundStatementEntries.Clear()
@@ -336,6 +358,8 @@ internal partial class StatementBinder {
         internal let UnresolvedLocation TextLocation
         internal let HadHandlerRegions bool
         internal let HandlerRegions ImmutableArray[SyntaxNode]
+        internal let HadBlockRegions bool
+        internal let BlockRegions ImmutableArray[SyntaxNode]
         internal let PendingJumpCount int32
         internal var RemovedPreExisting bool
         internal var RemovedJumps[]?NarrowingJumpState
@@ -350,6 +374,8 @@ internal partial class StatementBinder {
             unresolvedLocation TextLocation,
             hadHandlerRegions bool,
             handlerRegions ImmutableArray[SyntaxNode],
+            hadBlockRegions bool,
+            blockRegions ImmutableArray[SyntaxNode],
             pendingJumpCount int32
         ) {
             LabelName = labelName
@@ -361,6 +387,8 @@ internal partial class StatementBinder {
             UnresolvedLocation = unresolvedLocation
             HadHandlerRegions = hadHandlerRegions
             HandlerRegions = handlerRegions
+            HadBlockRegions = hadBlockRegions
+            BlockRegions = blockRegions
             PendingJumpCount = pendingJumpCount
         }
     }
@@ -374,6 +402,8 @@ internal partial class StatementBinder {
         internal let UnresolvedLocation TextLocation
         internal let HadHandlerRegions bool
         internal let HandlerRegions ImmutableArray[SyntaxNode]
+        internal let HadBlockRegions bool
+        internal let BlockRegions ImmutableArray[SyntaxNode]
         internal let RemovedPreExisting bool
         internal let HadTargetList bool
         internal let AddedJumps[]?NarrowingJumpState
@@ -387,6 +417,8 @@ internal partial class StatementBinder {
             unresolvedLocation TextLocation,
             hadHandlerRegions bool,
             handlerRegions ImmutableArray[SyntaxNode],
+            hadBlockRegions bool,
+            blockRegions ImmutableArray[SyntaxNode],
             removedPreExisting bool,
             hadTargetList bool,
             addedJumps[]?NarrowingJumpState
@@ -399,6 +431,8 @@ internal partial class StatementBinder {
             UnresolvedLocation = unresolvedLocation
             HadHandlerRegions = hadHandlerRegions
             HandlerRegions = handlerRegions
+            HadBlockRegions = hadBlockRegions
+            BlockRegions = blockRegions
             RemovedPreExisting = removedPreExisting
             HadTargetList = hadTargetList
             AddedJumps = addedJumps
@@ -521,6 +555,8 @@ internal partial class StatementBinder {
                 default(TextLocation),
                 false,
                 default(ImmutableArray[SyntaxNode]),
+                false,
+                default(ImmutableArray[SyntaxNode]),
                 pendingJumpCount
             )
         }
@@ -528,6 +564,7 @@ internal partial class StatementBinder {
         let hadUserLabel = binderCtx.UserLabels.TryGetValue(labelName, out var userLabel)
         let hadUnresolved = binderCtx.UnresolvedGotoLabels.TryGetValue(labelName, out var unresolvedLocation)
         let hadHandlerRegions = userLabelHandlerRegions.TryGetValue(labelName, out var handlerRegions)
+        let hadBlockRegions = binderCtx.UserLabelBlockRegions.TryGetValue(labelName, out var blockRegions)
         return SpeculativeLabelSnapshot(
             labelName,
             previousSnapshotIndex,
@@ -538,6 +575,8 @@ internal partial class StatementBinder {
             unresolvedLocation,
             hadHandlerRegions,
             handlerRegions,
+            hadBlockRegions,
+            blockRegions,
             pendingJumpCount
         )
     }
@@ -562,6 +601,8 @@ internal partial class StatementBinder {
                 default(TextLocation),
                 false,
                 default(ImmutableArray[SyntaxNode]),
+                false,
+                default(ImmutableArray[SyntaxNode]),
                 beforeSnapshot.RemovedPreExisting,
                 currentCount >= 0,
                 addedJumps
@@ -571,6 +612,7 @@ internal partial class StatementBinder {
         let hadUserLabel = binderCtx.UserLabels.TryGetValue(labelName, out var userLabel)
         let hadUnresolved = binderCtx.UnresolvedGotoLabels.TryGetValue(labelName, out var unresolvedLocation)
         let hadHandlerRegions = userLabelHandlerRegions.TryGetValue(labelName, out var handlerRegions)
+        let hadBlockRegions = binderCtx.UserLabelBlockRegions.TryGetValue(labelName, out var blockRegions)
         return SpeculativeTargetLabelDelta(
             labelName,
             wasDefined,
@@ -580,6 +622,8 @@ internal partial class StatementBinder {
             unresolvedLocation,
             hadHandlerRegions,
             handlerRegions,
+            hadBlockRegions,
+            blockRegions,
             beforeSnapshot.RemovedPreExisting,
             currentCount >= 0,
             addedJumps
@@ -617,6 +661,11 @@ internal partial class StatementBinder {
         } else {
             userLabelHandlerRegions.Remove(labelName)
         }
+        if snapshot.HadBlockRegions {
+            binderCtx.UserLabelBlockRegions[labelName] = snapshot.BlockRegions
+        } else {
+            binderCtx.UserLabelBlockRegions.Remove(labelName)
+        }
     }
 
     private func ApplyTargetLabelDelta(delta SpeculativeTargetLabelDelta) {
@@ -652,6 +701,11 @@ internal partial class StatementBinder {
         } else {
             userLabelHandlerRegions.Remove(labelName)
         }
+        if delta.HadBlockRegions {
+            binderCtx.UserLabelBlockRegions[labelName] = delta.BlockRegions
+        } else {
+            binderCtx.UserLabelBlockRegions.Remove(labelName)
+        }
     }
 
     /// Issue #5569 / #5604: the binder state before a speculative return value binds, using watermarks for
@@ -671,6 +725,7 @@ internal partial class StatementBinder {
         internal let ActiveCleanupRegions[]?GotoCleanupRegion
         internal let LabelLogMark int32
         internal let GotoRegionCount int32
+        internal let GotoBlockRegionCount int32
         internal let FinallyLogMark int32
         internal let FinallySummaryLogMark int32
         internal let SpanEntryLogMark int32
@@ -692,6 +747,7 @@ internal partial class StatementBinder {
             activeCleanupRegions[]?GotoCleanupRegion,
             labelLogMark int32,
             gotoRegionCount int32,
+            gotoBlockRegionCount int32,
             finallyLogMark int32,
             finallySummaryLogMark int32,
             spanEntryLogMark int32,
@@ -710,6 +766,7 @@ internal partial class StatementBinder {
             ActiveCleanupRegions = activeCleanupRegions
             LabelLogMark = labelLogMark
             GotoRegionCount = gotoRegionCount
+            GotoBlockRegionCount = gotoBlockRegionCount
             FinallyLogMark = finallyLogMark
             FinallySummaryLogMark = finallySummaryLogMark
             SpanEntryLogMark = spanEntryLogMark
@@ -732,6 +789,11 @@ internal partial class StatementBinder {
             Location TextLocation,
             SourceRegions ImmutableArray[SyntaxNode]
         )
+        internal let AddedGotoBlockRegions[]?(
+            LabelName string,
+            Location TextLocation,
+            SourceRegions ImmutableArray[SyntaxNode]
+        )
         internal let AddedFinallyClauses[]?(
             Clause FinallyClauseSyntax,
             HadBlock bool,
@@ -748,6 +810,7 @@ internal partial class StatementBinder {
             targetLabels[]?SpeculativeTargetLabelDelta,
             targetUserLabels Dictionary[string, BoundLabel]?,
             addedGotoRegions[]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
+            addedGotoBlockRegions[]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]),
             addedFinallyClauses[]?(
                 Clause FinallyClauseSyntax,
                 HadBlock bool,
@@ -763,6 +826,7 @@ internal partial class StatementBinder {
             TargetLabels = targetLabels
             TargetUserLabels = targetUserLabels
             AddedGotoRegions = addedGotoRegions
+            AddedGotoBlockRegions = addedGotoBlockRegions
             AddedFinallyClauses = addedFinallyClauses
             AddedFinallySummaries = addedFinallySummaries
             AddedSpanEntries = addedSpanEntries
@@ -808,6 +872,7 @@ internal partial class StatementBinder {
         },
         speculativeLabelUndoLog.Count,
         userGotoHandlerRegions.Count,
+        binderCtx.UserGotoBlockRegions.Count,
         speculativeFinallyLog.Count,
         speculativeFinallySummaryLog.Count,
         speculativeSpanEntryLog.Count,
@@ -856,6 +921,17 @@ internal partial class StatementBinder {
                 SourceRegions ImmutableArray[SyntaxNode]
             )
             userGotoHandlerRegions.CopyTo(beforeValue.GotoRegionCount, slice, 0, slice.Length)
+            slice
+        } else {
+            default([]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]))
+        }
+        let addedGotoBlockRegions = if binderCtx.UserGotoBlockRegions.Count > beforeValue.GotoBlockRegionCount {
+            let slice = [binderCtx.UserGotoBlockRegions.Count - beforeValue.GotoBlockRegionCount](
+                LabelName string,
+                Location TextLocation,
+                SourceRegions ImmutableArray[SyntaxNode]
+            )
+            binderCtx.UserGotoBlockRegions.CopyTo(beforeValue.GotoBlockRegionCount, slice, 0, slice.Length)
             slice
         } else {
             default([]?(LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]))
@@ -923,6 +999,7 @@ internal partial class StatementBinder {
             targetLabels,
             targetUserLabels,
             addedGotoRegions,
+            addedGotoBlockRegions,
             addedFinallyClauses,
             addedFinallySummaries,
             addedSpanEntries,
@@ -981,6 +1058,12 @@ internal partial class StatementBinder {
             userGotoHandlerRegions.RemoveRange(
                 state.GotoRegionCount,
                 userGotoHandlerRegions.Count - state.GotoRegionCount
+            )
+        }
+        if binderCtx.UserGotoBlockRegions.Count > state.GotoBlockRegionCount {
+            binderCtx.UserGotoBlockRegions.RemoveRange(
+                state.GotoBlockRegionCount,
+                binderCtx.UserGotoBlockRegions.Count - state.GotoBlockRegionCount
             )
         }
         for var i = speculativeFinallyLog.Count - 1; i >= state.FinallyLogMark; i-- {
@@ -1066,6 +1149,12 @@ internal partial class StatementBinder {
         if addedGotoRegions != nil {
             for region in addedGotoRegions {
                 userGotoHandlerRegions.Add(region)
+            }
+        }
+        let addedGotoBlockRegions = afterTarget.AddedGotoBlockRegions
+        if addedGotoBlockRegions != nil {
+            for region in addedGotoBlockRegions {
+                binderCtx.UserGotoBlockRegions.Add(region)
             }
         }
         let addedFinallyClauses = afterTarget.AddedFinallyClauses
@@ -2638,7 +2727,7 @@ internal partial class StatementBinder {
             return node!!.GetChildren().Any(ContainsUserLabel)
         }
 
-        private func IsHandlerRegionPrefix(
+        internal func IsHandlerRegionPrefix(
             targetRegions ImmutableArray[SyntaxNode],
             sourceRegions ImmutableArray[SyntaxNode]
         ) bool {
@@ -2651,6 +2740,41 @@ internal partial class StatementBinder {
                 }
             }
             return true
+        }
+
+        // Issue #5588: records enclosing value-producing block expressions (`BlockExpressionSyntax`)
+        // within the current function/lambda frame. Ordinary statement blocks (`BlockStatementSyntax`)
+        // are lowered to method-level jump targets by `Lowerer` and are explicitly permitted by
+        // ADR-0213 §6/§10 (rules J6 and J7, probes q6, q11, m05, m07–m10, m15–m16).
+        private func GetEnclosingBlockExpressions(node SyntaxNode?) ImmutableArray[SyntaxNode] {
+            if node == nil {
+                return ImmutableArray[SyntaxNode].Empty
+            }
+            var builder ImmutableArray[SyntaxNode].Builder? = nil
+            var current = node.Parent
+            var stop = false
+            while current != nil && !stop {
+                switch current {
+                    case FunctionLiteralExpressionSyntax,
+                    LambdaExpressionSyntax,
+                    FunctionDeclarationSyntax,
+                    EventDeclarationSyntax {
+                        stop = true
+                    }
+                    case BlockExpressionSyntax {
+                        if current.Parent is not LambdaExpressionSyntax {
+                            builder ??= ImmutableArray.CreateBuilder[SyntaxNode]()
+                            builder!!.Add(current)
+                        }
+                    }
+                }
+                current = current.Parent
+            }
+            if builder == nil {
+                return ImmutableArray[SyntaxNode].Empty
+            }
+            builder.Reverse()
+            return builder.ToImmutable()
         }
 
         /// Issue #490: returns true when [`expr`](paramref) denotes a stable lvalue whose

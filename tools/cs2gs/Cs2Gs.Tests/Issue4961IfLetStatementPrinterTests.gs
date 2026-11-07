@@ -41,6 +41,31 @@ open class Issue4961IfLetStatementPrinterTests {
         AssertSingleParenthesizedInitializer(printed, SyntaxKind.QuestionQuestionToken)
     }
 
+    @Fact
+    func GuardClause_IsPrinted_AndReparsesAsIfLetGuard() {
+        // Issue #4972: IfLetStatement carries an optional && guard clause.
+        let statement = IfLetStatement(
+            []IfLetBinding{
+                IfLetBinding("v", BinaryExpression(IdentifierExpression("a"), "&&", IdentifierExpression("b")))
+            },
+            BlockStatement([]GStatement{ExpressionStatement(IdentifierExpression("v"))}),
+            BlockStatement([]GStatement{ExpressionStatement(LiteralExpression.Int("0"))}),
+            BinaryExpression(IdentifierExpression("v"), "!=", LiteralExpression.Null())
+        )
+        let unit = CompilationUnit(
+            "Demo",
+            members: List[GNode]{MethodDeclaration("Run", body: BlockStatement(List[GStatement]{statement}))}
+        )
+        let printed = GSharpPrinter.Print(unit)
+        Assert.Contains("if let v = (a && b) && v != nil {", printed, StringComparison.Ordinal)
+        Assert.Contains("} else {", printed, StringComparison.Ordinal)
+        let tree = SyntaxTree.Parse(printed)
+        Assert.Empty(tree.Diagnostics)
+        let parsed = Walk(tree.Root).OfType[IfLetStatementSyntax]().Single()
+        Assert.NotNull(parsed.Guard)
+        Assert.NotNull(parsed.ElseClause)
+    }
+
     shared {
         private func PrintIfLet(initializer GExpression) string {
             let statement = IfLetStatement(

@@ -410,8 +410,8 @@ class Conversion {
             // and variant projections were already decided by the mismatch arm.
             if !(from is NullableTypeSymbol) &&
                 !(from is PlatformTypeSymbol) &&
-                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) &&
                 TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) &&
                 projectedArguments.Length == targetArguments
                 .Length {
                 var exactProjection = true
@@ -877,42 +877,60 @@ class Conversion {
             // reference equality decides shape identity. The name-mismatch
             // warning (GS0541) is reported at conversion-binding time, not here —
             // classification is pure.
-            if from is TupleTypeSymbol fromNamedTuple && to is TupleTypeSymbol toNamedTuple && !object.ReferenceEquals(
-                fromNamedTuple,
-                toNamedTuple
-            ) &&
-                object.ReferenceEquals(fromNamedTuple.WithoutNames(), toNamedTuple.WithoutNames()) {
-                return Conversion.Identity
-            }
-            // Issue #1256: element-wise tuple conversion. A tuple `(T1, …, Tn)`
-            // converts implicitly to `(U1, …, Un)` when both are tuple types of
-            // the SAME arity and EACH element `Ti → Ui` has an implicit conversion
-            // (identity, reference/interface upcast, nullable-reference upcast,
-            // numeric widening, boxing, …). Mirrors C# §10.2.13 implicit tuple
-            // conversions — the element conversions are classified recursively via
-            // `Classify`, so this composes with every existing implicit rule
-            // (including the #1255 lifted nullable-reference upcast). Identical
-            // tuples are already returned as identity by the `from == to`
-            // short-circuit (tuple symbols are cached per element sequence), so a
-            // match here is always a NON-identity implicit conversion: the emitter
-            // (via binder lowering in ConversionClassifier) rebuilds the target
-            // `ValueTuple<…>` from per-element converted accesses, because two
-            // distinct `ValueTuple<…>` instantiations are not IL-reinterpretable.
-            // When any element lacks an implicit conversion (e.g. a downcast
-            // `Base → Derived`, or `int32 → string`) or the arities differ, this
-            // branch declines and the conversion falls through to `None`, so such
-            // tuples remain errors exactly as C# requires.
-            if from is TupleTypeSymbol fromTuple && to is TupleTypeSymbol toTuple && fromTuple.Arity == toTuple.Arity {
+            if from is TupleTypeSymbol fromTuple && to is TupleTypeSymbol toTuple {
+                if !object.ReferenceEquals(fromTuple, toTuple) && object.ReferenceEquals(
+                    fromTuple.WithoutNames(),
+                    toTuple.WithoutNames()
+                ) {
+                    return Conversion.Identity
+                }
+                if fromTuple.Arity != toTuple.Arity {
+                    return Conversion.None
+                }
+                var allCrossContextIdentical = true
                 var allElementsImplicit = true
                 for var i = 0; i < fromTuple.Arity; i++ {
-                    let elementConversion = Classify(fromTuple.ElementTypes[i], toTuple.ElementTypes[i])
-                    if !elementConversion.Exists || !elementConversion.IsImplicit {
+                    let fromElement = fromTuple.ElementTypes[i]
+                    let toElement = toTuple.ElementTypes[i]
+                    if fromElement == toElement {
+                        continue
+                    }
+                    let hasFunctionPointer = TypeSymbol.ContainsFunctionPointer(fromElement) ||
+                        TypeSymbol.ContainsFunctionPointer(toElement)
+                    if !(fromElement is TupleTypeSymbol && toElement is TupleTypeSymbol) &&
+                        hasFunctionPointer &&
+                        HaveIdenticalTypeArgumentContracts(fromElement, toElement) {
+                        continue
+                    }
+                    let elementConversion = Classify(fromElement, toElement)
+                    let isElementImplicit = elementConversion.Exists && elementConversion.IsImplicit
+                    let isElementCrossContextIdentical = elementConversion.IsIdentity ||
+                        (
+                        !hasFunctionPointer &&
+                            !(
+                            TupleTypeSymbol.TryGetTupleShape(fromElement, out _) && TupleTypeSymbol.TryGetTupleShape(
+                                toElement,
+                                out _
+                            )
+                        ) &&
+                            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromElement, toElement)
+                    )
+                    if !isElementImplicit {
                         allElementsImplicit = false
-                        break
+                    }
+                    if !isElementCrossContextIdentical {
+                        allCrossContextIdentical = false
+                    }
+                    if !allElementsImplicit && !allCrossContextIdentical {
+                        return Conversion.None
                     }
                 }
-                if allElementsImplicit {
-                    return Conversion.Implicit
+                return if allCrossContextIdentical {
+                    Conversion.Identity
+                } else if allElementsImplicit {
+                    Conversion.Implicit
+                } else {
+                    Conversion.None
                 }
             }
             // #313: two erased generics constructed over the same open definition
@@ -3984,7 +4002,15 @@ class Conversion {
                 return false
             }
             // Tuple values use elementwise conversions. An invariant argument containing a tuple still uses the recursive relation.
-            if UnwrapPlatformAndNullable(from) is TupleTypeSymbol && UnwrapPlatformAndNullable(to) is TupleTypeSymbol {
+            if UnwrapPlatformAndNullable(from) is {} unwrappedFrom &&
+                UnwrapPlatformAndNullable(to) is {} unwrappedTo &&
+                (
+                (unwrappedFrom is TupleTypeSymbol && unwrappedTo is TupleTypeSymbol) ||
+                    (
+                    unwrappedFrom.GetType() != unwrappedTo.GetType() &&
+                        IsTupleTypeArgumentPair(unwrappedFrom, unwrappedTo)
+                )
+            ) {
                 return false
             }
             // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
@@ -4571,7 +4597,7 @@ class Conversion {
             targetArguments = ImmutableArray[TypeSymbol].Empty
             from = UnwrapPlatformAndNullable(from)
             to = UnwrapPlatformAndNullable(to)
-            if from == nil || to == nil {
+            if from == nil || to == nil || IsValueTypeLikeFrom(to) {
                 return false
             }
             // A same-compilation G# base class has no CLR type while binding.
@@ -5220,12 +5246,14 @@ class Conversion {
                 return true
             }
             // Tuple and Nullable<V> positions do not represent their CLR generic slots.
+            if type.IsTupleType || NullableLifting.IsAnyValueTypeNullable(type as NullableTypeSymbol) {
+                return false
+            }
             let positions = type.GetElementPositions()
             if !positions.IsDefaultOrEmpty &&
-                !type.IsTupleType &&
                 definition is {IsGenericType: true} constructed &&
                 positions.Length == constructed
-                .GetGenericArguments().Length && !NullableLifting.IsAnyValueTypeNullable(type as NullableTypeSymbol) {
+                .GetGenericArguments().Length {
                 arguments = positions
                 return true
             }
@@ -6037,21 +6065,40 @@ class Conversion {
                     return IsCrossContextIdenticalElement(fromMap.KeyType, toMap.KeyType) &&
                         IsCrossContextIdenticalElement(fromMap.ValueType, toMap.ValueType)
                 }
-                case fromTuple is TupleTypeSymbol when to is TupleTypeSymbol toTuple {
-                    if fromTuple.Arity != toTuple.Arity {
-                        return false
-                    }
-                    for var i = 0; i < fromTuple.Arity; i++ {
-                        if !IsCrossContextIdenticalElement(fromTuple.ElementTypes[i], toTuple.ElementTypes[i]) {
-                            return false
-                        }
-                    }
-                    return true
-                }
                 default {
                     return false
                 }
             }
+        }
+
+        private func AreCrossContextIdenticalTupleElements(
+            fromElements ImmutableArray[TypeSymbol],
+            toElements ImmutableArray[TypeSymbol]
+        ) bool {
+            if fromElements.Length != toElements.Length {
+                return false
+            }
+            for var i = 0; i < fromElements.Length; i++ {
+                let fromElement = fromElements[i]
+                let toElement = toElements[i]
+                if fromElement == toElement {
+                    continue
+                }
+                if !(fromElement is NullableTypeSymbol) &&
+                    !(toElement is NullableTypeSymbol) &&
+                    TupleTypeSymbol.TryGetTupleShape(fromElement, out var nestedFrom) &&
+                    TupleTypeSymbol
+                    .TryGetTupleShape(toElement, out var nestedTo) {
+                    if !AreCrossContextIdenticalTupleElements(nestedFrom, nestedTo) {
+                        return false
+                    }
+                    continue
+                }
+                if !IsCrossContextIdenticalElement(fromElement, toElement) {
+                    return false
+                }
+            }
+            return true
         }
 
         // Issue #3987: classifies the two SPELLINGS of one structural type — G#'s
@@ -6094,10 +6141,7 @@ class Conversion {
                 to,
                 out var toElements
             ) {
-                identical = fromElements.Length == toElements.Length
-                for var i = 0; identical && i < fromElements.Length; i++ {
-                    identical = IsCrossContextIdenticalElement(fromElements[i], toElements[i])
-                }
+                identical = AreCrossContextIdenticalTupleElements(fromElements, toElements)
             } else {
                 return false
             }
