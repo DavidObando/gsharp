@@ -894,14 +894,14 @@ partial class CSharpToGSharpTranslator {
                 }
                 case d is float64 {
                     return this.MapSpecialFloatConstant(d, isDouble: true, fallbackNode?.GetLocation()) ??
-                        LiteralExpression.Float(d.ToString(CultureInfo.InvariantCulture))
+                        LiteralExpression.Float(this.ToFloatLiteralText(d))
                 }
                 case f is float32 {
                     return this.MapSpecialFloatConstant(f, isDouble: false, fallbackNode?.GetLocation()) ??
-                        LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture))
+                        LiteralExpression.Float(this.ToFloatLiteralText(f, isSingle: true))
                 }
                 case m is decimal {
-                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture))
+                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture) + "m")
                 }
                 default {
                     return if IsIntegral(value) {

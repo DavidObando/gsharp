@@ -2965,9 +2965,16 @@ partial class CSharpToGSharpTranslator {
             initializer InitializerExpressionSyntax?
         ) GExpression? {
             var type = type
-            if typeSymbol is INamedTypeSymbol systemObject && systemObject.SpecialType == SpecialType.System_Object {
+            if typeSymbol is INamedTypeSymbol primitive &&
+                type is NamedTypeReference &&
+                (
+                primitive.SpecialType == SpecialType.System_Object ||
+                    primitive.SpecialType == SpecialType.System_String ||
+                    primitive.SpecialType == SpecialType.System_IntPtr ||
+                    primitive.SpecialType == SpecialType.System_UIntPtr
+            ) {
                 type = NamedTypeReference(
-                    this.typeMapper.GetOrCreateImportedTypeAlias(systemObject, this.context, creationNode.GetLocation())
+                    this.typeMapper.GetOrCreateImportedTypeAlias(primitive, this.context, creationNode.GetLocation())
                 )
             }
             let hasCtorArgs = arguments.Count > 0
@@ -11835,9 +11842,8 @@ partial class CSharpToGSharpTranslator {
             /// (`new object()`, `new string(' ', n)`, target-typed `new()`)
             /// must spell a callable CLR type name instead — otherwise gsc reports
             /// GS0130 ("Function 'string' doesn't exist"). Most aliases use a
-            /// qualified name; `object`/`string` use imported
-            /// `Object`/`String` because namespace-qualified constructor
-            /// expressions are not bindable.
+            /// qualified name. Object creation maps `object` and `string` through
+            /// collision-safe import aliases before reaching this fallback.
             /// Non-keyword type names are returned unchanged.
             private func ConstructionCalleeName(typeName string) string -> switch typeName {
                 case "object": "Object"
