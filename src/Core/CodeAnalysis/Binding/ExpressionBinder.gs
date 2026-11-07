@@ -4213,6 +4213,23 @@ internal partial class ExpressionBinder {
         return nil
     }
 
+    private func EnumerateTypeParameterEffectiveInterfaces(tp TypeParameterSymbol) List[TypeSymbol] {
+        let result = List[TypeSymbol]()
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.ConstraintInterfaceType is {} iface {
+                result.Add(iface)
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return result
+    }
+
     private func CanTypeParameterConvertViaAs(
         tp TypeParameterSymbol,
         other TypeSymbol,
@@ -4228,13 +4245,42 @@ internal partial class ExpressionBinder {
             if tp == otherTp {
                 return true
             }
-            if (IsTypeParameterConstrainedToValueType(tp) && IsTypeParameterConstrainedToReferenceType(otherTp)) ||
-                (IsTypeParameterConstrainedToValueType(otherTp) && IsTypeParameterConstrainedToReferenceType(tp)) {
-                return false
+            let tpIsVal = IsTypeParameterConstrainedToValueType(tp)
+            let otherIsVal = IsTypeParameterConstrainedToValueType(otherTp)
+            if tpIsVal && otherIsVal {
+                return CanSingleTypeParameterSatisfyExactSubstitution(tp, otherTp, substitutions) &&
+                    CanSingleTypeParameterSatisfyExactSubstitution(otherTp, tp, substitutions)
+            }
+            if tpIsVal {
+                if TryGetTypeParameterEffectiveClassBound(otherTp) is {} otherClassBound &&
+                    otherClassBound != TypeSymbol.Object &&
+                    otherClassBound
+                    .ClrType
+                    ?.FullName != "System.ValueType" &&
+                    otherClassBound
+                    .ClrType
+                    ?.FullName != "System.Enum" {
+                    return false
+                }
+                return true
+            }
+            if otherIsVal {
+                if TryGetTypeParameterEffectiveClassBound(tp) is {} tpClassBound &&
+                    tpClassBound != TypeSymbol.Object &&
+                    tpClassBound
+                    .ClrType
+                    ?.FullName != "System.ValueType" &&
+                    tpClassBound
+                    .ClrType
+                    ?.FullName != "System.Enum" {
+                    return false
+                }
+                return true
             }
             if TryGetTypeParameterEffectiveClassBound(tp) is {} clsA &&
-                TryGetTypeParameterEffectiveClassBound(otherTp) is {} clsB {
-                return CanConvertViaAs(clsA, clsB)
+                TryGetTypeParameterEffectiveClassBound(otherTp) is {} clsB &&
+                !CanConvertViaAs(clsA, clsB) {
+                return false
             }
             return true
         }
@@ -4243,18 +4289,186 @@ internal partial class ExpressionBinder {
                 return true
             }
             if other.IsValueType || other is TupleTypeSymbol || other is FunctionPointerTypeSymbol {
-                if tp.ConstraintInterfaceType is {} reqIface {
+                for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
                     let hasParam = TypeSymbol.ContainsTypeParameter(other) || TypeSymbol.ContainsTypeParameter(reqIface)
-                    return HasBoxingConversionForAs(other, reqIface, hasParam, substitutions)
+                    if !HasBoxingConversionForAs(other, reqIface, hasParam, substitutions) {
+                        return false
+                    }
                 }
                 return true
             }
             return Conversion.IsInterfaceLikeType(other)
         }
-        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound {
-            return CanConvertViaAs(classBound, other)
+        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound && !CanConvertViaAs(classBound, other) {
+            return false
+        }
+        for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+            if !CanConvertViaAs(reqIface, other) {
+                return false
+            }
         }
         return true
+    }
+
+    private func CanTypeParameterSatisfyExactSubstitution(
+        tp TypeParameterSymbol,
+        target TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if !CanSingleTypeParameterSatisfyExactSubstitution(tp, target, substitutions) {
+            return false
+        }
+        for kvp in substitutions {
+            if ResolveSubstitutedType(kvp.Value, substitutions) == tp {
+                if !CanSingleTypeParameterSatisfyExactSubstitution(kvp.Key, target, substitutions) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private func CanSingleTypeParameterSatisfyExactSubstitution(
+        tp TypeParameterSymbol,
+        target TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if target == TypeSymbol.Error {
+            return true
+        }
+        if target is PointerTypeSymbol {
+            return false
+        }
+        if target is TypeParameterSymbol targetTp {
+            if tp == targetTp {
+                return true
+            }
+            if (IsTypeParameterConstrainedToValueType(tp) && IsTypeParameterConstrainedToReferenceType(targetTp)) ||
+                (IsTypeParameterConstrainedToValueType(targetTp) && IsTypeParameterConstrainedToReferenceType(tp)) {
+                return false
+            }
+            if TryGetTypeParameterEffectiveClassBound(tp) is {} clsA &&
+                TryGetTypeParameterEffectiveClassBound(targetTp) is {} clsB &&
+                !CanConvertViaAs(clsA, clsB) {
+                return false
+            }
+            return true
+        }
+        let targetIsNonNullValue = (target.IsValueType || target is TupleTypeSymbol) && !(target is NullableTypeSymbol)
+        if IsTypeParameterConstrainedToValueType(tp) {
+            if !targetIsNonNullValue {
+                return false
+            }
+            for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+                let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(reqIface)
+                if !HasBoxingConversionForAs(target, reqIface, hasParam, substitutions) {
+                    return false
+                }
+            }
+            return true
+        }
+        if IsTypeParameterConstrainedToReferenceType(tp) {
+            if target.IsValueType || target is TupleTypeSymbol || target is FunctionPointerTypeSymbol {
+                return false
+            }
+        }
+        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound {
+            if target.IsValueType || target is TupleTypeSymbol || target is FunctionPointerTypeSymbol {
+                return false
+            }
+            let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(classBound)
+            if hasParam {
+                if !CanOpenReferenceConvertDirectionallyForAs(target, classBound, substitutions) {
+                    return false
+                }
+            } else if !Conversion.Classify(target, classBound).IsImplicit {
+                return false
+            }
+        }
+        for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+            let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(reqIface)
+            if targetIsNonNullValue {
+                if !HasBoxingConversionForAs(target, reqIface, hasParam, substitutions) {
+                    return false
+                }
+            } else if hasParam {
+                if !CanOpenReferenceConvertDirectionallyForAs(target, reqIface, substitutions) {
+                    return false
+                }
+            } else if !Conversion.Classify(target, reqIface).IsImplicit {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func TypeContainsTypeParameterWithSubstitutions(
+        type TypeSymbol?,
+        targetTp TypeParameterSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        let resolved = ResolveSubstitutedType(type, substitutions)
+        if resolved == nil {
+            return false
+        }
+        if resolved is TypeParameterSymbol tp {
+            return tp == targetTp
+        }
+        if resolved is NullableTypeSymbol nullable {
+            return TypeContainsTypeParameterWithSubstitutions(nullable.UnderlyingType, targetTp, substitutions)
+        }
+        if OneDimensionalElement(resolved) is {} elem {
+            return TypeContainsTypeParameterWithSubstitutions(elem, targetTp, substitutions)
+        }
+        if resolved is RectangularArrayTypeSymbol rect {
+            return TypeContainsTypeParameterWithSubstitutions(rect.ElementType, targetTp, substitutions)
+        }
+        if resolved is TupleTypeSymbol tuple {
+            for item in tuple.ElementTypes {
+                if TypeContainsTypeParameterWithSubstitutions(item, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is FunctionTypeSymbol fn {
+            for param in fn.ParameterTypes {
+                if TypeContainsTypeParameterWithSubstitutions(param, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return TypeContainsTypeParameterWithSubstitutions(fn.ReturnType, targetTp, substitutions)
+        }
+        if resolved is StructSymbol s {
+            for arg in Conversion.GetEffectiveStructTypeArguments(s) {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is InterfaceSymbol iface {
+            for arg in iface.TypeArguments {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is DelegateTypeSymbol del {
+            for arg in del.TypeArguments {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        for pos in resolved.GetElementPositions() {
+            if TypeContainsTypeParameterWithSubstitutions(pos, targetTp, substitutions) {
+                return true
+            }
+        }
+        return false
     }
 
     private func HasRuntimeReferenceConversion(from TypeSymbol, to TypeSymbol) bool {
@@ -4333,10 +4547,13 @@ internal partial class ExpressionBinder {
             )
         }
         if sub is SliceTypeSymbol || sub is ArrayTypeSymbol || sub is RectangularArrayTypeSymbol {
-            return sup.ClrType is {} supClr && !supClr.IsGenericType && ClrTypeUtilities.IsAssignableByName(
-                supClr,
-                typeof(int32).MakeArrayType()
-            )
+            if sup is SliceTypeSymbol || sup is ArrayTypeSymbol || sup is RectangularArrayTypeSymbol {
+                return false
+            }
+            return sup.ClrType is {} supClr &&
+                !supClr.IsArray &&
+                !supClr.IsGenericType &&
+                ClrTypeUtilities.IsAssignableByName(supClr, typeof(int32).MakeArrayType())
         }
         return false
     }
@@ -5084,31 +5301,36 @@ internal partial class ExpressionBinder {
             if tpA == tpB {
                 return true
             }
-            if !CanTypeParameterConvertViaAs(tpA, tpB, substitutions) {
-                return false
-            }
             if varianceMode == 0 {
+                if !CanTypeParameterSatisfyExactSubstitution(tpA, tpB, substitutions) {
+                    return false
+                }
                 substitutions[tpA] = tpB
+                return true
             }
-            return true
+            return CanTypeParameterConvertViaAs(tpA, tpB, substitutions)
         }
         if a is TypeParameterSymbol paramA {
-            if !CanTypeParameterConvertViaAs(paramA, b, substitutions) {
-                return false
-            }
-            if varianceMode == 0 && !TypeSymbol.ContainsTypeParameter(b) {
+            if varianceMode == 0 {
+                if TypeContainsTypeParameterWithSubstitutions(b, paramA, substitutions) ||
+                    !CanTypeParameterSatisfyExactSubstitution(paramA, b, substitutions) {
+                    return false
+                }
                 substitutions[paramA] = b
+                return true
             }
-            return true
+            return CanTypeParameterConvertViaAs(paramA, b, substitutions)
         }
         if b is TypeParameterSymbol paramB {
-            if !CanTypeParameterConvertViaAs(paramB, a, substitutions) {
-                return false
-            }
-            if varianceMode == 0 && !TypeSymbol.ContainsTypeParameter(a) {
+            if varianceMode == 0 {
+                if TypeContainsTypeParameterWithSubstitutions(a, paramB, substitutions) ||
+                    !CanTypeParameterSatisfyExactSubstitution(paramB, a, substitutions) {
+                    return false
+                }
                 substitutions[paramB] = a
+                return true
             }
-            return true
+            return CanTypeParameterConvertViaAs(paramB, a, substitutions)
         }
         if a is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} ||
             b is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} {

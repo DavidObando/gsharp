@@ -210,17 +210,45 @@ func Check[T](s S[T]) IBox[List[T]]? -> s as IBox[List[T]]
 Check[int32](S[int32]{}) == nil`)
         Assert.Single(rejectedNestedDirectionalCovariantSlot.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
+        let rejectedInterfaceConstrainedTypeParameter = Evaluate(`import System
+func Check[T IDisposable](x T) string? -> x as string
+Check[IDisposable](nil!!) == nil`)
+        Assert.Single(rejectedInterfaceConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedIncompatibleSlices = Evaluate(`let xs = []string{"x"}
+let ys = xs as []int32
+ys == nil`)
+        Assert.Single(rejectedIncompatibleSlices.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedStructConstrainedInInvariantSlot = Evaluate(`struct Box[A] { var Item A }
+func Check[T struct](x Box[T]) Box[object]? -> x as Box[object]?
+Check[int32](Box[int32]{Item: 1}) == nil`)
+        Assert.Single(rejectedStructConstrainedInInvariantSlot.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedRecursiveTypeParameterEquality = Evaluate(`struct Box[A] { var Item A }
+func Check[T](x Box[T]) Box[Box[T]]? -> x as Box[Box[T]]?
+Check[int32](Box[int32]{Item: 1}) == nil`)
+        Assert.Single(rejectedRecursiveTypeParameterEquality.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedConstructedRepeatedTypeParameter = Evaluate(`import System.Collections.Generic
+struct Pair[A, B] { var First A; var Second B }
+func Check[T, U](x Pair[T, T]) Pair[List[U], IEnumerable[U]]? -> x as Pair[List[U], IEnumerable[U]]?
+Check[List[int32], int32](Pair[List[int32], List[int32]]{First: List[int32](), Second: List[int32]()}) == nil`)
+        Assert.Single(rejectedConstructedRepeatedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}
 class Ints : List[int32] {}
+func BoxGeneric[T struct, U class](x T) U? -> x as U
 func Check[T](x object, xs IEnumerable[T], f (S) -> S, g (object) -> object) bool {
     let a = x as List[T]
     let b = xs as List[T]
     let c = f as ICloneable
     let d = xs as Ints
     let e = g as (string) -> string
-    return a == nil && b != nil && c != nil && d != nil && e != nil
+    let boxed = BoxGeneric[int32, object](42)
+    return a == nil && b != nil && c != nil && d != nil && e != nil && boxed != nil
 }
 let ints = Ints()
 ints.Add(1)
