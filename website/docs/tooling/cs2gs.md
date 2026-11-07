@@ -63,6 +63,7 @@ The destination keeps the source's relative directories. `cs2gs` translates chec
 
 For Git sources, supply the working-tree root.
 The destination keeps an independent copy of the source Git history without checking out the original files.
+It preserves raw remote fetch and push URLs and copies source-local (`local`, `worktree`, and included) `url.<base>.insteadOf` and `url.<base>.pushInsteadOf` rewrite rules, without copying arbitrary Git configuration, credentials, credential helpers, or hooks.
 Version tasks use that history instead of a repository above the destination.
 The translated files remain uncommitted.
 Linked working trees work as source roots.

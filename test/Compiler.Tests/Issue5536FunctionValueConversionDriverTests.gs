@@ -236,6 +236,170 @@ class Program {
 `, "OF")
     }
 
+    /// Issue #5560: a function literal at an imported `ref` delegate parameter does not target-type to `ref`
+    /// and selects the `object` overload with its natural delegate type, matching C#.
+    @Fact
+    func FunctionLiteral_AtImportedRefDelegateParameter_SelectsObjectOverload() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    Console.Write(Calls.Ref(() -> 1, 1))
+    Console.Write(Calls.SigRef((x int32) -> 1, 1))
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        Console.Write(Calls.Ref((Func<int>)(() => 1), 1));
+        Console.Write(Calls.SigRef((Func<int, int>)((int x) => 1), 1));
+    }
+}
+`, "OO:System.Func`2[System.Int32,System.Int32]")
+    }
+
+    /// Issue #5631 & #5636: a narrowed read of `holder.Pet` (`Animal?` narrowed to `Dog`), local `a` (`Animal?`
+    /// narrowed to `Dog`), local `v` (`int32?` narrowed to `int32`), or a branch block trailing value with `defer`
+    /// or `using` recovers the declared value when the target or common branch type accepts the declared type.
+    @Fact
+    func Issue5631And5636_NarrowedNullableMemberLocalAndCleanupBranch_RecoverDeclaredValue() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        let source = `import System
+open class Animal {
+    open func Name() string -> "animal"
+}
+class Dog : Animal {
+    override func Name() string -> "dog"
+}
+class Cat : Animal {
+    override func Name() string -> "cat"
+}
+class Holder {
+    let Pet Animal?
+    init(pet Animal?) {
+        Pet = pet
+    }
+}
+func U() string? -> nil
+func MemberGoto() string {
+    let f = () -> {
+        var holder = Holder(Dog())
+        var n = 0
+        if holder.Pet is Dog {
+            L: if n > 0 {
+                return holder.Pet
+            }
+            n++
+            holder = Holder(Cat())
+            goto L
+        }
+        return default(Animal?)
+    }
+    return f()!!.Name()
+}
+func MemberKept() string {
+    let f = () -> {
+        var holder = Holder(Dog())
+        if holder.Pet is Dog {
+            return holder.Pet
+        }
+        return default(Animal?)
+    }
+    return f()!!.Name()
+}
+func LocalClassGoto() string {
+    let f = () -> {
+        var a Animal? = Dog()
+        var n = 0
+        if a is Dog {
+            L: if n > 0 {
+                return a
+            }
+            n++
+            a = Cat()
+            goto L
+        }
+        return default(Animal?)
+    }
+    return f()!!.Name()
+}
+func LocalValueGoto() bool {
+    let f = () -> {
+        var v int32? = 1
+        var n = 0
+        if v != nil {
+            L: if n > 0 {
+                return v
+            }
+            n++
+            v = nil
+            goto L
+        }
+        return default(int32?)
+    }
+    return f() == nil
+}
+func CleanupBranchGoto() bool {
+    var s string? = "a"
+    var n = 0
+    if s != nil {
+        L: if n > 0 {
+            let t = if n > 1 { U() } else {
+                defer Console.Write("")
+                s
+            }
+            return t == nil
+        }
+        n++
+        s = nil
+        goto L
+    }
+    return false
+}
+func CleanupBranchMemberRecovered() string {
+    var holder = Holder(Dog())
+    if holder.Pet is Dog {
+        let t = if false {
+            default(Animal?)
+        } else {
+            defer Console.Write("")
+            holder.Pet
+        }
+        return t!!.Name()
+    }
+    return ""
+}
+func CleanupBranchCallableTuple() int32 {
+    var pair (f (int32) -> int32, tag int32)? = (f: (value int32) -> value + 1, tag: 2)
+    var n = 0
+    if pair != nil {
+        L: if n > 0 {
+            let picked = if n > 1 {
+                default((f (int32) -> int32, tag int32)?)
+            } else {
+                defer Console.Write("")
+                pair
+            }
+            return picked!!.f(value: 4)
+        }
+        n++
+        pair = (f: (value int32) -> value + 10, tag: 3)
+        goto L
+    }
+    return 0
+}
+func Main() {
+    Console.Write("${MemberGoto()},${MemberKept()},${LocalClassGoto()},${LocalValueGoto()},${CleanupBranchGoto()},${CleanupBranchMemberRecovered()},${CleanupBranchCallableTuple()}")
+}
+`
+        let oracle = `using System;
+class Program {
+    static void Main() => Console.Write("cat,dog,cat,True,True,dog,14");
+}
+`
+        Check(fixture, source, oracle, "cat,dog,cat,True,True,dog,14")
+    }
+
     /// Issue #5543: a function literal is a plain value, so it binds to the pointee of an imported `in` or
     /// `ref readonly` delegate parameter. That makes the delegate overload better than the `object` overload,
     /// as in C#.
@@ -3061,7 +3225,7 @@ class Program {
         var call = "Calls.M(() -> { return v0 }, 1)"
         for var level = 0; level < depth; level++ {
             let vName = "v${level}"
-            let useOuter = level + 1 < depth ? "let _ = v${level + 1}\n        ": ""
+            let useOuter = level + 1 < depth ? "let _ = v${level + 1}\n        " : ""
             call = "Calls.M(() -> {\n        " +
                 useOuter +
                 "return true ? {\n            var r = \"t\"\n            select {\n                case let " +
@@ -3580,6 +3744,10 @@ namespace FunctionControl {
         public static string POne(System.Func<long, long> f) => "F";
         public static string RR(ref readonly System.Func<long> f, int x) => "F";
         public static string RR(object o, long x) => "O";
+        public static string Ref(ref System.Func<long> f, int x) => "F";
+        public static string Ref(object o, long x) => "O";
+        public static string SigRef(ref System.Func<int, long> f, int x) => "F";
+        public static string SigRef(object o, long x) => Kinds.Of(o);
         public static string P(in System.Func<long, long> f, int x) => "F" + f(2);
         public static string P(object o, long x) => "O";
         public static string PG<T>(in System.Func<T, T> f, T x) => "F" + f(x);

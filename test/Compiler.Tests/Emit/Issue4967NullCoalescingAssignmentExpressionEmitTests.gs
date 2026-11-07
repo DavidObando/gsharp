@@ -1435,6 +1435,83 @@ run().Wait()`.Replace(
         Assert.Equal("bounds 0${Environment.NewLine}v 1${Environment.NewLine}", CompileAndRun(source))
     }
 
+    @Fact
+    func Issue4984_BranchyRhsWithNonNilArms_YieldsUnderlyingType() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package Test
+import System
+
+open class Animal {
+    open func Kind() string -> "animal"
+}
+class Dog : Animal {
+    override func Kind() string -> "dog"
+}
+class Cat : Animal {
+    override func Kind() string -> "cat"
+}
+
+func TernaryStr(flag bool) string {
+    var s string? = nil
+    return s ??= (flag ? "a" : "b")
+}
+
+func IfStr(flag bool) string {
+    var s string? = nil
+    return s ??= if flag { "c" } else { "d" }
+}
+
+func SwitchStr(n int32) string {
+    var s string? = nil
+    return s ??= switch n {
+        case 1: "e"
+        default: "f"
+    }
+}
+
+func BlockStr() string {
+    var s string? = nil
+    return s ??= {
+        defer Console.Write("")
+        "g"
+    }
+}
+
+func SiblingTargetTyped(flag bool) string {
+    var a Animal? = nil
+    let picked Animal = (a ??= (flag ? Dog() : Cat()))
+    return picked.Kind()
+}
+
+func ValueTypeBranchy(flag bool) int32 {
+    var n int32? = nil
+    return n ??= (flag ? 10 : 20)
+}
+
+func StatementNarrows(flag bool) int32 {
+    var s string? = nil
+    s ??= (flag ? "abc" : "de")
+    return s.Length
+}
+
+func NullableArmStaysNullable(flag bool) string {
+    var s string? = nil
+    let r string? = (s ??= if flag { nil } else { "z" })
+    return r ?? "nil"
+}
+
+Console.WriteLine("${TernaryStr(true)} ${TernaryStr(false)} ${IfStr(true)} ${SwitchStr(2)} ${BlockStr()} ${SiblingTargetTyped(true)} ${SiblingTargetTyped(false)} ${ValueTypeBranchy(false)} ${StatementNarrows(true)} ${NullableArmStaysNullable(true)}")`
+        Assert.Equal("a b c f g dog cat 20 3 nil${Environment.NewLine}", CompileAndRun(source))
+
+        let (code, output) = fixture.TryCompile(`package Invalid4984
+func Bad(flag bool) string {
+    var s string? = nil
+    return s ??= if flag { nil } else { "z" }
+}`, "Invalid4984", false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0155", output, StringComparison.Ordinal)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

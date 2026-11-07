@@ -70,6 +70,41 @@ public static class RuntimeHelpers {
         Assert.False(File.Exists(Path.Combine(fixture.Directory, "Utf8MissingHelper.dll")))
     }
 
+    @Fact
+    func Issue5383_Utf8LiteralResolutionIsCachedPerResolverAndPreservesMissingMemberDiagnostics() {
+        using let resolver = GSharp
+            .Core
+            .CodeAnalysis
+            .Symbols
+            .ReferenceResolver
+            .WithReferences([]string{typeof(object).Assembly.Location})
+        Assert.Equal(0, resolver.Utf8LiteralResolutionCount)
+        let tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(`package P
+func A() int32 -> u8"alpha".Length + u8"beta".Length + u8"gamma".Length
+func B() int32 -> u8"delta".Length + u8"epsilon".Length`)
+        let compilation = GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, tree)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        Assert.Equal(1, resolver.Utf8LiteralResolutionCount)
+    }
+
+    @Fact
+    func Issue5384_AnalyzeProgramBoundsDiagnosticSnapshotWorkAcrossManyRoots() {
+        let builder = StringBuilder("package P\nimport System.Threading.Tasks\n")
+        for var i = 0; i < 40; i++ {
+            builder.Append("func Bad").Append(i).Append("() int32 -> missing").Append(i).Append("\n")
+            builder.Append("async func Ok").Append(i).Append("() Task[int32] {\n")
+            builder.Append("    let s = u8\"abc\"\n    let n = s.Length\n    await Task.Yield()\n    return n\n}\n")
+        }
+        let tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(builder.ToString())
+        let compilation = GSharp.Core.CodeAnalysis.Compilation.Compilation(tree)
+        let errors = compilation.BoundProgram.Diagnostics.ToArray()
+        Assert.Equal(40, errors.Length)
+        Assert.Equal(
+            0,
+            GSharp.Core.CodeAnalysis.Binding.RefStructAsyncLivenessAnalyzer.LastAnalyzedProgramSuppressionIndexedCount
+        )
+    }
+
     @Theory
     @InlineData("u8\"\"\"A\"\"\"")
     @InlineData("u8\"\"\"\nA\n\"\"\"")

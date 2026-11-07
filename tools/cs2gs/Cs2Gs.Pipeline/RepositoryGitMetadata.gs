@@ -50,6 +50,52 @@ internal shared class RepositoryGitMetadata {
                     }
                 }
             }
+            let rewrites = Git(
+                []string{
+                    "-C",
+                    source,
+                    "config",
+                    "--includes",
+                    "--show-scope",
+                    "--null",
+                    "--get-regexp",
+                    "^url\\..*\\.(insteadof|pushinsteadof)$"
+                },
+                source
+            )
+            if rewrites.TimedOut || (rewrites.ExitCode != 0 && rewrites.ExitCode != 1) {
+                throw InvalidOperationException("Cannot read source URL rewrite rules: " + rewrites.Output)
+            }
+            if rewrites.ExitCode == 0 {
+                let fields = rewrites.Stdout.Split('\0')
+                for var i = 0; i + 1 < fields.Length; i += 2 {
+                    let configScope = fields[i]
+                    if !string.Equals(configScope, "local", StringComparison.Ordinal) && !string.Equals(
+                        configScope,
+                        "worktree",
+                        StringComparison.Ordinal
+                    ) {
+                        continue
+                    }
+                    let entry = fields[i + 1]
+                    let separator = entry.IndexOf('\n')
+                    if separator <= 0 {
+                        continue
+                    }
+                    let key = entry.Substring(0, separator)
+                    if !key.StartsWith("url.", StringComparison.Ordinal) ||
+                        (
+                        !key.EndsWith(".insteadof", StringComparison.Ordinal) && !key.EndsWith(
+                            ".pushinsteadof",
+                            StringComparison.Ordinal
+                        )
+                    ) {
+                        continue
+                    }
+                    let value = entry.Substring(separator + 1)
+                    Run([]string{"-C", destination, "config", "--add", key, value}, destination)
+                }
+            }
             if head.ExitCode == 0 {
                 let clonedHead = Run([]string{"-C", destination, "rev-parse", "--verify", "HEAD"}, destination)
                 if !string.Equals(head.Stdout.Trim(), clonedHead.Trim(), StringComparison.Ordinal) {

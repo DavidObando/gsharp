@@ -3655,17 +3655,34 @@ internal class LambdaBinder {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
                 }
             }
-            // Issue #5603: the conversion runs outside the narrowing scope, so the stable member path of a narrowed
+            // Issue #5603 / #5631: the conversion runs outside the narrowing scope, so the access path of a narrowed
             // read comes from the read itself. The read takes its declared value when the result does not need the
             // narrowing, as an eager conversion does.
+            operand = conversions.DecideNarrowedConversion(
+                node.Syntax?.Location ?? syntax.Body.Location,
+                operand,
+                returnType
+            )
             let storedRead = if operand is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
                 unwrap.Operand
             } else {
                 operand
             }
-            if SmartCastStability.TryGetStableMemberPath(storedRead, out var path, out _) &&
-                ConversionClassifier
-                .TryRecoverDeclaredMemberRead(operand, path!!, operand.Type, returnType, out var declaredRead) {
+            let recoveredPath = if storedRead is BoundVariableExpression variableRead &&
+                (variableRead.NarrowedType != nil || operand is BoundUnaryExpression{IsNarrowingUnwrap: true}) {
+                AccessPath.ForVariable(variableRead.Variable)
+            } else if SmartCastStability.TryGetStableMemberPath(storedRead, out var memberPath, out _) {
+                memberPath
+            } else {
+                default(AccessPath?)
+            }
+            if recoveredPath != nil && ConversionClassifier.TryRecoverDeclaredMemberRead(
+                operand,
+                recoveredPath,
+                operand.Type,
+                returnType,
+                out var declaredRead
+            ) {
                 operand = declaredRead!!
             }
             if operand.Type == returnType {

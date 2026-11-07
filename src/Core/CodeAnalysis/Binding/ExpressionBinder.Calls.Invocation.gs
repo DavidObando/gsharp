@@ -811,10 +811,9 @@ internal partial class ExpressionBinder {
                 // nil, so the slot's own top-level nullability does not apply.
                 let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
                 let delegateType = StripTopLevelNullability(parameterTypeSymbol)
-                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    parameterTypeSymbol,
-                    out var fn
-                ) ||
+                if parameterType.IsByRef ||
+                    parameterType.ContainsGenericParameters ||
+                    !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeSymbol, out var fn) ||
                     fn == nil {
                     allMapped = false
                     break
