@@ -1799,7 +1799,79 @@ public sealed class Probe<T>
         this.secondCallback = null;
         savedHelperPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var twoHolderA = new Probe<T>();
+        var twoHolderB = new Probe<T>();
+        var twoHolderPair = (replacement, replacement);
+        void TwoHolderLocal()
+        {
+            var (twoHolderLeft, _) = twoHolderPair;
+            Fill(ref twoHolderLeft, replacement);
+        }
+
+        twoHolderA.callback = TwoHolderLocal;
+        twoHolderB.callback = twoHolderA.callback;
+        twoHolderA.callback = twoHolderB.callback;
+        twoHolderB.callback = null;
+        twoHolderPair = (default(T), replacement);
+        twoHolderA.callback?.Invoke();
+
+        var paramHelperA = new Probe<T>();
+        var paramHelperB = new Probe<T>();
+        var paramHelperPair = (replacement, replacement);
+        void ParameterHelperLocal()
+        {
+            var (parameterHelperLeft, _) = paramHelperPair;
+            Fill(ref parameterHelperLeft, replacement);
+        }
+
+        paramHelperA.callback = ParameterHelperLocal;
+        paramHelperB.callback = GetFromHolder(paramHelperA);
+        paramHelperA.callback = null;
+        paramHelperPair = (default(T), replacement);
+        paramHelperB.callback?.Invoke();
+
+        var instanceHelperHolder = new Probe<T>();
+        var instanceHelperPair = (replacement, replacement);
+        void InstanceHelperLocal()
+        {
+            var (instanceHelperLeft, _) = instanceHelperPair;
+            Fill(ref instanceHelperLeft, replacement);
+        }
+
+        instanceHelperHolder.secondCallback = InstanceHelperLocal;
+        this.callback = instanceHelperHolder.GetSaved();
+        instanceHelperHolder.secondCallback = null;
+        instanceHelperPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var coalesceFieldPair = (replacement, replacement);
+        void CoalesceFieldLocal()
+        {
+            var (coalesceFieldLeft, _) = coalesceFieldPair;
+            Fill(ref coalesceFieldLeft, replacement);
+        }
+
+        this.callback = CoalesceFieldLocal;
+        this.callback ??= Other;
+        coalesceFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var coalesceLocalPair = (replacement, replacement);
+        void CoalesceLocalStorageLocal()
+        {
+            var (coalesceLocalStorageLeft, _) = coalesceLocalPair;
+            Fill(ref coalesceLocalStorageLeft, replacement);
+        }
+
+        System.Action? localDelegate = CoalesceLocalStorageLocal;
+        localDelegate ??= Other;
+        this.callback = localDelegate;
+        coalesceLocalPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
+
+    private static System.Action? GetFromHolder(Probe<T> holder) => holder.callback;
 }`
         let printed = Translate(source)
         Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
@@ -1814,6 +1886,11 @@ public sealed class Probe<T>
         Assert.Matches("\\b(let|var) genericMismatchLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) genericMatchedLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) savedHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) twoHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) parameterHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) instanceHelperLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) coalesceFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) coalesceLocalStorageLeft T\\? =", printed)
     }
 
     shared {

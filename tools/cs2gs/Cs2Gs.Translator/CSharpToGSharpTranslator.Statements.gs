@@ -1644,7 +1644,9 @@ partial class CSharpToGSharpTranslator {
             visited HashSet[ISymbol],
             enclosingExecutable SyntaxNode? = nil,
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil
         ) bool {
             let activeStorage = visitedStorage ?? HashSet[string](StringComparer.Ordinal)
             for candidate in expression!!.DescendantNodesAndSelf().OfType[ExpressionSyntax]() {
@@ -1689,13 +1691,15 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return true
                 }
-                if candidate is InvocationExpressionSyntax && symbol is IMethodSymbol factory && visited.Add(
-                    factory.OriginalDefinition
-                ) {
+                if candidate is InvocationExpressionSyntax candidateInvocation &&
+                    symbol is IMethodSymbol factory &&
+                    visited
+                    .Add(factory.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
-                        candidate.SpanStart
+                        candidate.SpanStart,
+                        candidateInvocation
                     )
                     for returned in this.GetSourceCallableReturnExpressions(factory) {
                         if this.DelegateExpressionReachesLocalFunction(
@@ -1721,7 +1725,9 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol,
             visited HashSet[ISymbol],
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil
         ) bool {
             if !visited.Add(local) {
                 return false
@@ -1770,13 +1776,15 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return true
                     }
-                    if expression is InvocationExpressionSyntax && symbol is IMethodSymbol factory && visited.Add(
-                        factory.OriginalDefinition
-                    ) {
+                    if expression is InvocationExpressionSyntax expressionInvocation &&
+                        symbol is IMethodSymbol factory &&
+                        visited
+                        .Add(factory.OriginalDefinition) {
                         let nextCallerChain = AppendDelegateCaller(
                             callerChain,
                             FindEnclosingExecutable(expression),
-                            expression.SpanStart
+                            expression.SpanStart,
+                            expressionInvocation
                         )
                         for returned in this.GetSourceCallableReturnExpressions(factory) {
                             if this.DelegateExpressionReachesLocalFunction(
@@ -1804,7 +1812,9 @@ partial class CSharpToGSharpTranslator {
             enclosingExecutable SyntaxNode?,
             visited HashSet[ISymbol],
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil
         ) bool {
             let activeStorage = visitedStorage ?? HashSet[string](StringComparer.Ordinal)
             if expression!!.DescendantNodesAndSelf().Any(
@@ -1845,13 +1855,15 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return true
                 }
-                if candidate is InvocationExpressionSyntax && symbol is IMethodSymbol factory && visited.Add(
-                    factory.OriginalDefinition
-                ) {
+                if candidate is InvocationExpressionSyntax candidateInvocation &&
+                    symbol is IMethodSymbol factory &&
+                    visited
+                    .Add(factory.OriginalDefinition) {
                     let nextCallerChain = AppendDelegateCaller(
                         callerChain,
                         enclosingExecutable ?? FindEnclosingExecutable(candidate),
-                        candidate.SpanStart
+                        candidate.SpanStart,
+                        candidateInvocation
                     )
                     for returned in this.GetSourceCallableReturnExpressions(factory) {
                         if this.DelegateExpressionReachesAnonymousFunction(
@@ -1911,7 +1923,10 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol? = nil,
             visited HashSet[ISymbol]? = nil,
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil,
+            receiverOverride ExpressionSyntax? = nil
         ) bool -> this
             .NonLocalDelegateReachingStates(
             storage,
@@ -1921,7 +1936,9 @@ partial class CSharpToGSharpTranslator {
             localFunction,
             visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default),
             visitedStorage ?? HashSet[string](StringComparer.Ordinal),
-            callerChain
+            callerChain,
+            isConstructedTarget: false,
+            receiverOverride: receiverOverride
         )
             .Any((count int32) -> count > 0)
 
@@ -1933,8 +1950,11 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol?,
             visited HashSet[ISymbol],
             visitedStorage HashSet[string],
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil,
-            isConstructedTarget bool = false
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil,
+            isConstructedTarget bool = false,
+            receiverOverride ExpressionSyntax? = nil
         ) HashSet[int32] {
             if !this.IsNonLocalDelegateStorage(storage) {
                 return HashSet[int32]{0}
@@ -1953,30 +1973,25 @@ partial class CSharpToGSharpTranslator {
                             visited,
                             visitedStorage,
                             callerChain,
-                            isConstructedTarget: true
+                            isConstructedTarget: true,
+                            receiverOverride: receiverOverride
                         )
                     )
                 }
                 return combinedStates
             }
-            let unwrappedStorage = Unwrap(storage)
-            let storageSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(unwrappedStorage)
-            let rawStorageKey = if storageSymbol != nil {
-                storageSymbol.ToDisplayString()
-            } else {
-                unwrappedStorage?.ToString() ?? string.Empty
-            }
-            let scopedStorageKey = "${enclosingExecutable?.SpanStart ?? -1}:$rawStorageKey"
+            let scopedStorageKey = this.GetDelegateStorageCycleKey(storage, enclosingExecutable, receiverOverride)
             let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
             let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
-            if rawStorageKey.Length > 0 && !nextVisitedStorage.Add(scopedStorageKey) {
+            if scopedStorageKey.Length > 0 && !nextVisitedStorage.Add(scopedStorageKey) {
                 return if this.StorageMayEverReachTarget(
                     storage,
                     enclosingExecutable,
                     anonymousFunction,
                     localFunction,
                     HashSet[ISymbol](SymbolEqualityComparer.Default),
-                    HashSet[string](StringComparer.Ordinal)
+                    HashSet[string](StringComparer.Ordinal),
+                    receiverOverride
                 ) {
                     HashSet[int32]{0, 1, 2}
                 } else {
@@ -2015,7 +2030,16 @@ partial class CSharpToGSharpTranslator {
             } else {
                 let lastCaller = callerChain[callerChain.Count - 1]
                 let remainingChain = callerChain.Take(callerChain.Count - 1).ToArray()
-                if lastCaller.Executable != nil && lastCaller.Executable != enclosingExecutable {
+                if lastCaller.Executable != nil &&
+                    lastCaller.Executable != enclosingExecutable &&
+                    this
+                    .TryMapStorageReceiverToCallSite(
+                    storage,
+                    receiverOverride,
+                    enclosingExecutable,
+                    lastCaller.Invocation,
+                    out var mappedReceiverOverride
+                ) {
                     this.NonLocalDelegateReachingStates(
                         storage,
                         lastCaller.CallPosition,
@@ -2025,7 +2049,8 @@ partial class CSharpToGSharpTranslator {
                         nextVisited,
                         nextVisitedStorage,
                         remainingChain,
-                        isConstructedTarget: true
+                        isConstructedTarget: true,
+                        receiverOverride: mappedReceiverOverride
                     )
                 } else {
                     HashSet[int32]{0, 1, 2}
@@ -2059,7 +2084,8 @@ partial class CSharpToGSharpTranslator {
                             localFunction: localFunction,
                             visited: nextVisited,
                             visitedStorage: nextVisitedStorage,
-                            callerChain: callerChain
+                            callerChain: callerChain,
+                            receiverOverride: receiverOverride
                         )
                     }
                     if block.BranchValue is {} branchValue {
@@ -2073,7 +2099,8 @@ partial class CSharpToGSharpTranslator {
                             localFunction: localFunction,
                             visited: nextVisited,
                             visitedStorage: nextVisitedStorage,
-                            callerChain: callerChain
+                            callerChain: callerChain,
+                            receiverOverride: receiverOverride
                         )
                     }
                     if !outputs.TryGetValue(block, out var previous) || !previous.SetEquals(states) {
@@ -2102,7 +2129,8 @@ partial class CSharpToGSharpTranslator {
                     localFunction: localFunction,
                     visited: nextVisited,
                     visitedStorage: nextVisitedStorage,
-                    callerChain: callerChain
+                    callerChain: callerChain,
+                    receiverOverride: receiverOverride
                 )
             }
             if useOperationIndex < useBlock!!.Operations.Length {
@@ -2117,7 +2145,8 @@ partial class CSharpToGSharpTranslator {
                     localFunction,
                     nextVisited,
                     nextVisitedStorage,
-                    callerChain
+                    callerChain,
+                    receiverOverride
                 )
             } else if useBlock!!.BranchValue is {} branchValue {
                 reaching = this.ApplyDelegateReachingOperation(
@@ -2131,7 +2160,8 @@ partial class CSharpToGSharpTranslator {
                     localFunction,
                     nextVisited,
                     nextVisitedStorage,
-                    callerChain
+                    callerChain,
+                    receiverOverride
                 )
             }
             return reaching
@@ -2145,7 +2175,9 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol?,
             visited HashSet[ISymbol],
             visitedStorage HashSet[string],
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil,
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil,
             isConstructedTarget bool = false
         ) HashSet[int32] {
             if !isConstructedTarget && localFunction != nil && localFunction.IsGenericMethod {
@@ -2361,7 +2393,9 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol? = nil,
             visited HashSet[ISymbol]? = nil,
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil
         ) HashSet[int32] {
             var states = states
             let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
@@ -2420,6 +2454,11 @@ partial class CSharpToGSharpTranslator {
                                         state,
                                         rightCount
                                     )
+                                    case SyntaxKind.CoalesceAssignmentExpression: if state == 0 {
+                                        rightCount
+                                    } else {
+                                        state
+                                    }
                                     default: rightCount
                                 }
                             )
@@ -2456,7 +2495,10 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol? = nil,
             visited HashSet[ISymbol]? = nil,
             visitedStorage HashSet[string]? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil,
+            receiverOverride ExpressionSyntax? = nil
         ) HashSet[int32] {
             var states = states
             let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
@@ -2468,7 +2510,8 @@ partial class CSharpToGSharpTranslator {
                 (candidate AssignmentExpressionSyntax) -> this.DelegateStorageMatches(
                     candidate.Left,
                     storage,
-                    storageUsePosition
+                    storageUsePosition,
+                    receiverOverride
                 )
             )
                 .OrderBy((candidate AssignmentExpressionSyntax) -> candidate.Span.End) {
@@ -2485,7 +2528,8 @@ partial class CSharpToGSharpTranslator {
                         localFunction,
                         activeVisited,
                         activeStorage,
-                        callerChain: callerChain
+                        callerChain: callerChain,
+                        trackedStorageReceiverOverride: receiverOverride
                     ) {
                         if opaqueStorage {
                             // A property's or custom event's accessors may ignore or transform what is
@@ -2497,6 +2541,11 @@ partial class CSharpToGSharpTranslator {
                             switch assignment.Kind() {
                                 case SyntaxKind.AddAssignmentExpression: CombineDelegateStates(state, rightCount)
                                 case SyntaxKind.SubtractAssignmentExpression: SubtractDelegateStates(state, rightCount)
+                                case SyntaxKind.CoalesceAssignmentExpression: if state == 0 {
+                                    rightCount
+                                } else {
+                                    state
+                                }
                                 default: rightCount
                             }
                         )
@@ -2518,7 +2567,10 @@ partial class CSharpToGSharpTranslator {
             visited HashSet[ISymbol],
             visitedStorage HashSet[string],
             trackedLocal ILocalSymbol? = nil,
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]? = nil
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]? = nil,
+            trackedStorageReceiverOverride ExpressionSyntax? = nil
         ) HashSet[int32] {
             var expression = expression
             while expression != nil {
@@ -2562,7 +2614,8 @@ partial class CSharpToGSharpTranslator {
             if trackedStorage != nil && this.DelegateStorageMatches(
                 expression,
                 trackedStorage,
-                trackedStorageUsePosition
+                trackedStorageUsePosition,
+                trackedStorageReceiverOverride
             ) {
                 return HashSet[int32]{currentState}
             }
@@ -2602,7 +2655,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     counts.UnionWith(
                         this.DelegateAssignmentValueAnonymousFunctionCounts(
@@ -2616,7 +2670,8 @@ partial class CSharpToGSharpTranslator {
                             visited,
                             visitedStorage,
                             trackedLocal,
-                            callerChain
+                            callerChain,
+                            trackedStorageReceiverOverride
                         )
                     )
                     return counts
@@ -2633,7 +2688,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     let rightCounts = this.DelegateAssignmentValueAnonymousFunctionCounts(
                         binary.Right,
@@ -2646,7 +2702,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     let combined = HashSet[int32]()
                     for leftCount in leftCounts {
@@ -2668,7 +2725,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     let rightCounts = this.DelegateAssignmentValueAnonymousFunctionCounts(
                         binary.Right,
@@ -2681,7 +2739,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     let subtracted = HashSet[int32]()
                     for leftCount in leftCounts {
@@ -2703,7 +2762,8 @@ partial class CSharpToGSharpTranslator {
                         visited,
                         visitedStorage,
                         trackedLocal,
-                        callerChain
+                        callerChain,
+                        trackedStorageReceiverOverride
                     )
                     counts.UnionWith(
                         this.DelegateAssignmentValueAnonymousFunctionCounts(
@@ -2717,7 +2777,8 @@ partial class CSharpToGSharpTranslator {
                             visited,
                             visitedStorage,
                             trackedLocal,
-                            callerChain
+                            callerChain,
+                            trackedStorageReceiverOverride
                         )
                     )
                     return counts
@@ -2764,7 +2825,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .SemanticModel
                 .SyntaxTree &&
-                expression is InvocationExpressionSyntax &&
+                expression is InvocationExpressionSyntax invocationExpr &&
                 this
                 .context
                 .GetSymbolInfo(expression)
@@ -2776,7 +2837,8 @@ partial class CSharpToGSharpTranslator {
                 let nextCallerChain = AppendDelegateCaller(
                     callerChain,
                     enclosingExecutable ?? FindEnclosingExecutable(expression),
-                    expression.SpanStart
+                    expression.SpanStart,
+                    invocationExpr
                 )
                 let counts = HashSet[int32]()
                 var anyReturn = false
@@ -2830,11 +2892,16 @@ partial class CSharpToGSharpTranslator {
             localFunction IMethodSymbol,
             enclosingExecutable SyntaxNode?
         ) IReadOnlyList[IMethodSymbol] {
-            if !localFunction.IsGenericMethod || enclosingExecutable == nil {
+            let searchRoot = if !localFunction.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                FindEnclosingExecutable(localFunction.DeclaringSyntaxReferences[0].GetSyntax()) ?? enclosingExecutable
+            } else {
+                enclosingExecutable
+            }
+            if !localFunction.IsGenericMethod || searchRoot == nil {
                 return []IMethodSymbol{localFunction}
             }
             let targets = List[IMethodSymbol]()
-            for node in enclosingExecutable.DescendantNodesAndSelf().OfType[ExpressionSyntax]() {
+            for node in searchRoot.DescendantNodesAndSelf().OfType[ExpressionSyntax]() {
                 if node.SyntaxTree != this.context.SemanticModel.SyntaxTree {
                     continue
                 }
@@ -2854,30 +2921,175 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func GetDelegateStorageCycleKey(
+            storage ExpressionSyntax,
+            enclosingExecutable SyntaxNode?,
+            receiverOverride ExpressionSyntax? = nil
+        ) string {
+            let unwrappedStorage = Unwrap(storage)
+            if unwrappedStorage is ElementAccessExpressionSyntax elementAccess {
+                let receiverKey = this.GetDelegateReceiverCycleKey(elementAccess.Expression)
+                return "${enclosingExecutable?.SpanStart ?? -1}:elem:$receiverKey:${elementAccess.ArgumentList}"
+            }
+            let storageSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(unwrappedStorage)
+            let symbolKey = if storageSymbol != nil {
+                storageSymbol.ToDisplayString()
+            } else {
+                unwrappedStorage?.ToString() ?? string.Empty
+            }
+            if symbolKey.Length == 0 {
+                return string.Empty
+            }
+            let receiverKey = if storageSymbol?.IsStatic == true {
+                "static"
+            } else {
+                this.GetDelegateReceiverCycleKey(
+                    receiverOverride ?? (unwrappedStorage as MemberAccessExpressionSyntax)?.Expression
+                )
+            }
+            return "${enclosingExecutable?.SpanStart ?? -1}:$receiverKey:$symbolKey"
+        }
+
+        private func GetDelegateReceiverCycleKey(receiver ExpressionSyntax?) string {
+            let unwrapped = Unwrap(receiver)
+            if unwrapped == nil || unwrapped is ThisExpressionSyntax {
+                return "this"
+            }
+            if unwrapped.SyntaxTree == this
+                .context
+                .SemanticModel
+                .SyntaxTree &&
+                this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is {} symbol {
+                if symbol is ILocalSymbol || symbol is IParameterSymbol {
+                    let loc = symbol.Locations.FirstOrDefault()?.SourceSpan.Start ?? -1
+                    return "${symbol.Kind.ToString()}:${symbol.Name}:$loc"
+                }
+                if symbol is IFieldSymbol || symbol is IPropertySymbol {
+                    let prefix = if symbol.IsStatic {
+                        "static"
+                    } else {
+                        this.GetDelegateReceiverCycleKey((unwrapped as MemberAccessExpressionSyntax)?.Expression)
+                    }
+                    return "$prefix.${symbol.Name}"
+                }
+            }
+            return unwrapped.ToString()
+        }
+
+        private func TryMapStorageReceiverToCallSite(
+            storage ExpressionSyntax,
+            receiverOverride ExpressionSyntax?,
+            calleeExecutable SyntaxNode?,
+            callSite InvocationExpressionSyntax?,
+            out mappedReceiverOverride ExpressionSyntax?
+        ) bool {
+            mappedReceiverOverride = receiverOverride
+            let unwrappedStorage = Unwrap(storage)
+            if unwrappedStorage is ElementAccessExpressionSyntax {
+                return false
+            }
+            let storageSymbol = this.GetNormalizedDelegateStorageSymbol(unwrappedStorage)
+            if storageSymbol == nil {
+                return false
+            }
+            if storageSymbol.IsStatic {
+                mappedReceiverOverride = nil
+                return true
+            }
+            let effectiveReceiver = Unwrap(
+                receiverOverride ?? (unwrappedStorage as MemberAccessExpressionSyntax)?.Expression
+            )
+            if effectiveReceiver == nil || effectiveReceiver is ThisExpressionSyntax {
+                if calleeExecutable is LocalFunctionStatementSyntax ||
+                    calleeExecutable is AnonymousFunctionExpressionSyntax {
+                    return true
+                }
+                if callSite == nil {
+                    return false
+                }
+                let callExpr = Unwrap(callSite.Expression)
+                if callExpr is MemberAccessExpressionSyntax memberCall {
+                    mappedReceiverOverride = memberCall.Expression
+                    return true
+                }
+                mappedReceiverOverride = nil
+                return true
+            }
+            if effectiveReceiver.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                return false
+            }
+            let receiverSymbol = this.context.GetSymbolInfo(effectiveReceiver).Symbol
+            if receiverSymbol is IParameterSymbol parameter {
+                if callSite == nil ||
+                    callSite.SyntaxTree != this
+                    .context
+                    .SemanticModel
+                    .SyntaxTree ||
+                    this
+                    .context
+                    .SemanticModel
+                    .GetOperation(callSite) is not IInvocationOperation invocationOp {
+                    return false
+                }
+                for argumentOp in invocationOp.Arguments {
+                    if !SymbolEqualityComparer.Default.Equals(argumentOp.Parameter, parameter) {
+                        continue
+                    }
+                    if argumentOp.Syntax is ArgumentSyntax argSyntax {
+                        if argSyntax.RefOrOutKeyword.IsKind(SyntaxKind.OutKeyword) {
+                            return false
+                        }
+                        mappedReceiverOverride = argSyntax.Expression
+                        return true
+                    }
+                    if argumentOp.Syntax is ExpressionSyntax receiverArgSyntax {
+                        mappedReceiverOverride = receiverArgSyntax
+                        return true
+                    }
+                }
+                return false
+            }
+            if receiverSymbol is ILocalSymbol local {
+                let decl = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                let declExec = if decl != nil {
+                    FindEnclosingExecutable(decl)
+                } else {
+                    default(SyntaxNode?)
+                }
+                if declExec != nil && declExec != calleeExecutable {
+                    mappedReceiverOverride = effectiveReceiver
+                    return true
+                }
+                return false
+            }
+            if receiverSymbol is IFieldSymbol field && field.IsStatic {
+                mappedReceiverOverride = effectiveReceiver
+                return true
+            }
+            return false
+        }
+
         private func StorageMayEverReachTarget(
             storage ExpressionSyntax,
             enclosingExecutable SyntaxNode?,
             anonymousFunction AnonymousFunctionExpressionSyntax?,
             localFunction IMethodSymbol?,
             visited HashSet[ISymbol],
-            visitedStorage HashSet[string]
+            visitedStorage HashSet[string],
+            receiverOverride ExpressionSyntax? = nil
         ) bool {
             if enclosingExecutable == nil {
                 return false
             }
-            let unwrappedStorage = Unwrap(storage)
-            let storageSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(unwrappedStorage)
-            let rawStorageKey = if storageSymbol != nil {
-                storageSymbol.ToDisplayString()
-            } else {
-                unwrappedStorage?.ToString() ?? string.Empty
-            }
-            let scopedKey = "${enclosingExecutable.SpanStart}:$rawStorageKey"
-            if rawStorageKey.Length == 0 || !visitedStorage.Add(scopedKey) {
+            let scopedKey = this.GetDelegateStorageCycleKey(storage, enclosingExecutable, receiverOverride)
+            if scopedKey.Length == 0 || !visitedStorage.Add(scopedKey) {
                 return false
             }
             for assignment in enclosingExecutable.DescendantNodes().OfType[AssignmentExpressionSyntax]() {
-                if !this.DelegateStorageMatches(assignment.Left, storage) {
+                if !this.DelegateStorageMatches(assignment.Left, storage, rightReceiverOverride: receiverOverride) {
                     continue
                 }
                 if this.ExpressionMayEverReachTarget(
@@ -3002,16 +3214,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func AppendDelegateCaller(
-            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)]?,
+            callerChain IReadOnlyList[
+                (Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)
+            ]?,
             executable SyntaxNode?,
-            callPosition int32
-        ) IReadOnlyList[(Executable SyntaxNode?, CallPosition int32)] {
+            callPosition int32,
+            invocation InvocationExpressionSyntax? = nil
+        ) IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)] {
             let next = if callerChain == nil {
-                List[(Executable SyntaxNode?, CallPosition int32)]()
+                List[(Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)]()
             } else {
-                List[(Executable SyntaxNode?, CallPosition int32)](callerChain)
+                List[(Executable SyntaxNode?, CallPosition int32, Invocation InvocationExpressionSyntax?)](callerChain)
             }
-            next.Add((executable, callPosition))
+            next.Add((executable, callPosition, invocation))
             return next
         }
 
@@ -3109,7 +3324,8 @@ partial class CSharpToGSharpTranslator {
         private func DelegateStorageMatches(
             left ExpressionSyntax?,
             right ExpressionSyntax?,
-            rightUsePosition int32? = nil
+            rightUsePosition int32? = nil,
+            rightReceiverOverride ExpressionSyntax? = nil
         ) bool {
             var left = left
             var right = right
@@ -3131,7 +3347,8 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             let leftReceiver ExpressionSyntax? = (left as MemberAccessExpressionSyntax)?.Expression
-            let rightReceiver ExpressionSyntax? = (right as MemberAccessExpressionSyntax)?.Expression
+            let rightReceiver ExpressionSyntax? = rightReceiverOverride ??
+                (right as MemberAccessExpressionSyntax)?.Expression
             if leftReceiver == nil || rightReceiver == nil {
                 let explicitReceiver ExpressionSyntax? = leftReceiver ?? rightReceiver
                 return explicitReceiver == nil || explicitReceiver is ThisExpressionSyntax

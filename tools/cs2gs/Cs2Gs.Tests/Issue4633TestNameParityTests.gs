@@ -180,6 +180,21 @@ The following Tests are available:
                 return CSharpTestOracle.LoadOrNull(dir, AppId)
             }
         )
+        let mismatchDir = NewDirectory()
+        CSharpTestOracle{
+            AppId: AppId,
+            TestCount: 2,
+            Tests: List[string]{"Own.Tests.A.Works", "Own.Tests.A.Works"},
+            TestsByFramework: Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net9.0"] = List[string]{"Own.Tests.A.Works"},
+                ["net10.0"] = List[string]{"Own.Tests.A.Other"}
+            }
+        }.Write(mismatchDir)
+        Assert.Throws[InvalidOperationException](
+            func () object? {
+                return CSharpTestOracle.LoadOrNull(mismatchDir, AppId)
+            }
+        )
     }
 
     /// A bare C# case with neither an exact result nor any row is missing.
