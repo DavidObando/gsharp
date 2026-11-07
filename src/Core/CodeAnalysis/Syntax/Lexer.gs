@@ -647,34 +647,6 @@ class Lexer {
         var pendingHigh char = '\u0000'
         var pendingHighSpan = default(TextSpan)
         var unpairedSurrogateSpans List[TextSpan]? = nil
-        let FlushPendingHigh = func () {
-            if !hasPendingHigh {
-                return
-            }
-            unpairedSurrogateSpans ??= List[TextSpan]()
-            unpairedSurrogateSpans!!.Add(pendingHighSpan)
-            hasPendingHigh = false
-        }
-        let AppendUtf16Unit = func (unit char, unitSpan TextSpan) {
-            if hasPendingHigh {
-                if char.IsLowSurrogate(unit) {
-                    AppendUtf8Scalar(bytes, char.ConvertToUtf32(pendingHigh, unit))
-                    hasPendingHigh = false
-                    return
-                }
-                FlushPendingHigh()
-            }
-            if char.IsHighSurrogate(unit) {
-                hasPendingHigh = true
-                pendingHigh = unit
-                pendingHighSpan = unitSpan
-            } else if char.IsLowSurrogate(unit) {
-                unpairedSurrogateSpans ??= List[TextSpan]()
-                unpairedSurrogateSpans!!.Add(unitSpan)
-            } else {
-                AppendUtf8Scalar(bytes, int32(unit))
-            }
-        }
         var terminated = false
         while position < end && Current != '\r' && Current != '\n' {
             if Current == '"' {
@@ -686,7 +658,15 @@ class Lexer {
             let currentChar = Current
             position++
             if currentChar != '\\' {
-                AppendUtf16Unit(currentChar, TextSpan(pieceStart, 1))
+                AppendUtf16Unit(
+                    bytes,
+                    currentChar,
+                    TextSpan(pieceStart, 1),
+                    ref hasPendingHigh,
+                    ref pendingHigh,
+                    ref pendingHighSpan,
+                    ref unpairedSurrogateSpans
+                )
                 continue
             }
             if position >= end || Current == '\r' || Current == '\n' {
@@ -694,40 +674,128 @@ class Lexer {
             }
             let escape = Current
             position++
-            let pieceSpan = () -> TextSpan(pieceStart, position - pieceStart)
+            let simpleEscapeSpan = TextSpan(pieceStart, position - pieceStart)
             switch escape {
                 case '0' {
-                    AppendUtf16Unit('\0', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\0',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'a' {
-                    AppendUtf16Unit('\a', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\a',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'b' {
-                    AppendUtf16Unit('\b', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\b',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'f' {
-                    AppendUtf16Unit('\f', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\f',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'n' {
-                    AppendUtf16Unit('\n', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\n',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'r' {
-                    AppendUtf16Unit('\r', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\r',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 't' {
-                    AppendUtf16Unit('\t', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\t',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'v' {
-                    AppendUtf16Unit('\v', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\v',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case '\'' {
-                    AppendUtf16Unit('\'', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\'',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case '"' {
-                    AppendUtf16Unit('"', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '"',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case '\\' {
-                    AppendUtf16Unit('\\', pieceSpan())
+                    AppendUtf16Unit(
+                        bytes,
+                        '\\',
+                        simpleEscapeSpan,
+                        ref hasPendingHigh,
+                        ref pendingHigh,
+                        ref pendingHighSpan,
+                        ref unpairedSurrogateSpans
+                    )
                 }
                 case 'x', 'u', 'U' {
                     let maximum = if escape == 'U' {
@@ -747,7 +815,7 @@ class Lexer {
                         digits++
                         position++
                     }
-                    let span = pieceSpan()
+                    let span = TextSpan(pieceStart, position - pieceStart)
                     if digits < minimum {
                         Diagnostics.ReportInvalidUtf8StringLiteral(
                             TextLocation(text, span),
@@ -760,22 +828,37 @@ class Lexer {
                                 "Expected a Unicode scalar from U+0000 through U+10FFFF."
                             )
                         } else {
-                            FlushPendingHigh()
+                            FlushPendingUtf8HighSurrogate(
+                                ref hasPendingHigh,
+                                pendingHighSpan,
+                                ref unpairedSurrogateSpans
+                            )
                             AppendUtf8Scalar(bytes, int32(scalar))
                         }
                     } else {
-                        AppendUtf16Unit(char(scalar), span)
+                        AppendUtf16Unit(
+                            bytes,
+                            char(scalar),
+                            span,
+                            ref hasPendingHigh,
+                            ref pendingHigh,
+                            ref pendingHighSpan,
+                            ref unpairedSurrogateSpans
+                        )
                     }
                 }
                 default {
-                    Diagnostics.ReportInvalidUtf8StringLiteral(TextLocation(text, pieceSpan()), "Unknown text escape.")
+                    Diagnostics.ReportInvalidUtf8StringLiteral(
+                        TextLocation(text, simpleEscapeSpan),
+                        "Unknown text escape."
+                    )
                 }
             }
         }
         if !terminated {
             Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 3)))
         }
-        FlushPendingHigh()
+        FlushPendingUtf8HighSurrogate(ref hasPendingHigh, pendingHighSpan, ref unpairedSurrogateSpans)
         if unpairedSurrogateSpans != nil {
             for span in unpairedSurrogateSpans {
                 Diagnostics.ReportInvalidUtf8StringLiteral(
@@ -897,6 +980,48 @@ class Lexer {
                 TextLocation(text, TextSpan(start, 2)),
                 "The source file contains invalid encoded characters; byte literals cannot use repaired source text."
             )
+        }
+    }
+
+    private func FlushPendingUtf8HighSurrogate(
+        ref hasPendingHigh bool,
+        pendingHighSpan TextSpan,
+        ref unpairedSurrogateSpans List[TextSpan]?
+    ) {
+        if !hasPendingHigh {
+            return
+        }
+        unpairedSurrogateSpans ??= List[TextSpan]()
+        unpairedSurrogateSpans!!.Add(pendingHighSpan)
+        hasPendingHigh = false
+    }
+
+    private func AppendUtf16Unit(
+        bytes ImmutableArray[uint8].Builder,
+        unit char,
+        unitSpan TextSpan,
+        ref hasPendingHigh bool,
+        ref pendingHigh char,
+        ref pendingHighSpan TextSpan,
+        ref unpairedSurrogateSpans List[TextSpan]?
+    ) {
+        if hasPendingHigh {
+            if char.IsLowSurrogate(unit) {
+                AppendUtf8Scalar(bytes, char.ConvertToUtf32(pendingHigh, unit))
+                hasPendingHigh = false
+                return
+            }
+            FlushPendingUtf8HighSurrogate(ref hasPendingHigh, pendingHighSpan, ref unpairedSurrogateSpans)
+        }
+        if char.IsHighSurrogate(unit) {
+            hasPendingHigh = true
+            pendingHigh = unit
+            pendingHighSpan = unitSpan
+        } else if char.IsLowSurrogate(unit) {
+            unpairedSurrogateSpans ??= List[TextSpan]()
+            unpairedSurrogateSpans!!.Add(unitSpan)
+        } else {
+            AppendUtf8Scalar(bytes, int32(unit))
         }
     }
 
