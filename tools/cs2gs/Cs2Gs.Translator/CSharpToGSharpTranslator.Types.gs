@@ -373,7 +373,8 @@ partial class CSharpToGSharpTranslator {
                             bodyExpression,
                             expressionBody,
                             targetType,
-                            invoke
+                            invoke,
+                            includePromotedValue: true
                         )
                     }
                 } finally {

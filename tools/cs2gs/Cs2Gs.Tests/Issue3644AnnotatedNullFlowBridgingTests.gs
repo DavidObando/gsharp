@@ -242,6 +242,35 @@ namespace Demo
         Assert.Contains("projectDirectory!!", printed)
     }
 
+    @Fact
+    func RuntimeLambdaResult_FixedDelegateContract_BridgesConditionalAccessAndRecordClassToString() {
+        let printed = TranslateOblivious(`
+using System;
+
+namespace Demo
+{
+    public record ProfileId(int AccountId, int Region);
+
+    public sealed class Key
+    {
+        public override string ToString() => "k";
+    }
+
+    public static class Logger
+    {
+        public static void Log(Func<string> getWhat) => _ = getWhat();
+
+        public static void Run(ProfileId profileId, Key aliasKey)
+        {
+            Log(() => profileId.ToString());
+            Log(() => aliasKey?.ToString());
+        }
+    }
+}`)
+        Assert.Contains("Log(() -> profileId.ToString()!!)", printed)
+        Assert.Contains("Log(() -> (aliasKey?.ToString())!!)", printed)
+    }
+
     shared {
         private func TranslateOblivious(source string) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})

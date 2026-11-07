@@ -3437,7 +3437,17 @@ partial class CSharpToGSharpTranslator {
                 .ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
             }
-            return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol)
+            let includePromotedLambdaArm = IsBranchArm(value) &&
+                targetSymbol is IMethodSymbol methodTarget &&
+                this.ResultLambda(methodTarget, value) != nil &&
+                this.SlotTypeIsDeclared(targetSymbol, value)
+            return this.ForgiveNullableReferenceValue(
+                value,
+                translated,
+                targetType,
+                targetSymbol,
+                includePromotedValue: includePromotedLambdaArm
+            )
         }
 
         // Issue #5582: whether `value` is `T?` only in the emitted G#: C# proves it non-null, but G# gives it
@@ -5866,7 +5876,7 @@ partial class CSharpToGSharpTranslator {
                 (
                 !isFlowNarrowedLocal &&
                     !nullableObservedLambdaResult &&
-                    (importedStatedNullableValue || value is ConditionalAccessExpressionSyntax)
+                    (importedStatedNullableValue || Unparenthesize(value) is ConditionalAccessExpressionSyntax)
             )
             // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
             // target is checked by gsc at that coercion (§4).
@@ -7259,7 +7269,22 @@ partial class CSharpToGSharpTranslator {
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
         ) bool -> this.GenericResultInfersNilableThroughByRefArgument(expression) ||
             this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
-            this.ImportedGenericTupleElementRequiresAssertion(expression)
+            this.ImportedGenericTupleElementRequiresAssertion(expression) ||
+            this.RecordClassSynthesizedToStringIsNilableInGSharp(expression)
+
+        private func RecordClassSynthesizedToStringIsNilableInGSharp(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool -> expression is InvocationExpressionSyntax &&
+            this
+            .context
+            .GetSymbolInfo(expression)
+            .Symbol is IMethodSymbol{
+            Name: "ToString",
+            IsImplicitlyDeclared: true,
+            Parameters: {IsEmpty: true},
+            ContainingType: {IsRecord: true, IsReferenceType: true} recordType
+        } &&
+            this.IsSourceSymbol(recordType)
 
         // Issue #5582: whether `expression` mentions anywhere (an operand, an argument, a lambda body at any
         // depth, the initializer of a local that it reads, or the scrutinee of a pattern variable that it reads)
