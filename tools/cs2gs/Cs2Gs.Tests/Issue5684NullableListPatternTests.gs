@@ -305,6 +305,69 @@ namespace Demo
     }
 
     @Fact
+    func ListSliceBindings_SnapshotBeforeReceiverReassignment() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string Text(string? current)
+        {
+            if (current is ['a', .. var rest]) { current = "cd"; return rest; }
+            return "nil";
+        }
+        static int Array(int[]? current)
+        {
+            if (current is [1, .. var rest]) { current = new[] { 3, 4 }; return rest[0]; }
+            return 0;
+        }
+        static string Plain(string current)
+        {
+            if (current is ['a', .. var rest]) { current = "cd"; return rest; }
+            return "nil";
+        }
+        static string Typed(string? current)
+        {
+            if (current is ['a', .. string rest]) { current = "cd"; return rest; }
+            return "nil";
+        }
+        public static string Run() =>
+            Text("ab") + " " + Text(null) + " " + Array(new[] { 1, 2 }) + " " + Array(null) + " " +
+            Plain("ab") + " " + Typed("ab");
+    }
+}`, "b nil 2 0 b b")
+    }
+
+    @Fact
+    func ListDiscardPatterns_DoNotReadThrowingIndexer() {
+        AssertRuns(`
+#nullable enable
+using System;
+using System.Collections;
+using System.Collections.Generic;
+namespace Demo
+{
+    public sealed class Buffer : IReadOnlyList<int>
+    {
+        public int Count => 1;
+        public int this[int index] => throw new InvalidOperationException();
+        public IEnumerator<int> GetEnumerator() => throw new InvalidOperationException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    public static class P
+    {
+        static bool Plain(IReadOnlyList<int>? current) => current is [_];
+        static bool Var(IReadOnlyList<int>? current) => current is [var _];
+        static bool Grouped(IReadOnlyList<int>? current) => current is [(var _)];
+        public static string Run() =>
+            Plain(new Buffer()) + " " + Var(new Buffer()) + " " + Grouped(new Buffer()) + " " +
+            Plain(null) + " " + Var(null) + " " + Grouped(null);
+    }
+}`, "True True True False False False")
+    }
+
+    @Fact
     func NullableSwitchListArms_PreserveRuntimeMatches() {
         AssertRuns(`
 #nullable enable

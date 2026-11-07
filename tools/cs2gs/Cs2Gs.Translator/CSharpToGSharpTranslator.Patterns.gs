@@ -1465,7 +1465,9 @@ partial class CSharpToGSharpTranslator {
             }
             let temp = this.NewSpillName()
             let local = IdentifierExpression(temp)
-            this.state.StoredPatternCaptures.Add(local)
+            if storageType?.IsNullable == true {
+                this.state.StoredPatternCaptures.Add(local)
+            }
             if gsharpNullable {
                 this.state.GSharpNullablePatternReceivers.Add(local)
             }
@@ -1813,7 +1815,6 @@ partial class CSharpToGSharpTranslator {
                         receiver,
                         listPattern,
                         projectedListReceiver ?? receiverType,
-                        isNestedPatternMember,
                         receiverIsNonNull
                     )
                 }
@@ -1840,7 +1841,6 @@ partial class CSharpToGSharpTranslator {
             receiver GExpression?,
             listPattern ListPatternSyntax,
             receiverType ITypeSymbol?,
-            isNestedPatternMember bool = false,
             receiverIsNonNull bool = false
         ) GExpression {
             var receiver = receiver
@@ -1892,15 +1892,14 @@ partial class CSharpToGSharpTranslator {
                         slice,
                         i,
                         elements.Count - i - 1,
-                        receiverType,
-                        isNestedPatternMember
+                        receiverType
                     )
                     if sliceTest != nil {
                         test = BinaryExpression(test, "&&", sliceTest)
                     }
                     continue
                 }
-                if element is DiscardPatternSyntax {
+                if this.IsDiscardPattern(element) {
                     continue
                 }
                 let elementReceiver = this.BuildListElementReceiver(
@@ -2002,86 +2001,41 @@ partial class CSharpToGSharpTranslator {
             return GetEnumerableElementType(receiverType)
         }
 
-        // Issue #1889: a slice ("rest") subpattern either captures the middle
-        // slice (`.. var rest`/`.. T rest`, a binder — registered as a
-        // patternBindings substitution, same mechanism as a top-level `var`/
-        // declaration pattern) or tests it against a nested subpattern (`..[>
-        // 0]`, recursed against the materialized slice value); a bare `..`
-        // contributes neither. Returns `null` when there is no additional
-        // boolean test to AND in (a bare discard slice, or a successful bind).
+        private func IsDiscardPattern(pattern PatternSyntax?) bool -> switch pattern {
+            case DiscardPatternSyntax, VarPatternSyntax{Designation: DiscardDesignationSyntax}: true
+            case parenthesized is ParenthesizedPatternSyntax: this.IsDiscardPattern(parenthesized.Pattern)
+            default: false
+        }
+
+        // Slice bindings and nested tests share element capture selection. Discards never read the slice.
         private func TranslateSlicePatternTest(
             receiver GExpression?,
             slice SlicePatternSyntax,
             prefixCount int32,
             suffixCount int32,
-            receiverType ITypeSymbol?,
-            isNestedPatternMember bool = false
+            receiverType ITypeSymbol?
         ) GExpression? {
-            switch slice.Pattern {
-                case nil {
-                    return nil
-                }
-                case VarPatternSyntax{Designation: SingleVariableDesignationSyntax variable} when this
-                    .context
-                    .GetDeclaredSymbol(variable) is {} boundSymbol {
-                    this.state.PatternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount)
-                    this.RegisterProjectedPatternBinding(
-                        boundSymbol,
-                        this.GetProjectedSlicePatternType(
-                            slice,
-                            receiverType,
-                            (receiverType as IArrayTypeSymbol)?.ElementType
-                        )
-                    )
-                    return nil
-                }
-                case varPatternSyntax is VarPatternSyntax when varPatternSyntax.Designation is DiscardDesignationSyntax {
-                    return nil
-                }
-                case varTuple is VarPatternSyntax when varTuple.Designation is ParenthesizedVariableDesignationSyntax {
-                    this.context.ReportUnsupported(
-                        varTuple,
-                        "var pattern with tuple designation ('var (a, b)') has no canonical G# form yet (ADR-0115 §B)."
-                    )
-                    return nil
-                }
-                case DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax declVariable} when this
-                    .context
-                    .GetDeclaredSymbol(declVariable) is {} declBoundSymbol {
-                    // A typed slice capture (`.. T rest`) can only ever narrow to
-                    // the slice's own `[]T` type, so the (redundant) type check is
-                    // dropped — same bind-only treatment as the `var` capture above.
-                    this
-                        .state
-                        .PatternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount)
-                    this.RegisterProjectedPatternBinding(
-                        declBoundSymbol,
-                        this.GetProjectedSlicePatternType(
-                            slice,
-                            receiverType,
-                            (receiverType as IArrayTypeSymbol)?.ElementType
-                        )
-                    )
-                    return nil
-                }
-                default {
-                    let nestedSliceType ITypeSymbol? = this.GetProjectedSlicePatternType(
-                        slice,
-                        receiverType,
-                        (receiverType as IArrayTypeSymbol)?.ElementType
-                    ) ??
-                        receiverType
-                    // A nested subpattern tested against the middle slice (e.g.
-                    // `.. { Length: 0 }`, `.. [1, 2]`) — recurse the normal
-                    // boolean-test lowering against the materialized slice value.
-                    return this.TranslatePatternTest(
-                        BuildSliceExpression(receiver, prefixCount, suffixCount),
-                        slice.Pattern,
-                        nestedSliceType,
-                        isNestedPatternMember: isNestedPatternMember
-                    )
-                }
+            if slice.Pattern == nil || this.IsDiscardPattern(slice.Pattern) {
+                return nil
             }
+            let sliceType ITypeSymbol? = this.GetProjectedSlicePatternType(
+                slice,
+                receiverType,
+                (receiverType as IArrayTypeSymbol)?.ElementType
+            ) ??
+                receiverType
+            if slice.Pattern is DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax variable} &&
+                this
+                .context
+                .GetDeclaredSymbol(variable) is {} boundSymbol {
+                this.RegisterProjectedPatternBinding(boundSymbol, sliceType)
+            }
+            return this.TranslatePatternTest(
+                BuildSliceExpression(receiver, prefixCount, suffixCount),
+                slice.Pattern,
+                sliceType,
+                isNestedPatternMember: true
+            )
         }
 
         // Issue #1889: the index of an element read forward from the start (no
