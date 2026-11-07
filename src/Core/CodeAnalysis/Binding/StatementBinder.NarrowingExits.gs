@@ -23,6 +23,10 @@ internal partial class StatementBinder {
     private var exitPredecessors List[NarrowingState] = List[NarrowingState]()
     // The state at the end of the statement list that was bound last.
     private var listExitState NarrowingState = NarrowingState.Empty
+    private let normalStatementExits Dictionary[BoundStatement, NarrowingState] = Dictionary[
+        BoundStatement,
+        NarrowingState
+    ](ReferenceEqualityComparer.Instance)
 
     /// Records the state at the end of a statement list. `BindBlockStatements`
     /// calls it before it pops the frame that holds the lifts of the list.
@@ -143,6 +147,9 @@ internal partial class StatementBinder {
     private func RecordJoinExits(statement BoundStatement, exits List[NarrowingState]) {
         exitOwner = statement
         exitPredecessors = exits
+        if JoinedConditional(statement) is {} conditional {
+            normalStatementExits[conditional] = NarrowingState.Join(exits)
+        }
     }
 
     private func RecordFallbackExit(
@@ -153,19 +160,25 @@ internal partial class StatementBinder {
         if object.ReferenceEquals(exitOwner, statement) {
             return
         }
+        // Synthesized conditionals have no bound branch-list exit. Only their skipped path reaches this join.
+        if statement is BoundIfStatement conditional &&
+            conditional.ElseStatement == nil &&
+            !CanCompleteNormally(conditional.ThenStatement) {
+            let conditionStatement = BoundExpressionStatement(nil, conditional.Condition)
+            let afterCondition = KillExitEffects(binderCtx.Narrowing, conditionStatement, aliases, syntax)
+            let (_, whenFalse) = ComputeConditionNarrowing(conditional.Condition, aliases)
+            RecordJoinExits(
+                statement,
+                List[NarrowingState]{NarrowingState.Unreachable, SkippedBranchExit(afterCondition, whenFalse)}
+            )
+            return
+        }
         // Labels inside expressions can join new predecessors while the statement binds.
         var exit = KillExitEffects(binderCtx.Narrowing, statement, aliases, syntax)
         let postconditions = NarrowingFrame()
         ApplyMemberNotNullNarrowings(statement, postconditions)
+        ApplyAssignmentNarrowing(statement, postconditions, aliases)
         exit = exit.WithAll(postconditions.Entries)
-        if statement is BoundExpressionStatement{Expression: BoundAssignmentExpression assignment} &&
-            TryClassifyNonNullAssignment(assignment, out var variable, out var type) {
-            exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
-        }
-        if statement is BoundExpressionStatement expressionStatement &&
-            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliases) is {} assignments {
-            exit = exit.WithAll(assignments)
-        }
         if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
             exit = exit.WithAll(loopFacts)
         }
@@ -206,6 +219,10 @@ internal partial class StatementBinder {
         for path in state.Paths {
             let held = heldState.NarrowedType(path)
             let joined = state.NarrowedType(path)!!
+            // A widening records a possible nil, not a proof that condition effects can invalidate.
+            if IsNullableWidening(path, joined) {
+                continue
+            }
             if (held == nil || !IsWeakerOrEqual(held, joined)) &&
                 (IsByReferenceRoot(path.Root) || IsExternalStorageAlias(path.Root)) {
                 if effects == nil {

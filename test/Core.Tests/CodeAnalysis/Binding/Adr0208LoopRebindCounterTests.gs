@@ -64,20 +64,15 @@ func Run(n int32) int32 {
     @Fact
     func SliceL3_RetiresLoopComparisonAndDeadNarrowingHelpers() {
         let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static
-        let comparisonType = typeof(NarrowingComparison)
-        for retiredComparisonMember in[]string{
-            "LoopsEnabled",
-            "ReportLoopKill",
-            "ReportLoopSummary",
-            "ReportSpan",
-            "ReportLoopExitGain",
-            "TryRegisterSpanFunction",
-            "CountSpan"
-        } {
-            Assert.Empty(comparisonType.GetMember(retiredComparisonMember, flags))
-        }
+        Assert.Null(typeof(StatementBinder).Assembly.GetType("GSharp.Core.CodeAnalysis.Binding.NarrowingComparison"))
         let statementBinderType = typeof(StatementBinder)
         for retiredBinderMethod in[]string{
+            "ApplyIfJoinNarrowings",
+            "ApplyEarlyExitNarrowings",
+            "RestoreEarlyExitLiftsWrittenOnlyByCondition",
+            "ComputeIfJoinNonNull",
+            "ComputeBranchFallthroughNonNull",
+            "ProcessBranchStatement",
             "ReportBackwardJumpSpan",
             "FindBangSitesAfter",
             "CollectBangSites",

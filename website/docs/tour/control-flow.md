@@ -462,6 +462,20 @@ func Describe(a Animal) string {
 
 The branches of an `if` expression and of the conditional operator narrow the same way, so `(a is Dog) ? a.Bark() : a.Name` and `if a is Dog { a.Bark() } else { a.Name }` are equivalent; a nil guard narrows too (`s != nil ? s.Length : 0`).
 
+Narrowing follows reachable flow paths. At an `if` or `switch` exit, G# keeps facts proved by every path that reaches that exit. A branch that returns or throws does not discard another branch's facts. A bare block carries its exit facts forward, and a switch includes reachable breaks after their cleanup runs. Different refinements join to a compatible non-null type, not an arbitrary assigned subtype.
+
+A null-conditional Boolean comparison can also prove its receiver non-nil:
+
+```gsharp
+func AddInterface(value System.Type?) {
+    if value?.IsInterface != true { return }
+    let interfaces = System.Collections.Generic.List[System.Type]{value}
+    System.Console.WriteLine(interfaces.Count)
+}
+```
+
+The guard returns for nil receivers. By contrast, `if value?.IsInterface == false { return }` leaves a nil receiver on the path after the guard and does not narrow it. A getter or call that can replace the receiver prevents the proof from surviving. These rules follow [ADR-0208](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0208-narrowing-as-flow-state-with-a-query.md); loop and backward-jump entry rules follow [ADR-0213](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0213-narrowing-across-loops-and-backward-jumps.md).
+
 Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Across a loop or a backward-`goto` span, G# removes at region entry any inherited narrowing (or external-callable alias) that the region's statements can write or invalidate, binds the region once, and (in a function without a user label or `goto`) joins all reachable `break` states targeting the loop with the negated loop condition's narrowing at loop exit (or over the reachable `break` states alone when the header is unconditional such as `while true` or `for { }`); forward `goto` jumps join their narrowing state at the target label. A stable member path — a local, parameter, or read-only top-level `let` followed by read-only (`let`) instance fields or immutable, non-overridable auto-properties (such as `b.Pet` or `o.Box.Pet`) — also narrows, and its narrowing is invalidated when its root is reassigned or when an intervening call, non-auto or overridable property access, unlisted CLR accessor, or member/indexed/indirect write can run user code or mutate storage. Mutable (`var`) fields, settable or computed or overridable properties, static members, and indexed expressions are not narrowed.
 
 ## Pattern variables
