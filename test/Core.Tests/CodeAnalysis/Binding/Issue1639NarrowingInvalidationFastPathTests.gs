@@ -98,16 +98,18 @@ class C {
         // Mirrors Issue1180's member-path invalidation coverage: an active
         // member-path narrowing must still be dropped by an intervening
         // member-mutating assignment, exercising the merged single-pass walk.
+        // ADR-0208 R21 (#5786): a `var` field write keeps the fact, so the
+        // intervening write is an index write.
         let result = Evaluate(`
 open class Animal { var Name string }
 class Dog : Animal { func Bark() string { return "woof" } }
-class Box { var Other int32 = 0 let Pet Animal }
+class Box { let Others []int32 let Pet Animal }
 func Run(b Box) string {
     if b.Pet !is Dog { return "" }
-    b.Other = 1
+    b.Others[0] = 1
     return b.Pet.Bark()
 }
-Run(Box{Pet: Dog{Name: "Rex"}})
+Run(Box{Others: []int32{0}, Pet: Dog{Name: "Rex"}})
 `)
         Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Message.Contains("Bark", StringComparison.Ordinal))
     }

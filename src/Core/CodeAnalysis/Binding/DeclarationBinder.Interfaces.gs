@@ -953,8 +953,12 @@ internal partial class DeclarationBinder {
                     declaration: fieldSyntax
                 )
                 Binder.AttachDocumentation(fieldSymbol, fieldSyntax)
-                if fieldSyntax.Initializer != nil {
-                    pendingStaticInitializers.Add((fieldSymbol, fieldSyntax.Initializer, fieldType))
+                if fieldSyntax.Initializer is {} staticInitializer {
+                    pendingStaticInitializers.Add((fieldSymbol, staticInitializer, fieldType))
+                    // ADR-0208 R11 (#5520, #5832): the same literal test as a struct or class `shared` field.
+                    if !IsLiteralInitializerSyntax(staticInitializer, fieldType) {
+                        interfaceSymbol.DeclaresNonLiteralSharedFieldInitializer = true
+                    }
                 }
                 staticFieldsBuilder.Add(fieldSymbol)
             }
