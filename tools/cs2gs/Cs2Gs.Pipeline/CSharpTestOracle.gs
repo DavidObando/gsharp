@@ -298,6 +298,20 @@ class CSharpTestOracle {
                             .ToString() + "."
                     )
                 }
+                let flattenedFrameworkTests = oracle.TestsByFramework!!
+                    .Values
+                    .SelectMany((list List[string]) -> list)
+                    .OrderBy((name string) -> name, StringComparer.Ordinal)
+                    .ToArray()
+                let orderedTests = oracle.Tests!!.OrderBy((name string) -> name, StringComparer.Ordinal).ToArray()
+                if flattenedFrameworkTests.Length != orderedTests.Length || !flattenedFrameworkTests.SequenceEqual(
+                    orderedTests,
+                    StringComparer.Ordinal
+                ) {
+                    throw InvalidOperationException(
+                        path + ": the C# test oracle per-framework tests disagree with the flat test list."
+                    )
+                }
             }
             return oracle
         }
