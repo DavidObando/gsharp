@@ -7178,7 +7178,7 @@ unsafe func Run(choose bool) int32 {
     if choose {
         cb = clear
     }
-    Holder.Save(*void(&text))
+    Holder.Save(*void(&{ let marker = 0 text }))
     if text != nil {
         cb()
         return text.Length

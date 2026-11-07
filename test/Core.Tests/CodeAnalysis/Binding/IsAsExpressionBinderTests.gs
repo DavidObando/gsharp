@@ -159,20 +159,44 @@ func Check[T](b Box[List[T]]) Box[IEnumerable[T]]? -> b as Box[IEnumerable[T]]?
 Check[int32](Box[List[int32]]{Item: List[int32]()}) == nil`)
         Assert.Single(rejectedNestedContainer.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
+        let rejectedDirectionalCovariantInterface = Evaluate(`interface IBox[out U] {}
+struct S[T] : IBox[object] {}
+func Check[T](s S[T]) IBox[string]? -> s as IBox[string]
+Check[int32](S[int32]{}) == nil`)
+        Assert.Single(rejectedDirectionalCovariantInterface.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedDirectionalClrCovariantInterface = Evaluate(`import System.Collections.Generic
+struct S[T] : IReadOnlyList[object] {
+    prop Count int32 -> 0
+    prop this[index int32] object -> ""
+    func GetEnumerator() IEnumerator[object] -> nil!!
+    private func (System.Collections.IEnumerable) GetEnumerator() System.Collections.IEnumerator -> nil!!
+}
+func Check[T](s S[T]) IReadOnlyList[string]? -> s as IReadOnlyList[string]
+Check[int32](S[int32]{}) == nil`)
+        Assert.Single(rejectedDirectionalClrCovariantInterface.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedRepeatedTypeParameter = Evaluate(`struct Pair[A, B] { var First A; var Second B }
+func Check[T](x Pair[T, T]) Pair[int32, string]? -> x as Pair[int32, string]?
+Check[int32](Pair[int32, int32]{First: 1, Second: 2}) == nil`)
+        Assert.Single(rejectedRepeatedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}
 class Ints : List[int32] {}
-func Check[T](x object, xs IEnumerable[T], f (S) -> S) bool {
+func Check[T](x object, xs IEnumerable[T], f (S) -> S, g (object) -> object) bool {
     let a = x as List[T]
     let b = xs as List[T]
     let c = f as ICloneable
     let d = xs as Ints
-    return a == nil && b != nil && c != nil && d != nil
+    let e = g as (string) -> string
+    return a == nil && b != nil && c != nil && d != nil && e != nil
 }
 let ints = Ints()
 ints.Add(1)
-Check[int32](42, ints, (s S) -> s)`)
+let fObjStr (object) -> string = (_ object) -> "ok"
+Check[int32](42, ints, (s S) -> s, fObjStr)`)
         Assert.Empty(allowed.Diagnostics)
         Assert.Equal(true, allowed.Value)
     }

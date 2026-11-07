@@ -1235,6 +1235,10 @@ internal partial class MethodBodyEmitter {
         symbolicDelegateCtorRef EntityHandle?
     ) bool {
         if symbolicDelegateCtorRef != nil {
+            if cachedType is FunctionTypeSymbol cachedFn &&
+                (cachedFn.ClrType == nil || this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(cachedFn)) {
+                return this.outer.memberRefs.GetFunctionDelegateCtorRef(cachedFn) == symbolicDelegateCtorRef
+            }
             if cachedType is ImportedTypeSymbol constructed &&
                 constructed.OpenDefinition != nil &&
                 constructed.HasSubstitutableTypeArgument &&

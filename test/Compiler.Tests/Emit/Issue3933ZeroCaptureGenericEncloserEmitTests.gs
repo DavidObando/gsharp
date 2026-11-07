@@ -359,6 +359,14 @@ class Holder[T] {
         func MakeNamed() IntOp {
             return (x int32) -> x * 2
         }
+
+        func MakeGenericFunc() Func[T, T] {
+            return (item T) -> item
+        }
+
+        func MakeGenericAction() Action[T] {
+            return (_ T) -> { }
+        }
     }
 }
 
@@ -378,9 +386,21 @@ func Main() {
     let n1 = Holder[string].MakeNamed()
     let n2 = Holder[string].MakeNamed()
     Console.WriteLine("named=" + object.ReferenceEquals(n1, n2).ToString() + ":" + n1(21).ToString())
+
+    let gf1 = Holder[string].MakeGenericFunc()
+    let gf2 = Holder[string].MakeGenericFunc()
+    let ga1 = Holder[string].MakeGenericAction()
+    let ga2 = Holder[string].MakeGenericAction()
+    Console.WriteLine(
+        "gen=" + object.ReferenceEquals(gf1, gf2).ToString() + ":" +
+        object.ReferenceEquals(ga1, ga2).ToString() + ":" + gf1("ok")
+    )
 }`
         let lines = CompileVerifyAndRun(source, out _)
-        Assert.Equal([]string{"func=True:42", "cmp=True:-1", "pred=True:True", "named=True:42"}, lines)
+        Assert.Equal(
+            []string{"func=True:42", "cmp=True:-1", "pred=True:True", "named=True:42", "gen=True:True:ok"},
+            lines
+        )
     }
 
     shared {

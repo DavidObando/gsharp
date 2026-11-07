@@ -1002,11 +1002,13 @@ internal class BinderContext {
                 case address is BoundAddressOfExpression: address.Operand
                 case conversion is BoundConversionExpression: conversion.Expression
                 case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion: assertion.Operand
+                case block is BoundBlockExpression: block.Expression
                 default: current
             }
             if !(current is BoundAddressOfExpression) &&
                 !(current is BoundConversionExpression) &&
-                !(current is BoundUnaryExpression && current.Op.Kind == BoundUnaryOperatorKind.NullAssertion) {
+                !(current is BoundUnaryExpression && current.Op.Kind == BoundUnaryOperatorKind.NullAssertion) &&
+                !(current is BoundBlockExpression) {
                 break
             }
         }
@@ -1015,6 +1017,9 @@ internal class BinderContext {
         } else if current is BoundConditionalAddressExpression conditional {
             RecordPointerEscapedOperand(conditional.WhenTrueOperand)
             RecordPointerEscapedOperand(conditional.WhenFalseOperand)
+        } else if current is BoundConditionalExpression conditionalExpr {
+            RecordPointerEscapedOperand(conditionalExpr.WhenTrue)
+            RecordPointerEscapedOperand(conditionalExpr.WhenFalse)
         }
     }
 
@@ -1034,9 +1039,21 @@ internal class BinderContext {
                     origin = assertion.Operand
                 } else if origin is BoundAddressOfExpression address {
                     origin = address.Operand
+                } else if origin is BoundBlockExpression block {
+                    origin = block.Expression
                 } else {
                     break
                 }
+            }
+            if origin is BoundConditionalAddressExpression conditionalOrigin {
+                RecordPointerEscapedOperand(conditionalOrigin.WhenTrueOperand)
+                RecordPointerEscapedOperand(conditionalOrigin.WhenFalseOperand)
+                break
+            }
+            if origin is BoundConditionalExpression conditionalExprOrigin {
+                RecordPointerEscapedOperand(conditionalExprOrigin.WhenTrue)
+                RecordPointerEscapedOperand(conditionalExprOrigin.WhenFalse)
+                break
             }
             current = (origin as BoundVariableExpression)?.Variable
         }
