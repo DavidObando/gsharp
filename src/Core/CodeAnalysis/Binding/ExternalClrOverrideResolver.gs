@@ -883,8 +883,17 @@ internal shared class ExternalClrOverrideResolver {
             implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable {
             return false
         }
-        // Tuple elements are returned values. Generic arguments have their own variance and invariance rules.
-        if !TupleTypeSymbol.TryGetTupleShape(contract.StripToBareShape(), out _) {
+        var valueShape = contract.StripToBareShape()
+        while valueShape is ByRefTypeSymbol || NullableLifting.IsAnyValueTypeNullable(
+            valueShape as NullableTypeSymbol
+        ) {
+            valueShape = TypeSymbol.GetWrappedTypes(valueShape).Single().StripToBareShape()
+        }
+        // Preserve semantic positions while recognizing tuple values through storage and async-result carriers.
+        if !TupleTypeSymbol.TryGetTupleShape(valueShape, out _) && !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+            valueShape,
+            out _
+        ) {
             return true
         }
         let contractPositions = contract.GetElementPositions()

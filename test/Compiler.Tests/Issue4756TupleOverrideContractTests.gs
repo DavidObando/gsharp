@@ -154,34 +154,49 @@ class Issue4756TupleOverrideContractTests {
     }
 
     @Theory
-    @InlineData("disable", "Box?", true, "")
-    @InlineData("disable", "Box", true, "")
-    @InlineData("enable", "Box?", false, "")
-    @InlineData("enable", "Box", true, "")
-    @InlineData("disable", "Box?", true, "Task")
-    @InlineData("disable", "Box", true, "Task")
-    @InlineData("enable", "Box?", false, "Task")
-    @InlineData("enable", "Box", true, "Task")
-    @InlineData("disable", "Box?", true, "ValueTask")
-    @InlineData("disable", "Box", true, "ValueTask")
-    @InlineData("enable", "Box?", false, "ValueTask")
-    @InlineData("enable", "Box", true, "ValueTask")
-    func ImportedTupleOverride_DistinguishesObliviousAndStatedNonNull(
+    @InlineData("disable", "Box?", true, "", true)
+    @InlineData("disable", "Box", true, "", true)
+    @InlineData("enable", "Box?", false, "", true)
+    @InlineData("enable", "Box", true, "", true)
+    @InlineData("disable", "Box?", true, "Task", true)
+    @InlineData("disable", "Box", true, "Task", true)
+    @InlineData("enable", "Box?", false, "Task", true)
+    @InlineData("enable", "Box", true, "Task", true)
+    @InlineData("disable", "Box?", true, "ValueTask", true)
+    @InlineData("disable", "Box", true, "ValueTask", true)
+    @InlineData("enable", "Box?", false, "ValueTask", true)
+    @InlineData("enable", "Box", true, "ValueTask", true)
+    @InlineData("disable", "Box?", true, "Task", false)
+    @InlineData("disable", "Box?", true, "ValueTask", false)
+    @InlineData("enable", "Box?", false, "Task", false)
+    @InlineData("enable", "Box?", false, "ValueTask", false)
+    func ImportedOverride_DistinguishesObliviousAndStatedNonNull(
         context string,
         leaf string,
         accepted bool,
-        envelope string
+        envelope string,
+        isTuple bool
     ) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let nativeReturn = if envelope == "" {
+        let nativeResult = if isTuple {
             "(Box Value, int Code)"
         } else {
-            "$envelope<(Box Value, int Code)>"
+            "Box"
+        }
+        let sourceResult = if isTuple {
+            "(Value $leaf, Code int32)"
+        } else {
+            leaf
+        }
+        let nativeReturn = if envelope == "" {
+            nativeResult
+        } else {
+            "$envelope<$nativeResult>"
         }
         let sourceReturn = if envelope == "ValueTask" {
-            "ValueTask[(Value $leaf, Code int32)]"
+            "ValueTask[$sourceResult]"
         } else {
-            "(Value $leaf, Code int32)"
+            sourceResult
         }
         let asyncModifier = if envelope == "" {
             ""
@@ -193,7 +208,9 @@ class Issue4756TupleOverrideContractTests {
                 "public abstract class Contract { public abstract $nativeReturn Read(bool choose); }",
             "native4795"
         )
-        let result = if leaf == "Box?" {
+        let result = if !isTuple {
+            "nil"
+        } else if leaf == "Box?" {
             "(nil, 1)"
         } else {
             "(Box(), 1)"
@@ -230,16 +247,95 @@ class Issue4756TupleOverrideContractTests {
         } else {
             ".GetAwaiter().GetResult()"
         }
+        let check = if isTuple {
+            "(row.Value == null) != $expectedNil || row.Code != 1"
+        } else {
+            "(row == null) != $expectedNil"
+        }
+        let expected = if isTuple {
+            "tuple:base-dispatch;code:1"
+        } else {
+            "reference:base-dispatch;nil"
+        }
         let consumer = fixture.CompileCSharp(
             "using System;\nusing Tuple4795;\npublic static class Consumer {\n" +
                 "public static string Run() { Contract rows = new Rows(); var row = rows.Read(false)$awaitSuffix;\n" +
-                "if ((row.Value == null) != $expectedNil || row.Code != 1) throw new Exception(\"return\");\n" +
-                "return \"tuple:base-dispatch;code:1\"; }\n}",
+                "if ($check) throw new Exception(\"return\");\n" +
+                "return \"$expected\"; }\n}",
             "consumer4795",
             native,
             emitted
         )
-        VerifyAndRun(native, emitted, consumer, "tuple:base-dispatch;code:1")
+        VerifyAndRun(native, emitted, consumer, expected)
+    }
+
+    @Theory
+    @InlineData("nullable", "disable", true)
+    @InlineData("nullable", "enable", false)
+    @InlineData("ref", "disable", true)
+    @InlineData("ref", "enable", false)
+    @InlineData("Task", "disable", true)
+    @InlineData("Task", "enable", false)
+    @InlineData("ValueTask", "disable", true)
+    @InlineData("ValueTask", "enable", false)
+    func WrappedTupleOverride_PreservesTheLeafContract(shape string, context string, accepted bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        const Tuple = "(Value Box?, Code int32)"
+        const NativeTuple = "(Box Value, int Code)"
+        let nativeReturn = switch shape {
+            case "nullable": NativeTuple + "?"
+            case "ref": "ref " + NativeTuple
+            default: "$shape<$NativeTuple>"
+        }
+        let sourceReturn = switch shape {
+            case "nullable": Tuple + "?"
+            case "ref": "ref " + Tuple
+            default: "$shape[$Tuple]"
+        }
+        let value = switch shape {
+            case "nullable": "row"
+            case "ref": "ref row"
+            case "Task": "Task.FromResult[$Tuple](row)"
+            default: "ValueTask[$Tuple](row)"
+        }
+        let native = fixture.CompileCSharp(
+            "#nullable $context\nusing System.Threading.Tasks;\nnamespace Wrapped4795;\npublic sealed class Box { }\n" +
+                "public abstract class Contract { public abstract $nativeReturn Read(); }",
+            "nativeWrapped4795"
+        )
+        let (exit, output) = fixture.TryCompile(
+            "package Wrapped4795\nimport System.Threading.Tasks\nclass Rows : Contract {\n" +
+                "    var row $Tuple = (nil, 1)\n" +
+                "    override func Read() $sourceReturn { return $value }\n}",
+            "Wrapped4795",
+            executable: false,
+            "/r:" + native
+        )
+        let emitted = Path.Combine(fixture.Directory, "Wrapped4795.dll")
+        if !accepted {
+            Assert.NotEqual(0, exit)
+            Assert.Contains("error GS0185", output, StringComparison.Ordinal)
+            Assert.Contains("Wrapped4795.gs(5,19,5,", output, StringComparison.Ordinal)
+            Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+            Assert.False(File.Exists(emitted))
+            return
+        }
+        Assert.True(exit == 0, output)
+        let read = switch shape {
+            case "nullable": "var maybe = rows.Read(); if (!maybe.HasValue) throw new Exception(\"presence\"); var row = maybe.Value;"
+            case "ref": "ref var row = ref rows.Read(); row.Code = 9; if (rows.Read().Code != 9) throw new Exception(\"alias\"); row.Code = 1;"
+            default: "var row = rows.Read().GetAwaiter().GetResult();"
+        }
+        let consumer = fixture.CompileCSharp(
+            "using System;\nusing Wrapped4795;\npublic static class Consumer {\n" +
+                "public static string Run() { Contract rows = new Rows(); $read\n" +
+                "if (row.Value != null || row.Code != 1) throw new Exception(\"wrapped return\");\n" +
+                "return \"wrapped:base-dispatch;nil;code:1\"; }\n}",
+            "consumerWrapped4795",
+            native,
+            emitted
+        )
+        VerifyAndRun(native, emitted, consumer, "wrapped:base-dispatch;nil;code:1")
     }
 
     @Theory
