@@ -676,7 +676,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1031,7 +1032,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1255,7 +1257,8 @@ partial class CSharpToGSharpTranslator {
                                 bindings,
                                 usedDesignators,
                                 guards,
-                                mutableBindings
+                                mutableBindings,
+                                node.Expression
                             )
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -2457,8 +2460,24 @@ partial class CSharpToGSharpTranslator {
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             usedDesignators HashSet[string],
             guards List[GExpression],
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
+            receiverSyntax ExpressionSyntax
         ) GPattern? {
+            let inputType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(receiverSyntax).Type,
+                receiverSyntax
+            )
+            if !PatternIntroducesBinding(pattern) && this.PatternRequiresLoweredListTest(pattern, inputType) {
+                let temp = this.NewSpillName()
+                let local = IdentifierExpression(temp)
+                if this.ReceiverValueIsPromotedNullable(receiverSyntax) || this.NullableReferenceValueMayBeNull(
+                    receiverSyntax
+                ) {
+                    this.state.GSharpNullablePatternReceivers.Add(local)
+                }
+                guards.Add(this.TranslatePatternTest(local, pattern, inputType))
+                return VarPattern(temp)
+            }
             if pattern is RecursivePatternSyntax &&
                 pattern.Type != nil &&
                 pattern.PropertyPatternClause != nil &&

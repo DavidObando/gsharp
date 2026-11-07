@@ -913,6 +913,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 return (nil, nil, nil, nil)
             }
+            if pattern is ListPatternSyntax || pattern is RecursivePatternSyntax{Type: nil} {
+                return (nil, nil, underlyingType, nil)
+            }
             return (this.GetTypeTestNarrowedType(pattern, inputType), nil, nil, nil)
         }
 
