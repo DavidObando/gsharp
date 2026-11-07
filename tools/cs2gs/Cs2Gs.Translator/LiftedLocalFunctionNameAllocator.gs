@@ -37,6 +37,43 @@ internal class LiftedLocalFunctionNameAllocator {
     private let claimedLocalNamesByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
         SymbolEqualityComparer.Default
     )
+    private let preallocatedOwners HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+    private let backingFieldsByOwner Dictionary[ISymbol, List[(Property IPropertySymbol, Name string)]] = Dictionary[
+        ISymbol,
+        List[(Property IPropertySymbol, Name string)]
+    ](SymbolEqualityComparer.Default)
+    private var compilationPreallocated bool
+
+    func TryBeginCompilationPreallocation() bool {
+        lock this.gate {
+            if this.compilationPreallocated {
+                return false
+            }
+            this.compilationPreallocated = true
+            return true
+        }
+    }
+
+    func TryBeginPreallocation(owner ISymbol?) bool {
+        if owner == nil {
+            return false
+        }
+        lock this.gate {
+            return this.preallocatedOwners.Add(owner.OriginalDefinition)
+        }
+    }
+
+    func GetAllocatedBackingFields(owner ISymbol?) IReadOnlyList[(Property IPropertySymbol, Name string)] {
+        if owner == nil {
+            return Array.Empty[(Property IPropertySymbol, Name string)]()
+        }
+        lock this.gate {
+            if this.backingFieldsByOwner.TryGetValue(owner.OriginalDefinition, out var fields) {
+                return fields.ToArray()
+            }
+            return Array.Empty[(Property IPropertySymbol, Name string)]()
+        }
+    }
 
     func ClaimDesignator(emittedOwner INamedTypeSymbol?, stem string, reserved(string) -> bool) string {
         lock this.gate {
@@ -154,6 +191,12 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
+    func TryGetAllocated(localFunction IMethodSymbol, out allocated string?) bool {
+        lock this.gate {
+            return this.assigned.TryGetValue(localFunction.OriginalDefinition, out allocated)
+        }
+    }
+
     func Allocate(
         localFunction IMethodSymbol,
         emittedOwner INamedTypeSymbol?,
@@ -208,6 +251,11 @@ internal class LiftedLocalFunctionNameAllocator {
             }
             used.Add(candidate)
             this.assigned.Add(propertyKey, candidate)
+            if !this.backingFieldsByOwner.TryGetValue(owner!!, out var ownerFields) {
+                ownerFields = List[(Property IPropertySymbol, Name string)]()
+                this.backingFieldsByOwner.Add(owner!!, ownerFields)
+            }
+            ownerFields.Add((propertyKey, candidate))
             return candidate
         }
     }

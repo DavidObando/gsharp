@@ -666,19 +666,15 @@ internal class CustomAttributeEncoder {
     /// declaration can express) and writes the fixed-argument blob using each
     /// parameter's own (always-primitive-or-string, hence already-resolved)
     /// `TypeSymbol.ClrType`.
-    /// @remarks Named (property/field) arguments are intentionally NOT supported for
-    /// user-defined attribute types here: (cref:WriteCustomAttributeNamedArg)
-    /// resolves the target member's CLR type via `Type.GetProperty`/
-    /// `Type.GetField` reflection, which is unavailable for a type
-    /// that hasn't been emitted yet. Reimplementing that against
-    /// (cref:StructSymbol) fields/properties (including nested-enum
-    /// underlying types, (cref:System.Type) arguments, etc.) is a
-    /// separate, considerably larger feature than closing the GS0200
-    /// recognition gap this issue is about. Named arguments on a
-    /// same-compilation user attribute are now rejected at bind time (GS0466,
-    /// see `DeclarationBinder.BindAttribute`), so [`attr`](paramref)
-    /// never carries any by the time it reaches the emitter — this method
-    /// only ever writes `NumNamed = 0`.
+    /// @remarks Issue #4798: named (property/field) arguments are resolved
+    /// across [`attributeType`](paramref)'s source and imported base
+    /// hierarchy by (cref:TryResolveUserNamedMember), validated by
+    /// (cref:ValidateUserNamedAttributeMembers) (requiring a most-derived
+    /// public writable instance field or non-indexer property with a valid
+    /// ECMA-335 custom-attribute member type and an assignable constant
+    /// argument), and encoded after `NumNamed` by
+    /// (cref:WriteUserCustomAttributeNamedArg) using `0x53` (`FIELD`) and
+    /// `0x54` (`PROPERTY`) entries.
     private func EmitUserBoundAttribute(parent EntityHandle, attributeType StructSymbol, attr BoundAttribute) {
         if !this.TryResolveUserAttributeConstructor(
             attributeType,
@@ -715,7 +711,10 @@ internal class CustomAttributeEncoder {
             let writeType = NormalizeWellKnownType(paramTypes!![i])
             WriteCustomAttributeFixedArg(valueBlob, writeType!!, effectiveArguments!![i])
         }
-        valueBlob.WriteUInt16(0) // NumNamed — see remarks above.
+        valueBlob.WriteUInt16(uint16(attr.NamedArguments.Length))
+        for arg in attr.NamedArguments {
+            this.WriteUserCustomAttributeNamedArg(valueBlob, attributeType, arg)
+        }
         this
             .emitCtx
             .Metadata
@@ -759,6 +758,7 @@ internal class CustomAttributeEncoder {
         var sawProjectableCandidate = false
         var positionalConflict BoundAttributeArgument? = nil
         ValidateUniqueNamedConstructorArguments(attr)
+        ValidateUserNamedAttributeMembers(attributeType, attr)
         let constructorCandidates = List[(Constructor ConstructorSymbol?, Parameters ImmutableArray[ParameterSymbol])]()
         if attributeType.HasPrimaryConstructor &&
             this.resolvePrimaryCtorToken != nil &&
@@ -951,6 +951,9 @@ internal class CustomAttributeEncoder {
 
     private func WriteCustomAttributeFixedArg(bb BlobBuilder, paramType Type, value object?) {
         var value = value
+        while value is BoundAttributeArgument{Value: BoundAttributeArgument innerArgument} {
+            value = innerArgument
+        }
         if value is BoundAttributeArgument argument {
             let unwrappedArgumentType = UnwrapAttributeReferenceNullability(argument.Type) ?? argument.Type
             if paramType.IsSameAs(typeof(object)) &&
@@ -1031,9 +1034,21 @@ internal class CustomAttributeEncoder {
         } else if paramType.IsSameAs(typeof(uint64)) {
             bb.WriteUInt64(Convert.ToUInt64(value))
         } else if paramType.IsSameAs(typeof(float32)) {
-            bb.WriteSingle(Convert.ToSingle(value))
+            bb.WriteSingle(
+                if value is char charSingle {
+                    float32(uint16(charSingle))
+                } else {
+                    Convert.ToSingle(value)
+                }
+            )
         } else if paramType.IsSameAs(typeof(float64)) {
-            bb.WriteDouble(Convert.ToDouble(value))
+            bb.WriteDouble(
+                if value is char charDouble {
+                    float64(uint16(charDouble))
+                } else {
+                    Convert.ToDouble(value)
+                }
+            )
         } else if paramType.IsSameAs(typeof(string)) {
             bb.WriteSerializedString(cast[string?](value))
         } else if paramType.IsSameAs(typeof(Type)) {
@@ -1496,6 +1511,51 @@ internal class CustomAttributeEncoder {
         WriteCustomAttributeFixedArg(bb, memberType, arg)
     }
 
+    private func WriteUserCustomAttributeNamedArg(
+        bb BlobBuilder,
+        attributeType StructSymbol,
+        arg BoundAttributeArgument
+    ) {
+        if !TryResolveUserNamedMember(
+            attributeType,
+            arg,
+            out var memberType,
+            out var writeType,
+            out var isProperty,
+            out var name,
+            out _
+        ) {
+            throw InvalidOperationException("Named attribute members must be validated before encoding.")
+        }
+        bb.WriteByte(
+            if isProperty {
+                uint8(0x54)
+            } else {
+                uint8(0x53)
+            }
+        )
+        this.WriteUserCustomAttributeFieldOrPropertyType(bb, memberType!!, writeType!!)
+        bb.WriteSerializedString(name)
+        let normalizedWriteType = NormalizeWellKnownType(writeType)!!
+        this.WriteCustomAttributeFixedArg(bb, normalizedWriteType, arg)
+    }
+
+    private func WriteUserCustomAttributeFieldOrPropertyType(bb BlobBuilder, memberType TypeSymbol, writeType Type) {
+        let unwrapped = UnwrapAttributeReferenceNullability(memberType) ?? memberType
+        if unwrapped is EnumSymbol {
+            bb.WriteByte(0x55)
+            bb.WriteSerializedString(this.GetSerializedTypeName(unwrapped))
+            return
+        }
+        if GetOneDimensionalArrayElementType(unwrapped) is EnumSymbol arrayEnum {
+            bb.WriteByte(0x1D)
+            bb.WriteByte(0x55)
+            bb.WriteSerializedString(this.GetSerializedTypeName(arrayEnum))
+            return
+        }
+        WriteCustomAttributeFieldOrPropertyType(bb, writeType)
+    }
+
     shared {
         /// Issue #1354: returns `true` when a per-position
         /// `[NullableAttribute]` must be emitted for a field/property — i.e. the
@@ -1896,7 +1956,7 @@ internal class CustomAttributeEncoder {
                         memberType.Name
                     )
                 }
-                if !ArgAssignable(memberArgument.Value, memberType, memberArgument.Type) {
+                if !IsNamedAttributeMemberArgumentAssignable(memberArgument, memberType) {
                     EmitDiagnosticException.ThrowDiagnostic(
                         memberArgument.Syntax ?? attribute.Syntax,
                         DiagnosticDescriptors.AttributeNamedArgumentTypeMismatch,
@@ -1906,6 +1966,188 @@ internal class CustomAttributeEncoder {
                     )
                 }
             }
+        }
+
+        private func ValidateUserNamedAttributeMembers(attributeType StructSymbol, attribute BoundAttribute) {
+            let seenMemberNames = HashSet[string](StringComparer.Ordinal)
+            for memberArgument in attribute.NamedArguments {
+                let memberName = Invariant.Required(
+                    memberArgument.Name,
+                    "a named attribute member argument has a name",
+                    expression: "memberArgument.Name"
+                )
+                if !TryResolveUserNamedMember(
+                    attributeType,
+                    memberArgument,
+                    out var memberType,
+                    out var writeType,
+                    out _,
+                    out var metadataName,
+                    out var hasInvalidMemberType
+                ) {
+                    if hasInvalidMemberType {
+                        EmitDiagnosticException.ThrowDiagnostic(
+                            memberArgument.Syntax ?? attribute.Syntax,
+                            DiagnosticDescriptors.AttributeNamedMemberInvalidType,
+                            memberArgument.Name,
+                            memberType?.Name ?? "?"
+                        )
+                    }
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.AttributeNamedArgumentNotFound,
+                        memberArgument.Name,
+                        attributeType.Name
+                    )
+                }
+                if !seenMemberNames.Add(metadataName!!) {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.DuplicateNamedArgument,
+                        memberName
+                    )
+                }
+                if !IsNamedAttributeMemberArgumentAssignable(memberArgument, writeType!!, memberType) {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.AttributeNamedArgumentTypeMismatch,
+                        memberArgument.Name,
+                        memberArgument.Type.Name,
+                        memberType!!.Name
+                    )
+                }
+            }
+        }
+
+        private func IsNamedAttributeMemberArgumentAssignable(
+            memberArgument BoundAttributeArgument,
+            writeType Type,
+            declaredMemberType TypeSymbol? = nil
+        ) bool {
+            if ArgAssignable(memberArgument.Value, writeType, memberArgument.Type, declaredMemberType) {
+                return true
+            }
+            if memberArgument.Value is not{} value {
+                return false
+            }
+            let unwrappedSupplied = UnwrapAttributeReferenceNullability(memberArgument.Type)
+            let unwrappedDeclared = UnwrapAttributeReferenceNullability(declaredMemberType)
+            if unwrappedSupplied is EnumSymbol ||
+                unwrappedDeclared is EnumSymbol ||
+                unwrappedSupplied?.ClrType is not{} suppliedClr ||
+                suppliedClr.IsEnumSafe() || !NumericWideningLattice.IsNumericPrimitive(suppliedClr.FullName) ||
+                writeType.IsEnumSafe() {
+                return false
+            }
+            let normalizedSource = NormalizeWellKnownType(suppliedClr)!!
+            let normalizedTarget = NormalizeWellKnownType(writeType)!!
+            if NumericWideningLattice.IsWidening(normalizedSource, normalizedTarget) {
+                return true
+            }
+            return ExpressionBinder.TryAdaptIntegerLiteral(
+                value,
+                TypeSymbol.FromClrTypeWithoutNullability(normalizedTarget, NullabilityFreeReason.IdentityComparison),
+                out _
+            )
+        }
+
+        private func TryResolveUserNamedMember(
+            attributeType StructSymbol,
+            argument BoundAttributeArgument,
+            out memberType TypeSymbol?,
+            out writeType Type?,
+            out isProperty bool,
+            out metadataName string?,
+            out hasInvalidMemberType bool
+        ) bool {
+            memberType = nil
+            writeType = nil
+            isProperty = false
+            metadataName = nil
+            hasInvalidMemberType = false
+            let emittedName = Invariant.Required(
+                argument.Name,
+                "a named attribute argument always has a member name",
+                expression: "argument.Name"
+            )
+            for current in attributeType.GetHierarchy() {
+                for staticProperty in current.StaticProperties {
+                    if !staticProperty.IsIndexer &&
+                        staticProperty
+                        .Parameters
+                        .Length == 0 &&
+                        staticProperty.Name == emittedName {
+                        return false
+                    }
+                }
+                for staticField in current.StaticFields {
+                    if !staticField.Name.StartsWith("<", StringComparison.Ordinal) && staticField.Name == emittedName {
+                        return false
+                    }
+                }
+                for constField in current.ConstFields {
+                    if constField.Name == emittedName {
+                        return false
+                    }
+                }
+                for property in current.Properties {
+                    if property.IsIndexer || property.Parameters.Length > 0 || property.Name != emittedName {
+                        continue
+                    }
+                    if property.IsStatic ||
+                        property.Accessibility != Accessibility.Public ||
+                        !property.HasSetter ||
+                        property.SetterAccessibility != Accessibility.Public {
+                        return false
+                    }
+                    let resolvedType = current.SubstituteMemberType(property.Type)
+                    memberType = resolvedType
+                    isProperty = true
+                    metadataName = property.Name
+                    if !TryGetAttributeParameterWriteType(resolvedType, out writeType) {
+                        hasInvalidMemberType = true
+                        return false
+                    }
+                    return true
+                }
+                for field in current.Fields {
+                    if field.Name.StartsWith("<", StringComparison.Ordinal) || field.Name != emittedName {
+                        continue
+                    }
+                    if field.IsStatic ||
+                        field.IsConst ||
+                        field.IsReadOnly ||
+                        field.Accessibility != Accessibility.Public {
+                        return false
+                    }
+                    let resolvedType = current.SubstituteMemberType(field.Type)
+                    memberType = resolvedType
+                    isProperty = false
+                    metadataName = field.Name
+                    if !TryGetAttributeParameterWriteType(resolvedType, out writeType) {
+                        hasInvalidMemberType = true
+                        return false
+                    }
+                    return true
+                }
+                if current.ImportedBaseType is {ClrType: {} importedBaseClr} importedBaseType &&
+                    TryResolveNamedMember(importedBaseClr, argument, out var clrMember, out metadataName) {
+                    if clrMember is PropertyInfo clrProperty {
+                        isProperty = true
+                        memberType = MemberLookup.GetClrPropertyTypeSymbol(importedBaseType, clrProperty)
+                    } else {
+                        let clrField = cast[FieldInfo](clrMember!!)
+                        isProperty = false
+                        memberType = MemberLookup.GetClrFieldTypeSymbol(importedBaseType, clrField)
+                    }
+                    if !TryGetAttributeParameterWriteType(memberType, out writeType) {
+                        hasInvalidMemberType = true
+                        return false
+                    }
+                    return true
+                }
+            }
+            return false
         }
 
         internal func TryResolveImportedAttributeConstructor(
@@ -2371,6 +2613,9 @@ internal class CustomAttributeEncoder {
             // Everything is assignable to System.Object. Compared by name so the
             // check holds for attribute types resolved through a MetadataLoadContext.
             if paramType.FullName == "System.Object" {
+                if !IsValidBoxedAttributeValue(supplied, suppliedType) {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
                 return if suppliedIsObject {
                     AttributeArgumentConversionKind.Exact
                 } else {
@@ -2438,6 +2683,9 @@ internal class CustomAttributeEncoder {
                 }
             }
             if IsObjectArrayType(paramType) {
+                if !IsValidBoxedAttributeValue(supplied, suppliedType) {
+                    return AttributeArgumentConversionKind.NotApplicable
+                }
                 if unwrappedSupplied != nil {
                     let elementClr = GetOneDimensionalArrayElementType(unwrappedSupplied)?.ClrType
                     if elementClr == nil {
@@ -2880,6 +3128,57 @@ internal class CustomAttributeEncoder {
             )
             metadataName = member?.Name
             return member != nil
+        }
+
+        private func IsValidBoxedAttributeValue(supplied object?, suppliedType TypeSymbol? = nil) bool {
+            if supplied is BoundAttributeArgument wrapped {
+                return IsValidBoxedAttributeValue(wrapped.Value, wrapped.Type)
+            }
+            let unwrappedType = UnwrapAttributeReferenceNullability(suppliedType)
+            if unwrappedType != nil &&
+                unwrappedType != TypeSymbol.Null &&
+                !DeclarationBinder.IsValidAttributeParameterType(unwrappedType) {
+                return false
+            }
+            if supplied == nil || supplied is Type || supplied is TypeSymbol {
+                return true
+            }
+            if unwrappedType is EnumSymbol || unwrappedType?.ClrType?.IsEnumSafe() == true {
+                return TryGetAttributeParameterWriteType(unwrappedType, out _) &&
+                    IsValidBoxedAttributeValue(supplied, nil)
+            }
+            if supplied is Array array {
+                let arrayType = supplied.GetType()
+                if !arrayType.IsArray || arrayType.GetArrayRank() != 1 {
+                    return false
+                }
+                let declaredElementType = GetOneDimensionalArrayElementType(unwrappedType)
+                if declaredElementType != nil && !DeclarationBinder.IsValidAttributeParameterType(declaredElementType) {
+                    return false
+                }
+                let runtimeElementType = arrayType.GetElementType()!!
+                if declaredElementType is not EnumSymbol && !IsValidAttributeMemberScalarType(runtimeElementType) {
+                    return false
+                }
+                for var i = 0; i < array.Length; i++ {
+                    let element = array.GetValue(i)
+                    let elementType = if element is BoundAttributeArgument {
+                        default(TypeSymbol?)
+                    } else {
+                        declaredElementType
+                    }
+                    if !IsValidBoxedAttributeValue(element, elementType) {
+                        return false
+                    }
+                }
+                return true
+            }
+            let runtimeType = supplied.GetType()
+            return runtimeType.IsEnum ||
+                (
+                !runtimeType.IsSameAs(typeof(nint)) && !runtimeType.IsSameAs(typeof(nuint)) &&
+                    (runtimeType.IsPrimitive || runtimeType.IsSameAs(typeof(string)))
+            )
         }
 
         private func IsValidAttributeMemberType(type Type) bool {

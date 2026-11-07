@@ -688,7 +688,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1043,7 +1044,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1129,51 +1131,7 @@ partial class CSharpToGSharpTranslator {
         ] {
             let subject GExpression? = this.TranslateExpression(node.Expression)
             let cases = List[SwitchStatementCase]()
-            let sectionByLocalFunction = Dictionary[IMethodSymbol, SwitchSectionSyntax](SymbolEqualityComparer.Default)
-            let declarationByLocalFunction = Dictionary[IMethodSymbol, LocalFunctionStatementSyntax](
-                SymbolEqualityComparer.Default
-            )
-            let orderedBySection = Dictionary[
-                SwitchSectionSyntax,
-                IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]
-            ]()
-            for section in node.Sections {
-                orderedBySection.Add(section, this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span))
-                for localFunction in section.Statements.OfType[LocalFunctionStatementSyntax]() {
-                    using let modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree)
-                    if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol {
-                        sectionByLocalFunction[symbol] = section
-                        declarationByLocalFunction[symbol] = localFunction
-                    }
-                }
-            }
-            this.RegisterRecursiveLocalFunctionLifts(
-                node.Sections.SelectMany(
-                    func (section SwitchSectionSyntax) IEnumerable[
-                        Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
-                    ] {
-                        return section.Statements
-                    }
-                ),
-                (component IReadOnlyCollection[IMethodSymbol]) -> component
-                    .Select((symbol IMethodSymbol) -> sectionByLocalFunction[symbol])
-                    .Distinct()
-                    .Skip(1)
-                    .Any() ||
-                    component
-                    .Any(
-                    (symbol IMethodSymbol) -> this.IsLocalFunctionReferencedFromAnotherSwitchSection(
-                        symbol,
-                        declarationByLocalFunction[symbol]
-                    )
-                ),
-                processOnlyForcedGroups: true
-            )
-            for section in node.Sections {
-                let ordered = orderedBySection[section]
-                this.RegisterCapturingRecursiveLocalFunctions(ordered)
-                this.RegisterRecursiveLocalFunctionLifts(ordered)
-            }
+            let orderedBySection = this.RegisterSwitchLocalFunctionLifts(node)
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
             // own labels) needs a synthesized label at the top of the arm it
@@ -1267,7 +1225,8 @@ partial class CSharpToGSharpTranslator {
                                 bindings,
                                 usedDesignators,
                                 guards,
-                                mutableBindings
+                                mutableBindings,
+                                node.Expression
                             )
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -2469,8 +2428,24 @@ partial class CSharpToGSharpTranslator {
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             usedDesignators HashSet[string],
             guards List[GExpression],
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
+            receiverSyntax ExpressionSyntax
         ) GPattern? {
+            let inputType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(receiverSyntax).Type,
+                receiverSyntax
+            )
+            if !PatternIntroducesBinding(pattern) && this.PatternRequiresLoweredListTest(pattern, inputType) {
+                let temp = this.NewSpillName()
+                let local = IdentifierExpression(temp)
+                if this.ReceiverValueIsPromotedNullable(receiverSyntax) || this.NullableReferenceValueMayBeNull(
+                    receiverSyntax
+                ) {
+                    this.state.GSharpNullablePatternReceivers.Add(local)
+                }
+                guards.Add(this.TranslatePatternTest(local, pattern, inputType))
+                return VarPattern(temp)
+            }
             if pattern is RecursivePatternSyntax &&
                 pattern.Type != nil &&
                 pattern.PropertyPatternClause != nil &&

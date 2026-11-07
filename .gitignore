@@ -349,6 +349,7 @@ test/Core.Tests/Baselines/*.actual
 
 # Golden-mismatch artifacts: every GoldenFile assertion writes a sibling
 # `.actual` when it fails, and one of those was committed by a `git add -A`.
+*.actual
 *.golden.txt.actual
 tools/cs2gs/Cs2Gs.Tests/Fixtures/FrozenCompiler/**/*.actual
 tools/cs2gs/Cs2Gs.Tests/Fixtures/FrozenCompiler/*.actual

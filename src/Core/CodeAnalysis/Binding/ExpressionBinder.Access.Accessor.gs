@@ -41,6 +41,15 @@ internal partial class ExpressionBinder {
         var resolvedPrefix string? = nil
         var resolvedPrefixIsPackage = false
         var qualifiedClrFailureHandled = false
+        // A same-compilation SOURCE type constructed/referenced through a
+        // package-qualified name — `Oahu.Decrypt.Mp4Operation(...)`,
+        // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types take
+        // precedence over imported CLR types carrying the same qualified name
+        // (#3907, #4683), so resolve exact package-qualified source identity
+        // before the CLR reflection paths below.
+        if TryBindQualifiedSourceTypeConstruction(syntax, out var qualifiedSourceCtor) {
+            return qualifiedSourceCtor!!
+        }
         // Issue #293: a fully-qualified imported-type constructor
         // (`System.Text.StringBuilder()`, `System.Collections.Generic.List[int]()`)
         // parses as an accessor chain whose terminal segment is the call, so it
@@ -78,16 +87,6 @@ internal partial class ExpressionBinder {
             ) {
                 return BindAccessorStep(nil, qualifiedClrType, qualifiedClrMember)
             }
-        }
-        // A same-compilation SOURCE type constructed/referenced through a
-        // package-qualified name — `Oahu.Decrypt.Mp4Operation(...)`,
-        // `Oahu.Decrypt.Mp4Operation[TResult](...)`. Source types are visible by
-        // simple name across packages, but the qualified path above only resolves
-        // CLR-backed reference types (a source type has no CLR type at bind time).
-        // Resolve the complete source identity instead of rebinding a terminal
-        // simple name, which can select a lexical homonym.
-        if TryBindQualifiedSourceTypeConstruction(syntax, out var qualifiedSourceCtor) {
-            return qualifiedSourceCtor!!
         }
         // Issue #1069: a nested user type referenced by a qualified name from
         // outside its enclosing type (`Outer.Entry(...)`, `Outer.Inner().M()`).

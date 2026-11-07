@@ -439,8 +439,8 @@ class ImportedTypeSymbol : TypeSymbol {
                 return false
             }
             if !type.IsValueType && !semantics!!.IsData {
-                // A plain (non-data) reference class is never marked by the
-                // emitter, so only genuine data classes reach here.
+                // All classes carry GSharp.TypeSemantics for inheritance policy (#4808);
+                // non-data reference classes stay ordinary CLR imports and do not build a semantic aggregate.
                 return false
             }
             let consumerAssemblyName = references?.CurrentAssemblyName ?? string.Empty

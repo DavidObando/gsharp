@@ -2745,14 +2745,41 @@ partial class CSharpToGSharpTranslator {
                         .Select((parameter IParameterSymbol) -> parameter.Name)
                 )
             }
-            taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values)
-            taken.UnionWith(this.state.LiftedStaticLocalFunctions.Values)
+            let ownerType = symbol!!.ContainingType?.OriginalDefinition
+            taken.UnionWith(
+                this
+                    .state
+                    .SynthesizedPropertyBackingFieldNames
+                    .Where(
+                    (entry KeyValuePair[IPropertySymbol, string]) -> SymbolEqualityComparer.Default.Equals(
+                        entry.Key.ContainingType?.OriginalDefinition,
+                        ownerType
+                    )
+                )
+                    .Select((entry KeyValuePair[IPropertySymbol, string]) -> entry.Value)
+            )
+            taken.UnionWith(
+                this
+                    .state
+                    .LiftedStaticLocalFunctions
+                    .Where(
+                    (entry KeyValuePair[IMethodSymbol, string]) -> SymbolEqualityComparer.Default.Equals(
+                        entry.Key.ContainingType?.OriginalDefinition,
+                        ownerType
+                    )
+                )
+                    .Select((entry KeyValuePair[IMethodSymbol, string]) -> entry.Value)
+            )
             taken.UnionWith(
                 this
                     .state
                     .LiftedRecursiveLocalFunctions
-                    .Values
-                    .Select((lift LiftedRecursiveLocalFunction) -> lift.Name!!)
+                    .Where(
+                    (entry KeyValuePair[IMethodSymbol, LiftedRecursiveLocalFunction]) -> SymbolEqualityComparer
+                        .Default
+                        .Equals(entry.Key.ContainingType?.OriginalDefinition, ownerType)
+                )
+                    .Select((entry KeyValuePair[IMethodSymbol, LiftedRecursiveLocalFunction]) -> entry.Value.Name!!)
             )
             taken.UnionWith(
                 this

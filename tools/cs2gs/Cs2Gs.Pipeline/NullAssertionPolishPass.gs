@@ -4,6 +4,8 @@
 
 package Cs2Gs.Pipeline
 
+import GSharp.Core.CodeAnalysis.Text
+import GSharp.Formatting
 import System
 import System.Collections.Generic
 import System.IO
@@ -149,8 +151,17 @@ shared class NullAssertionPolishPass {
         recompile((bool) -> SdkCompileResult)?,
         emittedGsFiles IReadOnlyCollection[string],
         strippableRoot string? = nil,
-        maxRounds int32 = 12
-    ) PolishLoopOutcome -> Run(initial, recompile, emittedGsFiles, strippableRoot, maxRounds, surveyAvailable: true)
+        maxRounds int32 = 12,
+        formatOutput bool = true
+    ) PolishLoopOutcome -> Run(
+        initial,
+        recompile,
+        emittedGsFiles,
+        strippableRoot,
+        maxRounds,
+        surveyAvailable: true,
+        formatOutput
+    )
 
     /// Convenience overload for callers with no survey-mode compile to offer
     /// (the unit tests, and any direct-gsc path): every round compiles strictly.
@@ -159,18 +170,28 @@ shared class NullAssertionPolishPass {
     /// @param emittedGsFiles The emitted .gs file paths owned by this app.
     /// @param strippableRoot The optional shared emitted-output root.
     /// @param maxRounds The round cap (see (cref:DefaultMaxRounds)).
+    /// @param formatOutput Whether to run `gsfmt` on files modified by the polish pass.
     /// @returns The final compile result and what the loop did to reach it.
     func RunToFixedPoint(
         initial SdkCompileResult,
         recompile(() -> SdkCompileResult)?,
         emittedGsFiles IReadOnlyCollection[string],
         strippableRoot string? = nil,
-        maxRounds int32 = 12
+        maxRounds int32 = 12,
+        formatOutput bool = true
     ) PolishLoopOutcome {
         if recompile == nil {
             throw ArgumentNullException("recompile")
         }
-        return Run(initial, (_ bool) -> recompile(), emittedGsFiles, strippableRoot, maxRounds, surveyAvailable: false)
+        return Run(
+            initial,
+            (_ bool) -> recompile(),
+            emittedGsFiles,
+            strippableRoot,
+            maxRounds,
+            surveyAvailable: false,
+            formatOutput
+        )
     }
 
     /// Deletes every GS0536-flagged `!!` span from the given emitted
@@ -185,11 +206,13 @@ shared class NullAssertionPolishPass {
     /// dependency whose own compile stage never ran (translation-unsupported)
     /// still carries redundant assertions that fail this app's
     /// warnings-as-errors build.
+    /// @param formatOutput Whether to run `gsfmt` on files modified by the polish pass.
     /// @returns The number of assertions removed.
     func Strip(
         diagnostics IReadOnlyList[GscDiagnostic]?,
         emittedGsFiles IReadOnlyCollection[string]?,
-        strippableRoot string? = nil
+        strippableRoot string? = nil,
+        formatOutput bool = true
     ) int32 {
         if diagnostics == nil || diagnostics.Count == 0 || emittedGsFiles == nil || emittedGsFiles.Count == 0 {
             return 0
@@ -227,6 +250,15 @@ shared class NullAssertionPolishPass {
                 stripped++
             }
             if changed {
+                if formatOutput {
+                    let raw = string.Join(Environment.NewLine, lines) + Environment.NewLine
+                    let formatted = GSharpFormatter.Format(SourceText.From(raw, group.Key))
+                    let formattedText = formatted.Text
+                    if formatted.Diagnostics.IsEmpty && formattedText != nil {
+                        File.WriteAllText(group.Key, formattedText.ToString())
+                        continue
+                    }
+                }
                 File.WriteAllLines(group.Key, lines)
             }
         }
@@ -266,7 +298,8 @@ shared class NullAssertionPolishPass {
         emittedGsFiles IReadOnlyCollection[string],
         strippableRoot string?,
         maxRounds int32,
-        surveyAvailable bool
+        surveyAvailable bool,
+        formatOutput bool = true
     ) PolishLoopOutcome {
         if initial == nil {
             throw ArgumentNullException("initial")
@@ -305,7 +338,7 @@ shared class NullAssertionPolishPass {
                     File.ReadAllText,
                     StringComparer.Ordinal
                 )
-                let roundStripped = Strip(result!!.Diagnostics, emittedGsFiles, strippableRoot)
+                let roundStripped = Strip(result!!.Diagnostics, emittedGsFiles, strippableRoot, formatOutput)
                 if roundStripped == 0 {
                     // Every reported span was one this pass declines to touch
                     // (a stale coordinate, or a file outside the strippable set):

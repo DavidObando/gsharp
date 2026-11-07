@@ -67,9 +67,10 @@ namespace Corpus.Issue1889
     }
 }
 `)
-        Assert.Contains("values.Length >= 2", rendered, StringComparison.Ordinal)
+        Assert.Contains("values.Length is var __spill0", rendered, StringComparison.Ordinal)
+        Assert.Contains("__spill0 >= 2", rendered, StringComparison.Ordinal)
         Assert.Contains("values[0] == 1", rendered, StringComparison.Ordinal)
-        Assert.Contains("values[values.Length - 1] == 4", rendered, StringComparison.Ordinal)
+        Assert.Contains("values[__spill0 - 1] == 4", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 
@@ -94,10 +95,11 @@ namespace Corpus.Issue1889
     }
 }
 `)
-        Assert.Contains("values.Length >= 3", rendered, StringComparison.Ordinal)
+        Assert.Contains("values.Length is var __spill0", rendered, StringComparison.Ordinal)
+        Assert.Contains("__spill0 >= 3", rendered, StringComparison.Ordinal)
         Assert.Contains("values[0] == 1", rendered, StringComparison.Ordinal)
-        Assert.Contains("values[values.Length - 2] == 4", rendered, StringComparison.Ordinal)
-        Assert.Contains("values[values.Length - 1] == 5", rendered, StringComparison.Ordinal)
+        Assert.Contains("values[__spill0 - 2] == 4", rendered, StringComparison.Ordinal)
+        Assert.Contains("values[__spill0 - 1] == 5", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 

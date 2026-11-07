@@ -56,6 +56,66 @@ open class GapLedgerTests {
     }
 
     @Fact
+    func Classify_ExecutedStages_SuppressesLaterStageStaleEntries() {
+        let ledger = GapLedger(
+            List[GapLedgerEntry]{
+                GapLedgerEntry{
+                    Fingerprint: "sha256:compile-stale",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Stage: "compile",
+                    Issue: 10
+                },
+                GapLedgerEntry{
+                    Fingerprint: "sha256:parity-unrun",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Stage: "test-parity",
+                    Issue: 11
+                }
+            }
+        )
+        let executed = HashSet[string]{"translate", "compile"}
+        let runWideClassification = ledger.Classify(List[TriageArtifact](), fullCorpus: true, executed)
+        Assert.Equal(
+            []string{"sha256:compile-stale"},
+            runWideClassification.Stale.ConvertAll((e GapLedgerEntry) -> e.Fingerprint)
+        )
+        let byApp = Dictionary[string, IReadOnlySet[string]]{
+            ["corpus/Broken"] = HashSet[string]{"translate"},
+            ["corpus/Widget"] = HashSet[string]{"translate", "compile"}
+        }
+        let ledgerWithAppScope = GapLedger(
+            List[GapLedgerEntry]{
+                GapLedgerEntry{
+                    Fingerprint: "sha256:widget-compile-stale",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Stage: "compile",
+                    Apps: List[string]{"corpus/Widget"},
+                    Issue: 10
+                },
+                GapLedgerEntry{
+                    Fingerprint: "sha256:broken-compile-skipped",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Stage: "compile",
+                    Apps: List[string]{"corpus/Broken"},
+                    Issue: 12
+                },
+                GapLedgerEntry{
+                    Fingerprint: "sha256:parity-unrun",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Stage: "test-parity",
+                    Apps: List[string]{"corpus/Widget"},
+                    Issue: 11
+                }
+            }
+        )
+        let classification = ledgerWithAppScope.Classify(List[TriageArtifact](), fullCorpus: true, executed, byApp)
+        Assert.Equal(
+            []string{"sha256:widget-compile-stale"},
+            classification.Stale.ConvertAll((e GapLedgerEntry) -> e.Fingerprint)
+        )
+    }
+
+    @Fact
     func SaveAndLoad_RoundTripsEnvelope() {
         let path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "gaps.json")
         let ledger = GapLedger(
