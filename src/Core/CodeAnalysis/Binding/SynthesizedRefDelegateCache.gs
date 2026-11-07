@@ -5,8 +5,11 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis.Symbols
+import System
 import System.Collections.Generic
 import System.Collections.Immutable
+import System.Globalization
+import System.Linq
 import System.Text
 
 /// Issue #3501 A2: per-compile-pass cache of compiler-synthesized delegate
@@ -45,9 +48,61 @@ internal class SynthesizedRefDelegateCache {
         if byShape.TryGetValue(key, out var existing) {
             return existing
         }
+        let freeTypeParams = List[TypeParameterSymbol]()
+        for parameter in parameters {
+            TypeSymbol.CollectReferencedTypeParameters(parameter.Type, freeTypeParams)
+        }
+        TypeSymbol.CollectReferencedTypeParameters(returnType, freeTypeParams)
+        SynthesizedClosureReifier.ExpandWithConstraintDependencies(freeTypeParams)
         // Roslyn synthesizes `<>A{…}`/`<>F{…}` for ref-kind lambdas; the
         // angle-bracket prefix keeps the name unspeakable in source while
         // remaining a valid CLR TypeDef name.
+        if freeTypeParams.Count > 0 {
+            let origTPs = freeTypeParams.ToImmutableArray()
+            let delegateTypeParams = SynthesizedClosureReifier.CloneWithRemappedConstraints(
+                origTPs,
+                preserveVariance: false
+            )
+            let subst = Dictionary[TypeParameterSymbol, TypeSymbol](origTPs.Length)
+            for var i = 0; i < origTPs.Length; i++ {
+                subst[origTPs[i]] = delegateTypeParams[i]
+            }
+            let openParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameters.Length)
+            for var i = 0; i < parameters.Length; i++ {
+                let parameter = parameters[i]
+                let openParamType = StructSymbol.SubstituteTypeParameters(parameter.Type, subst)!!
+                let openParam = ParameterSymbol(parameter, openParamType, parameter.DeclaringSyntax, name: "arg${i}")
+                if parameter.HasExplicitDefaultValue {
+                    openParam.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+                }
+                openParameters.Add(openParam)
+            }
+            let openReturnType = StructSymbol.SubstituteTypeParameters(returnType, subst)!!
+            let openDef = DelegateTypeSymbol(
+                "<>RefFunc${counter++}",
+                packageName ?? string.Empty,
+                Accessibility.Internal,
+                ImmutableArray[ParameterSymbol].Empty,
+                TypeSymbol.Void,
+                declaration: nil
+            )
+            openDef.SetTypeParameters(delegateTypeParams)
+            openDef.SetSignature(openParameters.MoveToImmutable(), openReturnType)
+            symbols.Add(openDef)
+            let typeArgs = origTPs.Cast[TypeSymbol]().ToImmutableArray()
+            let constructed = DelegateTypeSymbol.Construct(openDef, typeArgs)!!
+            byShape[key] = constructed
+            return constructed
+        }
+        let canonicalParameters = ImmutableArray.CreateBuilder[ParameterSymbol](parameters.Length)
+        for var i = 0; i < parameters.Length; i++ {
+            let parameter = parameters[i]
+            let canonicalParam = ParameterSymbol(parameter, parameter.Type, parameter.DeclaringSyntax, name: "arg${i}")
+            if parameter.HasExplicitDefaultValue {
+                canonicalParam.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+            }
+            canonicalParameters.Add(canonicalParam)
+        }
         let symbol = DelegateTypeSymbol(
             "<>RefFunc${counter++}",
             packageName ?? string.Empty,
@@ -56,7 +111,7 @@ internal class SynthesizedRefDelegateCache {
             TypeSymbol.Void,
             declaration: nil
         )
-        symbol.SetSignature(parameters, returnType)
+        symbol.SetSignature(canonicalParameters.MoveToImmutable(), returnType)
         byShape[key] = symbol
         symbols.Add(symbol)
         return symbol
@@ -68,6 +123,23 @@ internal class SynthesizedRefDelegateCache {
             for parameter in parameters {
                 sb.Append(int32(parameter.RefKind)).Append(':')
                 FunctionTypeSymbol.AppendIdentityKey(sb, parameter.Type)
+                if parameter.HasExplicitDefaultValue {
+                    sb.Append('=')
+                    if parameter.ExplicitDefaultValue is {} defaultValue {
+                        let defaultText = Convert.ToString(defaultValue, CultureInfo.InvariantCulture) ?? string.Empty
+                        sb
+                            .Append(defaultValue.GetType().FullName)
+                            .Append(':')
+                            .Append(defaultText.Length)
+                            .Append(':')
+                            .Append(defaultText)
+                    } else {
+                        sb.Append("nil")
+                    }
+                }
+                if parameter.IsVariadic {
+                    sb.Append("...")
+                }
                 sb.Append(';')
             }
             sb.Append("->")

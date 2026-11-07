@@ -832,7 +832,14 @@ internal partial class ExpressionBinder {
         let thenCompletes = whenTrue.Type != TypeSymbol.Never
         let falseCompletes = whenFalse.Type != TypeSymbol.Never
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
-        let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            whenTrue = UnwrapSynthesizedRefDelegateBranch(whenTrue)
+            whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
+        }
+        var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
+        }
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -1025,7 +1032,14 @@ internal partial class ExpressionBinder {
             )
         }
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
-        let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            whenTrue = UnwrapSynthesizedRefDelegateBranch(whenTrue)
+            whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
+        }
+        var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
+        }
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)
@@ -1262,6 +1276,33 @@ internal partial class ExpressionBinder {
     /// the bound trailing expression (when there are no prefix statements), or
     /// a (cref:BoundBlockExpression) wrapping the prefix statements and
     /// the trailing value.
+    internal func MaterializeRefKindLiteralIfNeeded(location TextLocation, bound BoundExpression) BoundExpression {
+        if bound is BoundFunctionLiteralExpression refLiteral && TypeSymbol.MaterializeNeverFunctionReturns(
+            refLiteral.FunctionType
+        ) is FunctionTypeSymbol materializedFunctionType &&
+            $scope.TryGetSynthesizedRefDelegateForLiteral(
+            refLiteral.Function,
+            materializedFunctionType.ReturnType
+        ) is {} refDelegateType {
+            return conversions.BindConversion(location, bound, refDelegateType)
+        }
+        return bound
+    }
+
+    internal func UnwrapSynthesizedRefDelegateBranch(branch BoundExpression) BoundExpression ->
+    DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(branch, conversions)
+
+    internal func MaterializeSynthesizedRefDelegateResultType(
+        resultType TypeSymbol?,
+        branches IEnumerable[BoundExpression],
+        allowFirstArmFallback bool = false
+    ) TypeSymbol? -> DelegateRefKindUtilities.MaterializeSynthesizedRefDelegateResultType(
+        resultType,
+        branches,
+        $scope,
+        allowFirstArmFallback
+    )
+
     private func BindBlockExpressionParts(
         statements ImmutableArray[StatementSyntax],
         expression ExpressionSyntax,
@@ -1269,11 +1310,10 @@ internal partial class ExpressionBinder {
         targetType TypeSymbol? = nil
     )(Statements ImmutableArray[BoundStatement], Expression BoundExpression) {
         let BindTrailingExpression = func () BoundExpression {
-            return if targetType == nil {
-                BindExpression(expression, canBeVoid)
-            } else {
-                BindExpression(expression, targetType)
+            if targetType != nil {
+                return BindExpression(expression, targetType)
             }
+            return MaterializeRefKindLiteralIfNeeded(expression.Location, BindExpression(expression, canBeVoid))
         }
         return BindStatementsBeforeValue(statements, expression, BindTrailingExpression)
     }
@@ -1350,7 +1390,7 @@ internal partial class ExpressionBinder {
                 "<blockResult${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
                 isReadOnly: true,
                 value.Type ?? TypeSymbol.Error
-            )
+            ){CallableParameterNameTree = StatementBinder.BuildCallableParameterNameTree(value)}
             result = resultVariable
             $scope.TryDeclareVariable(resultVariable)
             return BoundVariableDeclaration(valueSyntax, resultVariable, value)
@@ -4180,11 +4220,37 @@ internal partial class ExpressionBinder {
                     return nil
                 }
                 if clrParameterType.IsByRef {
+                    let argument = boundArguments[argIndex]
+                    let paramRefKind = RefCapabilities.GetParameterRefKind(parameter)
+                    var hasRefKindOrReadOnlyMismatch = false
+                    if argument.Syntax is RefArgumentExpressionSyntax refArgSyntax {
+                        let explicitRefKind = Binder.GetRefKindFromModifier(refArgSyntax.RefKindModifier)
+                        if explicitRefKind != RefKind.None && explicitRefKind != paramRefKind {
+                            hasRefKindOrReadOnlyMismatch = true
+                        }
+                    } else if paramRefKind != RefKind.In &&
+                        (argument is BoundAddressOfExpression || argument is BoundConditionalAddressExpression) &&
+                        RefCapabilities.IsReadOnlyStorage(argument) {
+                        hasRefKindOrReadOnlyMismatch = true
+                    } else if paramRefKind != RefKind.In && ConversionClassifier.IsPlainValueArgument(argument) &&
+                        !ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument) &&
+                        !InterpolatedStringHandlerInfo
+                        .IsHandlerType(clrParameterType.GetElementType() ?? clrParameterType) {
+                        hasRefKindOrReadOnlyMismatch = true
+                    }
                     // Issue #5558: when a by-reference parameter is substituted from
                     // symbolic type arguments, compare the argument's storage type
                     // against the substituted symbolic pointee.
-                    let storageType = ByRefStorageMatching.TryGetStorageType(boundArguments[argIndex])
-                    if storageType != nil {
+                    let storageType = ByRefStorageMatching.TryGetStorageType(argument)
+                    let effectiveStorageType = storageType ??
+                        (
+                        if hasRefKindOrReadOnlyMismatch {
+                            argument.Type
+                        } else {
+                            default(TypeSymbol?)
+                        }
+                    )
+                    if effectiveStorageType != nil && effectiveStorageType != TypeSymbol.Error {
                         var symbolicPointee = TryResolveSymbolicByRefParameterPointee(
                             parameter,
                             receiverType,
@@ -4196,24 +4262,37 @@ internal partial class ExpressionBinder {
                         if symbolicPointee == nil &&
                             (
                             ClrNullability.ContainsFunctionPointer(clrParameterType) ||
-                                TypeSymbol.ContainsFunctionPointer(storageType)
+                                TypeSymbol.ContainsFunctionPointer(effectiveStorageType)
                         ) {
                             symbolicPointee = ClrNullability.GetParameterTypeSymbol(parameter)
                         }
                         if symbolicPointee == nil || symbolicPointee == TypeSymbol.Error {
-                            return nil
+                            return if hasRefKindOrReadOnlyMismatch {
+                                ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
+                            } else {
+                                default(ClrOverloadResolution.ImplicitConversionKind?)
+                            }
                         }
                         return if ByRefStorageMatching.AreSameStorageType(
-                            storageType,
+                            effectiveStorageType,
                             symbolicPointee,
                             out _,
                             out _,
                             out _
                         ) {
-                            ClrOverloadResolution.ImplicitConversionKind.Identity
+                            if hasRefKindOrReadOnlyMismatch {
+                                ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
+                            } else {
+                                ClrOverloadResolution.ImplicitConversionKind.Identity
+                            }
+                        } else if storageType == nil && hasRefKindOrReadOnlyMismatch {
+                            ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
                         } else {
                             ClrOverloadResolution.ImplicitConversionKind.None
                         }
+                    }
+                    if hasRefKindOrReadOnlyMismatch {
+                        return ClrOverloadResolution.ImplicitConversionKind.DelegateRefKindMismatch
                     }
                     if !parameter.IsIn ||
                         (
@@ -4261,9 +4340,8 @@ internal partial class ExpressionBinder {
                 ) {
                     nativeTarget = nativeTarget.GetElementPositions()[0]
                 }
-                if NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
-                    return if nativeConversions?.ClassifyArgumentConversion(sourceType, nativeTarget)
-                        .IsImplicit == true {
+                if nativeConversions != nil && NativeProtocolOperations.GetProtocol(nativeTarget) != nil {
+                    return if nativeConversions.ClassifyArgumentConversion(sourceType, nativeTarget).IsImplicit {
                         if sourceType == nativeTarget {
                             ClrOverloadResolution.ImplicitConversionKind.Identity
                         } else {

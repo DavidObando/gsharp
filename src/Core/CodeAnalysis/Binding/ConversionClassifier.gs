@@ -843,6 +843,90 @@ internal class ConversionClassifier {
                 )
             }
         }
+        if type != nil && type != TypeSymbol.Error && type != TypeSymbol.Void && !object.ReferenceEquals(
+            expression.Type,
+            type
+        ) &&
+            (
+            (
+                expression.Type.StripToBareShape() is FunctionTypeSymbol &&
+                    DelegateRefKindUtilities.HasNonNoneSourceParameterRefKinds(expression)
+            ) ||
+                CanAdaptSynthesizedRefDelegateValue(expression, type)
+        ) {
+            if expression is BoundConversionExpression{
+                Type: DelegateTypeSymbol{Declaration: nil},
+                Expression: {} innerRefExpr
+            } {
+                return BindConversion(
+                    diagnosticLocation,
+                    innerRefExpr,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            }
+            if expression is BoundBlockExpression refBlock {
+                return ConvertNeverBlockExpression(
+                    refBlock,
+                    diagnosticLocation,
+                    type,
+                    allowExplicit,
+                    callParameter,
+                    trackNarrowing
+                )
+            }
+            if expression is BoundConditionalExpression refConditional {
+                return BoundConditionalExpression(
+                    refConditional.Syntax,
+                    refConditional.Condition,
+                    BindConversion(
+                        diagnosticLocation,
+                        DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(refConditional.WhenTrue, this),
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    BindConversion(
+                        diagnosticLocation,
+                        DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(refConditional.WhenFalse, this),
+                        type,
+                        allowExplicit,
+                        callParameter,
+                        trackNarrowing
+                    ),
+                    type
+                )
+            }
+            if expression is BoundSwitchExpression refSwitch {
+                let convertedArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](refSwitch.Arms.Length)
+                for arm in refSwitch.Arms {
+                    convertedArms.Add(
+                        BoundSwitchExpressionArm(
+                            arm.Syntax,
+                            arm.Pattern,
+                            arm.Guard,
+                            BindConversion(
+                                diagnosticLocation,
+                                DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(arm.Result, this),
+                                type,
+                                allowExplicit,
+                                callParameter,
+                                trackNarrowing
+                            )
+                        )
+                    )
+                }
+                return BoundSwitchExpression(
+                    refSwitch.Syntax,
+                    refSwitch.Discriminant,
+                    convertedArms.MoveToImmutable(),
+                    type
+                )
+            }
+        }
         // ADR-0100 / issue #795: a typeless bare-`default` placeholder
         // (produced by ExpressionBinder.BindDefaultExpression when the
         // syntax has no type-clause) takes its concrete type from the
@@ -958,6 +1042,27 @@ internal class ConversionClassifier {
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type!!, Diagnostics)
             return BoundConversionExpression(nil, type!!, expressionTreeLiteral)
         }
+        if expression is BoundFunctionLiteralExpression refUpcastLiteral &&
+            !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _) &&
+            !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type!!, out _) &&
+            TypeSymbol.MaterializeNeverFunctionReturns(
+            refUpcastLiteral.FunctionType
+        ) is FunctionTypeSymbol materializedRefUpcastFnType &&
+            binderCtx
+            .RootScope
+            .TryGetSynthesizedRefDelegateForLiteral(
+            refUpcastLiteral.Function,
+            materializedRefUpcastFnType.ReturnType
+        ) is {} synthesizedRefUpcastDelegate {
+            expression = BindConversion(
+                diagnosticLocation,
+                refUpcastLiteral,
+                synthesizedRefUpcastDelegate,
+                allowExplicit,
+                callParameter,
+                trackNarrowing: false
+            )
+        }
         if expression is BoundFunctionLiteralExpression refContractLiteral {
             GetMethodGroupTargetRefKinds(
                 type!!,
@@ -1017,7 +1122,7 @@ internal class ConversionClassifier {
                 neverTargetFnType!!
             )
                 .IsImplicit {
-                let shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType!!, false)
+                let shaped = createErasedFunctionLiteralAdapter(neverCandidateLiteral, neverTargetFnType!!, true)
                 if !object.ReferenceEquals(shaped, neverCandidateLiteral) {
                     return BindConversion(diagnosticLocation, shaped, type, allowExplicit, callParameter)
                 }
@@ -3975,6 +4080,17 @@ internal class ConversionClassifier {
             try {
                 for var i = 0; i < arity; i++ {
                     var element = literalSource.Elements[i]
+                    if element is BoundConversionExpression{
+                        Type: DelegateTypeSymbol{Declaration: nil},
+                        Expression: BoundFunctionLiteralExpression synthesizedRefLiteral
+                    } &&
+                        !object.ReferenceEquals(element.Type, targetTuple.ElementTypes[i]) &&
+                        (
+                        MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetTuple.ElementTypes[i], out _) ||
+                            MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetTuple.ElementTypes[i], out _)
+                    ) {
+                        element = synthesizedRefLiteral
+                    }
                     let elementSyntax ExpressionSyntax? = if literalSource.Syntax is TupleLiteralExpressionSyntax tupleSyntax &&
                         i < tupleSyntax
                         .Elements
@@ -4053,7 +4169,9 @@ internal class ConversionClassifier {
         }
         // General path: evaluate the source once into a temp local, then build
         // a tuple literal of converted `ItemN` accesses off that local.
-        let temp = LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple)
+        let temp = LocalVariableSymbol("<>tupleConv", isReadOnly: true, type: sourceTuple){
+            CallableParameterNameTree = StatementBinder.BuildCallableParameterNameTree(expression)
+        }
         let declaration = BoundVariableDeclaration(expression.Syntax, temp, expression)
         let convertedElements = ImmutableArray.CreateBuilder[BoundExpression](arity)
         for var i = 0; i < arity; i++ {
@@ -4690,31 +4808,27 @@ internal class ConversionClassifier {
         callParameter ParameterSymbol?,
         trackNarrowing bool
     ) BoundExpression {
-        if neverBlock.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} resultRead &&
+        if neverBlock.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
             resultLocal
             .Name
-            .StartsWith("<blockResult", StringComparison.Ordinal) && TypeSymbol.ContainsNeverType(resultLocal.Type) {
-            let rewriter = CleanupBlockResultRewriter(
+            .StartsWith("<blockResult", StringComparison.Ordinal) {
+            let needsRewrite = TypeSymbol.ContainsNeverType(resultLocal.Type) ||
+                DelegateRefKindUtilities.HasNonNoneSourceParameterRefKinds(neverBlock)
+            if needsRewrite &&
+                RewriteCleanupBlockExpression(
+                neverBlock,
                 resultLocal,
                 (initializer BoundExpression) -> BindConversion(
                     diagnosticLocation,
-                    initializer,
+                    DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(initializer, this),
                     type,
                     allowExplicit,
                     callParameter,
                     trackNarrowing
-                )
-            )
-            let statements = ImmutableArray.CreateBuilder[BoundStatement](neverBlock.Statements.Length)
-            for statement in neverBlock.Statements {
-                statements.Add(rewriter.RewriteStatement(statement))
-            }
-            if rewriter.ReplacedLocal is {} replacedLocal {
-                return BoundBlockExpression(
-                    neverBlock.Syntax,
-                    statements.MoveToImmutable(),
-                    BoundVariableExpression(resultRead.Syntax, replacedLocal)
-                )
+                ),
+                type
+            ) is {} rewrittenBlock {
+                return rewrittenBlock
             }
         }
         return BoundBlockExpression(
@@ -4722,7 +4836,7 @@ internal class ConversionClassifier {
             neverBlock.Statements,
             BindConversion(
                 diagnosticLocation,
-                neverBlock.Expression,
+                DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(neverBlock.Expression, this),
                 type,
                 allowExplicit,
                 callParameter,
@@ -4731,13 +4845,43 @@ internal class ConversionClassifier {
         )
     }
 
+    internal func RewriteCleanupBlockExpression(
+        block BoundBlockExpression,
+        resultLocal LocalVariableSymbol,
+        rewriteInitializer(BoundExpression) -> BoundExpression,
+        targetType TypeSymbol? = nil
+    ) BoundBlockExpression? {
+        if block.Expression is not BoundVariableExpression resultRead {
+            return nil
+        }
+        let rewriter = CleanupBlockResultRewriter(resultLocal, rewriteInitializer, targetType)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement](block.Statements.Length)
+        for statement in block.Statements {
+            statements.Add(rewriter.RewriteStatement(statement))
+        }
+        if rewriter.ReplacedLocal is {} replacedLocal {
+            return BoundBlockExpression(
+                block.Syntax,
+                statements.MoveToImmutable(),
+                BoundVariableExpression(resultRead.Syntax, replacedLocal)
+            )
+        }
+        return nil
+    }
+
     private class CleanupBlockResultRewriter : BoundTreeRewriter {
         private let targetLocal LocalVariableSymbol
         private let convertInitializer(BoundExpression) -> BoundExpression
+        private let targetType TypeSymbol?
 
-        init(targetLocal LocalVariableSymbol, convertInitializer(BoundExpression) -> BoundExpression) {
+        init(
+            targetLocal LocalVariableSymbol,
+            convertInitializer(BoundExpression) -> BoundExpression,
+            targetType TypeSymbol? = nil
+        ) {
             this.targetLocal = targetLocal
             this.convertInitializer = convertInitializer
+            this.targetType = targetType
         }
 
         prop ReplacedLocal LocalVariableSymbol? {
@@ -4749,12 +4893,21 @@ internal class ConversionClassifier {
             let rewritten = cast[BoundVariableDeclaration](base.RewriteVariableDeclaration(node))
             if object.ReferenceEquals(rewritten.Variable, this.targetLocal) && rewritten.Initializer is {} initializer {
                 let convertedInitializer = this.convertInitializer(initializer)
+                if object.ReferenceEquals(convertedInitializer, initializer) &&
+                    (this.targetType == nil || object.ReferenceEquals(this.targetLocal.Type, this.targetType)) {
+                    return rewritten
+                }
+                let updatedType = if convertedInitializer.Type == TypeSymbol.Never && this.targetType != nil {
+                    this.targetType
+                } else {
+                    convertedInitializer.Type
+                }
                 let replaced = LocalVariableSymbol(
                     this.targetLocal.Name,
                     this.targetLocal.IsReadOnly,
-                    convertedInitializer.Type,
+                    updatedType,
                     this.targetLocal.DeclaringSyntax
-                )
+                ){CallableParameterNameTree = StatementBinder.BuildCallableParameterNameTree(convertedInitializer)}
                 this.ReplacedLocal = replaced
                 return BoundVariableDeclaration(
                     rewritten.Syntax,
@@ -6100,19 +6253,37 @@ internal class ConversionClassifier {
         }
 
         private func HasDelegateParameterRefKindMismatch(targetType TypeSymbol, expression BoundExpression) bool {
-            if !(targetType is DelegateTypeSymbol) &&
-                (targetType?.ClrType is not Type targetClrType || !ClrTypeUtilities.IsDelegateType(targetClrType)) {
+            let bareTarget = targetType.StripToBareShape()
+            if !(bareTarget is DelegateTypeSymbol) &&
+                (bareTarget?.ClrType is not Type targetClrType || !ClrTypeUtilities.IsDelegateType(targetClrType)) {
                 return false
             }
             if !DelegateRefKindUtilities.TryGetSourceParameterRefKinds(expression, out var sourceRefKinds) {
                 return false
             }
-            let targetRefKinds = GetMethodGroupTargetRefKinds(targetType, sourceRefKinds.Length, out _)
+            let targetRefKinds = GetMethodGroupTargetRefKinds(bareTarget, sourceRefKinds.Length, out _)
             if targetRefKinds.Length != sourceRefKinds.Length {
                 return false
             }
+            let sourceFn = expression.Type.StripToBareShape() as FunctionTypeSymbol
+            var targetFn FunctionTypeSymbol? = nil
+            if sourceFn != nil {
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(bareTarget, out targetFn)
+            }
             for var i = 0; i < sourceRefKinds.Length; i++ {
-                if (sourceRefKinds[i] != targetRefKinds[i]) {
+                if sourceRefKinds[i] != targetRefKinds[i] {
+                    return true
+                }
+                if targetRefKinds[i] != RefKind.None &&
+                    sourceFn != nil &&
+                    targetFn != nil &&
+                    i < sourceFn.Arity &&
+                    i < targetFn.Arity &&
+                    !TypeSymbol
+                    .AreRuntimeEquivalentIgnoringReferenceNullability(
+                    sourceFn.ParameterTypes[i],
+                    targetFn.ParameterTypes[i]
+                ) {
                     return true
                 }
             }
@@ -6247,7 +6418,77 @@ internal class ConversionClassifier {
             target TypeSymbol
         ) bool -> expression is BoundFunctionLiteralExpression ||
             CanAdaptNeverDelegateValue(expression) ||
+            CanAdaptSynthesizedRefDelegateValue(expression, target) ||
             Conversion.KeepsFunctionValueDelegate(expression.Type, target)
+
+        internal func CanAdaptSynthesizedRefDelegateValue(expression BoundExpression, target TypeSymbol) bool {
+            if object.ReferenceEquals(expression.Type.StripToBareShape(), target.StripToBareShape()) {
+                return false
+            }
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(target, out _) {
+                return false
+            }
+            if expression.Type.StripToBareShape() is not(FunctionTypeSymbol or DelegateTypeSymbol{Declaration: nil}) {
+                return false
+            }
+            if !DelegateRefKindUtilities.HasNonNoneSourceParameterRefKinds(expression) {
+                return false
+            }
+            return CanAdaptSynthesizedRefDelegateBranch(expression, target)
+        }
+
+        private func CanAdaptSynthesizedRefDelegateBranch(branch BoundExpression, target TypeSymbol) bool {
+            switch branch {
+                case literal is BoundFunctionLiteralExpression {
+                    return !HasDelegateParameterRefKindMismatch(target, literal) && Conversion.Classify(
+                        literal.Type,
+                        target
+                    )
+                        .IsImplicit
+                }
+                case conversion is BoundConversionExpression {
+                    if conversion.Expression.Type == TypeSymbol.Null || conversion.Expression.Type == TypeSymbol.Never {
+                        return Conversion.Classify(conversion.Expression.Type, target).IsImplicit
+                    }
+                    if conversion.Type.StripToBareShape() is DelegateTypeSymbol{Declaration: nil} {
+                        return CanAdaptSynthesizedRefDelegateBranch(conversion.Expression, target)
+                    }
+                    return Conversion.Classify(conversion.Type, target).IsImplicit
+                }
+                case block is BoundBlockExpression {
+                    if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                        resultLocal
+                        .Name
+                        .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                        DelegateRefKindUtilities.TryFindCleanupBlockResultInitializer(
+                        block.Statements,
+                        resultLocal
+                    ) is {} initExpr {
+                        return CanAdaptSynthesizedRefDelegateBranch(initExpr, target)
+                    }
+                    return CanAdaptSynthesizedRefDelegateBranch(block.Expression, target)
+                }
+                case conditional is BoundConditionalExpression {
+                    return CanAdaptSynthesizedRefDelegateBranch(conditional.WhenTrue, target) &&
+                        CanAdaptSynthesizedRefDelegateBranch(conditional.WhenFalse, target)
+                }
+                case switchExpr is BoundSwitchExpression {
+                    for arm in switchExpr.Arms {
+                        if !CanAdaptSynthesizedRefDelegateBranch(arm.Result, target) {
+                            return false
+                        }
+                    }
+                    return switchExpr.Arms.Length > 0
+                }
+                default {
+                    return (branch.Type == TypeSymbol.Null || branch.Type == TypeSymbol.Never) && Conversion.Classify(
+                        branch.Type,
+                        target
+                    )
+                        .IsImplicit
+                }
+            }
+        }
 
         private func CanAdaptNeverDelegateValue(expression BoundExpression) bool {
             if !TypeSymbol.ContainsNeverType(expression.Type) {
@@ -6336,10 +6577,16 @@ internal class ConversionClassifier {
             target TypeSymbol,
             conversion Conversion
         ) Conversion {
+            if HasDelegateParameterRefKindMismatch(target, expression) {
+                return Conversion.None
+            }
             if (expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression) &&
                 !conversion.IsImplicit &&
                 !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
                 return Conversion.None
+            }
+            if !conversion.Exists && CanAdaptSynthesizedRefDelegateValue(expression, target) {
+                return Conversion.Implicit
             }
             if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
                 return conversion
@@ -6430,13 +6677,14 @@ internal class ConversionClassifier {
             return returnRefKind != RefKind.None
         }
 
-        private func GetMethodGroupTargetRefKinds(
+        internal func GetMethodGroupTargetRefKinds(
             targetType TypeSymbol,
             parameterCount int32,
             out returnRefKind RefKind
         ) ImmutableArray[RefKind] {
             returnRefKind = RefKind.None
-            if targetType is DelegateTypeSymbol userDelegate {
+            let bareTarget = targetType.StripToBareShape()
+            if bareTarget is DelegateTypeSymbol userDelegate {
                 return userDelegate
                     .Parameters
                     .Select((parameter ParameterSymbol) -> parameter.RefKind)
@@ -6448,11 +6696,11 @@ internal class ConversionClassifier {
             // context closure, here silently degrading a by-ref target signature
             // to all-by-value rather than failing loudly. Both now read the ref
             // kinds through the same load-context-tolerant helper.
-            if targetType?.ClrType == nil || !ClrTypeUtilities.IsDelegateType(targetType.ClrType) {
+            if bareTarget?.ClrType == nil || !ClrTypeUtilities.IsDelegateType(bareTarget.ClrType) {
                 return ImmutableArray.CreateRange(Enumerable.Repeat(RefKind.None, parameterCount))
             }
             return DelegateRefKindUtilities.GetDelegateParameterRefKinds(
-                targetType.ClrType,
+                bareTarget.ClrType,
                 parameterCount,
                 out returnRefKind
             )

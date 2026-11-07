@@ -742,7 +742,9 @@ internal partial class ExpressionBinder {
                     TryGetTupleElementIndex(ce.Identifier.ValueText, tupleType, out var tupleIndex) &&
                     (
                     RequiresSymbolicTupleElementInvocation(tupleType, tupleIndex) ||
-                        RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex)
+                        RequiresDeclaredNameTupleElementInvocation(ce.Identifier.ValueText, tupleType, tupleIndex) ||
+                        !StatementBinder
+                        .GetTupleElementCallableParameterNames(receiver!!, tupleIndex).IsDefaultOrEmpty
                 ) {
                     let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
                     let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {

@@ -242,13 +242,16 @@ import System
 import System.Threading
 
 var x int32? = 41
+var y int32? = 42
+var c = true
 Interlocked.Increment(&x)
+Interlocked.Increment(&(c ? x : y))
 Int32.TryParse("5", &x)
 Console.WriteLine(x)
 `
             let (rejectExit, rejectLog) = Compile(tempDir, rejected, Path.Combine(tempDir, "rejected.dll"))
             Assert.True(rejectExit != 0, "&int32? must not reach an imported ref int:\n" + rejectLog)
-            Assert.Equal(2, CountOccurrences(rejectLog, "error GS0154"))
+            Assert.Equal(3, CountOccurrences(rejectLog, "error GS0154"))
             const accepted = `
 package P
 import System
