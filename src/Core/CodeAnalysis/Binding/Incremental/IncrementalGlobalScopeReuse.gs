@@ -356,6 +356,44 @@ internal shared class IncrementalGlobalScopeReuse {
                 }
                 fieldsToRepoint.Add((field, updated))
             }
+            if !interfaceSymbol.Properties.IsDefaultOrEmpty {
+                for prop in interfaceSymbol.Properties {
+                    let declaration PropertyDeclarationSyntax? = prop.Declaration
+                    if declaration == nil || declaration.SyntaxTree != previousTree {
+                        continue
+                    }
+                    if !propertyMap.TryGetValue(declaration, out var updated) {
+                        return false
+                    }
+                    let newGetter BlockStatementSyntax? = GetAccessorBody(updated, isGetter: true)
+                    let newSetter BlockStatementSyntax? = GetAccessorBody(updated, isGetter: false)
+                    if (prop.GetterBodySyntax != nil) != (newGetter != nil) ||
+                        (prop.SetterBodySyntax != nil) != (newSetter != nil) {
+                        return false
+                    }
+                    propertiesToRepoint.Add((prop, updated, newGetter, newSetter))
+                }
+            }
+            if !interfaceSymbol.Events.IsDefaultOrEmpty {
+                for ev in interfaceSymbol.Events {
+                    let declaration EventDeclarationSyntax? = ev.Declaration
+                    if declaration == nil || declaration.SyntaxTree != previousTree {
+                        continue
+                    }
+                    if !eventMap.TryGetValue(declaration, out var updated) {
+                        return false
+                    }
+                    let newAdd BlockStatementSyntax? = GetEventAccessorBody(updated, EventAccessorKind.Add)
+                    let newRemove BlockStatementSyntax? = GetEventAccessorBody(updated, EventAccessorKind.Remove)
+                    let newRaise BlockStatementSyntax? = GetEventAccessorBody(updated, EventAccessorKind.Raise)
+                    if (ev.AddBodySyntax != nil) != (newAdd != nil) ||
+                        (ev.RemoveBodySyntax != nil) != (newRemove != nil) ||
+                        (ev.RaiseBodySyntax != nil) != (newRaise != nil) {
+                        return false
+                    }
+                    eventsToRepoint.Add((ev, updated, newAdd, newRemove, newRaise))
+                }
+            }
         }
         // ---- Phase 2: all validation passed — apply the re-point. This is the
         // only mutation, and it only swaps backing syntax (signatures and

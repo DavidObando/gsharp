@@ -242,6 +242,23 @@ func F(a Animal) {
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Message.Contains("Bark", StringComparison.Ordinal))
     }
 
+    @Fact
+    func Issue4998_NestedSwitchHeadersContainingSwitchStatements_BindInLinearTime() {
+        var stmt = "switch 0 { default { } }"
+        for var i = 0; i < 28; i++ {
+            stmt = "switch { " + stmt + " 0 } { default { } }"
+        }
+        let src = "func F() {\n" + stmt + "\n}\n"
+        let sw = System.Diagnostics.Stopwatch.StartNew()
+        let diagnostics = Bind(src)
+        sw.Stop()
+        Assert.Empty(diagnostics)
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromSeconds(2),
+            "Nested switch headers took ${sw.Elapsed.TotalMilliseconds}ms"
+        )
+    }
+
     shared {
         private func Bind(source string) ImmutableArray[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

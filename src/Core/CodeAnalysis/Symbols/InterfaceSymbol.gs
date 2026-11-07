@@ -604,6 +604,7 @@ class InterfaceSymbol : TypeSymbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration InterfaceDeclarationSyntax) {
         Declaration = declaration
+        signatureVersion++
     }
 
     internal func NotifyParameterDefaultAttached() {
@@ -1065,8 +1066,9 @@ class InterfaceSymbol : TypeSymbol {
             if !m.Attributes.IsDefaultOrEmpty {
                 substMethod.SetAttributes(m.Attributes)
             }
-            if m.ThisParameter?.IsUnscopedRefReceiver == true && substMethod.ThisParameter != nil {
-                substMethod.ThisParameter.IsUnscopedRefReceiver = true
+            if m.ThisParameter is {} sourceThis && substMethod.ThisParameter is {} substThis {
+                substThis.IsScoped = sourceThis.IsScoped
+                substThis.IsUnscopedRefReceiver = sourceThis.IsUnscopedRefReceiver
             }
             if isStatic {
                 substMethod.IsStatic = true
@@ -1088,6 +1090,7 @@ class InterfaceSymbol : TypeSymbol {
             if !m.TypeParameters.IsDefaultOrEmpty {
                 substMethod.TypeParameters = m.TypeParameters
             }
+            substMethod.AnchorContainingType(instance)
             return substMethod
         }
 

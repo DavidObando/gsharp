@@ -964,6 +964,9 @@ internal partial class StatementBinder {
                 mayMutateMemberPaths = true
             }
             case AssignmentExpressionSyntax, FieldAssignmentExpressionSyntax, MemberFieldAssignmentExpressionSyntax { }
+            case coalescing is NullCoalescingAssignmentExpressionSyntax {
+                mayMutateMemberPaths = coalescing.Target is not NameExpressionSyntax
+            }
             // ADR-0208 R20 and R21 (#5832): an increment of a named member (`x.f++`) binds to a member write,
             // which the bound effects classify like `x.f = v`. Any other target keeps the syntax answer.
             case EventSubscriptionExpressionSyntax{IsIncrementDecrement: true} inc {
@@ -1174,6 +1177,46 @@ internal partial class StatementBinder {
                     expression: "underlying"
                 )
             )
+        }
+        if TryExtractNullCoalescingAssignmentFromStatement(statement, out var ncaAssign) &&
+            ncaAssign != nil &&
+            TryClassifyNonNullAssignment(ncaAssign, out var ncaVariable, out var ncaUnderlying) {
+            SetPersistentNarrowing(
+                persistentFrame,
+                Invariant.Required(
+                    ncaVariable,
+                    "a successful assignment narrowing has a variable",
+                    expression: "ncaVariable"
+                ),
+                Invariant.Required(
+                    ncaUnderlying,
+                    "a successful assignment narrowing has an underlying type",
+                    expression: "ncaUnderlying"
+                )
+            )
+        }
+        if statement != nil && !ContainsUserLabel(statement) {
+            let expr BoundExpression? = switch statement {
+                case exprStmt is BoundExpressionStatement: exprStmt.Expression
+                case varDecl is BoundVariableDeclaration: varDecl.Initializer
+                default: default(BoundExpression?)
+            }
+            if expr != nil &&
+                TryClassifyNullCoalescingExpressionNonNullAssignments(expr, aliasesAtEntry) is {} narrowed {
+                for kv in narrowed {
+                    SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
+                }
+            } else if statement is BoundBlockStatement{
+                Syntax: ExpressionStatementSyntax{Expression: NullCoalescingAssignmentExpressionSyntax}
+            } ncaBlock &&
+                TryClassifyNullCoalescingBlockStatementNonNullAssignments(
+                ncaBlock,
+                aliasesAtEntry
+            ) is {} blockNarrowed {
+                for kv in blockNarrowed {
+                    SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
+                }
+            }
         }
         if statement is BoundExpressionStatement expressionStatement &&
             TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliasesAtEntry) is {} assignments {
@@ -1595,50 +1638,6 @@ internal partial class StatementBinder {
         return true
     }
 
-    /// Issue #3907: whether [`value`](paramref) — the right-hand side of
-    /// an assignment — is itself an assignment whose own value proves the outer
-    /// target non-nil.
-    /// @remarks A nested assignment's STATIC type is its own target's DECLARED
-    /// type, so `order = (buffer = [8]int32)` types as `buffer`'s
-    /// `[]?int32` even though the value it propagates is the definitely
-    /// non-nil array literal. The outer assignment therefore failed
-    /// (cref:AssignmentTypePreservesNarrowing) and `order` stayed
-    /// nullable, while the identical `order = [8]int32` narrowed — an
-    /// asymmetry with no justification, since the two assign the same value.
-    /// C# reaches the same conclusion: its flow analysis tracks the assigned
-    /// value's null-state, not the nested target's annotation.
-    ///
-    /// Sound because the value of an assignment expression IS the value
-    /// assigned — not a re-read of the target — so `x = (y = v)` gives
-    /// `x` exactly the value `v` and must narrow on exactly the
-    /// evidence `x = v` narrows on. That is why this applies the SAME
-    /// (cref:AssignmentTypePreservesNarrowing) test to the inner
-    /// operand rather than a weaker or stronger one: the rule is a
-    /// look-through, not a new narrowing source.
-    /// @param value The outer assignment's right-hand side.
-    /// @param narrowedType The outer target's underlying non-nullable type.
-    /// @returns `true` when the nested assignment narrows the outer target.
-    private func NestedAssignmentPreservesNarrowing(value BoundExpression?, narrowedType TypeSymbol) bool {
-        var value = value
-        while value is BoundConversionExpression conversion {
-            value = conversion.Expression
-        }
-        let inner BoundExpression? = switch value {
-            case nestedLocal is BoundAssignmentExpression: nestedLocal.Expression
-            case nestedField is BoundFieldAssignmentExpression: nestedField.Value
-            default: default(BoundExpression?)
-        }
-        if inner == nil {
-            return false
-        }
-        var innerValue = inner
-        while innerValue is BoundConversionExpression innerConversion {
-            innerValue = innerConversion.Expression
-        }
-        return AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType) ||
-            NestedAssignmentPreservesNarrowing(innerValue, narrowedType)
-    }
-
     internal func DischargesNullableWidening(bound BoundExpression, path AccessPath, widenedType TypeSymbol) bool {
         if path.HasMembers || widenedType is not NullableTypeSymbol widenedNullable {
             return false
@@ -1658,15 +1657,12 @@ internal partial class StatementBinder {
             return AssignmentTypePreservesNarrowing(assign.AssignedValueType, underlying) ||
                 NestedAssignmentPreservesNarrowing(assign.Expression, underlying)
         }
-        if expr.Syntax is NullCoalescingAssignmentExpressionSyntax &&
-            expr is BoundBlockExpression{
-            Expression: BoundBinaryExpression{
-                Op: {Kind: BoundBinaryOperatorKind.NullCoalesce},
-                Left: BoundVariableExpression targetVar
-            }
-        } &&
-            object.ReferenceEquals(targetVar.Variable, path.Root) {
-            return AssignmentTypePreservesNarrowing(expr.Type, underlying)
+        if TryExtractNullCoalescingAssignmentFromExpression(expr, out var ncaAssign) &&
+            ncaAssign != nil &&
+            object
+            .ReferenceEquals(ncaAssign.Variable, path.Root) {
+            return AssignmentTypePreservesNarrowing(ncaAssign.AssignedValueType, underlying) ||
+                NestedAssignmentPreservesNarrowing(ncaAssign.Expression, underlying)
         }
         let assignments = TryClassifyNestedAssignmentNarrowings(expr)
         return (
@@ -1674,6 +1670,41 @@ internal partial class StatementBinder {
                 AssignmentTypePreservesNarrowing(assignedType, underlying)
         ) ||
             CallDischargesNullableWidening(expr, path.Root, underlying)
+    }
+
+    private func TryExtractNullCoalescingAssignmentFromStatement(
+        statement BoundStatement?,
+        out assign BoundAssignmentExpression?
+    ) bool {
+        assign = nil
+        if statement == nil {
+            return false
+        }
+        if statement is BoundExpressionStatement exprStmt {
+            return TryExtractNullCoalescingAssignmentFromExpression(exprStmt.Expression, out assign)
+        }
+        var ifStmt = statement as BoundIfStatement
+        if ifStmt == nil && statement is BoundBlockStatement blockStmt && blockStmt.Statements.Length > 0 {
+            ifStmt = blockStmt.Statements[blockStmt.Statements.Length - 1] as BoundIfStatement
+        }
+        if ifStmt == nil ||
+            ifStmt.ElseStatement != nil ||
+            ifStmt.Syntax is not ExpressionStatementSyntax{Expression: NullCoalescingAssignmentExpressionSyntax} {
+            return false
+        }
+        if ifStmt.ThenStatement is BoundExpressionStatement{Expression: BoundAssignmentExpression directAssign} {
+            assign = directAssign
+            return true
+        }
+        if ifStmt.ThenStatement is BoundBlockStatement thenBlock {
+            for s in thenBlock.Statements {
+                if s is BoundExpressionStatement{Expression: BoundAssignmentExpression blockAssign} {
+                    assign = blockAssign
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private func CallDischargesNullableWidening(
@@ -2529,7 +2560,14 @@ internal partial class StatementBinder {
         let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
         let processed = HashSet[BoundExpression](ReferenceEqualityComparer.Instance)
         let exitAliases = Dictionary[BoundExpression, HashSet[VariableSymbol]](ReferenceEqualityComparer.Instance)
-        CollectConditionNonNullAssignments(condition, state, aliases, processed, exitAliases)
+        CollectConditionNonNullAssignments(
+            condition,
+            state,
+            aliases,
+            processed,
+            exitAliases,
+            includeNullableNullCoalescing: true
+        )
         return if state.Count > 0 {
             state
         } else {
@@ -2537,22 +2575,112 @@ internal partial class StatementBinder {
         }
     }
 
+    private func TryClassifyNullCoalescingExpressionNonNullAssignments(
+        expression BoundExpression,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        let anchor = expression.Syntax ?? FindSyntaxAnchor(expression)
+        if anchor == nil || !ContainsNullCoalescingAssignmentSyntax(anchor) {
+            return nil
+        }
+        var entryAliases IReadOnlyCollection[VariableSymbol] = callableAliases ?? externalCallableAliases
+        if expressionEntryAliases.TryGetValue(expression, out var recordedEntry) {
+            entryAliases = recordedEntry
+        }
+        let state = Dictionary[AccessPath, TypeSymbol]()
+        let aliases = HashSet[VariableSymbol](entryAliases)
+        let processed = HashSet[BoundExpression](ReferenceEqualityComparer.Instance)
+        let exitAliases = Dictionary[BoundExpression, HashSet[VariableSymbol]](ReferenceEqualityComparer.Instance)
+        CollectConditionNonNullAssignments(
+            expression,
+            state,
+            aliases,
+            processed,
+            exitAliases,
+            includeNullableNullCoalescing: true
+        )
+        return if state.Count > 0 {
+            state
+        } else {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        }
+    }
+
+    private func TryClassifyNullCoalescingBlockStatementNonNullAssignments(
+        block BoundBlockStatement,
+        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        let state = Dictionary[AccessPath, TypeSymbol]()
+        let aliases = HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
+        let processed = HashSet[BoundExpression](ReferenceEqualityComparer.Instance)
+        let exitAliases = Dictionary[BoundExpression, HashSet[VariableSymbol]](ReferenceEqualityComparer.Instance)
+        for stmt in block.Statements {
+            if stmt is BoundVariableDeclaration varDecl && varDecl.Initializer != nil {
+                CollectConditionNonNullAssignments(
+                    varDecl.Initializer,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing: true
+                )
+            } else {
+                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
+            }
+        }
+        return if state.Count > 0 {
+            state
+        } else {
+            default(Dictionary[AccessPath, TypeSymbol]?)
+        }
+    }
+
+    private func ContainsNullCoalescingAssignmentSyntax(node SyntaxNode) bool {
+        if node is NullCoalescingAssignmentExpressionSyntax {
+            return true
+        }
+        if node is FunctionLiteralExpressionSyntax or LambdaExpressionSyntax {
+            return false
+        }
+        for child in node.GetChildren() {
+            if ContainsNullCoalescingAssignmentSyntax(child) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func CollectConditionNonNullAssignments(
         node BoundExpression?,
         state Dictionary[AccessPath, TypeSymbol],
         aliases HashSet[VariableSymbol],
         processed HashSet[BoundExpression],
-        exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]]
+        exitAliases Dictionary[BoundExpression, HashSet[VariableSymbol]],
+        includeNullableNullCoalescing bool = false
     ) {
         if node == nil || processed.Contains(node) {
             return
         }
         switch node {
             case unary is BoundUnaryExpression {
-                CollectConditionNonNullAssignments(unary.Operand, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    unary.Operand,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case binary is BoundBinaryExpression {
-                CollectConditionNonNullAssignments(binary.Left, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    binary.Left,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 if binary
                     .Op
                     .Kind is not(
@@ -2560,116 +2688,977 @@ internal partial class StatementBinder {
                         BoundBinaryOperatorKind.LogicalOr or
                         BoundBinaryOperatorKind.NullCoalesce
                 ) {
-                    CollectConditionNonNullAssignments(binary.Right, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        binary.Right,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case conv is BoundConversionExpression {
-                CollectConditionNonNullAssignments(conv.Expression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    conv.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case asExpr is BoundAsExpression {
-                CollectConditionNonNullAssignments(asExpr.Expression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    asExpr.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case isExpr is BoundIsExpression {
-                CollectConditionNonNullAssignments(isExpr.Expression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    isExpr.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case assign is BoundAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.Expression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case indexExpr is BoundIndexExpression {
+                CollectConditionNonNullAssignments(
+                    indexExpr.Target,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for index in indexExpr.Indices {
+                    CollectConditionNonNullAssignments(
+                        index,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case clrIndexExpr is BoundClrIndexExpression {
+                CollectConditionNonNullAssignments(
+                    clrIndexExpr.Target,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for arg in clrIndexExpr.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
             }
             case assign is BoundIndexAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.TargetExpression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 for index in assign.Indices {
-                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        index,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
-                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case assign is BoundClrIndexAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.TargetExpression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 for index in assign.Arguments {
-                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        index,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
-                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case assign is BoundFieldAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.ReceiverExpression, state, aliases, processed, exitAliases)
-                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.ReceiverExpression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    assign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case assign is BoundPropertyAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
-                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    assign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case assign is BoundClrPropertyAssignmentExpression {
-                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
-                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    assign.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    assign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case tupleLit is BoundTupleLiteralExpression {
                 for elem in tupleLit.Elements {
-                    CollectConditionNonNullAssignments(elem, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        elem,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
+            case arrayCreate is BoundArrayCreationExpression {
+                if arrayCreate.DimensionExpressions.Length > 1 {
+                    for dim in arrayCreate.DimensionExpressions {
+                        CollectConditionNonNullAssignments(
+                            dim,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
+                    }
+                } else if arrayCreate.LengthExpression != nil {
+                    CollectConditionNonNullAssignments(
+                        arrayCreate.LengthExpression,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+                for elem in arrayCreate.Elements {
+                    CollectConditionNonNullAssignments(
+                        elem,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case stackAlloc is BoundStackAllocExpression {
+                CollectConditionNonNullAssignments(
+                    stackAlloc.Count,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for elem in stackAlloc.InitializerElements {
+                    CollectConditionNonNullAssignments(
+                        elem,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case mapLit is BoundMapLiteralExpression {
+                for entry in mapLit.Entries {
+                    CollectConditionNonNullAssignments(
+                        entry.Key,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                    CollectConditionNonNullAssignments(
+                        entry.Value,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case lenExpr is BoundLenExpression {
+                CollectConditionNonNullAssignments(
+                    lenExpr.Operand,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case structLit is BoundStructLiteralExpression {
+                CollectConditionNonNullAssignments(
+                    structLit.CopySource,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for init in structLit.Initializers {
+                    CollectConditionNonNullAssignments(
+                        init.Value,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case interp is BoundInterpolatedStringExpression {
+                if interp.Handler != nil && !interp.Handler.ForwardedArguments.IsDefaultOrEmpty {
+                    for arg in interp.Handler.ForwardedArguments {
+                        CollectConditionNonNullAssignments(
+                            arg,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
+                    }
+                }
+                for part in interp.Parts {
+                    if !part.IsLiteral {
+                        if interp.Handler != nil {
+                            let skippedState = Dictionary[AccessPath, TypeSymbol](state)
+                            let skippedAliases = HashSet[VariableSymbol](aliases)
+                            let evalState = Dictionary[AccessPath, TypeSymbol](state)
+                            let evalAliases = HashSet[VariableSymbol](aliases)
+                            CollectConditionNonNullAssignments(
+                                part.Value,
+                                evalState,
+                                evalAliases,
+                                processed,
+                                exitAliases,
+                                includeNullableNullCoalescing
+                            )
+                            state.Clear()
+                            for kv in skippedState {
+                                if evalState.TryGetValue(kv.Key, out var evalType) &&
+                                    FindCommonImplicitSupertype(
+                                    kv.Key,
+                                    List[TypeSymbol]{kv.Value, evalType}
+                                ) is {} common {
+                                    state[kv.Key] = common
+                                }
+                            }
+                            skippedAliases.IntersectWith(evalAliases)
+                            aliases.Clear()
+                            aliases.UnionWith(skippedAliases)
+                            if part.Value != nil {
+                                exitAliases[part.Value] = HashSet[VariableSymbol](aliases)
+                            }
+                        } else {
+                            CollectConditionNonNullAssignments(
+                                part.Value,
+                                state,
+                                aliases,
+                                processed,
+                                exitAliases,
+                                includeNullableNullCoalescing
+                            )
+                        }
+                    }
+                }
+            }
+            case nullCond is BoundNullConditionalAccessExpression {
+                CollectConditionNonNullAssignments(
+                    nullCond.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case baseIfaceCall is BoundBaseInterfaceCallExpression {
+                CollectConditionNonNullAssignments(
+                    baseIfaceCall.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for arg in baseIfaceCall.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case baseClassCall is BoundBaseClassCallExpression {
+                CollectConditionNonNullAssignments(
+                    baseClassCall.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for arg in baseClassCall.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case clrBin is BoundClrBinaryOperatorExpression {
+                CollectConditionNonNullAssignments(
+                    clrBin.Left,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    clrBin.Right,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case clrUnary is BoundClrUnaryOperatorExpression {
+                CollectConditionNonNullAssignments(
+                    clrUnary.Operand,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case addr is BoundAddressOfExpression {
+                CollectConditionNonNullAssignments(
+                    addr.Operand,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case deref is BoundDereferenceExpression {
+                CollectConditionNonNullAssignments(
+                    deref.Operand,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case indirectAssign is BoundIndirectAssignmentExpression {
+                CollectConditionNonNullAssignments(
+                    indirectAssign.Pointer,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    indirectAssign.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case fnPtrCall is BoundFunctionPointerInvocationExpression {
+                CollectConditionNonNullAssignments(
+                    fnPtrCall.Pointer,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                for arg in fnPtrCall.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case awaitExpr is BoundAwaitExpression {
+                CollectConditionNonNullAssignments(
+                    awaitExpr.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
             case tupleAccess is BoundTupleElementAccessExpression {
-                CollectConditionNonNullAssignments(tupleAccess.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    tupleAccess.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case fieldAccess is BoundFieldAccessExpression {
-                CollectConditionNonNullAssignments(fieldAccess.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    fieldAccess.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case propAccess is BoundPropertyAccessExpression {
-                CollectConditionNonNullAssignments(propAccess.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    propAccess.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
             case clrPropAccess is BoundClrPropertyAccessExpression {
-                CollectConditionNonNullAssignments(clrPropAccess.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    clrPropAccess.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case ctorCall is BoundConstructorCallExpression {
+                for arg in ctorCall.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
+            }
+            case clrCtorCall is BoundClrConstructorCallExpression {
+                for arg in clrCtorCall.Arguments {
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
+                }
             }
             case call is BoundCallExpression {
                 for arg in call.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case impCall is BoundImportedCallExpression {
                 for arg in impCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case clrStaticCall is BoundClrStaticCallExpression {
                 for arg in clrStaticCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case constrainedCall is BoundConstrainedStaticCallExpression {
                 for arg in constrainedCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case userInstCall is BoundUserInstanceCallExpression {
-                CollectConditionNonNullAssignments(userInstCall.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    userInstCall.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 for arg in userInstCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case impInstCall is BoundImportedInstanceCallExpression {
-                CollectConditionNonNullAssignments(impInstCall.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    impInstCall.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 for arg in impInstCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case indirectCall is BoundIndirectCallExpression {
-                CollectConditionNonNullAssignments(indirectCall.Target, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    indirectCall.Target,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
                 for arg in indirectCall.Arguments {
-                    CollectConditionNonNullAssignments(arg, state, aliases, processed, exitAliases)
+                    CollectConditionNonNullAssignments(
+                        arg,
+                        state,
+                        aliases,
+                        processed,
+                        exitAliases,
+                        includeNullableNullCoalescing
+                    )
                 }
             }
             case clrConvCall is BoundClrConversionCallExpression {
-                CollectConditionNonNullAssignments(clrConvCall.Source, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    clrConvCall.Source,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
-            case block is BoundBlockExpression when !(block.Syntax is NullCoalescingAssignmentExpressionSyntax) {
-                for stmt in block.Statements {
+            case cond is BoundConditionalExpression {
+                CollectConditionNonNullAssignments(
+                    cond.Condition,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                let thenState = Dictionary[AccessPath, TypeSymbol](state)
+                let thenAliases = HashSet[VariableSymbol](aliases)
+                CollectConditionNonNullAssignments(
+                    cond.WhenTrue,
+                    thenState,
+                    thenAliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                let elseState = Dictionary[AccessPath, TypeSymbol](state)
+                let elseAliases = HashSet[VariableSymbol](aliases)
+                CollectConditionNonNullAssignments(
+                    cond.WhenFalse,
+                    elseState,
+                    elseAliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                state.Clear()
+                aliases.Clear()
+                if cond.WhenTrue.Type == TypeSymbol.Never && cond.WhenFalse.Type != TypeSymbol.Never {
+                    for kv in elseState {
+                        state[kv.Key] = kv.Value
+                    }
+                    aliases.UnionWith(elseAliases)
+                } else if cond.WhenFalse.Type == TypeSymbol.Never && cond.WhenTrue.Type != TypeSymbol.Never {
+                    for kv in thenState {
+                        state[kv.Key] = kv.Value
+                    }
+                    aliases.UnionWith(thenAliases)
+                } else {
+                    for kv in thenState {
+                        if elseState.TryGetValue(kv.Key, out var elseType) &&
+                            FindCommonImplicitSupertype(kv.Key, List[TypeSymbol]{kv.Value, elseType}) is {} common {
+                            state[kv.Key] = common
+                        }
+                    }
+                    thenAliases.IntersectWith(elseAliases)
+                    aliases.UnionWith(thenAliases)
+                }
+                processed.Add(cond)
+                exitAliases[cond] = HashSet[VariableSymbol](aliases)
+                return
+            }
+            case condAddr is BoundConditionalAddressExpression {
+                CollectConditionNonNullAssignments(
+                    condAddr.Condition,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                let thenState = Dictionary[AccessPath, TypeSymbol](state)
+                let thenAliases = HashSet[VariableSymbol](aliases)
+                CollectConditionNonNullAssignments(
+                    condAddr.WhenTrueOperand,
+                    thenState,
+                    thenAliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                let elseState = Dictionary[AccessPath, TypeSymbol](state)
+                let elseAliases = HashSet[VariableSymbol](aliases)
+                CollectConditionNonNullAssignments(
+                    condAddr.WhenFalseOperand,
+                    elseState,
+                    elseAliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                state.Clear()
+                aliases.Clear()
+                if condAddr
+                    .WhenTrueOperand
+                    .Type == TypeSymbol.Never &&
+                    condAddr
+                    .WhenFalseOperand
+                    .Type != TypeSymbol.Never {
+                    for kv in elseState {
+                        state[kv.Key] = kv.Value
+                    }
+                    aliases.UnionWith(elseAliases)
+                } else if condAddr
+                    .WhenFalseOperand
+                    .Type == TypeSymbol.Never &&
+                    condAddr
+                    .WhenTrueOperand
+                    .Type != TypeSymbol.Never {
+                    for kv in thenState {
+                        state[kv.Key] = kv.Value
+                    }
+                    aliases.UnionWith(thenAliases)
+                } else {
+                    for kv in thenState {
+                        if elseState.TryGetValue(kv.Key, out var elseType) &&
+                            FindCommonImplicitSupertype(kv.Key, List[TypeSymbol]{kv.Value, elseType}) is {} common {
+                            state[kv.Key] = common
+                        }
+                    }
+                    thenAliases.IntersectWith(elseAliases)
+                    aliases.UnionWith(thenAliases)
+                }
+                processed.Add(condAddr)
+                exitAliases[condAddr] = HashSet[VariableSymbol](aliases)
+                return
+            }
+            case switchExpr is BoundSwitchExpression {
+                CollectConditionNonNullAssignments(
+                    switchExpr.Discriminant,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case spill is BoundSpillSequenceExpression {
+                for stmt in spill.SideEffects {
                     if stmt is BoundExpressionStatement exprStmt {
-                        CollectConditionNonNullAssignments(exprStmt.Expression, state, aliases, processed, exitAliases)
+                        CollectConditionNonNullAssignments(
+                            exprStmt.Expression,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
                     } else if stmt is BoundVariableDeclaration varDecl && varDecl.Initializer != nil {
-                        CollectConditionNonNullAssignments(varDecl.Initializer, state, aliases, processed, exitAliases)
+                        CollectConditionNonNullAssignments(
+                            varDecl.Initializer,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
                     } else {
                         ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
                     }
                 }
-                CollectConditionNonNullAssignments(block.Expression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(
+                    spill.Value,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case managedRef is BoundManagedReferenceExpression {
+                CollectConditionNonNullAssignments(
+                    managedRef.Location,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case evtSub is BoundEventSubscriptionExpression {
+                CollectConditionNonNullAssignments(
+                    evtSub.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    evtSub.Handler,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case clrEvtSub is BoundClrEventSubscriptionExpression {
+                CollectConditionNonNullAssignments(
+                    clrEvtSub.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+                CollectConditionNonNullAssignments(
+                    clrEvtSub.Handler,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case methodGroup is BoundMethodGroupExpression {
+                CollectConditionNonNullAssignments(
+                    methodGroup.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case clrMethodGroup is BoundClrMethodGroupExpression {
+                CollectConditionNonNullAssignments(
+                    clrMethodGroup.Receiver,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case throwExpr is BoundThrowExpression {
+                CollectConditionNonNullAssignments(
+                    throwExpr.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
+            }
+            case block is BoundBlockExpression {
+                for stmt in block.Statements {
+                    if stmt is BoundExpressionStatement exprStmt {
+                        CollectConditionNonNullAssignments(
+                            exprStmt.Expression,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
+                    } else if stmt is BoundVariableDeclaration varDecl && varDecl.Initializer != nil {
+                        CollectConditionNonNullAssignments(
+                            varDecl.Initializer,
+                            state,
+                            aliases,
+                            processed,
+                            exitAliases,
+                            includeNullableNullCoalescing
+                        )
+                    } else {
+                        ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
+                    }
+                }
+                CollectConditionNonNullAssignments(
+                    block.Expression,
+                    state,
+                    aliases,
+                    processed,
+                    exitAliases,
+                    includeNullableNullCoalescing
+                )
             }
         }
         let nextAliases = ApplyExpressionEffects(node, state, aliases, processed, exitAliases)
@@ -2678,17 +3667,17 @@ internal partial class StatementBinder {
         if node is BoundAssignmentExpression assigned &&
             TryClassifyNonNullAssignment(assigned, out var variable, out var type, includeNonNullableStorage: true) {
             state[AccessPath.ForVariable(variable!!)] = type!!
-        } else if node.Syntax is NullCoalescingAssignmentExpressionSyntax &&
-            node is BoundBlockExpression{
-            Expression: BoundBinaryExpression{
-                Op: {Kind: BoundBinaryOperatorKind.NullCoalesce},
-                Left: BoundVariableExpression targetVar
-            }
-        } &&
-            !(targetVar.Variable.Type is NullableTypeSymbol) {
-            let path = AccessPath.ForVariable(targetVar.Variable)
-            if DischargesNullableWidening(node, path, NullableTypeSymbol.Get(targetVar.Variable.Type)) {
-                state[path] = targetVar.Variable.Type
+        } else if TryExtractNullCoalescingAssignmentFromExpression(node, out var ncaAssign) && ncaAssign != nil {
+            if !(ncaAssign.Variable.Type is NullableTypeSymbol) {
+                let path = AccessPath.ForVariable(ncaAssign.Variable)
+                if DischargesNullableWidening(node, path, NullableTypeSymbol.Get(ncaAssign.Variable.Type)) {
+                    state[path] = ncaAssign.Variable.Type
+                }
+            } else if includeNullableNullCoalescing &&
+                TryClassifyNonNullAssignment(ncaAssign, out var ncaVar, out var ncaUnderlying) &&
+                ncaVar != nil &&
+                ncaUnderlying != nil {
+                state[AccessPath.ForVariable(ncaVar)] = ncaUnderlying
             }
         } else if node is BoundCallOperationExpression callOp {
             for child in callOp.ChildNodes {
@@ -3021,7 +4010,8 @@ internal partial class StatementBinder {
         if !HasAnyActiveNarrowings() &&
             externalCallableAliases.Count == 0 &&
             expression is not BoundAssignmentExpression &&
-            expression is not BoundBlockExpression {
+            expression is not BoundBlockExpression &&
+            expression.Syntax is not NullCoalescingAssignmentExpressionSyntax {
             if expression is not BoundErrorExpression && fullyAppliedSubExpressions.Add(expression) {
                 fullyAppliedSubExpressionsLog.Add(expression)
                 fullyAppliedExitAliases[expression] = HashSet[VariableSymbol](externalCallableAliases)
@@ -3047,6 +4037,15 @@ internal partial class StatementBinder {
         let statement = BoundExpressionStatement(anchor, expression)
         InvalidateNarrowingsForAssignedVariables(anchor, statement)
         UpdateExternalCallableAliases(statement, aliasesAtEntry)
+        if binderCtx
+            .NarrowedVariables
+            .Count > 0 &&
+            TryClassifyNullCoalescingExpressionNonNullAssignments(expression, aliasesAtEntry) is {} ncaNarrowed {
+            let topFrame = binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1]
+            for kv in ncaNarrowed {
+                SetPersistentNarrowing(topFrame, kv.Key, kv.Value)
+            }
+        }
         if expression is not BoundErrorExpression && fullyAppliedSubExpressions.Add(expression) {
             fullyAppliedSubExpressionsLog.Add(expression)
             fullyAppliedExitAliases[expression] = HashSet[VariableSymbol](externalCallableAliases)
@@ -3066,7 +4065,38 @@ internal partial class StatementBinder {
         case binary is BoundBinaryExpression: FindSyntaxAnchor(binary.Left) ?? FindSyntaxAnchor(binary.Right)
         case instCall is BoundUserInstanceCallExpression: FindSyntaxAnchor(instCall.Receiver)
         case impInstCall is BoundImportedInstanceCallExpression: FindSyntaxAnchor(impInstCall.Receiver)
+        case cond is BoundConditionalExpression: FindSyntaxAnchor(cond.Condition) ??
+            FindSyntaxAnchor(cond.WhenTrue) ??
+            FindSyntaxAnchor(cond.WhenFalse)
+        case condAddr is BoundConditionalAddressExpression: FindSyntaxAnchor(condAddr.Condition) ??
+            FindSyntaxAnchor(condAddr.WhenTrueOperand) ??
+            FindSyntaxAnchor(condAddr.WhenFalseOperand)
+        case switchExpr is BoundSwitchExpression: FindSwitchSyntaxAnchor(switchExpr)
+        case spill is BoundSpillSequenceExpression: FindSyntaxAnchor(spill.Value)
+        case addr is BoundAddressOfExpression: FindSyntaxAnchor(addr.Operand)
+        case deref is BoundDereferenceExpression: FindSyntaxAnchor(deref.Operand)
+        case managedRef is BoundManagedReferenceExpression: FindSyntaxAnchor(managedRef.Location)
         default: nil
+    }
+
+    private func FindSwitchSyntaxAnchor(switchExpr BoundSwitchExpression) SyntaxNode? {
+        var anchor = FindSyntaxAnchor(switchExpr.Discriminant)
+        if anchor == nil {
+            for arm in switchExpr.Arms {
+                anchor = arm.Syntax ?? FindSyntaxAnchor(arm.Guard) ?? FindSyntaxAnchor(arm.Result)
+                if anchor != nil {
+                    break
+                }
+            }
+        }
+        var current = anchor
+        while current != nil {
+            if current is SwitchExpressionSyntax {
+                return current
+            }
+            current = current.Parent
+        }
+        return anchor
     }
 
     private func ApplyDeferredBlockArgumentNarrowingEffects(syntax ExpressionSyntax) {
@@ -5297,6 +6327,23 @@ internal partial class StatementBinder {
             captureReceivers[node.Capture] = node.Receiver
             VisitExpression(node.Receiver)
             VisitPossiblySkipped(() -> VisitExpression(node.WhenNotNull))
+        }
+
+        protected open override func VisitInterpolatedStringExpression(node BoundInterpolatedStringExpression) {
+            if node.Handler != nil && !node.Handler.ForwardedArguments.IsDefaultOrEmpty {
+                for arg in node.Handler.ForwardedArguments {
+                    VisitExpression(arg)
+                }
+            }
+            for part in node.Parts {
+                if !part.IsLiteral {
+                    if node.Handler != nil {
+                        VisitPossiblySkipped(() -> VisitExpression(part.Value))
+                    } else {
+                        VisitExpression(part.Value)
+                    }
+                }
+            }
         }
 
         protected open override func VisitConditionalExpression(node BoundConditionalExpression) {
@@ -8983,6 +10030,16 @@ internal partial class StatementBinder {
                 case a is AssignmentExpressionSyntax {
                     assigned.Add(a.IdentifierToken.ValueText)
                 }
+                case coalescing is NullCoalescingAssignmentExpressionSyntax {
+                    if coalescing.Target is NameExpressionSyntax target {
+                        assigned.Add(target.IdentifierToken.ValueText)
+                    } else if coalescing.Target is AccessorExpressionSyntax{RightPart: NameExpressionSyntax field} {
+                        mayMutateMemberPaths = true
+                        assigned.Add(field.IdentifierToken.ValueText)
+                    } else {
+                        mayMutateMemberPaths = true
+                    }
+                }
                 case EventSubscriptionExpressionSyntax{IsIncrementDecrement: true} inc {
                     if inc.LeftHandSide is NameExpressionSyntax incName {
                         assigned.Add(incName.IdentifierToken.ValueText)
@@ -9031,6 +10088,138 @@ internal partial class StatementBinder {
             }
             let conversion = Conversion.Classify(assignedType, narrowedType)
             return conversion.Exists && conversion.IsImplicit
+        }
+
+        /// Issue #3907: whether [`value`](paramref) — the right-hand side of
+        /// an assignment — is itself an assignment whose own value proves the outer
+        /// target non-nil.
+        /// @param value The outer assignment's right-hand side.
+        /// @param narrowedType The outer target's underlying non-nullable type.
+        /// @returns `true` when the nested assignment narrows the outer target.
+        internal func NestedAssignmentPreservesNarrowing(value BoundExpression?, narrowedType TypeSymbol) bool {
+            var value = value
+            while value is BoundConversionExpression conversion {
+                value = conversion.Expression
+            }
+            if value == nil {
+                return false
+            }
+            if value.Syntax is NullCoalescingAssignmentExpressionSyntax &&
+                value.Type is not PlatformTypeSymbol &&
+                AssignmentTypePreservesNarrowing(value.Type, narrowedType) {
+                return true
+            }
+            if TryExtractNullCoalescingAssignmentFromExpression(value, out var nestedNca) && nestedNca != nil {
+                return (
+                    nestedNca.AssignedValueType is not PlatformTypeSymbol &&
+                        AssignmentTypePreservesNarrowing(nestedNca.AssignedValueType, narrowedType)
+                ) ||
+                    NestedAssignmentPreservesNarrowing(nestedNca.Expression, narrowedType)
+            }
+            let coalesce BoundBinaryExpression? = if value.Syntax is NullCoalescingAssignmentExpressionSyntax {
+                switch value {
+                    case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                    case block is BoundBlockExpression when block.Expression is BoundBinaryExpression bin &&
+                        bin
+                        .Op
+                        .Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                    default: default(BoundBinaryExpression?)
+                }
+            } else {
+                default(BoundBinaryExpression?)
+            }
+            if coalesce != nil {
+                var right = coalesce.Right
+                while right is BoundConversionExpression conv {
+                    right = conv.Expression
+                }
+                if right is BoundBlockExpression rightBlock {
+                    for stmt in rightBlock.Statements {
+                        if stmt is BoundVariableDeclaration{Initializer: {} initExpr} &&
+                            NestedAssignmentPreservesNarrowing(initExpr, narrowedType) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let inner BoundExpression? = switch value {
+                case nestedLocal is BoundAssignmentExpression: if nestedLocal.AssignedValueType is not PlatformTypeSymbol &&
+                    AssignmentTypePreservesNarrowing(nestedLocal.AssignedValueType, narrowedType) {
+                    return true
+                } else {
+                    nestedLocal.Expression
+                }
+                case nestedField is BoundFieldAssignmentExpression: nestedField.Value
+                default: default(BoundExpression?)
+            }
+            if inner == nil {
+                return false
+            }
+            if inner.Type is not NullableTypeSymbol &&
+                inner.Type is not PlatformTypeSymbol &&
+                AssignmentTypePreservesNarrowing(inner.Type, narrowedType) {
+                return true
+            }
+            var innerValue = inner
+            while innerValue is BoundConversionExpression innerConversion {
+                innerValue = innerConversion.Expression
+            }
+            return (
+                innerValue.Type is not PlatformTypeSymbol &&
+                    AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType)
+            ) ||
+                NestedAssignmentPreservesNarrowing(innerValue, narrowedType)
+        }
+
+        internal func TryExtractNullCoalescingAssignmentFromExpression(
+            expression BoundExpression?,
+            out assign BoundAssignmentExpression?
+        ) bool {
+            assign = nil
+            var current = expression
+            while current is BoundConversionExpression conv && conv.Syntax is not CallExpressionSyntax {
+                current = conv.Expression
+            }
+            if current == nil || current.Syntax is not NullCoalescingAssignmentExpressionSyntax {
+                return false
+            }
+            let coalesce BoundBinaryExpression? = switch current {
+                case bin is BoundBinaryExpression when bin.Op.Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                case block is BoundBlockExpression when block.Expression is BoundBinaryExpression bin &&
+                    bin
+                    .Op
+                    .Kind == BoundBinaryOperatorKind.NullCoalesce: bin
+                default: default(BoundBinaryExpression?)
+            }
+            if coalesce == nil {
+                return false
+            }
+            var left = coalesce.Left
+            while left is BoundConversionExpression conv {
+                left = conv.Expression
+            }
+            if left is not BoundVariableExpression targetVar {
+                return false
+            }
+            var right = coalesce.Right
+            while right is BoundConversionExpression conv {
+                right = conv.Expression
+            }
+            if right.Type == TypeSymbol.Never {
+                assign = BoundAssignmentExpression(current.Syntax, targetVar.Variable, right, TypeSymbol.Never)
+                return true
+            }
+            if right is BoundBlockExpression rightBlock {
+                for stmt in rightBlock.Statements {
+                    if stmt is BoundExpressionStatement{Expression: BoundAssignmentExpression writeAssign} &&
+                        object.ReferenceEquals(writeAssign.Variable, targetVar.Variable) {
+                        assign = writeAssign
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
         private func IsDefinitelyNonNullVariable(variable VariableSymbol) bool {
