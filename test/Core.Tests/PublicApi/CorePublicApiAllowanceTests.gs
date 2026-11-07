@@ -191,6 +191,60 @@ data class Pair(A int32)
         )
     }
 
+    @Fact
+    func LocateRepoRoot_HonorsTestSourceRoot_WhenStartDirectoryIsOutsideRepository() {
+        // Issue #4889: stage-2 certification runs Core.Tests from an external
+        // test directory with CS2GS_TEST_SOURCE_ROOT pointing to the repository root.
+        let repoRoot = CorePublicApiSnapshotTests.LocateRepoRoot()
+        let filesystemRoot = Path.GetPathRoot(this.directory)!!
+        Assert.Equal(
+            repoRoot,
+            CorePublicApiSnapshotTests.LocateRepoRoot(configuredRoot: repoRoot, startDirectory: filesystemRoot)
+        )
+        Assert.Throws[InvalidOperationException](
+            func () object? {
+                return CorePublicApiSnapshotTests.LocateRepoRoot(configuredRoot: "", startDirectory: filesystemRoot)
+            }
+        )
+    }
+
+    @Fact
+    func InTreeRuntimeReferences_GuardTargetAndProjectProperties_PreventSdkShadowing() {
+        // Issue #4910: every project with an in-tree Gsharp.Runtime.* ProjectReference
+        // must opt out of the SDK's _ExplicitReference copy, and build/gsharp.build.*
+        // must enforce that invariant and treat MSB3243 as an error.
+        let repoRoot = CorePublicApiSnapshotTests.LocateRepoRoot()
+        let buildProps = File.ReadAllText(Path.Combine(repoRoot, "build", "gsharp.build.props"))
+        Assert.Contains(
+            "<MSBuildWarningsAsErrors>$(MSBuildWarningsAsErrors);MSB3243</MSBuildWarningsAsErrors>",
+            buildProps,
+            StringComparison.Ordinal
+        )
+        let buildTargets = File.ReadAllText(Path.Combine(repoRoot, "build", "gsharp.build.targets"))
+        Assert.Contains("_GsharpValidateInTreeRuntimeReferences", buildTargets, StringComparison.Ordinal)
+        for projectRelative in[]string{
+            Path.Combine("src", "Compiler", "Compiler.gsproj"),
+            Path.Combine("src", "Repl", "Repl.gsproj"),
+            Path.Combine("test", "Compiler.Tests", "Compiler.Tests.gsproj"),
+            Path.Combine("test", "Interpreter.Tests", "Interpreter.Tests.gsproj"),
+            Path.Combine("test", "Core.Tests", "Core.Tests.gsproj")
+        } {
+            let text = File.ReadAllText(Path.Combine(repoRoot, projectRelative))
+            Assert.Contains("<GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>", text, StringComparison.Ordinal)
+        }
+        let channelsTests = File.ReadAllText(
+            Path.Combine(repoRoot, "test", "Runtime.Channels.Tests", "Runtime.Channels.Tests.gsproj")
+        )
+        Assert.Contains(
+            "<GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>",
+            channelsTests,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("Gsharp.Runtime.Values", channelsTests, StringComparison.Ordinal)
+        Assert.DoesNotContain("GsharpNoValuesRuntime", channelsTests, StringComparison.Ordinal)
+    }
+
     private func Compare(golden IReadOnlyList[string], actual IReadOnlyList[string]) GoldenFileComparison {
         let path = Path.Combine(this.directory, "golden.txt")
         File.WriteAllText(path, string.Join("\n", golden) + "\n")

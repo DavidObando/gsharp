@@ -2366,7 +2366,7 @@ partial class CSharpToGSharpTranslator {
             // NullReferenceException; throw`), unlike C#'s erased `x!`, so a
             // gratuitous assertion on a legitimately-null argument turns a legal
             // C# call into a crash that translate, compile and ILVerify all pass.
-            if this.IsImportedObliviousNullableTarget(targetSymbol) {
+            if this.IsImportedObliviousNullableTarget(targetSymbol, targetType) {
                 return false
             }
             // Issue #3886: the DECLARATION side deliberately never promotes a
@@ -2470,7 +2470,13 @@ partial class CSharpToGSharpTranslator {
             parameter IParameterSymbol,
             argumentExpression ExpressionSyntax
         ) bool {
-            if !(parameter.OriginalDefinition is {Type: ITypeParameterSymbol typeParameter} original) ||
+            let original = parameter.OriginalDefinition
+            let declared = if this.IsExpandedParamsArgument(argumentExpression, parameter) {
+                GetParamsElementType(original) ?? original.Type
+            } else {
+                original.Type
+            }
+            if !(declared is ITypeParameterSymbol typeParameter) ||
                 typeParameter.TypeParameterKind != TypeParameterKind.Method ||
                 original.ContainingSymbol is not IMethodSymbol method ||
                 method.ReducedFrom != nil ||
@@ -2519,7 +2525,7 @@ partial class CSharpToGSharpTranslator {
         //    a member whose own declared type is a concrete oblivious reference
         //    type qualifies, exactly as `IsImportedObliviousNullableMember` scopes
         //    the read side.
-        private func IsImportedObliviousNullableTarget(targetSymbol ISymbol?) bool {
+        private func IsImportedObliviousNullableTarget(targetSymbol ISymbol?, targetType ITypeSymbol? = nil) bool {
             if !(
                 (targetSymbol is IParameterSymbol || targetSymbol is IFieldSymbol || targetSymbol is IPropertySymbol)
             ) {
@@ -2530,7 +2536,15 @@ partial class CSharpToGSharpTranslator {
             }
             let original = targetSymbol!!.OriginalDefinition
             let declaredType ITypeSymbol? = switch original {
-                case parameter is IParameterSymbol: parameter.Type
+                case parameter is IParameterSymbol: if targetType != nil &&
+                    targetSymbol is IParameterSymbol constructedParameter &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(targetType, GetParamsElementType(constructedParameter)) {
+                    GetParamsElementType(parameter) ?? parameter.Type
+                } else {
+                    parameter.Type
+                }
                 case field is IFieldSymbol: field.Type
                 case property is IPropertySymbol: property.Type
                 default: default(ITypeSymbol?)

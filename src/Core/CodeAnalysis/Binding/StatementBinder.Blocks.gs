@@ -1086,7 +1086,8 @@ internal partial class StatementBinder {
         let declaration = cast[BoundVariableDeclaration](BindVariableDeclaration(syntax.Declaration))
         let disposeAsyncCall BoundExpression? = conversions.TryBuildDisposeAsyncCall(
             declaration.Variable,
-            syntax.AwaitKeyword.Location
+            syntax.AwaitKeyword.Location,
+            syntax
         )
         if disposeAsyncCall == nil {
             return (nil, declaration, nil, nil, BindErrorStatement())

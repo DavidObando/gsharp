@@ -2075,6 +2075,30 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        // Issue #4709: whether an uninitialized struct local is written through
+        // one of its fields or elements inside the current body scope.
+        private func RequiresStructFieldWiseDefaultInitializer(local ILocalSymbol?) bool {
+            if local == nil ||
+                local
+                .Type
+                .TypeKind != TypeKind.Struct ||
+                local
+                .Type
+                .OriginalDefinition
+                .SpecialType == SpecialType.System_Nullable_T ||
+                this
+                .state
+                .CurrentBodyScope == nil {
+                return false
+            }
+            for node in this.state.CurrentBodyScope!!.DescendantNodes() {
+                if CSharpToGSharpTranslator.SyntaxNodeWritesMemberOfSymbol(node, local, this.context.SemanticModel) {
+                    return true
+                }
+            }
+            return false
+        }
+
         shared {
             // True for a node that starts a NEW `continue` seam: a nested loop (its
             // own `continue` target) or a lambda/local function (C# forbids a jump
@@ -2639,6 +2663,74 @@ partial class CSharpToGSharpTranslator {
                 target = receiver
             }
         }
+
+        internal func SyntaxNodeWritesMemberOfSymbol(
+            node SyntaxNode,
+            symbol ISymbol?,
+            model SemanticModel
+        ) bool -> switch node {
+            case assignment is AssignmentExpressionSyntax when WritesMemberStorageOf(
+                assignment.Left,
+                symbol,
+                model
+            ): true
+            case AssignmentExpressionSyntax{
+                Left: TupleExpressionSyntax tuple
+            } when TupleAssignmentTargetsIncludeMemberOf(tuple, symbol, model): true
+            case postfix is PostfixUnaryExpressionSyntax when(
+                postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression)
+            ) &&
+                WritesMemberStorageOf(postfix.Operand, symbol, model): true
+            case prefix is PrefixUnaryExpressionSyntax when(
+                prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression) ||
+                    prefix.IsKind(SyntaxKind.AddressOfExpression)
+            ) &&
+                WritesMemberStorageOf(prefix.Operand, symbol, model): true
+            case argument is ArgumentSyntax when(
+                argument.RefOrOutKeyword.IsKind(SyntaxKind.RefKeyword) || argument.RefOrOutKeyword.IsKind(
+                    SyntaxKind.OutKeyword
+                )
+            ) &&
+                WritesMemberStorageOf(argument.Expression, symbol, model): true
+            case refOf is RefExpressionSyntax when WritesMemberStorageOf(refOf.Expression, symbol, model) &&
+                !(
+                refOf.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                    model.GetDeclaredSymbol(declarator) is ILocalSymbol local && local.RefKind == RefKind.RefReadOnly
+            ): true
+            default: false
+        }
+
+        private func TupleAssignmentTargetsIncludeMemberOf(
+            tuple TupleExpressionSyntax,
+            symbol ISymbol?,
+            model SemanticModel
+        ) bool {
+            for argument in tuple.Arguments {
+                switch argument.Expression {
+                    case nested is TupleExpressionSyntax when TupleAssignmentTargetsIncludeMemberOf(
+                        nested,
+                        symbol,
+                        model
+                    ) {
+                        return true
+                    }
+                    case DeclarationExpressionSyntax { }
+                    default {
+                        if WritesMemberStorageOf(argument.Expression, symbol, model) {
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        private func WritesMemberStorageOf(
+            target ExpressionSyntax?,
+            symbol ISymbol?,
+            model SemanticModel
+        ) bool -> !BindsTo(target, symbol, model) &&
+            WritesStorageOf(target, symbol, model)
 
         private func MutatingStructCallWritesSymbol(
             invocation InvocationExpressionSyntax,

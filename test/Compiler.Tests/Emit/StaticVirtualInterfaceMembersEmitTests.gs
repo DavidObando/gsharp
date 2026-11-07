@@ -403,7 +403,7 @@ stderr:
                 let csDir = Path.Combine(tempDir, "consumer")
                 Directory.CreateDirectory(csDir)
                 File.WriteAllText(Path.Combine(csDir, "Program.cs"), csource)
-                File.WriteAllText(Path.Combine(csDir, "Consumer.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
+                DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(Path.Combine(csDir, "Consumer.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

@@ -97,6 +97,10 @@ class CSharpTypeMapper {
         IReadOnlyList[GTypeReference]
     ](StringComparer.Ordinal)
     private let synthesizedTypeAliases Dictionary[string, string] = Dictionary[string, string](StringComparer.Ordinal)
+    private let barePrintedMetadataTypes List[(SimpleName string, Symbol INamedTypeSymbol)] = List[
+        (SimpleName string, Symbol INamedTypeSymbol)
+    ]()
+    private let barePrintedMetadataTypeKeys HashSet[string] = HashSet[string](StringComparer.Ordinal)
     private let reservedTypeAliases Dictionary[string, HashSet[string]] = Dictionary[string, HashSet[string]](
         StringComparer.Ordinal
     )
@@ -129,6 +133,7 @@ class CSharpTypeMapper {
     private var identityCriticalDelegatesCompilation Compilation
 
     private var sourceDeclaredTypeNames HashSet[string]?
+    private var potentialSynthesizedNamespaceNames HashSet[string]?
 
     /// Issue #2222: the current file's imported namespace names (`using`
     /// directives plus its own declared namespace), cached lazily since every
@@ -1933,7 +1938,13 @@ class CSharpTypeMapper {
             this.TrackShortenedNamespace(named)
             let simpleName string? = this.Names(context).GetName(named)
             let visibleNestedHomonym = this.HasVisibleSourceNestedHomonym(named, context, location)
-            if IsDeclaredInContainingNamespace(named, context, location) && !visibleNestedHomonym {
+            let competingBareHomonym = this.HasCompetingBarePrintedMetadataType(simpleName, named, context)
+            if IsDeclaredInContainingNamespace(named, context, location) &&
+                !visibleNestedHomonym &&
+                !competingBareHomonym {
+                if !named.Locations.Any((l Location) -> l.IsInSource) {
+                    this.TrackBarePrintedMetadataType(simpleName, named)
+                }
                 return simpleName
             }
             // Issue #2222: a bare top-level type name is ambiguous in G#'s flat
@@ -1961,8 +1972,12 @@ class CSharpTypeMapper {
             let isSourceType = named.Locations.Any((l Location) -> l.IsInSource)
             let ambiguous = this.HasSourceHomonym(named, context) ||
                 visibleNestedHomonym ||
+                competingBareHomonym ||
                 this.HasImportedNamespaceHomonym(named, context) || this.HasConflictingTypeAlias(simpleName, named)
             if !ambiguous {
+                if !isSourceType {
+                    this.TrackBarePrintedMetadataType(simpleName, named)
+                }
                 return simpleName
             }
             return this.AmbiguousTopLevelTypeName(named, simpleName, isSourceType, context, location)
@@ -1991,8 +2006,15 @@ class CSharpTypeMapper {
             context,
             location
         ) ||
-            this.HasImportedNamespaceHomonym(outermost, context) || this.HasConflictingTypeAlias(parts[0], outermost)
+            this.HasCompetingBarePrintedMetadataType(parts[0], outermost, context) || this.HasImportedNamespaceHomonym(
+            outermost,
+            context
+        ) ||
+            this.HasConflictingTypeAlias(parts[0], outermost)
         if !outermostAmbiguous {
+            if !outermost!!.Locations.Any((candidate Location) -> candidate.IsInSource) {
+                this.TrackBarePrintedMetadataType(parts[0], outermost)
+            }
             return nestedName
         }
         parts[0] = this.AmbiguousTopLevelTypeName(
@@ -2061,6 +2083,126 @@ class CSharpTypeMapper {
         if this.importTrackingSuppression == 0 && outermostType!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
             this.shortenedNamespaces.Add(this.nameAllocator?.GetNamespaceName(ns) ?? ns.ToDisplayString())
         }
+    }
+
+    // Issue #4602: records a bare-printed top-level metadata type so import
+    // assembly can emit a pinning alias if a later synthesized import brings
+    // in a homonym.
+    private func TrackBarePrintedMetadataType(simpleName string?, named INamedTypeSymbol?) {
+        if this.importTrackingSuppression != 0 || string.IsNullOrEmpty(simpleName) ||
+            named == nil ||
+            named.ContainingType != nil ||
+            named.ContainingNamespace == nil ||
+            named
+            .ContainingNamespace
+            .IsGlobalNamespace {
+            return
+        }
+        let definition = named.OriginalDefinition
+        let key = "$simpleName`${definition.Arity}:${definition.ContainingNamespace.ToDisplayString()}"
+        if this.barePrintedMetadataTypeKeys.Add(key) {
+            this.barePrintedMetadataTypes.Add((simpleName!!, definition))
+        }
+    }
+
+    private func HasCompetingBarePrintedMetadataType(
+        simpleName string?,
+        named INamedTypeSymbol?,
+        context TranslationContext
+    ) bool {
+        if string.IsNullOrEmpty(simpleName) || named == nil {
+            return false
+        }
+        let definition = named.OriginalDefinition
+        let candidateNamespace = definition.ContainingNamespace?.ToDisplayString()
+        if string.IsNullOrEmpty(candidateNamespace) {
+            return false
+        }
+        let preScannedNamespaces = this.GetImportedNamespaceNames(context)
+        for (recordedName, recordedSymbol) in this.barePrintedMetadataTypes {
+            if recordedName != simpleName || SymbolEqualityComparer.Default.Equals(recordedSymbol, definition) {
+                continue
+            }
+            let recordedNamespace = recordedSymbol.ContainingNamespace?.ToDisplayString()
+            if string.IsNullOrEmpty(recordedNamespace) || recordedNamespace == candidateNamespace {
+                continue
+            }
+            if recordedSymbol.Arity == definition.Arity ||
+                preScannedNamespaces == nil ||
+                !preScannedNamespaces.Contains(recordedNamespace) || !preScannedNamespaces.Contains(
+                candidateNamespace
+            ) ||
+                this.HasPotentialSynthesizedNamespaceHomonym(recordedSymbol, context) ||
+                this.HasPotentialSynthesizedNamespaceHomonym(definition, context) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasPotentialSynthesizedNamespaceHomonym(named INamedTypeSymbol, context TranslationContext) bool {
+        for namespaceName in this.GetPotentialSynthesizedNamespaceNames(context).Concat(this.shortenedNamespaces) {
+            for compilation in this.LinkedDocumentCompilations(context) {
+                if this.HasImportedNamespaceHomonym(named, compilation, namespaceName) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func GetPotentialSynthesizedNamespaceNames(context TranslationContext) HashSet[string] {
+        if this.potentialSynthesizedNamespaceNames != nil {
+            return this.potentialSynthesizedNamespaceNames!!
+        }
+        let names = HashSet[string](this.GetImportedNamespaceNames(context)!!, StringComparer.Ordinal)
+        for reservedNamespace in this.reservedImportedNamespaces {
+            if !reservedNamespace.IsGlobalNamespace {
+                names.Add(reservedNamespace.ToDisplayString())
+            }
+        }
+        for model in this.LinkedDocumentModels(context) {
+            CollectPotentialSynthesizedNamespaceNames(model, names)
+        }
+        this.potentialSynthesizedNamespaceNames = names
+        return names
+    }
+
+    internal func CollectSynthesizedImportHomonymAliases(
+        importedNamespaces IReadOnlyCollection[string],
+        context TranslationContext
+    ) IEnumerable[KeyValuePair[string, string]] {
+        let aliases = Dictionary[string, string](StringComparer.Ordinal)
+        if this.barePrintedMetadataTypes.Count == 0 || importedNamespaces.Count == 0 {
+            return aliases
+        }
+        let names = this.Names(context)
+        for (simpleName, named) in this.barePrintedMetadataTypes {
+            if aliases.ContainsKey(simpleName) || this.HasConflictingTypeAlias(simpleName, named) {
+                continue
+            }
+            let containingNamespace = named.ContainingNamespace
+            if containingNamespace == nil || containingNamespace.IsGlobalNamespace {
+                continue
+            }
+            var hasHomonym = false
+            for namespaceName in importedNamespaces {
+                for compilation in this.LinkedDocumentCompilations(context) {
+                    if this.HasImportedNamespaceHomonym(named, compilation, namespaceName) {
+                        hasHomonym = true
+                        break
+                    }
+                }
+                if hasHomonym {
+                    break
+                }
+            }
+            if hasHomonym {
+                let targetNamespace = names.GetNamespaceName(containingNamespace)
+                aliases[simpleName] = "$targetNamespace.$simpleName"
+            }
+        }
+        return aliases
     }
 
     /// Issue #1174: whether a source-declared top-level type shares the simple
@@ -2170,7 +2312,7 @@ class CSharpTypeMapper {
     /// metadata type colliding with a different metadata type; symbols in the
     /// same namespace/package are not import collisions.
     private func HasImportedNamespaceHomonym(named INamedTypeSymbol?, context TranslationContext) bool {
-        for namespaceName in this.GetImportedNamespaceNames(context)!! {
+        for namespaceName in this.GetImportedNamespaceNames(context)!!.Concat(this.shortenedNamespaces) {
             // Issue #3805: for a LINKED source this scans every compilation
             // that compiles the file, not just the one being translated. The
             // mirror writes ONE .gs per source file, so the spelling chosen
@@ -2204,7 +2346,14 @@ class CSharpTypeMapper {
         compilation CSharpCompilation,
         namespaceName string
     ) bool {
-        let candidateNamespace INamespaceSymbol? = ResolveNamespace(compilation, namespaceName)
+        let candidateNamespace INamespaceSymbol? = ResolveNamespace(compilation, namespaceName) ??
+            (
+            if this.nameAllocator != nil {
+                ResolveEmittedNamespace(compilation, namespaceName, this.nameAllocator)
+            } else {
+                default(INamespaceSymbol?)
+            }
+        )
         if candidateNamespace == nil {
             return false
         }
@@ -3164,6 +3313,35 @@ class CSharpTypeMapper {
                     }
                     if outermost!!.ContainingNamespace is {IsGlobalNamespace: false} ns {
                         names.Add(ns.ToDisplayString())
+                    }
+                }
+            }
+        }
+
+        private func CollectPotentialSynthesizedNamespaceNames(
+            semanticModel Microsoft.CodeAnalysis.SemanticModel,
+            names HashSet[string]
+        ) {
+            let root = semanticModel.SyntaxTree.GetRoot()
+            for node in root.DescendantNodes() {
+                if node is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax expr {
+                    let typeInfo = semanticModel.GetTypeInfo(expr)
+                    if typeInfo.Type != nil {
+                        AddReferencedNamespaces(typeInfo.Type!!, names)
+                    }
+                    if typeInfo.ConvertedType != nil {
+                        AddReferencedNamespaces(typeInfo.ConvertedType!!, names)
+                    }
+                    if semanticModel.GetSymbolInfo(expr).Symbol is {} symbol {
+                        if symbol.ContainingType != nil {
+                            AddReferencedNamespaces(symbol.ContainingType!!, names)
+                        }
+                        if symbol is IMethodSymbol method {
+                            AddReferencedNamespaces(method.ReturnType, names)
+                            if method.ReducedFrom is {ContainingType: {} reducedOwner} {
+                                AddReferencedNamespaces(reducedOwner, names)
+                            }
+                        }
                     }
                 }
             }

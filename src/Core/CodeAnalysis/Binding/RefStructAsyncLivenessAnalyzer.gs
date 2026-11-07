@@ -991,13 +991,9 @@ internal shared class RefStructAsyncLivenessAnalyzer {
             return
         }
         // Synthetic statements stay hidden to stepping; their await retains the diagnostic source.
-        let suspensionLocation = if owningStatement is BoundVariableDeclaration declaration {
-            AsyncBoundTreeQueries.FindFirstAwaitSyntax(declaration.Initializer)?.Location ?? default(TextLocation)
-        } else if owningStatement is BoundExpressionStatement expression {
-            AsyncBoundTreeQueries.FindFirstAwaitSyntax(expression.Expression)?.Location ?? default(TextLocation)
-        } else {
+        let suspensionLocation = AsyncBoundTreeQueries.FindFirstAwaitSyntax(owningStatement)
+            ?.Location ??
             default(TextLocation)
-        }
         let fallbackLocation = if suspensionLocation.Text != nil {
             suspensionLocation
         } else {
