@@ -62,7 +62,7 @@ open class Issue3826CrossCompilationTypeIdentityTests : IDisposable {
         } catch (IOException) {
             // A best-effort cleanup; a locked file must not fail the test.
 
-        }
+        } catch (UnauthorizedAccessException) { }
         GC.SuppressFinalize(this)
     }
 

@@ -228,7 +228,7 @@ class ReferenceResolver : IDisposable {
 
         func LoadReference(path string) Assembly {
             AddProbeDirectory(path)
-            return LoadFromAssemblyPath(path)
+            return LoadFromBytes(path)
         }
 
         // Issue #3818: a reference reused from the host context (rather than
@@ -240,10 +240,24 @@ class ReferenceResolver : IDisposable {
             for directory in directories {
                 let path = Path.Combine(directory, assemblyName.Name + ".dll")
                 if File.Exists(path) {
-                    return LoadFromAssemblyPath(path)
+                    return LoadFromBytes(path)
                 }
             }
             return nil
+        }
+
+        // Issue #4635: load from bytes so Windows does not hold a file lock on
+        // temporary reference assemblies after the resolver is disposed.
+        private func LoadFromBytes(path string) Assembly {
+            let fullPath = Path.GetFullPath(path)
+            if !File.Exists(fullPath) {
+                throw FileNotFoundException("Could not load file or assembly '$fullPath'.", fullPath)
+            }
+            let bytes = File.ReadAllBytes(fullPath)
+            let assembly = LoadFromStream(MemoryStream(bytes, writable: false))
+            ReferenceResolver.RegisterAssemblyOriginalPath(assembly, fullPath)
+            ReferenceResolver.AssemblyImages.AddOrUpdate(assembly, bytes)
+            return assembly
         }
     }
 

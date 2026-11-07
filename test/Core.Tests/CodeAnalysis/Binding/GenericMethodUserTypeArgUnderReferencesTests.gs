@@ -314,8 +314,9 @@ func main() {
                 (source string, index int32) -> SyntaxTree.Parse(SourceText.From(source, "Test$index.gs"))
             )
                 .ToImmutableArray()
-            let globalScope = Binder.BindGlobalScope(previous: nil, trees, MetadataLoadContextResolver())
-            let program = Binder.BindProgram(globalScope, MetadataLoadContextResolver())
+            using let resolver = MetadataLoadContextResolver()
+            let globalScope = Binder.BindGlobalScope(previous: nil, trees, resolver)
+            let program = Binder.BindProgram(globalScope, resolver)
             return globalScope.Diagnostics.AddRange(program.Diagnostics)
         }
 

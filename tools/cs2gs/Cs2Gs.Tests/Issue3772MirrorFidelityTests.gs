@@ -45,6 +45,7 @@ class Issue3772MirrorFidelityTests : IDisposable {
   <!-- keep me -->
   <PropertyGroup>
     <AssemblyName>Gsharp.Extensions</AssemblyName>
+    <DocumentationFile>$(IntermediateOutputPath)/$(AssemblyName).xml</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Compiler\Compiler.csproj" />
@@ -89,6 +90,7 @@ class Issue3772MirrorFidelityTests : IDisposable {
         Assert.Equal("Gsharp.NET.Sdk/9.9.9-test", document.Root!!.Attribute(XName?("Sdk")!!)!!.Value)
         Assert.Empty(document.Descendants("Import"))
         Assert.Equal("Gsharp.Extensions", document.Descendants("AssemblyName").Single().Value)
+        Assert.Equal("$$(OutputPath)/$$(AssemblyName).xml", document.Descendants("DocumentationFile").Single().Value)
     }
 
     /// An excluded project whose C# sources were left untranslated stays out of
@@ -306,6 +308,36 @@ EndGlobal
             () -> RepositoryMirror.ValidateCompleted(source, destination, []string{"Product.sln"})
         )
         Assert.Contains("Product.sln", missing.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Generate_ExcludedAndTemplateSolutions_DoNotEmitStraySlnx() {
+        let source = Path.Combine(this.root, "source")
+        let destination = Path.Combine(this.root, "destination")
+        let vsDir = Path.Combine(source, "src", "vs-gsharp")
+        let tplDir = Path.Combine(source, "templates", "xunit")
+        Directory.CreateDirectory(vsDir)
+        Directory.CreateDirectory(Path.Combine(tplDir, ".template.config"))
+        File.WriteAllText(Path.Combine(tplDir, ".template.config", "template.json"), "{}")
+        File.WriteAllText(
+            Path.Combine(vsDir, "VsGsharp.sln"),
+            "Microsoft Visual Studio Solution File, Format Version 12.00\n"
+        )
+        File.WriteAllText(
+            Path.Combine(tplDir, "GsharpLibrary.sln"),
+            "Microsoft Visual Studio Solution File, Format Version 12.00\n"
+        )
+        let excluded = ExcludedScope(source, Path.Combine(vsDir, "VsGsharp.csproj"))
+        let written = RepositorySolutionGenerator.Generate(
+            source,
+            destination,
+            Dictionary[string, string](),
+            []string{"src/vs-gsharp/VsGsharp.sln", "templates/xunit/GsharpLibrary.sln"},
+            excluded
+        )
+        Assert.Equal(2, written.Count)
+        Assert.False(File.Exists(Path.Combine(destination, "src", "vs-gsharp", "VsGsharp.slnx")))
+        Assert.False(File.Exists(Path.Combine(destination, "templates", "xunit", "GsharpLibrary.slnx")))
     }
 
     shared {

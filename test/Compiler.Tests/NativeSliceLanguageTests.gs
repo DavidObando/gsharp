@@ -452,7 +452,7 @@ True
     internal class Fixture : IDisposable {
         init() {
             Directory = Path.Combine(
-                Environment.CurrentDirectory,
+                AppContext.BaseDirectory,
                 "out",
                 "test-artifacts",
                 "native-slices-" + Guid.NewGuid().ToString("N")

@@ -110,8 +110,8 @@ Console.WriteLine(Run("before"))
     }
 
     @Theory
-    @InlineData("var v string? = \"a\"\nRefS(&v)", "ref")
-    @InlineData("var v string? = \"a\"\nInS(&v)", "in")
+    @InlineData("var v string? = nil\nRefS(&v)", "ref")
+    @InlineData("var v string? = if true { \"a\" } else { nil }\nInS(&v)", "in")
     @InlineData("var v string = \"a\"\nRefNs(&v)", "ref")
     @InlineData("var v string = \"a\"\nOutNs(&v)", "out")
     @InlineData("var v List[string?] = List[string?]()\nRefList(&v)", "ref")
@@ -137,6 +137,13 @@ Console.WriteLine(v)`, "r")
     @InlineData(`var v string? = nil
 RefNs(&v)
 Console.WriteLine(v)`, "rn")
+    @InlineData(`var v string? = "a"
+RefS(&v)
+Console.WriteLine(InS(&v))`, "1")
+    @InlineData(`var v string? = nil
+OutS(&v)
+RefS(&v)
+Console.WriteLine(v)`, "r")
     func SafeDirection_IsAcceptedWithoutWarning(body string, expected string) {
         let result = EmittedOracle.Evaluate(Callees + body)
         Assert.Empty(result.Diagnostics)
@@ -144,9 +151,25 @@ Console.WriteLine(v)`, "rn")
     }
 
     @Fact
+    func FlowProvenNonNullNullableLocal_DoesNotWarnGS0612_UntilReassignedToNullable() {
+        let result = EmittedOracle.Evaluate(Callees + `
+var g string? = "x"
+RefS(&g)
+let len = InS(&g)
+g = nil
+RefS(&g)
+Console.WriteLine("${len} ${g!!}")
+`)
+        Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        let warning = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0612")
+        Assert.Contains("ref parameter", warning.Message, StringComparison.Ordinal)
+        Assert.Equal("1 r", result.Output.Trim())
+    }
+
+    @Fact
     func NullableStorage_ReachesTheCalleeAndRuns() {
         let result = EmittedOracle.Evaluate(Callees + `
-var s string? = "abc"
+var s string? = nil
 RefS(&s)
 var l List[string?] = List[string?]()
 RefList(&l)

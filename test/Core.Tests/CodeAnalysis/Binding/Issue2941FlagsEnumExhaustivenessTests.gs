@@ -201,17 +201,9 @@ enum Access { None = 0, Read = 1, Write = 2 }`, "Access", []string{"None", "Read
             )
         }
 
-        private func FindRepoRoot() string? {
-            var directory string? = Path.GetDirectoryName(
-                typeof(Issue2941FlagsEnumExhaustivenessTests).Assembly.Location
-            )
-            while !string.IsNullOrEmpty(directory) {
-                if RepositoryRootMarker.IsRoot(directory) {
-                    return directory
-                }
-                directory = Path.GetDirectoryName(directory)
-            }
-            return Environment.CurrentDirectory
-        }
+        private func FindRepoRoot() string? -> RepositoryRootMarker.Locate(
+            Path.GetDirectoryName(typeof(Issue2941FlagsEnumExhaustivenessTests).Assembly.Location)
+        ) ??
+            Environment.CurrentDirectory
     }
 }

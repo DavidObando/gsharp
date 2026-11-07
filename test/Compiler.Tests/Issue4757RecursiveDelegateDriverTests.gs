@@ -320,7 +320,23 @@ public static class Consumer {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             }
-            start.ArgumentList.Add(typeof(Program).Assembly.Location)
+            let siblingGsc = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+            let gscPath = if File.Exists(siblingGsc) {
+                siblingGsc
+            } else {
+                typeof(Program).Assembly.Location
+            }
+            let gscRuntimeConfig = Path.ChangeExtension(gscPath, ".runtimeconfig.json")
+            let testRuntimeConfig = Path.ChangeExtension(
+                typeof(Issue4757RecursiveDelegateDriverTests).Assembly.Location,
+                ".runtimeconfig.json"
+            )
+            if !File.Exists(gscRuntimeConfig) && File.Exists(testRuntimeConfig) {
+                start.ArgumentList.Add("exec")
+                start.ArgumentList.Add("--runtimeconfig")
+                start.ArgumentList.Add(testRuntimeConfig)
+            }
+            start.ArgumentList.Add(gscPath)
             start.ArgumentList.Add("/target:library")
             start.ArgumentList.Add("/out:" + Path.Combine(directory, name + ".dll"))
             start.ArgumentList.Add(sourcePath)

@@ -23,7 +23,8 @@ internal shared class RepositoryMirror {
         ValidateDestination(source, destination)
         let files = RepositoryFileInventory.Enumerate(source)
         let verbatim = RepositoryVerbatimSources.Compute(source, files)
-        ValidateCollisions(files, verbatim)
+        let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(source, files)
+        ValidateCollisions(files, verbatim, copyAndTranslate)
         RepositoryGitMetadata.Prepare(source, destination)
         for relativePath in files {
             let extension = Path.GetExtension(relativePath)
@@ -159,8 +160,17 @@ internal shared class RepositoryMirror {
     /// Rebinds mirrored G# SDK declarations in projects and shared MSBuild files.
     /// @param destinationRoot The mirrored repository root.
     /// @param sdkMoniker The run's SDK moniker.
-    internal func RebindMirroredSdkFiles(destinationRoot string?, sdkMoniker string) {
+    /// @param excludedScope Optional excluded scope whose projects keep their own SDK pins.
+    internal func RebindMirroredSdkFiles(
+        destinationRoot string?,
+        sdkMoniker string,
+        excludedScope RepositoryExcludedScope? = nil
+    ) {
+        let fullDest = Path.GetFullPath(destinationRoot!!)
         for path in SdkPin.BuildableSdkFilePaths(destinationRoot) {
+            if excludedScope != nil && excludedScope.IsExcluded(Path.GetRelativePath(fullDest, path)) {
+                continue
+            }
             let project = XDocument.Load(path, LoadOptions.PreserveWhitespace)
             if project.Root == nil || !SdkPin.ProjectSdkNames(project.Root).Any(
                 (name string) -> string.Equals(name, SdkPin.PackageId, StringComparison.OrdinalIgnoreCase)
@@ -188,6 +198,7 @@ internal shared class RepositoryMirror {
         // copied verbatim by Prepare regardless of scope and stays expected.
         excludedScope ??= RepositoryExcludedScope.None
         let verbatim = RepositoryVerbatimSources.Compute(sourceRoot, sourceFiles)
+        let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(sourceRoot, sourceFiles)
         let expected = HashSet[string](
             sourceFiles!!.Where(
                 (path string) -> {
@@ -201,7 +212,7 @@ internal shared class RepositoryMirror {
             )
                 .SelectMany(
                 func (path string) IEnumerable[string] {
-                    return DestinationRelativePaths(path, verbatim)
+                    return DestinationRelativePaths(path, verbatim, copyAndTranslate, sourceRoot, excludedScope)
                 }
             ),
             StringComparer.OrdinalIgnoreCase
@@ -280,11 +291,19 @@ internal shared class RepositoryMirror {
         }
     }
 
-    private func ValidateCollisions(files IEnumerable[string], verbatim ISet[string]) {
+    private func ValidateCollisions(
+        files IEnumerable[string],
+        verbatim ISet[string],
+        copyAndTranslate ISet[string]? = nil
+    ) {
         let destinations = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
         for source in files {
-            for destination in DestinationRelativePaths(source, verbatim) {
-                if destinations.TryGetValue(destination, out var prior) {
+            for destination in DestinationRelativePaths(source, verbatim, copyAndTranslate) {
+                if destinations.TryGetValue(destination, out var prior) && !string.Equals(
+                    prior,
+                    source,
+                    StringComparison.OrdinalIgnoreCase
+                ) {
                     throw InvalidOperationException(
                         "Migration output collision: '$prior' and '$source' both map to '$destination'."
                     )
@@ -441,6 +460,21 @@ internal shared class RepositoryMirror {
             .ToList() {
             reference.Remove()
         }
+        // Issue #4897 / #4915: once rebound to `<Project Sdk="Gsharp.NET.Sdk">`,
+        // `<DocumentationFile>$(IntermediateOutputPath)...</DocumentationFile>` in
+        // the project body evaluates before Sdk.targets defines IntermediateOutputPath,
+        // dropping the XML file into the project source directory.
+        for docFile in project.Root!!.Descendants().Where(
+            (element XElement) -> element.Name.LocalName.Equals("DocumentationFile", StringComparison.OrdinalIgnoreCase)
+        ) {
+            if docFile.Value.Contains("$$(IntermediateOutputPath)", StringComparison.OrdinalIgnoreCase) {
+                docFile.Value = docFile.Value.Replace(
+                    "$$(IntermediateOutputPath)",
+                    "$$(OutputPath)",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            }
+        }
     }
 
     private func CopyFile(
@@ -501,8 +535,24 @@ internal shared class RepositoryMirror {
     //
     // Issue #4850: a `.cs` file in `verbatim` (RepositoryVerbatimSources) is
     // copied as itself, not translated to `.gs`.
-    private func DestinationRelativePaths(source string, verbatim ISet[string]?) sequence[string] {
+    private func DestinationRelativePaths(
+        source string,
+        verbatim ISet[string]?,
+        copyAndTranslate ISet[string]? = nil,
+        sourceRoot string? = nil,
+        excludedScope RepositoryExcludedScope? = nil
+    ) sequence[string] {
         let extension = Path.GetExtension(source)
+        if extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) &&
+            copyAndTranslate != nil &&
+            copyAndTranslate
+            .Contains(source) {
+            yield source
+            if excludedScope == nil || !excludedScope.IsExcluded(source) {
+                yield Path.ChangeExtension(source, ".gs")
+            }
+            yield break
+        }
         if extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) && verbatim != nil && verbatim.Contains(source) {
             yield source
             yield break
@@ -517,7 +567,23 @@ internal shared class RepositoryMirror {
         }
         if extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) {
             yield source
-            yield Path.ChangeExtension(source, ".slnx")
+            let fullRoot string? = if sourceRoot == nil {
+                default(string?)
+            } else {
+                Path.GetFullPath(sourceRoot)
+            }
+            let isTemplateOrExcluded = (excludedScope != nil && excludedScope.IsExcluded(source)) ||
+                (
+                fullRoot != nil && SdkPin.IsTemplatePayload(
+                    Path.GetFullPath(
+                        Path.Combine(fullRoot, source.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar))
+                    ),
+                    fullRoot
+                )
+            )
+            if !isTemplateOrExcluded {
+                yield Path.ChangeExtension(source, ".slnx")
+            }
             yield break
         }
         yield source

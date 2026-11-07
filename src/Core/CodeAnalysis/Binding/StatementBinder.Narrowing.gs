@@ -634,7 +634,7 @@ internal partial class StatementBinder {
         // active frame actually holds a narrowing; if none do, no walk of the
         // statement's syntax subtree can possibly invalidate anything, so skip
         // both walks (and their HashSet/List allocations) entirely.
-        if !HasAnyActiveNarrowings() {
+        if !HasAnyActiveNarrowings() && binderCtx.NonNullByRefVariables.Count == 0 {
             return
         }
         // ADR-0069 addendum / issue #1180: member-path narrowings are far more
@@ -768,6 +768,39 @@ internal partial class StatementBinder {
                     }
                     conditionKillJournal?.Add((frame, key, frame[key]))
                     frame.Remove(key)
+                }
+            }
+        }
+        // Issue #4454: invalidate non-null by-ref local facts on any statement that
+        // may write a nullable value to the local, while keeping a local passed only
+        // to a non-null `ref T` or `out T` parameter.
+        if binderCtx.NonNullByRefVariables.Count > 0 {
+            for variable in binderCtx.NonNullByRefVariables.ToArray() {
+                if boundStatement is BoundExpressionStatement callStmt &&
+                    CallPreservesNonNullByRefVariable(callStmt.Expression, variable) &&
+                    (statementCollector == nil || !statementCollector.MayMutateAnyRoot) {
+                    continue
+                }
+                let varPath = AccessPath.ForVariable(variable)
+                let killed = (filterWrites != nil && FilterWritesVariable(filterWrites, variable)) ||
+                    (dropGlobalRoots && variable is GlobalVariableSymbol && !variable.IsReadOnly) ||
+                    (
+                    if statementCollector != nil {
+                        StatementKillsPath(
+                            statementCollector,
+                            varPath,
+                            dropAllMemberPaths,
+                            statementCollector.MayWriteStorageOf(varPath)
+                        )
+                    } else {
+                        assignedRoots!!.Any(
+                            (assigned VariableSymbol) -> object.ReferenceEquals(assigned, variable) ||
+                                MayShareStorage(assigned, variable)
+                        )
+                    }
+                )
+                if killed {
+                    binderCtx.NonNullByRefVariables.Remove(variable)
                 }
             }
         }
@@ -1224,6 +1257,157 @@ internal partial class StatementBinder {
                 SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
             }
         }
+        if statement is BoundExpressionStatement outCallStmt && !ContainsUserLabel(outCallStmt) {
+            CollectNonNullOutCallVariables(outCallStmt.Expression, binderCtx.NonNullByRefVariables)
+        }
+    }
+
+    private func CallPreservesNonNullByRefVariable(expr BoundExpression, target VariableSymbol) bool {
+        if !SmartCastStability.IsAssignmentNarrowingRoot(target) ||
+            target.Type is not NullableTypeSymbol nullable ||
+            !IsReferenceLikeType(nullable.UnderlyingType) {
+            return false
+        }
+        let underlying = nullable.UnderlyingType
+        switch expr {
+            case call is BoundCallExpression {
+                return UserCallPreservesNonNullByRefVariable(
+                    call.Function.Parameters,
+                    call.Arguments,
+                    0,
+                    target,
+                    underlying
+                )
+            }
+            case uic is BoundUserInstanceCallExpression {
+                let offset = if uic.Method.Parameters.Length == uic.Arguments.Length + 1 {
+                    1
+                } else {
+                    0
+                }
+                return UserCallPreservesNonNullByRefVariable(
+                    uic.Method.Parameters,
+                    uic.Arguments,
+                    offset,
+                    target,
+                    underlying
+                )
+            }
+            case ctorCall is BoundConstructorCallExpression {
+                let parameters = ctorCall
+                    .SelectedConstructor
+                    ?.Parameters ??
+                    ctorCall
+                    .StructType
+                    .PrimaryConstructorParameters
+                return !parameters.IsDefaultOrEmpty &&
+                    UserCallPreservesNonNullByRefVariable(parameters, ctorCall.Arguments, 0, target, underlying)
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func UserCallPreservesNonNullByRefVariable(
+        parameters ImmutableArray[ParameterSymbol],
+        arguments ImmutableArray[BoundExpression],
+        parameterOffset int32,
+        target VariableSymbol,
+        underlying TypeSymbol
+    ) bool {
+        var matched = false
+        for var i = 0; i < arguments.Length && i + parameterOffset < parameters.Length; i++ {
+            let param = parameters[i + parameterOffset]
+            if param.RefKind != RefKind.Ref && param.RefKind != RefKind.Out {
+                continue
+            }
+            if arguments[i] is BoundAddressOfExpression{IsReadOnly: false, Operand: BoundVariableExpression v} &&
+                object
+                .ReferenceEquals(v.Variable, target) {
+                if HasUserNullabilityContract(param) ||
+                    !OutputTypeDischargesNullableWidening(param.Type, underlying) ||
+                    HasCompetingWritableReferenceArgument(arguments, i, target) {
+                    return false
+                }
+                matched = true
+            }
+        }
+        return matched
+    }
+
+    private func CollectNonNullOutCallVariables(expr BoundExpression, sink HashSet[VariableSymbol]) {
+        switch expr {
+            case call is BoundCallExpression {
+                CollectUserOutCallVariables(call.Function.Parameters, call.Arguments, 0, sink)
+            }
+            case uic is BoundUserInstanceCallExpression {
+                let offset = if uic.Method.Parameters.Length == uic.Arguments.Length + 1 {
+                    1
+                } else {
+                    0
+                }
+                CollectUserOutCallVariables(uic.Method.Parameters, uic.Arguments, offset, sink)
+            }
+            case ctorCall is BoundConstructorCallExpression {
+                let parameters = ctorCall
+                    .SelectedConstructor
+                    ?.Parameters ??
+                    ctorCall
+                    .StructType
+                    .PrimaryConstructorParameters
+                if !parameters.IsDefaultOrEmpty {
+                    CollectUserOutCallVariables(parameters, ctorCall.Arguments, 0, sink)
+                }
+            }
+        }
+    }
+
+    private func CollectUserOutCallVariables(
+        parameters ImmutableArray[ParameterSymbol],
+        arguments ImmutableArray[BoundExpression],
+        parameterOffset int32,
+        sink HashSet[VariableSymbol]
+    ) {
+        for var i = 0; i < arguments.Length && i + parameterOffset < parameters.Length; i++ {
+            let param = parameters[i + parameterOffset]
+            if param.RefKind != RefKind.Out || HasUserNullabilityContract(param) {
+                continue
+            }
+            if arguments[i] is BoundAddressOfExpression{
+                IsReadOnly: false,
+                Operand: BoundVariableExpression{Variable: var outVar}
+            } &&
+                SmartCastStability.IsAssignmentNarrowingRoot(outVar) &&
+                outVar.Type is NullableTypeSymbol nullable &&
+                IsReferenceLikeType(nullable.UnderlyingType) &&
+                OutputTypeDischargesNullableWidening(param.Type, nullable.UnderlyingType) &&
+                !HasCompetingWritableReferenceArgument(arguments, i, outVar) {
+                sink.Add(outVar)
+            }
+        }
+    }
+
+    private func IsNonNullByRefInitializer(expression BoundExpression?, underlying TypeSymbol) bool {
+        var current = expression
+        while current is BoundConversionExpression conv {
+            current = conv.Expression
+        }
+        if current == nil || current is BoundDefaultExpression || current is BoundErrorExpression {
+            return false
+        }
+        if current is BoundConditionalExpression cond {
+            return IsNonNullByRefInitializer(cond.WhenTrue, underlying) &&
+                IsNonNullByRefInitializer(cond.WhenFalse, underlying)
+        }
+        if current is BoundBlockExpression block {
+            return IsNonNullByRefInitializer(block.Expression, underlying)
+        }
+        if current.Type is PlatformTypeSymbol {
+            return false
+        }
+        return AssignmentTypePreservesNarrowing(current.Type, underlying) ||
+            NestedAssignmentPreservesNarrowing(current, underlying)
     }
 
     private func TryClassifyNestedAssignmentNarrowings(
@@ -1290,6 +1474,7 @@ internal partial class StatementBinder {
         fallthroughReachesTarget bool
     ) {
         JoinExternalCallableAliases(incomingSnapshots, fallthroughReachesTarget)
+        binderCtx.NonNullByRefVariables.Clear()
         if !fallthroughReachesTarget {
             let commonIncoming = Dictionary[AccessPath, TypeSymbol]()
             let commonFrameIndices = Dictionary[AccessPath, int32]()
@@ -8465,6 +8650,14 @@ internal partial class StatementBinder {
             "a variable declaration produces a variable symbol",
             expression: "variable"
         )
+        if SmartCastStability.IsAssignmentNarrowingRoot(declaredVariable) &&
+            syntax.Initializer != nil &&
+            convertedInitializer != nil &&
+            declaredVariable.Type is NullableTypeSymbol nonNullTarget &&
+            IsReferenceLikeType(nonNullTarget.UnderlyingType) &&
+            IsNonNullByRefInitializer(convertedInitializer, nonNullTarget.UnderlyingType) {
+            binderCtx.NonNullByRefVariables.Add(declaredVariable)
+        }
         if convertedInitializer is {} callableInitializer && IsExternalCallableSource(callableInitializer) {
             externalCallableAliases.Add(declaredVariable)
         }

@@ -38,13 +38,16 @@ internal shared class RepositoryOrphanSourceTranslator {
         var excludedScope = excludedScope
         excludedScope ??= RepositoryExcludedScope.None
         let failures = List[string]()
-        // Issue #4850: a `.cs` a project references as data or foreign input
-        // is mirrored verbatim by RepositoryMirror.Prepare, not an orphan.
+        // Issue #4850 / #4867: a `.cs` a project unconditionally references as
+        // data or foreign input is mirrored verbatim by RepositoryMirror.Prepare,
+        // not an orphan; a conditional data include is both copied and translated.
         let verbatim = RepositoryVerbatimSources.Compute(sourceRoot, sourceFiles)
+        let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(sourceRoot, sourceFiles)
         for relativePath in sourceFiles!!.Where(
             (path string) -> Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase)
         ) {
-            if excludedScope!!.IsExcluded(relativePath) || verbatim.Contains(relativePath) {
+            if excludedScope!!.IsExcluded(relativePath) ||
+                (verbatim.Contains(relativePath) && !copyAndTranslate.Contains(relativePath)) {
                 continue
             }
             let destinationPath = Path.Combine(destinationRoot!!, Path.ChangeExtension(relativePath, ".gs"))

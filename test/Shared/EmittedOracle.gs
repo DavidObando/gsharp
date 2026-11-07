@@ -362,7 +362,7 @@ shared class EmittedOracle {
                     File.Exists(path)
             )
             if match != nil {
-                return context.LoadFromAssemblyPath(Path.GetFullPath(match))
+                return context.LoadFromStream(MemoryStream(File.ReadAllBytes(Path.GetFullPath(match)), writable: false))
             }
         }
         // Framework, test-assembly, and transitive dependencies fall back to

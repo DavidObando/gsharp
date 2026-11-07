@@ -265,7 +265,7 @@ class MigrationPipeline {
             ) {
                 this.options.RepositoryAdditionalFiles!!.Add(passthroughFile)
             }
-            RepositoryMirror.RebindMirroredSdkFiles(destinationRoot, sdkMoniker)
+            RepositoryMirror.RebindMirroredSdkFiles(destinationRoot, sdkMoniker, excludedScope)
             // Issue #3862: the mirror must BE a repository before anything runs
             // inside it, not only after. Repository-anchored code — a test that
             // walks up from its output directory looking for `GSharp.sln`, an
@@ -280,7 +280,8 @@ class MigrationPipeline {
                 this.options.SourceRoot,
                 destinationRoot,
                 this.options.GeneratedProjectPaths,
-                repositoryFiles
+                repositoryFiles,
+                excludedScope
             )
             let loadedProjects = Dictionary[string, LoadedCSharpProject](StringComparer.OrdinalIgnoreCase)
             for app in apps {

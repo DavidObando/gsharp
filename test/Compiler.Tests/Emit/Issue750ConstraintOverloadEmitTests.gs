@@ -171,27 +171,25 @@ stderr:
         }
 
         private func LocateGsharpExtensionsAssembly() string? {
-            var dir DirectoryInfo? = DirectoryInfo(
-                Path.GetDirectoryName(typeof(Issue750ConstraintOverloadEmitTests).Assembly.Location)!!
-            )
-            while dir != nil {
-                if RepositoryRootMarker.IsRoot(dir.FullName) {
-                    for cfg in[]string{"Debug", "Release"} {
-                        let candidate = Path.Combine(
-                            dir.FullName,
-                            "out",
-                            "bin",
-                            cfg,
-                            "Gsharp.Extensions",
-                            "Gsharp.Extensions.dll"
-                        )
-                        if File.Exists(candidate) {
-                            return candidate
-                        }
-                    }
-                    return nil
+            let baseDir = AppContext.BaseDirectory
+            for relative in[]string{
+                Path.Combine(baseDir, "Gsharp.Extensions.dll"),
+                Path.Combine(baseDir, "..", "Gsharp.Extensions", "Gsharp.Extensions.dll")
+            } {
+                let full = Path.GetFullPath(relative)
+                if File.Exists(full) {
+                    return full
                 }
-                dir = dir.Parent
+            }
+            if RepositoryRootMarker.Locate(
+                Path.GetDirectoryName(typeof(Issue750ConstraintOverloadEmitTests).Assembly.Location)
+            ) is {} root {
+                for cfg in[]string{"Debug", "Release"} {
+                    let candidate = Path.Combine(root, "out", "bin", cfg, "Gsharp.Extensions", "Gsharp.Extensions.dll")
+                    if File.Exists(candidate) {
+                        return candidate
+                    }
+                }
             }
             return nil
         }
