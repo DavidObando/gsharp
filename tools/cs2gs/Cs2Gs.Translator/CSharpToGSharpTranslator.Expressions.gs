@@ -3587,20 +3587,24 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             tuplePath List[int32]?
         ) List[int32]? {
-            if tuplePath != nil && tuplePath.Count > 0 {
-                return tuplePath
-            }
-            if value == nil || value == lambda {
-                return nil
-            }
             let rawIndices = List[int32]()
-            OutermostTransparentNode(value, rawIndices)
-            if rawIndices.Count == 0 {
+            if value != nil && value != lambda {
+                OutermostTransparentNode(value, rawIndices)
+            }
+            let suffixCount = if tuplePath == nil {
+                0
+            } else {
+                tuplePath.Count
+            }
+            if rawIndices.Count == 0 && suffixCount == 0 {
                 return nil
             }
-            let path = List[int32](rawIndices.Count)
+            let path = List[int32](rawIndices.Count + suffixCount)
             for var i = rawIndices.Count - 1; i >= 0; i-- {
                 path.Add(rawIndices[i])
+            }
+            if tuplePath != nil {
+                path.AddRange(tuplePath)
             }
             return path
         }
@@ -3727,14 +3731,21 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(elementAccess)
                 .Symbol == nil {
-                return this
+                let elementReturnSlot = if this
                     .context
                     .GetTypeInfo(elementAccess.Expression)
-                    .Type is IArrayTypeSymbol assignedArrayType &&
-                    !ContainsTypeParameter(
+                    .Type is IArrayTypeSymbol assignedArrayType {
                     this.EffectiveDeclaredSlotType(assignedArrayType.ElementType, lambda, tuplePath)
-                ) &&
-                    this.ReceiverTypeArgumentsAreDeclared(elementAccess.Expression, tuplePath: tuplePath)
+                } else {
+                    default(ITypeSymbol?)
+                }
+                return elementReturnSlot != nil &&
+                    !ContainsTypeParameter(elementReturnSlot) &&
+                    this.ReceiverTypeArgumentsAreDeclared(
+                    elementAccess.Expression,
+                    slotType: elementReturnSlot,
+                    tuplePath: tuplePath
+                )
             }
             if outermost?.Parent is ExpressionElementSyntax{Parent: CollectionExpressionSyntax collection} {
                 let collectionType = this
@@ -4019,8 +4030,7 @@ partial class CSharpToGSharpTranslator {
                 let arrayType = (
                     this.context.GetTypeInfo(unwrapped).Type ?? this.context.GetTypeInfo(unwrapped).ConvertedType
                 ) as IArrayTypeSymbol
-                return arrayType != nil &&
-                    !ContainsTypeParameter(arrayType.ElementType) &&
+                return arrayType != nil && !this.ReceiverTargetContainsTypeParameter(arrayType.ElementType, slotType) &&
                     (
                     unwrapped is not ImplicitArrayCreationExpressionSyntax implicitArray ||
                         this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, tuplePath: tuplePath)
@@ -4045,10 +4055,7 @@ partial class CSharpToGSharpTranslator {
                     slotType
                 ) &&
                     !this.TryGetManagedReferenceArrayProjectedMethod(creation, out _) &&
-                    this
-                    .EffectiveCreationPositions(creation, createdType)
-                    .Nullable
-                    .Count == 0
+                    !this.CreationSlotHasNullablePositions(creation, createdType, slotType)
             }
             if unwrapped is InvocationExpressionSyntax invocation {
                 let receiverMethod = this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol
@@ -4057,6 +4064,18 @@ partial class CSharpToGSharpTranslator {
                     slotType
                 ) {
                     return false
+                }
+                if receiverMethod.MethodKind == MethodKind.DelegateInvoke ||
+                    receiverMethod
+                    .ContainingType
+                    ?.TypeKind == TypeKind
+                    .Delegate {
+                    return this.DelegateInvocationReturnTypeArgumentsAreDeclared(
+                        invocation,
+                        slotType,
+                        awaitExpression: nil,
+                        activeMemo
+                    )
                 }
                 let declaredReturn = receiverMethod.OriginalDefinition.ReturnType
                 let projectedDeclaredReturn = this.ProjectSlotThroughReceiverType(slotType, declaredReturn)
@@ -5045,6 +5064,17 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return false
                 }
+                if receiverMethod.MethodKind == MethodKind.DelegateInvoke ||
+                    receiverMethod
+                    .ContainingType
+                    ?.TypeKind == TypeKind.Delegate {
+                    return this.DelegateInvocationReturnTypeArgumentsAreDeclared(
+                        invocation,
+                        slotType,
+                        awaitExpression,
+                        memo
+                    )
+                }
                 let declaredResult = this.GetAwaitedResultType(
                     awaitExpression,
                     receiverMethod.OriginalDefinition.ReturnType
@@ -5194,6 +5224,218 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return nil
+        }
+
+        private func DelegateInvocationReturnTypeArgumentsAreDeclared(
+            invocation InvocationExpressionSyntax,
+            slotType ITypeSymbol?,
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+        ) bool {
+            let callable = if invocation.Expression is MemberAccessExpressionSyntax{
+                Name: {Identifier: {ValueText: "Invoke"}}
+            } memberAccess {
+                memberAccess.Expression
+            } else {
+                invocation.Expression
+            }
+            return this.CallableReturnTypeArgumentsAreDeclared(callable, slotType, awaitExpression, memo)
+        }
+
+        private func CallableReturnTypeArgumentsAreDeclared(
+            callable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotType ITypeSymbol?,
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+        ) bool {
+            var unwrapped = Unparenthesize(callable)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedCallable {
+                    unwrapped = Unparenthesize(checkedCallable.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedCallable {
+                    unwrapped = Unparenthesize(suppressedCallable.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is CastExpressionSyntax castExpression {
+                let castDelegate = UnwrapExpressionTreeDelegateType(
+                    this.context.GetTypeInfo(castExpression.Type).Type
+                ) as INamedTypeSymbol
+                let castReturn = castDelegate?.DelegateInvokeMethod?.ReturnType
+                let effectiveReturn = if awaitExpression != nil {
+                    this.GetAwaitedResultType(awaitExpression, castReturn)
+                } else {
+                    castReturn
+                }
+                return effectiveReturn != nil && !this.ReceiverTargetContainsTypeParameter(effectiveReturn, slotType)
+            }
+            if unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax binaryExpression &&
+                binaryExpression
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                return this.CallableReturnTypeArgumentsAreDeclared(
+                    binaryExpression.Left,
+                    slotType,
+                    awaitExpression,
+                    memo
+                ) &&
+                    this.CallableReturnTypeArgumentsAreDeclared(binaryExpression.Right, slotType, awaitExpression, memo)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.CallableReturnTypeArgumentsAreDeclared(
+                    conditional.WhenTrue,
+                    slotType,
+                    awaitExpression,
+                    memo
+                ) &&
+                    this.CallableReturnTypeArgumentsAreDeclared(conditional.WhenFalse, slotType, awaitExpression, memo)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
+                    (
+                        arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
+                    ) -> this.CallableReturnTypeArgumentsAreDeclared(arm.Expression, slotType, awaitExpression, memo)
+                )
+            }
+            if unwrapped is AnonymousFunctionExpressionSyntax lambda {
+                if this.LambdaHasExplicitDelegateCast(lambda) {
+                    return true
+                }
+                let isAsyncLambda = lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprBody {
+                    return if awaitExpression != nil && !isAsyncLambda {
+                        this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, exprBody, slotType, memo)
+                    } else {
+                        this.ReceiverTypeArgumentsAreDeclared(exprBody, slotType, memo)
+                    }
+                }
+                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax block {
+                    return this.BlockReturnTypeArgumentsAreDeclared(
+                        block,
+                        slotType,
+                        if isAsyncLambda {
+                            default(Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?)
+                        } else {
+                            awaitExpression
+                        },
+                        memo
+                    )
+                }
+                return false
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            if symbol is ILocalSymbol local {
+                let pathKey = if awaitExpression != nil {
+                    "@await-callable"
+                } else {
+                    "@callable"
+                }
+                if TryGetReceiverLocalMemo(memo, local, slotType, pathKey, out var cached) {
+                    return cached
+                }
+                let localDelegate = UnwrapExpressionTreeDelegateType(local.Type) as INamedTypeSymbol
+                let localReturn = localDelegate?.DelegateInvokeMethod?.ReturnType
+                let effectiveLocalReturn = if awaitExpression != nil {
+                    this.GetAwaitedResultType(awaitExpression, localReturn)
+                } else {
+                    localReturn
+                }
+                if effectiveLocalReturn == nil || this.ReceiverTargetContainsTypeParameter(
+                    effectiveLocalReturn,
+                    slotType
+                ) {
+                    return false
+                }
+                if local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is not VariableDeclaratorSyntax declarator {
+                    return !IsImplicitlyTypedLocal(local)
+                }
+                if !IsImplicitlyTypedLocal(local) &&
+                    (this.state.EmittedLocalTypeClauses.Contains(local) || declarator.Initializer?.Value == nil) {
+                    return true
+                }
+                if declarator.Initializer?.Value is not{} localInit {
+                    return false
+                }
+                SetReceiverLocalMemo(memo, local, slotType, pathKey, false)
+                let result = this.CallableReturnTypeArgumentsAreDeclared(localInit, slotType, awaitExpression, memo)
+                SetReceiverLocalMemo(memo, local, slotType, pathKey, result)
+                return result
+            }
+            let callableType = this.context.GetTypeInfo(unwrapped).Type as INamedTypeSymbol
+            let invokeReturn = callableType?.OriginalDefinition.DelegateInvokeMethod?.ReturnType
+            let projectedCallableSlot = if awaitExpression != nil {
+                this.ProjectSlotThroughReceiverType(slotType, this.GetAwaitedResultType(awaitExpression, invokeReturn))
+            } else {
+                this.ProjectSlotThroughReceiverType(slotType, invokeReturn)
+            }
+            return this.ReceiverTypeArgumentsAreDeclared(unwrapped, projectedCallableSlot, memo)
+        }
+
+        private func BlockReturnTypeArgumentsAreDeclared(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            slotType ITypeSymbol?,
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]]
+        ) bool {
+            var sawReturn = false
+            return this.BlockReturnsAllHaveDeclaredTypeArguments(
+                node,
+                slotType,
+                awaitExpression,
+                memo,
+                ref sawReturn
+            ) &&
+                sawReturn
+        }
+
+        private func BlockReturnsAllHaveDeclaredTypeArguments(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            slotType ITypeSymbol?,
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Path string, Result bool)]],
+            ref sawReturn bool
+        ) bool {
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.ReturnStatementSyntax returnStmt {
+                if returnStmt.Expression == nil {
+                    return false
+                }
+                sawReturn = true
+                return if awaitExpression != nil {
+                    this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, returnStmt.Expression, slotType, memo)
+                } else {
+                    this.ReceiverTypeArgumentsAreDeclared(returnStmt.Expression, slotType, memo)
+                }
+            }
+            for child in node.ChildNodes() {
+                if child is AnonymousFunctionExpressionSyntax || child is LocalFunctionStatementSyntax {
+                    continue
+                }
+                if !this.BlockReturnsAllHaveDeclaredTypeArguments(
+                    child,
+                    slotType,
+                    awaitExpression,
+                    memo,
+                    ref sawReturn
+                ) {
+                    return false
+                }
+            }
+            return true
         }
 
         private func InitializerLambdaReturnsNilableBeyondItsCSharpType(

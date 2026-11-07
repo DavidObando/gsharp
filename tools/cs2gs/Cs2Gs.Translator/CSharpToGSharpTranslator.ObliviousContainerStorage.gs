@@ -470,6 +470,41 @@ partial class CSharpToGSharpTranslator {
         // (an `async` method's task result included) and those that its arguments and
         // initializer give its type arguments. The spelling, the constructor arguments
         // and the initializer writes all read these.
+        private func CreationSlotHasNullablePositions(
+            creation BaseObjectCreationExpressionSyntax,
+            createdType ITypeSymbol?,
+            slotType ITypeSymbol?
+        ) bool {
+            if createdType is not INamedTypeSymbol created {
+                return false
+            }
+            let stated = this.EffectiveCreationPositions(creation, createdType)
+            if stated.Nullable.Count == 0 {
+                return false
+            }
+            if slotType == nil {
+                return true
+            }
+            let bindings = TypeParameterMap()
+            let parameters = FlatTypeArguments(created.OriginalDefinition)
+            for var i = 0; i < parameters.Count; i++ {
+                if parameters[i] is ITypeParameterSymbol parameter {
+                    bindings[parameter] = Subtree(stated, IndexPosition(i))
+                }
+            }
+            var current INamedTypeSymbol? = created.BaseType
+            while current != nil {
+                Unify(current.OriginalDefinition, current, stated, bindings)
+                current = current.BaseType
+            }
+            for iface in created.AllInterfaces {
+                Unify(iface.OriginalDefinition, iface, stated, bindings)
+            }
+            let projected = ObliviousPositionSet()
+            Substitute(slotType, bindings, "", projected)
+            return projected.Nullable.Count > 0
+        }
+
         private func EffectiveCreationPositions(
             creation ExpressionSyntax,
             createdType ITypeSymbol?,

@@ -2567,9 +2567,13 @@ partial class CSharpToGSharpTranslator {
             return GetLambdaResultExpressions(lambda).Any(
                 (result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> {
                     let resultType ITypeSymbol? = this.context.GetTypeInfo(result).Type
-                    return resultType != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
-                        resultType,
-                        targetResult
+                    return resultType != nil &&
+                        (
+                        !SymbolEqualityComparer.Default.Equals(resultType, targetResult) ||
+                            (
+                            !SymbolEqualityComparer.IncludeNullability.Equals(resultType, targetResult) &&
+                                this.SlotTypeIsDeclared(invoke, result)
+                        )
                     )
                 }
             )
