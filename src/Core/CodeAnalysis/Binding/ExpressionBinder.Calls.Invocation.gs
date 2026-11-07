@@ -794,7 +794,7 @@ internal partial class ExpressionBinder {
                 // The delegate slot's bare shape: a function literal is never
                 // nil, so the slot's own top-level nullability does not apply.
                 let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
-                let delegateType = parameterTypeSymbol.StripToBareShape()
+                let delegateType = StripTopLevelNullability(parameterTypeSymbol)
                 if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
                     parameterTypeSymbol,
                     out var fn
@@ -4293,6 +4293,25 @@ internal partial class ExpressionBinder {
             type
         }
 
+        private func StripTopLevelNullability(type TypeSymbol) TypeSymbol {
+            var current = type
+            while true {
+                switch current {
+                    case platform is PlatformTypeSymbol {
+                        current = platform.UnderlyingType
+                        continue
+                    }
+                    case nullable is NullableTypeSymbol when !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                        current = nullable.UnderlyingType
+                        continue
+                    }
+                    default {
+                        return current
+                    }
+                }
+            }
+        }
+
         private func UnwrapExpressionTreeDelegate(
             type TypeSymbol
         ) TypeSymbol -> if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType) {
@@ -4304,7 +4323,7 @@ internal partial class ExpressionBinder {
         private func IsCanonicalFunctionDelegate(type TypeSymbol) bool {
             var type = type
             type = UnwrapExpressionTreeDelegate(type)
-            if type is ImportedTypeSymbol imported {
+            if type.StripToBareShape() is ImportedTypeSymbol imported {
                 var definition Type? = imported.OpenDefinition ?? imported.ClrType
                 if definition?.IsGenericType == true && !definition!!.IsGenericTypeDefinition {
                     definition = definition!!.GetGenericTypeDefinition()
@@ -4357,8 +4376,8 @@ internal partial class ExpressionBinder {
         private func SameDelegateIdentity(left TypeSymbol, right TypeSymbol) bool {
             var left = left
             var right = right
-            left = UnwrapExpressionTreeDelegate(left)
-            right = UnwrapExpressionTreeDelegate(right)
+            left = UnwrapExpressionTreeDelegate(left).StripToBareShape()
+            right = UnwrapExpressionTreeDelegate(right).StripToBareShape()
             if object.ReferenceEquals(left, right) {
                 return true
             }

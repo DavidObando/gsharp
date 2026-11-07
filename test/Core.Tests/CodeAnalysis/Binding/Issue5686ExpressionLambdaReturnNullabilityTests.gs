@@ -367,6 +367,11 @@ func Run(token Token) {
                 "Maybe()"
             )
             yield Row(
+                "mixed-custom-generic-delegate-and-expression-tree-overload",
+                `func Run() string -> StrictSink5686.PickCustomDelegate((x) -> Maybe(), 1)`,
+                "Maybe()"
+            )
+            yield Row(
                 "mixed-object-delegate-and-expression-tree-overload",
                 `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
                 "MaybeThing()",
@@ -456,7 +461,9 @@ func Run(token Token) {
     let b = StrictSink5686.TakeNullableArg((x) -> Maybe())
     let c = StrictSink5686.TakeNullableExpression(() -> Box().MaybeName)
     let d = StrictSink5686.Eval(() -> Maybe())
-    return a ?? b ?? c ?? d
+    let e = StrictSink5686.PickNullableCustomDelegate((x) -> Maybe(), 1)
+    let f = StrictSink5686.PickNullableCustomDelegate((x) -> Box().MaybeName, true)
+    return a ?? b ?? c ?? d ?? e ?? f
 }`)
             yield AcceptedRow("ok-fixed-expression-tree-return", `func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
 func Run() string? {
@@ -506,7 +513,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v12.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v13.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -515,6 +522,7 @@ using System.Threading.Tasks;
 namespace Lib5686
 {
     public delegate string StrictDelegate5686();
+    public delegate T CustomGenericDelegate5686<T>(int x);
 
     public static class StrictSink5686
     {
@@ -525,6 +533,10 @@ namespace Lib5686
         public static string? TakeExpressionArg(Expression<Func<int, string>> f) => f.Compile()(1);
         public static string Pick(Func<string> f, int n) => f();
         public static string? Pick(Expression<Func<string>> f, bool b) => f.Compile()();
+        public static string PickCustomDelegate(CustomGenericDelegate5686<string> f, int n) => f(n);
+        public static string? PickCustomDelegate(Expression<CustomGenericDelegate5686<string>> f, bool b) => f.Compile()(1);
+        public static string? PickNullableCustomDelegate(CustomGenericDelegate5686<string?> f, int n) => f(n);
+        public static string? PickNullableCustomDelegate(Expression<CustomGenericDelegate5686<string?>> f, bool b) => f.Compile()(1);
         public static object PickObject(Func<object> f, int n) => f();
         public static object? PickObject(Expression<Func<object>> f, bool b) => f.Compile()();
         public static Exception PickException(Func<Exception> f, int n) => f();

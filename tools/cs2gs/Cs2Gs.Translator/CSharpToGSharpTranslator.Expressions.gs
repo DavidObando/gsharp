@@ -3661,7 +3661,8 @@ partial class CSharpToGSharpTranslator {
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
                 return this.ArrayTypeOfInitializer(initializer) is {} arrayType &&
-                    !ContainsTypeParameter(arrayType.ElementType)
+                    !ContainsTypeParameter(arrayType.ElementType) &&
+                    this.ArrayInitializerSlotIsDeclared(initializer)
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression) ||
                 (
@@ -3888,6 +3889,14 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
                 return this.ReceiverTypeArgumentsAreDeclared(conditionalAccess.WhenNotNull, slotType, activeMemo)
             }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaitExpression {
+                return this.AwaitedReceiverTypeArgumentsAreDeclared(
+                    awaitExpression,
+                    awaitExpression.Expression,
+                    slotType,
+                    activeMemo
+                )
+            }
             if unwrapped is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -3898,7 +3907,12 @@ partial class CSharpToGSharpTranslator {
                 let arrayType = (
                     this.context.GetTypeInfo(unwrapped).Type ?? this.context.GetTypeInfo(unwrapped).ConvertedType
                 ) as IArrayTypeSymbol
-                return arrayType != nil && !ContainsTypeParameter(arrayType.ElementType)
+                return arrayType != nil &&
+                    !ContainsTypeParameter(arrayType.ElementType) &&
+                    (
+                    unwrapped is not ImplicitArrayCreationExpressionSyntax implicitArray ||
+                        this.ImplicitArrayDelegateSlotIsDeclared(implicitArray)
+                )
             }
             if unwrapped is ElementAccessExpressionSyntax innerElementAccess &&
                 this
@@ -4216,15 +4230,16 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if IsImplicitlyTypedLocal(local) {
-                let localDelegate = UnwrapExpressionTreeDelegateType(local.Type) as INamedTypeSymbol
+                var localDelegateType = local.Type
+                while localDelegateType is IArrayTypeSymbol localArrayType {
+                    localDelegateType = localArrayType.ElementType
+                }
+                let localDelegate = UnwrapExpressionTreeDelegateType(localDelegateType) as INamedTypeSymbol
                 let localInvoke = localDelegate?.DelegateInvokeMethod
-                if value is not AnonymousFunctionExpressionSyntax ||
-                    declarator
-                    .Initializer
-                    ?.Value is not{} varInitializer ||
-                    varInitializer
-                    .Span
-                    .Contains(value.Span) ||
+                let varInitializer = declarator.Initializer?.Value
+                let isLambdaOrImplicitArray = value is AnonymousFunctionExpressionSyntax ||
+                    value is ImplicitArrayCreationExpressionSyntax
+                if !isLambdaOrImplicitArray || varInitializer == nil || varInitializer.Span.Contains(value!!.Span) ||
                     localInvoke == nil ||
                     ContainsTypeParameter(localInvoke.ReturnType) ||
                     localInvoke
@@ -4263,8 +4278,583 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func InitializerLambdaReturnsNilableBeyondItsCSharpType(
+        private func ArrayInitializerSlotIsDeclared(initializer InitializerExpressionSyntax) bool {
+            var root = initializer
+            while root.Parent is InitializerExpressionSyntax parentInitializer && parentInitializer.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+            ) {
+                root = parentInitializer
+            }
+            if root.Parent is not ImplicitArrayCreationExpressionSyntax implicitArray {
+                return true
+            }
+            return this.ImplicitArrayDelegateSlotIsDeclared(implicitArray)
+        }
+
+        private func ImplicitArrayDelegateSlotIsDeclared(
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            visited HashSet[ILocalSymbol]? = nil
+        ) bool {
+            if this.ImplicitArrayHasDeclaredTargetSlot(implicitArray) {
+                return true
+            }
+            let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+            if leaves.Count == 0 {
+                return true
+            }
+            var sawNilableReturn = false
+            for leaf in leaves {
+                if this.InitializerLambdaReturnsNilableBeyondItsCSharpType(leaf, visited) {
+                    sawNilableReturn = true
+                } else if !this.IsUncastAnonymousFunctionOperand(leaf) {
+                    return true
+                }
+            }
+            return !sawNilableReturn
+        }
+
+        private func ImplicitArrayHasDeclaredTargetSlot(implicitArray ImplicitArrayCreationExpressionSyntax) bool {
+            var node Microsoft.CodeAnalysis.SyntaxNode? = implicitArray
+            while node != nil {
+                switch node.Parent {
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParenthesizedExpressionSyntax,
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .CheckedExpressionSyntax {
+                        node = node.Parent
+                    }
+                    case conditional is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax when conditional.Condition != node {
+                        node = conditional
+                    }
+                    case arm is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax when arm.Expression == node {
+                        node = arm.Parent
+                    }
+                    case castExpr is CastExpressionSyntax {
+                        if this
+                            .context
+                            .GetTypeInfo(castExpr.Type)
+                            .Type is IArrayTypeSymbol castArray &&
+                            !ContainsTypeParameter(castArray.ElementType) {
+                            return true
+                        }
+                        node = castExpr
+                    }
+                    default {
+                        node = nil
+                    }
+                }
+            }
+            let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
+            let outermost = OutermostTransparentNode(implicitArray, storeNodes: storeNodes)
+            if outermost?.Parent is InitializerExpressionSyntax outerInitializer && outerInitializer.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+            ) &&
+                this.ArrayTypeOfInitializer(outerInitializer) is {} outerArrayType &&
+                !ContainsTypeParameter(outerArrayType.ElementType) &&
+                this.ArrayInitializerSlotIsDeclared(outerInitializer) {
+                return true
+            }
+            let sink = this.ResolveValueSink(implicitArray) ??
+                (
+                if this.FindResultLambda(implicitArray) is {} enclosingLambda {
+                    this.GetLambdaTargetDelegateType(enclosingLambda)?.DelegateInvokeMethod
+                } else {
+                    default(IMethodSymbol?)
+                }
+            )
+            return this.SlotTypeIsDeclared(sink, implicitArray)
+        }
+
+        private func CollectArrayInitializerLeaves(
+            initializer InitializerExpressionSyntax?,
+            leaves List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]
+        ) {
+            if initializer == nil {
+                return
+            }
+            for expr in initializer.Expressions {
+                if expr is InitializerExpressionSyntax nested && nested.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+                ) {
+                    this.CollectArrayInitializerLeaves(nested, leaves)
+                } else {
+                    leaves.Add(expr)
+                }
+            }
+        }
+
+        private func IsUncastAnonymousFunctionOperand(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if ComposedValueOperands(unwrapped) is {} operands {
+                return operands.Count > 0 && operands.All(this.IsUncastAnonymousFunctionOperand)
+            }
+            return unwrapped is AnonymousFunctionExpressionSyntax lambda && !this.LambdaHasExplicitDelegateCast(lambda)
+        }
+
+        private func PromoteInferredDelegateArrayElementType(
+            elementType GTypeReference?,
+            elementTypeSymbol ITypeSymbol?,
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) GTypeReference? {
+            if elementType == nil || elementTypeSymbol == nil {
+                return elementType
+            }
+            let delegateType = UnwrapExpressionTreeDelegateType(elementTypeSymbol) as INamedTypeSymbol
+            let invoke = delegateType?.DelegateInvokeMethod
+            if invoke == nil || ContainsTypeParameter(invoke.ReturnType) || this.ImplicitArrayDelegateSlotIsDeclared(
+                implicitArray
+            ) {
+                return elementType
+            }
+            if elementType is ArrowTypeReference arrow && arrow.ReturnTypes.Count == 1 {
+                let widenedReturn = this.WidenInferredDelegateReturnType(
+                    arrow.ReturnTypes[0],
+                    invoke.ReturnType,
+                    implicitArray,
+                    List[int32]()
+                )
+                if widenedReturn != nil && !object.ReferenceEquals(widenedReturn, arrow.ReturnTypes[0]) {
+                    return ArrowTypeReference(arrow.ParameterTypes, List[GTypeReference]{widenedReturn}, arrow.IsAsync){
+                        IsNullable = arrow.IsNullable
+                    }
+                }
+            }
+            if elementType is NamedTypeReference{TypeArguments: {Count: 1}} exprRef &&
+                exprRef.TypeArguments[0] is ArrowTypeReference innerArrow &&
+                innerArrow
+                .ReturnTypes
+                .Count == 1 {
+                let widenedReturn = this.WidenInferredDelegateReturnType(
+                    innerArrow.ReturnTypes[0],
+                    invoke.ReturnType,
+                    implicitArray,
+                    List[int32]()
+                )
+                if widenedReturn != nil && !object.ReferenceEquals(widenedReturn, innerArrow.ReturnTypes[0]) {
+                    let widenedArrow GTypeReference = ArrowTypeReference(
+                        innerArrow.ParameterTypes,
+                        List[GTypeReference]{widenedReturn},
+                        innerArrow.IsAsync
+                    ){IsNullable = innerArrow.IsNullable}
+                    return NamedTypeReference(exprRef.Name, List[GTypeReference]{widenedArrow}){
+                        IsNullable = exprRef.IsNullable
+                    }
+                }
+            }
+            return elementType
+        }
+
+        private func WidenInferredDelegateReturnType(
+            returnTypeRef GTypeReference?,
+            returnTypeSymbol ITypeSymbol?,
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            path List[int32]
+        ) GTypeReference? {
+            if returnTypeRef == nil || returnTypeSymbol == nil {
+                return returnTypeRef
+            }
+            if this.UnwrapNullableValueTupleType(returnTypeSymbol) is INamedTypeSymbol tupleType &&
+                tupleType.IsTupleType &&
+                returnTypeRef is TupleTypeReference tupleRef &&
+                tupleRef
+                .ElementTypes
+                .Count == tupleType
+                .TupleElements
+                .Length {
+                let updatedElements = List[GTypeReference](tupleRef.ElementTypes.Count)
+                var changed = false
+                for var i = 0; i < tupleType.TupleElements.Length; i++ {
+                    let existing = tupleRef.ElementTypes[i]
+                    let childPath = List[int32](path){i}
+                    let widenedElem = this.WidenInferredDelegateReturnType(
+                        existing,
+                        tupleType.TupleElements[i].Type,
+                        implicitArray,
+                        childPath
+                    ) ??
+                        existing
+                    if !object.ReferenceEquals(widenedElem, existing) {
+                        changed = true
+                    }
+                    updatedElements.Add(widenedElem)
+                }
+                return if changed {
+                    cast[GTypeReference](
+                        TupleTypeReference(updatedElements, tupleRef.ElementNames){IsNullable = tupleRef.IsNullable}
+                    )
+                } else {
+                    returnTypeRef
+                }
+            }
+            if !returnTypeRef.IsNullable &&
+                returnTypeSymbol.IsReferenceType &&
+                returnTypeSymbol.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                (path.Count == 0 || this.ImplicitArrayLeavesYieldNilableAtTuplePath(implicitArray, path)) {
+                return MakeNullable(returnTypeRef)
+            }
+            return returnTypeRef
+        }
+
+        private func ImplicitArrayLeavesYieldNilableAtTuplePath(
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            path List[int32]
+        ) bool {
+            let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+            return leaves.Any(
+                (
+                    leaf Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                ) -> this.InitializerLambdaReturnsNilableAtTuplePath(leaf, path, nil)
+            )
+        }
+
+        private func InitializerLambdaReturnsNilableAtTuplePath(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            path List[int32],
+            visited HashSet[ILocalSymbol]?
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if ComposedValueOperands(unwrapped) is {} operands {
+                for operand in operands {
+                    if this.InitializerLambdaReturnsNilableAtTuplePath(operand, path, visited) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if unwrapped is AnonymousFunctionExpressionSyntax lambda {
+                if this.LambdaHasExplicitDelegateCast(lambda) {
+                    return false
+                }
+                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprBody {
+                    return this.TupleElementYieldsNilableBeyondItsCSharpType(exprBody, path)
+                }
+                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax block {
+                    return this.BlockReturnsNilableAtTuplePath(block, path)
+                }
+                return false
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInitializer}} {
+                let activeVisited = visited ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(aliasedLocal) {
+                    return false
+                }
+                try {
+                    return this.InitializerLambdaReturnsNilableAtTuplePath(aliasInitializer, path, activeVisited)
+                } finally {
+                    activeVisited.Remove(aliasedLocal)
+                }
+            }
+            return false
+        }
+
+        private func BlockReturnsNilableAtTuplePath(node Microsoft.CodeAnalysis.SyntaxNode, path List[int32]) bool {
+            if node is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ReturnStatementSyntax returnStmt &&
+                returnStmt.Expression != nil {
+                return this.TupleElementYieldsNilableBeyondItsCSharpType(returnStmt.Expression, path)
+            }
+            for child in node.ChildNodes() {
+                if child is AnonymousFunctionExpressionSyntax || child is LocalFunctionStatementSyntax {
+                    continue
+                }
+                if this.BlockReturnsNilableAtTuplePath(child, path) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func AwaitedReceiverTypeArgumentsAreDeclared(
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax,
+            operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotType ITypeSymbol?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]
+        ) bool {
+            var unwrapped = Unparenthesize(operand)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedOperand {
+                    unwrapped = Unparenthesize(checkedOperand.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedOperand {
+                    unwrapped = Unparenthesize(suppressedOperand.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is CastExpressionSyntax castExpression {
+                let castResult = this.GetAwaitedResultType(
+                    awaitExpression,
+                    this.context.GetTypeInfo(castExpression.Type).Type
+                )
+                return (castResult is INamedTypeSymbol || castResult is IArrayTypeSymbol) &&
+                    !this.ReceiverTargetContainsTypeParameter(castResult, slotType)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax binaryExpression {
+                if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsExpression) {
+                    let asResult = this.GetAwaitedResultType(
+                        awaitExpression,
+                        this.context.GetTypeInfo(binaryExpression.Right).Type
+                    )
+                    return (asResult is INamedTypeSymbol || asResult is IArrayTypeSymbol) &&
+                        !this.ReceiverTargetContainsTypeParameter(asResult, slotType)
+                }
+                if binaryExpression.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                    return this.AwaitedReceiverTypeArgumentsAreDeclared(
+                        awaitExpression,
+                        binaryExpression.Left,
+                        slotType,
+                        memo
+                    ) &&
+                        this.AwaitedReceiverTypeArgumentsAreDeclared(
+                        awaitExpression,
+                        binaryExpression.Right,
+                        slotType,
+                        memo
+                    )
+                }
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.AwaitedReceiverTypeArgumentsAreDeclared(
+                    awaitExpression,
+                    conditional.WhenTrue,
+                    slotType,
+                    memo
+                ) &&
+                    this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, conditional.WhenFalse, slotType, memo)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Count > 0 && switchExpression.Arms.All(
+                    (
+                        arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
+                    ) -> this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, arm.Expression, slotType, memo)
+                )
+            }
+            if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
+                return this.AwaitedReceiverTypeArgumentsAreDeclared(
+                    awaitExpression,
+                    conditionalAccess.WhenNotNull,
+                    slotType,
+                    memo
+                )
+            }
+            if unwrapped is InvocationExpressionSyntax invocation {
+                let receiverMethod = this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol
+                let actualResult = this.GetAwaitedResultType(awaitExpression, receiverMethod?.ReturnType)
+                if receiverMethod == nil || actualResult == nil || this.ReceiverTargetContainsTypeParameter(
+                    actualResult,
+                    slotType
+                ) {
+                    return false
+                }
+                let declaredResult = this.GetAwaitedResultType(
+                    awaitExpression,
+                    receiverMethod.OriginalDefinition.ReturnType
+                )
+                let projectedDeclaredReturn = this.ProjectSlotThroughReceiverType(slotType, declaredResult)
+                if !ContainsTypeParameter(projectedDeclaredReturn) {
+                    return true
+                }
+                if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Method) &&
+                    !HasExplicitTypeArguments(invocation.Expression) {
+                    return false
+                }
+                if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Type) {
+                    if invocation.Expression is SimpleNameSyntax {
+                        return true
+                    }
+                    let invocationReceiver = switch invocation.Expression {
+                        case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                        case memberBinding is MemberBindingExpressionSyntax: this.GetConditionalBindingReceiver(
+                            memberBinding
+                        )
+                        default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                    }
+                    if declaredResult is ITypeParameterSymbol {
+                        return this.AwaitedReceiverTypeArgumentsAreDeclared(
+                            awaitExpression,
+                            invocationReceiver,
+                            slotType,
+                            memo
+                        )
+                    }
+                    return this.ReceiverTypeArgumentsAreDeclared(invocationReceiver, projectedDeclaredReturn, memo)
+                }
+                return true
+            }
+            let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+            return switch symbol {
+                case local is ILocalSymbol: if TryGetReceiverLocalMemo(memo, local, slotType, out var cached) {
+                    cached
+                } else if IsImplicitlyTypedLocal(local) &&
+                    !this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) &&
+                    local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}} {
+                    this.AwaitedLocalReceiverTypeArgumentsAreDeclared(awaitExpression, local, localInit, slotType, memo)
+                } else {
+                    !this.ReceiverTargetContainsTypeParameter(
+                        this.GetAwaitedResultType(awaitExpression, local.Type),
+                        slotType
+                    )
+                }
+                case field is IFieldSymbol: this.MemberReceiverTypeArgumentsAreDeclared(
+                    this.GetAwaitedResultType(awaitExpression, field.OriginalDefinition.Type),
+                    this.GetAwaitedResultType(awaitExpression, field.Type),
+                    unwrapped,
+                    slotType,
+                    memo
+                )
+                case property is IPropertySymbol: this.MemberReceiverTypeArgumentsAreDeclared(
+                    this.GetAwaitedResultType(awaitExpression, property.OriginalDefinition.Type),
+                    this.GetAwaitedResultType(awaitExpression, property.Type),
+                    unwrapped,
+                    slotType,
+                    memo
+                )
+                case parameter is IParameterSymbol: !this.ReceiverTargetContainsTypeParameter(
+                    this.GetAwaitedResultType(awaitExpression, parameter.Type),
+                    slotType
+                ) &&
+                    (
+                    !(
+                        parameter
+                            .DeclaringSyntaxReferences
+                            .FirstOrDefault()
+                            ?.GetSyntax() is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .ParameterSyntax{Type: nil}
+                    ) ||
+                        this.SlotTypeIsDeclared(parameter, unwrapped)
+                )
+                default: false
+            }
+        }
+
+        private func AwaitedLocalReceiverTypeArgumentsAreDeclared(
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax,
+            local ILocalSymbol,
+            localInit Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            slotType ITypeSymbol?,
+            memo Dictionary[ILocalSymbol, List[(Slot ITypeSymbol?, Result bool)]]
+        ) bool {
+            SetReceiverLocalMemo(memo, local, slotType, false)
+            let result = this.AwaitedReceiverTypeArgumentsAreDeclared(awaitExpression, localInit, slotType, memo)
+            SetReceiverLocalMemo(memo, local, slotType, result)
+            return result
+        }
+
+        private func GetAwaitedResultType(
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax,
+            awaitableType ITypeSymbol?
+        ) ITypeSymbol? {
+            if awaitableType == nil {
+                return nil
+            }
+            let info = this.context.SemanticModel.GetAwaitExpressionInfo(awaitExpression)
+            if info.GetAwaiterMethod is {} getAwaiter &&
+                info.GetResultMethod is {} getResult &&
+                !getAwaiter
+                .IsExtensionMethod {
+                let declaredAwaiterType = this.ProjectSlotThroughReceiverType(
+                    getAwaiter.OriginalDefinition.ReturnType,
+                    awaitableType
+                )
+                if !SymbolEqualityComparer.Default.Equals(
+                    declaredAwaiterType,
+                    getAwaiter.OriginalDefinition.ReturnType
+                ) ||
+                    !ContainsTypeParameter(declaredAwaiterType) {
+                    return this.ProjectSlotThroughReceiverType(
+                        getResult.OriginalDefinition.ReturnType,
+                        declaredAwaiterType
+                    )
+                }
+            }
+            if awaitableType is INamedTypeSymbol namedAwaitable {
+                for member in namedAwaitable.OriginalDefinition.GetMembers("GetAwaiter") {
+                    if member is IMethodSymbol{IsStatic: false, Parameters: {Length: 0}} instanceGetAwaiter &&
+                        this.ProjectSlotThroughReceiverType(
+                        instanceGetAwaiter.ReturnType,
+                        namedAwaitable
+                    ) is INamedTypeSymbol awaiterType {
+                        for resultMember in awaiterType.OriginalDefinition.GetMembers("GetResult") {
+                            if resultMember is IMethodSymbol{
+                                IsStatic: false,
+                                Parameters: {Length: 0}
+                            } instanceGetResult {
+                                return this.ProjectSlotThroughReceiverType(instanceGetResult.ReturnType, awaiterType)
+                            }
+                        }
+                    }
+                }
+            }
+            return nil
+        }
+
+        private func InitializerLambdaReturnsNilableBeyondItsCSharpType(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            visited HashSet[ILocalSymbol]? = nil
         ) bool {
             var unwrapped = Unparenthesize(expression)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -4273,12 +4863,20 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
-            if unwrapped is CastExpressionSyntax {
+            if unwrapped is CastExpressionSyntax ||
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ArrayCreationExpressionSyntax {
                 return false
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
+                return !this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, visited)
             }
             if ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
-                    if this.InitializerLambdaReturnsNilableBeyondItsCSharpType(operand) {
+                    if this.InitializerLambdaReturnsNilableBeyondItsCSharpType(operand, visited) {
                         return true
                     }
                 }
@@ -4295,6 +4893,29 @@ partial class CSharpToGSharpTranslator {
                     return this.BlockReturnsNilableBeyondItsCSharpType(block)
                 }
                 return false
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInitializer}} {
+                let activeVisited = visited ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(aliasedLocal) {
+                    return false
+                }
+                try {
+                    return this.InitializerLambdaReturnsNilableBeyondItsCSharpType(aliasInitializer, activeVisited)
+                } finally {
+                    activeVisited.Remove(aliasedLocal)
+                }
             }
             return this.ExpressionOrTupleYieldsNilableBeyondItsCSharpType(unwrapped)
         }
