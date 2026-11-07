@@ -7216,10 +7216,51 @@ partial class CSharpToGSharpTranslator {
         /// a property subpattern `{ P: var c }` at any depth and a conjunction. See
         /// (cref:TryGetVarCaptureInput) for the input.
         /// @returns `false` when cs2gs cannot name the input. The caller then uses its other rules.
-        private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
+        private func TryGetVarCaptureStaticNonNull(
+            local ILocalSymbol,
+            out isNonNull bool,
+            capturedInputType ITypeSymbol? = nil
+        ) bool {
             isNonNull = false
-            if this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
+            if capturedInputType == nil && this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
                 isNonNull = decided
+                return true
+            }
+            let capturePattern = (
+                local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as SingleVariableDesignationSyntax
+            )?.Parent as Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .VarPatternSyntax
+            var captureParent = capturePattern?.Parent
+            while captureParent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                captureParent = parenthesized.Parent
+            }
+            if captureParent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ListPatternSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SlicePatternSyntax {
+                let inputType = capturedInputType ??
+                    (
+                    if this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType
+                        .TryGetValue(local, out var projectedType) {
+                        projectedType
+                    } else {
+                        local.Type
+                    }
+                )
+                isNonNull = this.DeclaredValueIsStaticallyNonNull(nil, inputType)
+                this.state.VarCaptureInputNonNull[local] = isNonNull
                 return true
             }
             if this.state.VarCaptureUndecided.Contains(local) || !this.TryGetVarCaptureInput(
@@ -7595,9 +7636,9 @@ partial class CSharpToGSharpTranslator {
                     !TryGetPatternNonNullPolarity(isPattern.Pattern, out var whenTrue) ||
                     !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue) ||
                     (
-                    PatternUsesNativeVariableSyntax(isPattern.Pattern) && !this.ConditionUsesNativePatternVariables(
-                        GetConditionRoot(isPattern)
-                    )
+                    this.PatternHasWholeValueCapture(isPattern.Pattern) &&
+                        PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
+                        !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
                 ) ||
                     !this
                     .ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
@@ -15083,7 +15124,8 @@ partial class CSharpToGSharpTranslator {
             // Focus on the GS0158/GS0116 cases: nullable reference types and
             // nullable arrays. Nullable value types (`int?`) take the `.Value`/
             // `.HasValue` path and are left untouched.
-            if !(declared != nil && declared.IsReferenceType == true) {
+            // Annotated type parameters keep the mapper's nullable-reference-like spelling.
+            if !(declared != nil && (declared.IsReferenceType || declared is ITypeParameterSymbol)) {
                 return false
             }
             // A declared-nullable receiver (`T?`) flow-proven non-null needs `!!`.

@@ -1369,6 +1369,14 @@ partial class CSharpToGSharpTranslator {
             }
             var receiver GExpression? = this.TranslateExpression(isPattern!!.Expression)
             if this.IsNativelyExpressiblePattern(positivePattern, topLevel: true) &&
+                !this
+                .PatternRequiresLoweredListTest(
+                positivePattern!!,
+                this.ResolveDeclaredReceiverType(
+                    this.context.GetTypeInfo(isPattern!!.Expression).Type,
+                    isPattern!!.Expression
+                )
+            ) &&
                 binder
                 .Type
                 .TypeKind != TypeKind.Error &&
@@ -1432,14 +1440,19 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let localName string? = this.EmittedName(designation, designation!!.Identifier)
-            let localType GTypeReference? = MakeNullable(
-                this.typeMapper.Map(binder.Type, this.context, designation!!.GetLocation())
+            let localSymbolType = if this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) &&
+                inputIsNonNull {
+                binder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+            } else {
+                binder.Type
+            }
+            let localType GTypeReference? = this.PromoteIfUsedAsNullable(
+                this.typeMapper.Map(localSymbolType, this.context, designation!!.GetLocation()),
+                binder
             )
-            statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType))
             statements.Add(IfStatement(Negate(positiveTest), then))
-            statements.Add(AssignmentStatement(IdentifierExpression(localName), replacement))
-            let narrowed = NonNullAssertionExpression(IdentifierExpression(localName))
-            this.state.PatternBindings[binder] = narrowed
+            statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType, replacement))
+            this.state.PatternBindings[binder] = IdentifierExpression(localName)
             for var i = patternIndex + 1; i < terms.Count; i++ {
                 statements.Add(IfStatement(this.TranslateExpression(terms[i]), then))
             }
