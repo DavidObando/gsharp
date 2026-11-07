@@ -302,7 +302,7 @@ internal shared class LiteralConstructionRuntimeParity {
     private func FindCompiler() string {
         var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
         while directory != nil {
-            let candidate = Path.Combine(directory.FullName, "out", "bin", "Release", "Compiler", "gsc.dll")
+            let candidate = Path.Combine(directory.FullName, "Compiler", "gsc.dll")
             if File.Exists(candidate) {
                 return candidate
             }
