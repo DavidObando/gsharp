@@ -826,7 +826,11 @@ internal shared class ExternalClrOverrideResolver {
             }
             clrReturnType = unwrappedReturnType
         }
-        var contract = MemberLookup.GetClrMethodReturnTypeSymbol(containingType, openMethodDefinition)
+        var contract = MemberLookup.GetClrMethodReturnTypeSymbol(
+            containingType,
+            openMethodDefinition,
+            methodTypeArguments
+        )
         if isAsync {
             if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(contract, out var awaitedContract) {
                 return false

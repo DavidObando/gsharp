@@ -487,6 +487,60 @@ class Issue4756TupleOverrideContractTests {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func UnconstrainedGenericRefTuple_UsesTheInScopeMethodArgument(genericOwner bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let nativeOwner = if genericOwner {
+            "<O> where O : class"
+        } else {
+            ""
+        }
+        let sourceOwner = if genericOwner {
+            "[O class]"
+        } else {
+            ""
+        }
+        let parent = if genericOwner {
+            "Contract[O]"
+        } else {
+            "Contract"
+        }
+        let native = fixture.CompileCSharp(
+            "#nullable enable\nnamespace GenericRef4795;\npublic sealed class Box { }\n" +
+                "public abstract class Contract$nativeOwner {\n" +
+                "public abstract ref (T? Value, int Code) Read<T>((T? Value, int Code)[] values); }",
+            "nativeGenericRef4795"
+        )
+        let emitted = fixture.Compile(
+            "package GenericRef4795\nclass Rows$sourceOwner : $parent {\n" +
+                "    override func Read[U any](values [](Value U, Code int32)) ref (Value U, Code int32) {\n" +
+                "        return ref values[0]\n    }\n}",
+            "GenericRef4795",
+            executable: false,
+            "/r:" + native
+        )
+        let owner = if genericOwner {
+            "<Box>"
+        } else {
+            ""
+        }
+        let consumer = fixture.CompileCSharp(
+            "#nullable enable\nusing System;\nusing GenericRef4795;\npublic static class Consumer {\n" +
+                "public static string Run() { Contract$owner rows = new Rows$owner(); var box = new Box();\n" +
+                "var first = new (Box? Value, int Code)[] { (box, 1) }; ref var reference = ref rows.Read<Box>(first);\n" +
+                "reference.Code = 9; if (!ReferenceEquals(box, first[0].Value) || first[0].Code != 9) throw new Exception(\"reference alias\");\n" +
+                "var second = new (int Value, int Code)[] { (7, 1) }; ref var value = ref rows.Read<int>(second);\n" +
+                "value.Code = 9; if (second[0].Value != 7 || second[0].Code != 9) throw new Exception(\"value alias\");\n" +
+                "return \"generic-ref:box-identity;int:7;alias:9\"; }\n}",
+            "consumerGenericRef4795",
+            native,
+            emitted
+        )
+        VerifyAndRun(native, emitted, consumer, "generic-ref:box-identity;int:7;alias:9")
+    }
+
+    @Theory
     @InlineData("Task", "disable", "", true)
     @InlineData("ValueTask", "disable", "", true)
     @InlineData("Task", "enable", "", false)
