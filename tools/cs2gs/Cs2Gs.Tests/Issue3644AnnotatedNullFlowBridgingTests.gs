@@ -269,6 +269,45 @@ namespace Demo
 }`)
         Assert.Contains("Log(() -> profileId.ToString()!!)", printed)
         Assert.Contains("Log(() -> (aliasKey?.ToString())!!)", printed)
+        let siblingProject = CSharpProjectLoader.LoadInMemory([](string, source string){("Foundation.cs", `using System;
+namespace Demo.Foundation
+{
+    public static class SiblingLogger
+    {
+        public static void Log(Func<string> getWhat) => _ = getWhat();
+    }
+}`)})
+        using let peStream = System.IO.MemoryStream()
+        let emitResult = siblingProject.Compilation.Emit(peStream)
+        Assert.True(emitResult.Success)
+        let siblingRef = MetadataReference.CreateFromImage(peStream.ToArray())
+        let consumerReferences = System
+            .Collections
+            .Generic
+            .List[MetadataReference](CSharpProjectLoader.RuntimeReferences()){siblingRef}
+        let consumerProject = CSharpProjectLoader.LoadInMemory([](string, source string){("Consumer.cs", `using Demo.Foundation;
+namespace Demo
+{
+    public sealed class Key
+    {
+        public override string ToString() => "k";
+    }
+    public static class Consumer
+    {
+        public static void Run(Key aliasKey) => SiblingLogger.Log(() => aliasKey?.ToString());
+    }
+}`)}, consumerReferences)
+        let consumerDoc = Assert.Single(consumerProject.Documents)
+        let consumerCtx = TranslationContext(
+            consumerProject.Compilation,
+            consumerDoc.SemanticModel,
+            consumerDoc.FilePath,
+            []Microsoft.CodeAnalysis.CSharp.CSharpCompilation{siblingProject.Compilation}
+        )
+        let consumerPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(consumerDoc, consumerCtx)
+        )
+        Assert.Contains("SiblingLogger.Log(() -> (aliasKey?.ToString())!!)", consumerPrinted)
     }
 
     shared {

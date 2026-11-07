@@ -3548,24 +3548,12 @@ partial class CSharpToGSharpTranslator {
             let sink = this.ResolveValueSink(lambda) ??
                 (
                 if this.FindResultLambda(lambda) is {} enclosingLambda {
-                    this.GetLambdaTargetDelegateType(enclosingLambda)?.DelegateInvokeMethod
+                    this.ResolveValueSink(enclosingLambda)
                 } else {
                     default(ISymbol?)
                 }
             )
-            if sink == nil {
-                return false
-            }
-            if this.IsSourceSymbol(sink) {
-                return true
-            }
-            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-            return compilations != nil && compilations.Any(
-                (compilation CSharpCompilation) -> SymbolEqualityComparer.Default.Equals(
-                    compilation.Assembly,
-                    sink.OriginalDefinition.ContainingAssembly
-                )
-            )
+            return sink != nil && !this.TargetContractIsFrozenInMetadata(sink)
         }
 
         private func LambdaResultSlotIsDeclared(
