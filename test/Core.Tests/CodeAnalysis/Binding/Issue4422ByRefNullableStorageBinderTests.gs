@@ -776,6 +776,12 @@ var s string? = nil
     OutS(&s)
 }
 let _ = InS(&s)`, "s")
+    @InlineData(`var flag = false
+var s string? = nil
+for flag {
+    OutS(&s)
+}
+let _ = InS(&s)`, "s")
     func SubExpressionWriteAndConditionalOut_InvalidateOrIsolateNonNullByRefFact(body string, parameterName string) {
         let result = EmittedOracle.Evaluate(Callees + "\n" + body)
         let warning = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0612")

@@ -834,7 +834,7 @@ internal partial class StatementBinder {
                 boundStatement is BoundIfStatement or
                 BoundPatternSwitchStatement or
                 BoundTryStatement or
-                BoundBlockStatement &&
+                BoundBlockStatement{Syntax: BlockStatementSyntax or IfStatementSyntax} &&
                 !ContainsUserGotoOrLabel(boundStatement)
         ) {
             for variable in binderCtx.NonNullByRefVariables.ToArray() {
