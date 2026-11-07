@@ -143,16 +143,36 @@ func Check[T](x RefPair[T, int32]) RefPair[T, string]? -> x as RefPair[T, string
 Check[bool](RefPair[bool, int32]()) == nil`)
         Assert.Single(rejectedClassPair.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
+        let rejectedFunctionReturnWidening = Evaluate(`func Check(f (int32) -> int64) ((int32) -> int32)? -> f as (int32) -> int32
+Check((x int32) -> int64(x)) == nil`)
+        Assert.Single(rejectedFunctionReturnWidening.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedInvariantInterface = Evaluate(`interface IBox[U] {}
+struct S[T] : IBox[string] {}
+func Check[T](s S[T]) IBox[object]? -> s as IBox[object]
+Check[int32](S[int32]{}) == nil`)
+        Assert.Single(rejectedInvariantInterface.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedNestedContainer = Evaluate(`import System.Collections.Generic
+struct Box[A] { var Item A }
+func Check[T](b Box[List[T]]) Box[IEnumerable[T]]? -> b as Box[IEnumerable[T]]?
+Check[int32](Box[List[int32]]{Item: List[int32]()}) == nil`)
+        Assert.Single(rejectedNestedContainer.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}
+class Ints : List[int32] {}
 func Check[T](x object, xs IEnumerable[T], f (S) -> S) bool {
     let a = x as List[T]
     let b = xs as List[T]
     let c = f as ICloneable
-    return a == nil && b != nil && c != nil
+    let d = xs as Ints
+    return a == nil && b != nil && c != nil && d != nil
 }
-Check[int32](42, List[int32]{1}, (s S) -> s)`)
+let ints = Ints()
+ints.Add(1)
+Check[int32](42, ints, (s S) -> s)`)
         Assert.Empty(allowed.Diagnostics)
         Assert.Equal(true, allowed.Value)
     }

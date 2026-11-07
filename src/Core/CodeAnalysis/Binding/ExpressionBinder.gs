@@ -4163,10 +4163,7 @@ internal partial class ExpressionBinder {
         if toIsValue {
             return HasBoxingConversionForAs(toCore, fromCore, hasTypeParameter)
         }
-        if Conversion.HasCheckedReferenceConversion(fromCore, toCore) || Conversion.HasCheckedReferenceConversion(
-            toCore,
-            fromCore
-        ) {
+        if HasRuntimeReferenceConversion(fromCore, toCore) || HasRuntimeReferenceConversion(toCore, fromCore) {
             return true
         }
         if HasSymbolicReferenceSupertypeConversion(fromCore, toCore) ||
@@ -4174,6 +4171,15 @@ internal partial class ExpressionBinder {
             return true
         }
         return hasTypeParameter && CanOpenReferenceTypesMatchForAs(fromCore, toCore)
+    }
+
+    private func HasRuntimeReferenceConversion(from TypeSymbol, to TypeSymbol) bool {
+        if (from is FunctionTypeSymbol || to is FunctionTypeSymbol) &&
+            MemberLookup.TryGetDelegateFunctionTypeFromSymbol(from, out _) &&
+            MemberLookup.TryGetDelegateFunctionTypeFromSymbol(to, out _) {
+            return Conversion.ReusesFunctionValueDelegate(from, to)
+        }
+        return Conversion.HasCheckedReferenceConversion(from, to)
     }
 
     private func HasSymbolicReferenceSupertypeConversion(sub TypeSymbol, sup TypeSymbol) bool {
@@ -4230,15 +4236,18 @@ internal partial class ExpressionBinder {
         if ifaceType is InterfaceSymbol userIface {
             let userIfaceDef = userIface.Definition ?? userIface
             if valueType is StructSymbol valStruct {
-                for implemented in valStruct.Interfaces {
-                    for ancestor in implemented.SelfAndAllBaseInterfaces() {
-                        if (ancestor.Definition ?? ancestor) == userIfaceDef &&
-                            CanTypeArgumentsMatchForAs(
-                            ancestor.TypeArguments,
-                            userIface.TypeArguments,
-                            allowVariance: true
-                        ) {
-                            return true
+                for holder in valStruct.GetHierarchy() {
+                    for implemented in holder.Interfaces {
+                        for ancestor in implemented.SelfAndAllBaseInterfaces() {
+                            if (ancestor.Definition ?? ancestor) == userIfaceDef &&
+                                CanSourceTypeArgumentsMatchForAs(
+                                ancestor.TypeArguments,
+                                userIface.TypeArguments,
+                                userIfaceDef.TypeParameters,
+                                allowVariance: true
+                            ) {
+                                return true
+                            }
                         }
                     }
                 }
@@ -4251,19 +4260,51 @@ internal partial class ExpressionBinder {
         }
         let ifaceArgs = ifaceType.GetElementPositions()
         if valueType is StructSymbol srcStruct {
-            for clrIface in srcStruct.ImplementedClrInterfaces {
-                if OpenClrTypeDefinition(clrIface) is {} candidateOpen && ClrTypeUtilities.AreSame(
-                    candidateOpen,
-                    openIface
-                ) &&
-                    CanTypeArgumentsMatchForAs(clrIface.GetElementPositions(), ifaceArgs, allowVariance: true) {
-                    return true
+            for holder in srcStruct.GetHierarchy() {
+                for clrIface in holder.ImplementedClrInterfaces {
+                    if OpenClrTypeDefinition(clrIface) is {} candidateOpen && ClrTypeUtilities.AreSame(
+                        candidateOpen,
+                        openIface
+                    ) &&
+                        CanClrTypeArgumentsMatchForAs(
+                        clrIface.GetElementPositions(),
+                        ifaceArgs,
+                        openIface,
+                        allowVariance: true
+                    ) {
+                        return true
+                    }
+                    for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                        clrIface,
+                        openIface
+                    ) {
+                        if CanClrTypeArgumentsMatchForAs(projectedArgs, ifaceArgs, openIface, allowVariance: true) {
+                            return true
+                        }
+                    }
+                }
+                if holder.ImportedBaseType is {} importedBase {
+                    for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                        importedBase,
+                        openIface
+                    ) {
+                        if CanClrTypeArgumentsMatchForAs(projectedArgs, ifaceArgs, openIface, allowVariance: true) {
+                            return true
+                        }
+                    }
+                    if !openIface.IsGenericType && importedBase.ClrType is {} baseClr {
+                        for clrIface in ClrTypeUtilities.SafeGetInterfaces(baseClr) {
+                            if !clrIface.IsGenericType && ClrTypeUtilities.AreSame(clrIface, openIface) {
+                                return true
+                            }
+                        }
+                    }
                 }
             }
             return false
         }
         for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(valueType, openIface) {
-            if CanTypeArgumentsMatchForAs(projectedArgs, ifaceArgs, allowVariance: true) {
+            if CanClrTypeArgumentsMatchForAs(projectedArgs, ifaceArgs, openIface, allowVariance: true) {
                 return true
             }
         }
@@ -4291,18 +4332,31 @@ internal partial class ExpressionBinder {
                 .Length == tFn
                 .ParameterTypes
                 .Length &&
+                (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
                 CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, allowVariance: true) &&
                 CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, allowVariance: true)
         }
         if fromCore is DelegateTypeSymbol fDel && toCore is DelegateTypeSymbol tDel {
-            return (fDel.Definition ?? fDel) == (tDel.Definition ?? tDel) &&
-                CanTypeArgumentsMatchForAs(fDel.TypeArguments, tDel.TypeArguments, allowVariance: true)
+            let delDef = fDel.Definition ?? fDel
+            return delDef == (tDel.Definition ?? tDel) &&
+                CanSourceTypeArgumentsMatchForAs(
+                fDel.TypeArguments,
+                tDel.TypeArguments,
+                delDef.TypeParameters,
+                allowVariance: true
+            )
         }
         if Conversion.IsInterfaceLikeType(fromCore) {
+            if Conversion.IsClassLikeReferenceType(toCore) && !Conversion.IsSealedReferenceType(toCore) {
+                return true
+            }
             return ValueTypeCanImplementOpenInterface(toCore, fromCore) ||
                 ArrayImplementsOpenInterface(toCore, fromCore)
         }
         if Conversion.IsInterfaceLikeType(toCore) {
+            if Conversion.IsClassLikeReferenceType(fromCore) && !Conversion.IsSealedReferenceType(fromCore) {
+                return true
+            }
             return ValueTypeCanImplementOpenInterface(fromCore, toCore) ||
                 ArrayImplementsOpenInterface(fromCore, toCore)
         }
@@ -4314,25 +4368,28 @@ internal partial class ExpressionBinder {
         if fOpen != nil && tOpen != nil {
             if ClrTypeUtilities.AreSame(fOpen, tOpen) {
                 let allowVar = fOpen.IsInterface || ClrTypeUtilities.IsDelegateType(fOpen)
-                return CanTypeArgumentsMatchForAs(
+                return CanClrTypeArgumentsMatchForAs(
                     fromCore.GetElementPositions(),
                     toCore.GetElementPositions(),
+                    fOpen,
                     allowVariance: allowVar
                 )
             }
             for projected in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(fromCore, tOpen) {
-                if CanTypeArgumentsMatchForAs(
+                if CanClrTypeArgumentsMatchForAs(
                     projected,
                     toCore.GetElementPositions(),
+                    tOpen,
                     allowVariance: tOpen.IsInterface
                 ) {
                     return true
                 }
             }
             for projected in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(toCore, fOpen) {
-                if CanTypeArgumentsMatchForAs(
+                if CanClrTypeArgumentsMatchForAs(
                     projected,
                     fromCore.GetElementPositions(),
+                    fOpen,
                     allowVariance: fOpen.IsInterface
                 ) {
                     return true
@@ -4346,13 +4403,61 @@ internal partial class ExpressionBinder {
             }
             return false
         }
-        if fromCore is StructSymbol sFrom && tOpen != nil && sFrom.ImportedBaseType is {} sFromBase {
-            return CanOpenReferenceTypesMatchForAs(sFromBase, toCore)
+        if fromCore is StructSymbol sFrom && tOpen != nil {
+            for holder in sFrom.GetHierarchy() {
+                if holder.ImportedBaseType is {} sFromBase && CanOpenReferenceTypesMatchForAs(sFromBase, toCore) {
+                    return true
+                }
+            }
         }
-        if toCore is StructSymbol sTo && fOpen != nil && sTo.ImportedBaseType is {} sToBase {
-            return CanOpenReferenceTypesMatchForAs(fromCore, sToBase)
+        if toCore is StructSymbol sTo && fOpen != nil {
+            for holder in sTo.GetHierarchy() {
+                if holder.ImportedBaseType is {} sToBase && CanOpenReferenceTypesMatchForAs(fromCore, sToBase) {
+                    return true
+                }
+            }
         }
         return false
+    }
+
+    private func CanOpenTypesUnifyExactlyForAs(fromCore TypeSymbol, toCore TypeSymbol) bool {
+        if OneDimensionalElement(fromCore) is {} fElem && OneDimensionalElement(toCore) is {} tElem {
+            return CanSingleTypePositionMatchForAs(fElem, tElem, allowVariance: false)
+        }
+        if fromCore is RectangularArrayTypeSymbol fRect && toCore is RectangularArrayTypeSymbol tRect {
+            return fRect.Rank == tRect.Rank &&
+                CanSingleTypePositionMatchForAs(fRect.ElementType, tRect.ElementType, allowVariance: false)
+        }
+        if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
+            return fFn
+                .ParameterTypes
+                .Length == tFn
+                .ParameterTypes
+                .Length &&
+                (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
+                CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, allowVariance: false) &&
+                CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, allowVariance: false)
+        }
+        if fromCore is DelegateTypeSymbol fDel && toCore is DelegateTypeSymbol tDel {
+            return (fDel.Definition ?? fDel) == (tDel.Definition ?? tDel) &&
+                CanTypeArgumentsMatchForAs(fDel.TypeArguments, tDel.TypeArguments, allowVariance: false)
+        }
+        if fromCore is InterfaceSymbol fIface && toCore is InterfaceSymbol tIface {
+            return (fIface.Definition ?? fIface) == (tIface.Definition ?? tIface) &&
+                CanTypeArgumentsMatchForAs(fIface.TypeArguments, tIface.TypeArguments, allowVariance: false)
+        }
+        if fromCore is StructSymbol fClass && toCore is StructSymbol tClass {
+            return (fClass.Definition ?? fClass) == (tClass.Definition ?? tClass) &&
+                CanTypeArgumentsMatchForAs(fClass.TypeArguments, tClass.TypeArguments, allowVariance: false)
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        return fOpen != nil && tOpen != nil && ClrTypeUtilities.AreSame(fOpen, tOpen) &&
+            CanTypeArgumentsMatchForAs(
+            fromCore.GetElementPositions(),
+            toCore.GetElementPositions(),
+            allowVariance: false
+        )
     }
 
     private func OneDimensionalElement(type TypeSymbol) TypeSymbol? {
@@ -4376,9 +4481,10 @@ internal partial class ExpressionBinder {
             }
             for clrIface in typeof(int32).MakeArrayType().GetInterfaces() {
                 if clrIface.IsGenericType && ClrTypeUtilities.AreSame(clrIface.GetGenericTypeDefinition(), openIface) {
-                    return CanTypeArgumentsMatchForAs(
+                    return CanClrTypeArgumentsMatchForAs(
                         ImmutableArray.Create(elem),
                         ifaceType.GetElementPositions(),
+                        openIface,
                         allowVariance: true
                     )
                 }
@@ -4404,6 +4510,57 @@ internal partial class ExpressionBinder {
             }
         }
         return false
+    }
+
+    private func CanSourceTypeArgumentsMatchForAs(
+        leftArgs ImmutableArray[TypeSymbol],
+        rightArgs ImmutableArray[TypeSymbol],
+        typeParameters ImmutableArray[TypeParameterSymbol],
+        allowVariance bool
+    ) bool {
+        if leftArgs.IsDefault || rightArgs.IsDefault {
+            return true
+        }
+        if leftArgs.Length != rightArgs.Length {
+            return false
+        }
+        for var i = 0; i < leftArgs.Length; i++ {
+            let slotVariance = allowVariance &&
+                !typeParameters.IsDefault &&
+                i < typeParameters.Length &&
+                typeParameters[i].Variance != TypeParameterVariance.None
+            if !CanSingleTypePositionMatchForAs(leftArgs[i], rightArgs[i], slotVariance) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func CanClrTypeArgumentsMatchForAs(
+        leftArgs ImmutableArray[TypeSymbol],
+        rightArgs ImmutableArray[TypeSymbol],
+        openClr Type?,
+        allowVariance bool
+    ) bool {
+        if !allowVariance || openClr == nil || !openClr.IsGenericType {
+            return CanTypeArgumentsMatchForAs(leftArgs, rightArgs, allowVariance: false)
+        }
+        if leftArgs.IsDefault || rightArgs.IsDefault {
+            return true
+        }
+        if leftArgs.Length != rightArgs.Length {
+            return false
+        }
+        let genericParams = openClr.GetGenericArguments()
+        for var i = 0; i < leftArgs.Length; i++ {
+            let slotVariance = i < genericParams.Length &&
+                (genericParams[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask) !=
+            GenericParameterAttributes.None
+            if !CanSingleTypePositionMatchForAs(leftArgs[i], rightArgs[i], slotVariance) {
+                return false
+            }
+        }
+        return true
     }
 
     private func CanTypeArgumentsMatchForAs(
@@ -4467,6 +4624,9 @@ internal partial class ExpressionBinder {
         }
         if aIsValue || bIsValue {
             return aIsValue && bIsValue && CanOpenValueTypesMatchForAs(a, b)
+        }
+        if !allowVariance {
+            return CanOpenTypesUnifyExactlyForAs(a, b)
         }
         return CanOpenReferenceTypesMatchForAs(a, b)
     }
