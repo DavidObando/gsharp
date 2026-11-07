@@ -3479,7 +3479,9 @@ internal partial class ExpressionBinder {
                 if nominalTargetsAgree {
                     if nominalTarget == nil {
                         nominalTarget = nominalCandidate
-                    } else if !SameDelegateIdentity(nominalTarget, nominalCandidate) {
+                    } else if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalTarget, out _) !=
+                    MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(nominalCandidate, out _) ||
+                        !SameDelegateIdentity(nominalTarget, nominalCandidate) {
                         // Issue #3149: reached but not mutation-pinned. TryBindClrConstructorCall
                         // is the sole constructor caller; BindAccessorCall also consumes this output.
                         nominalTarget = nil
