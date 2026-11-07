@@ -23,6 +23,12 @@ class Issue5700TypedForEachDeconstructionTests {
     @InlineData("captured inferred", "3,30,")
     @InlineData("captured typed", "10000000000,40000000000,")
     @InlineData("await", "10000000000")
+    @InlineData("by-reference conversion", "3,W5,")
+    @InlineData("by-reference numeric", "3,")
+    @InlineData("by-reference conversion oblivious", "3,W5,")
+    @InlineData("by-reference numeric oblivious", "3,")
+    @InlineData("captured widened record", "7,")
+    @InlineData("mutating struct", "6,W5,")
     func ConvertedBindings_MatchCSharpOutput(shape string, expected string) {
         let statement = switch shape {
             case "numeric":
@@ -32,6 +38,13 @@ class Issue5700TypedForEachDeconstructionTests {
             case "user conversion":
             `long total = 0;
              foreach ((Wrapper w, int n) in new[] { (100000, 7) }) total += w.Value + n;
+             return total + "," + Events;`
+            case "mutating struct":
+            `int total = 0;
+             foreach ((Wrapper w, int n) in new[] { (5, 0) }) {
+                 w.Increment();
+                 total += w.Value;
+             }
              return total + "," + Events;`
             case "nested":
             `long total = 0;
@@ -80,6 +93,20 @@ class Issue5700TypedForEachDeconstructionTests {
              string result = "";
              foreach (var callback in callbacks) result += callback() + ",";
              return result;`
+            case "captured widened record":
+            `var widened = new Entry(null!, 0);
+             var items = new[] { new Entry(new Node { Value = 7 }, 1) };
+             var callbacks = new List<Func<int>>();
+             foreach ((Node item, int id) in items) callbacks.Add(() => item.Value);
+             string result = "";
+             foreach (var callback in callbacks) result += callback() + ",";
+             return result;`
+            case "by-reference conversion" or
+                "by-reference numeric" or
+                "by-reference conversion oblivious" or
+                "by-reference numeric oblivious":
+            `string? text = "abc";
+             return Read(ref text, new[] { (5, 0) }) + "," + Events;`
             default:
             `long total = 0;
              await foreach ((long a, int b) in AsyncPairs()) total += a * a;
@@ -90,8 +117,10 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 namespace TypedForEach {
+    EXTRATYPES
     public struct Wrapper {
         public int Value;
+        public void Increment() { Value++; }
         public static implicit operator Wrapper(int value) {
             Probe.Events += "W" + value + ",";
             return new Wrapper { Value = value };
@@ -106,6 +135,7 @@ namespace TypedForEach {
     }
     public static class Probe {
         public static string Events = "";
+        EXTRAMEMBER
         private static string Pick(object value) => "object";
         private static string Pick(string value) => "string";
         private static string Pick(int value) => "int";
@@ -117,7 +147,35 @@ namespace TypedForEach {
         }
         public static ASYNCRESULT Run() { STATEMENT }
     }
-}`).Replace("STATEMENT", statement).Replace(
+}`).Replace(
+            "EXTRATYPES",
+            if shape == "captured widened record" {
+                "public class Node { public int Value; } public record Entry(Node Item, int Id);"
+            } else {
+                string.Empty
+            }
+        ).Replace(
+            "EXTRAMEMBER",
+            if shape.StartsWith("by-reference", StringComparison.Ordinal) {
+                (`public static int Read(ref string? s, (int, int)[] pairs) {
+                    if (s == null) return 0;
+                    foreach ((TYPE value, int other) in pairs) { }
+                    return s.Length;
+                }`).Replace(
+                    "TYPE",
+                    if shape.Contains("numeric", StringComparison.Ordinal) {
+                        "long"
+                    } else {
+                        "Wrapper"
+                    }
+                )
+            } else {
+                string.Empty
+            }
+        ).Replace(
+            "STATEMENT",
+            statement
+        ).Replace(
             "ASYNCRESULT",
             if shape == "await" {
                 "async Task<string>"
@@ -125,18 +183,36 @@ namespace TypedForEach {
                 "string"
             }
         )
-        let printed = Verify(source, expected, shape == "await")
+        let printed = Verify(
+            if shape.StartsWith("by-reference", StringComparison.Ordinal) && !shape.EndsWith(
+                "oblivious",
+                StringComparison.Ordinal
+            ) {
+                "#nullable enable\n" + source
+            } else {
+                source
+            },
+            expected,
+            shape == "await"
+        )
         Assert.DoesNotContain("__", printed)
         if shape == "await" {
             Assert.Contains("await for aItem", printed)
             Assert.Contains("let a int64 = int64(aValue)", printed)
         }
         if shape == "captured inferred" {
-            Assert.Contains("let a int32 = aValue", printed)
-            Assert.Contains("let b int32 = bValue", printed)
+            Assert.Contains("let a = aValue", printed)
+            Assert.Contains("let b = bValue", printed)
         }
         if shape == "nullable reference" {
             Assert.Contains("let a string? = aValue", printed)
+        }
+        if shape.StartsWith("by-reference", StringComparison.Ordinal) {
+            Assert.Contains("return s!!.Length", printed)
+        }
+        if shape == "captured widened record" {
+            Assert.Contains("let item Node? = itemValue", printed)
+            Assert.DoesNotContain("itemValue!!", printed)
         }
     }
 

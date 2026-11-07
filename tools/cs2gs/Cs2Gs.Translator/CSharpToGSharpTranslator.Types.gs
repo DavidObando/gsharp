@@ -2071,8 +2071,21 @@ partial class CSharpToGSharpTranslator {
             }
             var mappedType = this.typeMapper.Map(targetType, this.context, single.GetLocation())
             mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
-            if this.state.NullableForEachBindings.Contains(local) {
+            if this
+                .state
+                .NullableForEachBindings
+                .Contains(local) ||
+                ((!hasSlot || conversion.IsIdentity) && this.IsTranslatorWidenedDeclaration(local)) {
                 mappedType = MakeNullable(mappedType)
+            }
+            if captured &&
+                inferredType &&
+                hasSlot &&
+                conversion.IsIdentity &&
+                !this
+                .InferredLocalDefaultRequiresTypedDeclaration(local) {
+                // Inferred captures retain platform and widened element types without a new coercion.
+                mappedType = nil
             }
             let value = cast[GExpression](IdentifierExpression(carrier))
             conversions.Add(
@@ -2098,6 +2111,35 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             )
+        }
+
+        private func ForEachLeafConversionsRunUserCode(loop ForEachVariableStatementSyntax) bool {
+            for single in loop.Variable.DescendantNodesAndSelf().OfType[SingleVariableDesignationSyntax]() {
+                if this.context.GetDeclaredSymbol(single) is not ILocalSymbol local ||
+                    !this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType) ||
+                    conversion.IsIdentity {
+                    continue
+                }
+                if conversion.IsUserDefined ||
+                    (
+                    conversion.IsTupleConversion && this.TupleConversionRequiresExplicitLowering(sourceType, local.Type)
+                ) {
+                    return true
+                }
+                // The region scanner counts emitted numeric conversion syntax as a call too.
+                let lowered = this.BuildConvertedDeconstructionValue(
+                    IdentifierExpression("_"),
+                    sourceType,
+                    local.Type,
+                    nil,
+                    conversion,
+                    single.GetLocation()
+                )
+                if lowered is ConversionExpression or IfExpression {
+                    return true
+                }
+            }
+            return false
         }
 
         private func CollectForEachDesignationTargets(
