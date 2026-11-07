@@ -40,7 +40,7 @@ public class BasicRenderer : Renderer {
                 (d Issue3338ImportedAbstractMemberTests.DiagnosticInfo) -> d.Id == "GS0387"
             )
             Assert.Equal(
-                "'BasicRenderer' does not implement inherited abstract member 'Renderer.Prepare' (issue #987).",
+                "'BasicRenderer' does not implement inherited abstract member 'Renderer.Prepare'.",
                 diagnostic.Message
             )
         } finally {
@@ -114,7 +114,7 @@ public class ExternalRenderer : RestrictedRenderer {
                 (d Issue3338ImportedAbstractMemberTests.DiagnosticInfo) -> d.Id == "GS0387"
             )
             Assert.Equal(
-                "'ExternalRenderer' does not implement inherited abstract member 'RestrictedRenderer.Prepare' (issue #987).",
+                "'ExternalRenderer' does not implement inherited abstract member 'RestrictedRenderer.Prepare'.",
                 missing.Message
             )
             let friend = CompileGSharp(`package Issue3338.PrivateProtectedFriend

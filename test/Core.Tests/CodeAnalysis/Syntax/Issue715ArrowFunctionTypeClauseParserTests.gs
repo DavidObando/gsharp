@@ -204,7 +204,7 @@ func use() {
         Assert.False(warning.IsError)
         Assert.Equal("func", warning.Location.Text!!.ToString(warning.Location.Span))
         Assert.Equal(
-            "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122).",
+            "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead. The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated.",
             warning.Message
         )
         let clause = FindAll[TypeClauseSyntax](tree).First((t TypeClauseSyntax) -> t.IsLegacyFuncFunction)

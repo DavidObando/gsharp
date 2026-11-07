@@ -319,6 +319,100 @@ class Issue5402SourceVersionTests : IDisposable {
         Assert.False(Directory.Exists(mirror))
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Prepare_PreservesSourceLocalUrlRewritesAndRawRemoteUrlsAcrossWorktreeAndIncludes(useWorktree bool) {
+        let globalConfig = Path.Combine(this.root, "rewrite-global.gitconfig")
+        File.WriteAllText(
+            globalConfig,
+            "[clone]\n    defaultRemoteName = source-copy\n[url \"https://global.invalid/\"]\n    insteadOf = global:\n"
+        )
+        Environment.SetEnvironmentVariable("GIT_CONFIG_GLOBAL", globalConfig)
+        let source = Path.Combine(this.root, "rewrite-source-" + useWorktree.ToString())
+        Directory.CreateDirectory(source)
+        File.WriteAllText(Path.Combine(source, "version.json"), "{\"version\":\"2.3\"}")
+        Git(source, "init", "--quiet")
+        Git(source, "remote", "add", "origin", "source:demo.git")
+        Git(source, "config", "--add", "remote.origin.url", "extra:demo-mirror.git")
+        Git(source, "remote", "add", "publish", "https://example.invalid/publish-fetch.git")
+        Git(source, "config", "remote.publish.pushurl", "pub:publish-one.git")
+        Git(source, "config", "--add", "remote.publish.pushurl", "pub:publish-two.git")
+        Git(source, "config", "url.https://example.invalid/.insteadOf", "source:")
+        Git(source, "config", "--add", "url.https://example.invalid/.insteadOf", "extra:")
+        Git(source, "config", "url.https://publish.invalid/.insteadOf", "pub:")
+        Git(source, "config", "url.https://push.invalid/.pushInsteadOf", "source:")
+        // Local non-rewrite settings (credentials, hooks) must never be copied into the mirror.
+        Git(source, "config", "credential.helper", "store")
+        Git(source, "config", "core.hooksPath", "custom-hooks")
+        let includedConfig = Path.Combine(source, "local-rewrites.gitconfig")
+        File.WriteAllText(includedConfig, "[url \"https://included-push.invalid/\"]\n    pushInsteadOf = extra:\n")
+        Git(source, "config", "include.path", includedConfig)
+        Commit(source)
+        var checkout = source
+        if useWorktree {
+            Git(source, "config", "extensions.worktreeConfig", "true")
+            checkout = Path.Combine(this.root, "rewrite-worktree")
+            Git(source, "worktree", "add", "--quiet", "--detach", checkout, "HEAD")
+            Git(checkout, "config", "--worktree", "url.https://worktree.invalid/.insteadOf", "wt:")
+            Git(checkout, "config", "--add", "remote.origin.url", "wt:wt-demo.git")
+        }
+        let host = this.CreateHost()
+        let mirror = Path.Combine(host, "rewrite-mirror-" + useWorktree.ToString())
+        RepositoryMirror.Prepare(checkout, mirror)
+
+        // Raw remote.origin.url and remote.publish.pushurl values are preserved.
+        Assert.Equal(
+            Git(checkout, "config", "--get-all", "remote.origin.url"),
+            Git(mirror, "config", "--get-all", "remote.origin.url")
+        )
+        Assert.Equal(
+            Git(checkout, "config", "--get-all", "remote.publish.pushurl"),
+            Git(mirror, "config", "--get-all", "remote.publish.pushurl")
+        )
+
+        // Effective fetch and push URLs match between checkout and mirror.
+        let expectedFetch = Git(checkout, "remote", "get-url", "--all", "origin")
+        let actualFetch = Git(mirror, "remote", "get-url", "--all", "origin")
+        Assert.Contains("https://example.invalid/demo.git", actualFetch, StringComparison.Ordinal)
+        Assert.Contains("https://example.invalid/demo-mirror.git", actualFetch, StringComparison.Ordinal)
+        if useWorktree {
+            Assert.Contains("https://worktree.invalid/wt-demo.git", actualFetch, StringComparison.Ordinal)
+        }
+        Assert.Equal(expectedFetch, actualFetch)
+
+        let expectedPush = Git(checkout, "remote", "get-url", "--push", "--all", "origin")
+        let actualPush = Git(mirror, "remote", "get-url", "--push", "--all", "origin")
+        Assert.Contains("https://push.invalid/demo.git", actualPush, StringComparison.Ordinal)
+        Assert.Contains("https://included-push.invalid/demo-mirror.git", actualPush, StringComparison.Ordinal)
+        Assert.Equal(expectedPush, actualPush)
+
+        let expectedPublishPush = Git(checkout, "remote", "get-url", "--push", "--all", "publish")
+        let actualPublishPush = Git(mirror, "remote", "get-url", "--push", "--all", "publish")
+        Assert.Contains("https://publish.invalid/publish-one.git", actualPublishPush, StringComparison.Ordinal)
+        Assert.Contains("https://publish.invalid/publish-two.git", actualPublishPush, StringComparison.Ordinal)
+        Assert.Equal(expectedPublishPush, actualPublishPush)
+
+        // Global rewrites and local credential/hook settings are not copied into mirror local config.
+        Assert.Equal(
+            1,
+            ProcessRunner.Run(
+                "git",
+                []string{"config", "--local", "--get-all", "url.https://global.invalid/.insteadof"},
+                mirror
+            )
+                .ExitCode
+        )
+        Assert.Equal(
+            1,
+            ProcessRunner.Run("git", []string{"config", "--local", "--get-all", "credential.helper"}, mirror).ExitCode
+        )
+        Assert.Equal(
+            1,
+            ProcessRunner.Run("git", []string{"config", "--local", "--get-all", "core.hooksPath"}, mirror).ExitCode
+        )
+    }
+
     private func CreateHost() string {
         let host = Path.Combine(this.root, "host")
         Directory.CreateDirectory(host)

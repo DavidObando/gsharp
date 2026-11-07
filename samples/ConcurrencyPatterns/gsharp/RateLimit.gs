@@ -34,7 +34,7 @@ class KeyedLimiter {
             verify(now >= bucket.Last, "clock moved backwards")
             let added = (now - bucket.Last) / period
             if added > 0 {
-                bucket.Tokens = added >= capacity - bucket.Tokens ? capacity: bucket.Tokens + int32(added)
+                bucket.Tokens = added >= capacity - bucket.Tokens ? capacity : bucket.Tokens + int32(added)
                 bucket.Last += added * period
             }
             if bucket.Tokens == 0 {

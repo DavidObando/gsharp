@@ -776,7 +776,11 @@ shared class GSharpFormatter {
             }
 
             private func NeedsSpaceBeforeColon(parent SyntaxNode?) bool -> (
-                parent is StructDeclarationSyntax or InterfaceDeclarationSyntax or ConstructorDeclarationSyntax
+                parent is StructDeclarationSyntax or
+                    InterfaceDeclarationSyntax or
+                    ConstructorDeclarationSyntax or
+                    ConditionalExpressionSyntax or
+                    ConditionalRefArgumentExpressionSyntax
             )
 
             private func IsPostfix(token LayoutToken) bool -> (

@@ -615,6 +615,31 @@ internal class ConversionClassifier {
         expression BoundExpression,
         target TypeSymbol?
     ) BoundExpression {
+        if expression is BoundBlockExpression block {
+            if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                resultVar
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                TryRecoverCleanupBlockDeclaredRead(
+                diagnosticLocation,
+                block.Statements,
+                resultVar,
+                target,
+                out var rewrittenStatements,
+                out var newResultVar
+            ) {
+                return BoundBlockExpression(
+                    block.Syntax,
+                    rewrittenStatements,
+                    BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                )
+            }
+            let recoveredTail = DecideNarrowedConversion(diagnosticLocation, block.Expression, target)
+            if !object.ReferenceEquals(recoveredTail, block.Expression) {
+                return BoundBlockExpression(block.Syntax, block.Statements, recoveredTail)
+            }
+            return expression
+        }
         if !binderCtx.TryGetNarrowedAccessPath(expression, out var path, out var narrowedType) {
             return expression
         }
@@ -628,6 +653,77 @@ internal class ConversionClassifier {
             return declaredRead
         }
         return expression
+    }
+
+    private func TryRecoverCleanupBlockDeclaredRead(
+        diagnosticLocation TextLocation,
+        statements ImmutableArray[BoundStatement],
+        resultVar LocalVariableSymbol,
+        target TypeSymbol?,
+        out rewritten ImmutableArray[BoundStatement],
+        out newResultVar LocalVariableSymbol?
+    ) bool {
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](statements.Length)
+        newResultVar = nil
+        var changed = false
+        for stmt in statements {
+            if !changed && stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) &&
+                decl.Initializer is {} initializer {
+                let recoveredInit = DecideNarrowedConversion(diagnosticLocation, initializer, target)
+                if !object.ReferenceEquals(recoveredInit, initializer) {
+                    let updatedVar = LocalVariableSymbol(
+                        resultVar.Name,
+                        resultVar.IsReadOnly,
+                        recoveredInit.Type ?? TypeSymbol.Error
+                    ){CallableParameterNameTree = StatementBinder.BuildCallableParameterNameTree(recoveredInit)}
+                    newResultVar = updatedVar
+                    builder.Add(BoundVariableDeclaration(decl.Syntax, updatedVar, recoveredInit))
+                    changed = true
+                    continue
+                }
+            } else if !changed &&
+                stmt is BoundBlockStatement innerBlock &&
+                TryRecoverCleanupBlockDeclaredRead(
+                diagnosticLocation,
+                innerBlock.Statements,
+                resultVar,
+                target,
+                out var innerStatements,
+                out newResultVar
+            ) {
+                builder.Add(BoundBlockStatement(innerBlock.Syntax, innerStatements))
+                changed = true
+                continue
+            } else if !changed &&
+                stmt is BoundTryStatement tryStmt &&
+                tryStmt.TryBlock is BoundBlockStatement tryBlock &&
+                TryRecoverCleanupBlockDeclaredRead(
+                diagnosticLocation,
+                tryBlock.Statements,
+                resultVar,
+                target,
+                out var tryStatements,
+                out newResultVar
+            ) {
+                builder.Add(
+                    BoundTryStatement(
+                        tryStmt.Syntax,
+                        BoundBlockStatement(tryBlock.Syntax, tryStatements),
+                        tryStmt.CatchClauses,
+                        tryStmt.FinallyBlock
+                    )
+                )
+                changed = true
+                continue
+            }
+            builder.Add(stmt)
+        }
+        rewritten = if changed {
+            builder.MoveToImmutable()
+        } else {
+            statements
+        }
+        return changed
     }
 
     private func BindConversionCore(
@@ -5353,12 +5449,10 @@ internal class ConversionClassifier {
                 (NullableLifting.IsValueTypeNullable(optional) || NullableLifting.IsUserValueTypeNullable(optional)) {
                 return !(target is NullableTypeSymbol) || !Conversion.Classify(declaredType, target).IsImplicit
             }
-            return declaredType is NullableTypeSymbol ||
-                declaredType is PlatformTypeSymbol ||
-                !Conversion.IsRepresentationPreservingImplicit(declaredType, target)
+            return !Conversion.IsRepresentationPreservingImplicit(declaredType, target)
         }
 
-        /// Issue #5603: replaces a narrowed member read that casts or unwraps with its declared read, when the
+        /// Issue #5603 / #5631: replaces a narrowed read that casts or unwraps with its declared read, when the
         /// conversion to [`target`](paramref) does not need the narrowing (cref:ConversionNeedsNarrowedSource). The
         /// declared read is correct whether or not a backward `goto` removes the narrowing.
         /// @param expression The narrowed read.
@@ -5375,13 +5469,16 @@ internal class ConversionClassifier {
             @NotNullWhen(true) out declaredRead BoundExpression?
         ) bool {
             let declaredType = MemberLookup.GetDeclaredAccessPathType(path, narrowedType)
-            if !path.HasMembers || !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) ||
+            if !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) ||
                 ConversionNeedsNarrowedSource(declaredType, narrowedType, target) {
                 declaredRead = nil
                 return false
             }
             declaredRead = switch expression {
                 case unwrap is BoundUnaryExpression when unwrap.IsNarrowingUnwrap: unwrap.Operand
+                case variable is BoundVariableExpression when variable.NarrowedType != nil: cast[BoundExpression](
+                    BoundVariableExpression(variable.Syntax, variable.Variable)
+                )
                 case field is BoundFieldAccessExpression: cast[BoundExpression](
                     BoundFieldAccessExpression(
                         field.Syntax,

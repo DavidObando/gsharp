@@ -55,7 +55,7 @@ Console.WriteLine(makeZero()) // 0
 Console.WriteLine(echo(default)) // 0
 
 // Bare `default` in a conditional branch, typed by its sibling.
-let pick = true ? 42: default
+let pick = true ? 42 : default
 Console.WriteLine(pick) // 42
 
 // `default(T)` inside a generic function — the reified-generics emit

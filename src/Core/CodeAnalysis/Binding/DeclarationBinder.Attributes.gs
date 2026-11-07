@@ -1570,7 +1570,7 @@ internal partial class DeclarationBinder {
                 function.ExplicitReceiverParameter != nil ||
                 function
                 .IsExtension {
-                return "cannot be applied to a receiver-clause function; ADR-0182 makes every receiver clause an extension, whose receiver is an ordinary by-value parameter"
+                return "cannot be applied to a receiver-clause function; every receiver clause declares an extension, whose receiver is an ordinary by-value parameter"
             }
             if function.ContainingType is InterfaceSymbol {
                 if function.Accessibility == Accessibility.Private {
