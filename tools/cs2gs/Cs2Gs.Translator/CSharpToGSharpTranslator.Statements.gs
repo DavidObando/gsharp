@@ -3340,6 +3340,11 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
+            if expression.Parent is IsPatternExpressionSyntax decision && this.RecordPatternRunsUserCode(
+                decision.Pattern
+            ) {
+                return false
+            }
             if !this.IsSmartCastableScrutinee(expression) || !IsTrivialPatternReceiver(expression) {
                 return false
             }
@@ -5214,7 +5219,16 @@ partial class CSharpToGSharpTranslator {
                     this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
-                            TupleDeconstructionStatement(binding, names, this.TranslateExpression(assignment.Right))
+                            TupleDeconstructionStatement(
+                                binding,
+                                names,
+                                this.RewriteRecordDeconstruction(
+                                    this.TranslateExpression(assignment.Right),
+                                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
+                                    assignment.Right,
+                                    assignment.Right
+                                )
+                            )
                         )
                     }
                 }

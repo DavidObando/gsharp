@@ -121,6 +121,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateIdentifierName(identifier IdentifierNameSyntax) GExpression? {
+            if identifier
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                this
+                .context
+                .GetSymbolInfo(identifier)
+                .Symbol is IMethodSymbol{MethodKind: MethodKind.Ordinary} method {
+                this.ReportMetadataRecordDeconstruction(method, identifier)
+                let emitted = this.EmittedName(method, method.Name)
+                if !method.IsStatic && emitted != method.Name {
+                    return MemberAccessExpression(ThisExpression(), emitted)
+                }
+            }
             if this.TryTranslateLiftedLocalFunctionReference(identifier, out var liftedReference) {
                 return liftedReference
             }
@@ -1224,6 +1237,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateMemberAccess(member MemberAccessExpressionSyntax) GExpression? {
+            if member
+                .Name
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                member.Parent is not InvocationExpressionSyntax &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(member) is IMethodReferenceOperation reference {
+                this.ReportMetadataRecordDeconstruction(reference.Method, member)
+            }
             // ADR-0169 analyzer mode: idioms that need more than a member
             // rename (e.g. name.Identifier -> expr.GetLastToken()).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerMemberAccess(member, out var analyzerIdiom) {
@@ -2632,9 +2656,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateReceiverWithNullForgiveness(
-            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedValue GExpression? = nil
         ) GExpression? {
-            var translated GExpression? = this.TranslateExpression(recv)
+            var translated GExpression? = translatedValue ?? this.TranslateExpression(recv)
             // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
             // the seam that produced it, so an assertion there is at best
             // redundant and at worst masks the guard — and it is not even
@@ -8505,7 +8530,10 @@ partial class CSharpToGSharpTranslator {
                             default: true
                         }
                     }
-                    return this.WritesThroughStorage(assignment.Left, isArgument: false)
+                    return this.RecordDeconstructionRunsUserCode(
+                        this.context.SemanticModel.GetDeconstructionInfo(assignment)
+                    ) ||
+                        this.WritesThroughStorage(assignment.Left, isArgument: false)
                 }
                 case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
@@ -8760,6 +8788,9 @@ partial class CSharpToGSharpTranslator {
         /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
         /// properties) except a discard, and calls a `Deconstruct` method.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
+            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) {
+                return true
+            }
             let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
             if element is INamedTypeSymbol{IsTupleType: true} {
                 return false
@@ -12472,6 +12503,9 @@ partial class CSharpToGSharpTranslator {
                 .Syntax
                 .RecursivePatternSyntax recursive {
                 return false
+            }
+            if this.UserRecordPatternDeconstruct(recursive) != nil {
+                return this.RecordPatternNeedsDeconstruction(recursive)
             }
             let positional PositionalSlots? = this.TryGetPositionalMembers(
                 recursive,
