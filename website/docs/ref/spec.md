@@ -2282,6 +2282,9 @@ Diagnostics:
   function.
 - **GS0470** — two `label:` declarations with the same name in the same
   function.
+- **GS0498** — `goto` enters a `catch` or `finally` handler from outside that
+  handler.
+- **GS0636** — `goto` enters a nested block from outside that block.
 - **GS0294** is retired — a label on a non-loop statement is now a
   valid `goto` target rather than an error.
 

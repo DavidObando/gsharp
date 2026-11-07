@@ -264,13 +264,10 @@ partial class CSharpToGSharpTranslator {
             if !directBinding && this.IsLocalReassigned(binder) {
                 return false
             }
-            // cs2gs emits no statement-form `if let` guard (N-1: the pinned
-            // release predates ADR-0201). Nesting a residual
-            // or conjoined guard would require attaching the same C# else branch
-            // to both binding failure and guard failure; a leading prefix would
-            // add a third copy. Let the general pattern lowering keep one branch.
-            if ifStatement.Else != nil &&
-                (prefix.Count > 0 || (!directBinding && (residualPattern != nil || guards.Count > 0))) {
+            // A leading prefix wraps the `if let` in an outer `if`, which would
+            // duplicate an `else` branch across the outer and inner statements.
+            // Let the general pattern lowering keep one branch in that case.
+            if ifStatement.Else != nil && prefix.Count > 0 {
                 return false
             }
             // A guard that itself hoists a spill would need a statement seam
@@ -366,13 +363,9 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             } else {
-                // cs2gs emits no statement-form `if let` guard (N-1; ADR-0201). Nest the residual
-                // test/extra conjuncts inside its binding scope. Reuse the same else
-                // branch both when binding fails and when the nested guard fails.
-                if guard_ != nil {
-                    then = BlockStatement([]GStatement{IfStatement(guard_, then, elseBranch)})
-                }
-                inner = IfLetStatement(List[IfLetBinding]{IfLetBinding(name, initializer)}, then, elseBranch)
+                // Issue #4972 / ADR-0201: statement-form `if let` carries the
+                // optional `&& guard` directly on `IfLetStatement`.
+                inner = IfLetStatement(List[IfLetBinding]{IfLetBinding(name, initializer)}, then, elseBranch, guard_)
             }
             if prefix.Count == 0 {
                 result = []GStatement{inner}

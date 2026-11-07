@@ -4417,19 +4417,20 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        // ADR-0161 / issue #3350: translates a C# assignment used in VALUE position
+        // ADR-0161 / issue #3350, issue #4979: translates a C# assignment used in VALUE position
         // into G#'s assignment expression, preserving the write where C# put it.
         //
         // A deconstruction assignment (`(a, b) = …`) has no single target and is
-        // left to the existing tuple lowering. G# has no `??=` expression, so
-        // that one uses a native block/if expression below.
+        // left to the existing tuple lowering.
         private func TranslateAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {
             if assignment.Left is TupleExpressionSyntax {
                 // Unchanged fallback: still better than nothing, and these shapes
                 // are handled by their own lowerings when a seam is available.
                 return this.TranslateExpression(assignment.Right)
             }
-            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) && !this.CanEmitNativeCoalesceAssignment(
+                assignment
+            ) {
                 return this.TranslateCoalescingAssignmentAsExpression(assignment)
             }
             // Issue #3640: a true-discard assignment (`_ = e`) in VALUE position —
@@ -4455,7 +4456,8 @@ partial class CSharpToGSharpTranslator {
             // A materialized non-null reference binder uses nullable storage
             // because its declaration precedes the guard. Its assignment result
             // still has the binder's non-null C# type.
-            if assignment.Left is IdentifierNameSyntax identifier &&
+            if !assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                assignment.Left is IdentifierNameSyntax identifier &&
                 this
                 .context
                 .GetSymbolInfo(identifier)
@@ -4468,6 +4470,28 @@ partial class CSharpToGSharpTranslator {
                 result = EnsureNonNullAssertion(result)
             }
             return result
+        }
+
+        private func CanEmitNativeCoalesceAssignment(assignment AssignmentExpressionSyntax) bool {
+            let left ExpressionSyntax? = Unparenthesize(assignment.Left)
+            if left == nil {
+                return false
+            }
+            if left is ElementAccessExpressionSyntax {
+                return true
+            }
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                return false
+            }
+            let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
+            if this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
+                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
+                (
+                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
+            ) {
+                return false
+            }
+            return true
         }
 
         private func TranslateCoalescingAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {
@@ -4483,6 +4507,13 @@ partial class CSharpToGSharpTranslator {
                 AssignmentExpression(target, this.TranslateAssignmentValue(assignment)),
                 current
             )
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                return if statements.Count == 0 {
+                    cast[GExpression](value)
+                } else {
+                    cast[GExpression](BlockExpression(statements, value))
+                }
+            }
             // Issue #3774: G# `!!` is a CHECKED assertion that THROWS on nil, not
             // C#'s erased `!`, so an assertion here is faithful only when the
             // `??=` expression's value genuinely cannot be nil — and its value is

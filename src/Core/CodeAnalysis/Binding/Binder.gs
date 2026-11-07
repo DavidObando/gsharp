@@ -1233,9 +1233,13 @@ partial class Binder {
                 BodyFacts.PreserveContainsYield(lowered, rebound)
                 lowered = rebound
             }
-            if method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(
-                lowered
-            ) {
+            if method.Type != TypeSymbol.Void &&
+                !IsIteratorReturnType(method.Type) &&
+                !child
+                .statements
+                .HasInvalidUserGoto &&
+                !ControlFlowGraph
+                .AllPathsReturn(lowered) {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
             AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
@@ -8687,9 +8691,12 @@ partial class Binder {
             } else {
                 Lowerer.Lower(body, owner)
             }
-            if allPathsReturnLocation != nil && !IsIteratorReturnType(member.Type) && !ControlFlowGraph.AllPathsReturn(
-                lowered
-            ) {
+            if allPathsReturnLocation != nil &&
+                !IsIteratorReturnType(member.Type) &&
+                !binder
+                .statements
+                .HasInvalidUserGoto &&
+                !ControlFlowGraph.AllPathsReturn(lowered) {
                 binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation)
             }
             AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics, binder.binderCtx.References)

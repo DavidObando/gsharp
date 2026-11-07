@@ -1973,7 +1973,8 @@ partial class CSharpToGSharpTranslator {
                                     replacement
                                 )
                             ),
-                            elseBranch
+                            elseBranch,
+                            ifLetStatement.Guard
                         )
                     }
                 }
