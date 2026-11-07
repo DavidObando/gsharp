@@ -2150,11 +2150,63 @@ class PackageCacheTests(unittest.TestCase):
         self.assertIn("hash is invalid", result.stderr)
 
     def test_replaced_archive_and_sidecar_differ_from_lock_content_hash(self) -> None:
-        self.package.write_bytes(self.package.read_bytes() + b"changed")
+        signed_package = self.source / "signed.1.0.0.nupkg"
+        with zipfile.ZipFile(signed_package, "w") as archive:
+            archive.writestr("lib/net10.0/example.dll", b"accepted")
+            archive.writestr(".signature.p7s", b"SIGNATURE-BYTES")
+        signed_raw_hash = base64.b64encode(
+            hashlib.sha512(signed_package.read_bytes()).digest()).decode()
+        self.assertNotEqual(self.content_hash, signed_raw_hash)
+        signed_result = run_driver(
+            "--verify-package-content", signed_package, self.content_hash,
+            self.root / "signed-hash-work")
+        self.assertEqual(
+            0, signed_result.returncode,
+            signed_result.stdout + signed_result.stderr)
+        helper_dll = self.root / "signed-hash-work" / "bin" / "Adr0198.PackageContentHash.dll"
+        self.assertTrue(helper_dll.is_file())
+
+        class _ControllerHarness:
+            stage1 = self.root
+            stage2 = self.root
+
+            def build_trusted_helper(
+                _self, stage: str, project_name: str, assembly_name: str, label: str,
+            ) -> Path:
+                self.assertEqual("PackageContentHash.gsproj", project_name)
+                self.assertEqual("Adr0198.PackageContentHash.dll", assembly_name)
+                return helper_dll
+
+            def environment(_self, stage: str) -> tuple[dict[str, str], list[Path]]:
+                return dict(os.environ), [self.root]
+
+            def stage_dotnet(_self, stage: str) -> Path:
+                dotnet_exe = shutil.which("dotnet")
+                assert dotnet_exe is not None
+                return Path(dotnet_exe).parent
+
+            def command_stdout(
+                _self, stage: str, label: str, cwd: Path, cmd: list[str],
+                identity: str, writable: list[Path], env: dict[str, str],
+                read_only: list[Path],
+            ) -> bytes:
+                return subprocess.check_output(cmd, cwd=cwd, env=env)
+
+        self.assertEqual(
+            self.content_hash,
+            stage2.Controller.package_content_hash(
+                _ControllerHarness(), "stage-1", signed_package))  # type: ignore[arg-type]
+
+        with zipfile.ZipFile(self.package, "w") as archive:
+            archive.writestr("lib/net10.0/example.dll", b"forged")
         replacement_hash = base64.b64encode(
             hashlib.sha512(self.package.read_bytes()).digest()).decode()
         (self.source / "example.1.0.0.nupkg.sha512").write_text(
             replacement_hash, encoding="utf-8")
+        self.assertNotEqual(
+            self.content_hash,
+            stage2.Controller.package_content_hash(
+                _ControllerHarness(), "stage-1", self.package))  # type: ignore[arg-type]
         result = run_driver(
             "--verify-package-content", self.package, self.content_hash,
             self.root / "hash-work")

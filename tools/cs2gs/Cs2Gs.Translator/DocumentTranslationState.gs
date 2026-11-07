@@ -325,10 +325,6 @@ internal class DocumentTranslationState {
         get;
     }
 
-    // Monotonic counter for synthesizing the hoist local when a loop condition
-    // carries a binder-less side-effecting `is`-pattern clause (issue #914).
-    prop LoopHoistCounter int32
-
     // The active statement-seam prologue (issue #1731): several lowerings
     // (lock targets, chained-assignment link targets, non-trivial pattern
     // scrutinees) must embed the SAME translated
@@ -493,10 +489,6 @@ internal class DocumentTranslationState {
 
     // Monotonic counter for synthesizing spill temporaries (issue #1731).
     prop SpillCounter int32
-
-    // Monotonic counter for immutable pattern captures that seed mutable C#
-    // switch-arm pattern locals.
-    prop SwitchPatternCounter int32
 
     // True only while reusing the switch-pattern code model for a native
     // boolean `is` expression. Boolean type patterns omit switch designators

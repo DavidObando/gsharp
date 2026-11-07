@@ -243,6 +243,26 @@ data class Pair(A int32)
         )
         Assert.DoesNotContain("Gsharp.Runtime.Values", channelsTests, StringComparison.Ordinal)
         Assert.DoesNotContain("GsharpNoValuesRuntime", channelsTests, StringComparison.Ordinal)
+        // Issue #5073: netstandard2.0 SDK/packaging projects opt out of net10.0
+        // implicit runtime references so ResolveAssemblyReferences emits zero MSB3277 warnings.
+        for netstandardProject in[]string{
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk", "Gsharp.NET.Sdk.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.Templates", "Gsharp.Templates.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk.Compiler", "Gsharp.NET.Sdk.Compiler.gsproj")
+        } {
+            let text = File.ReadAllText(Path.Combine(repoRoot, netstandardProject))
+            Assert.Contains("<GsharpNoExtensions>true</GsharpNoExtensions>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>", text, StringComparison.Ordinal)
+        }
+        let sdkProps = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "build", "Gsharp.NET.Sdk.props")
+        )
+        Assert.Contains(
+            "$([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp'",
+            sdkProps,
+            StringComparison.Ordinal
+        )
     }
 
     private func Compare(golden IReadOnlyList[string], actual IReadOnlyList[string]) GoldenFileComparison {

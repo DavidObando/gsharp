@@ -42,6 +42,93 @@ shared class TestNameParity {
         prop Remaining int32
     }
 
+    /// Compares the C# oracle with the actual (migrated) results, partitioning by
+    /// target framework when both sides carry target-framework metadata (#4691).
+    /// @param oracle The C# test oracle.
+    /// @param actual The migrated run's per-case results.
+    /// @returns The comparison result.
+    func Compare(oracle CSharpTestOracle?, actual IReadOnlyList[TestCaseOutcome]?) TestNameParityResult {
+        if oracle == nil {
+            throw ArgumentNullException("oracle")
+        }
+        if actual == nil {
+            throw ArgumentNullException("actual")
+        }
+        if oracle.TestsByFramework != nil && oracle.TestsByFramework!!.Count > 0 && actual.Count > 0 && actual.All(
+            (result TestCaseOutcome) -> !string.IsNullOrWhiteSpace(result?.TargetFramework)
+        ) {
+            return CompareByFramework(oracle.TestsByFramework!!, actual)
+        }
+        return Compare(oracle.Tests, actual)
+    }
+
+    /// Compares the expected (C#) names with the actual (migrated) results, keyed by target framework (#4691).
+    /// @param expectedByFramework The C# original's discovered display names per target framework.
+    /// @param actual The migrated run's per-case results.
+    /// @returns The comparison result.
+    func CompareByFramework(
+        expectedByFramework IReadOnlyDictionary[string, List[string]]?,
+        actual IReadOnlyList[TestCaseOutcome]?
+    ) TestNameParityResult {
+        if expectedByFramework == nil {
+            throw ArgumentNullException("expectedByFramework")
+        }
+        if actual == nil {
+            throw ArgumentNullException("actual")
+        }
+        let actualByFramework = actual
+            .Where((result TestCaseOutcome) -> result?.Name != nil)
+            .GroupBy(
+            (result TestCaseOutcome) -> CSharpTestOracle.NormalizeTargetFramework(result.TargetFramework) ??
+                (result.TargetFramework ?? string.Empty),
+            StringComparer.Ordinal
+        )
+            .ToDictionary(
+            func (group IGrouping[string, TestCaseOutcome]) string {
+                return group.Key
+            },
+            (group IGrouping[string, TestCaseOutcome]) -> cast[IReadOnlyList[TestCaseOutcome]](group.ToList()),
+            StringComparer.Ordinal
+        )
+        let frameworks = expectedByFramework
+            .Keys
+            .Select((key string) -> CSharpTestOracle.NormalizeTargetFramework(key) ?? key)
+            .Union(actualByFramework.Keys, StringComparer.Ordinal)
+            .OrderBy((key string) -> key, StringComparer.Ordinal)
+            .ToList()
+        var expectedCount = 0
+        var actualCount = 0
+        var matched = 0
+        var theoryRows = 0
+        let missing = List[string]()
+        let extra = List[string]()
+        for framework in frameworks {
+            var expectedForFramework IReadOnlyList[string] = Array.Empty[string]()
+            for pair in expectedByFramework {
+                let normalizedKey = CSharpTestOracle.NormalizeTargetFramework(pair.Key) ?? pair.Key
+                if string.Equals(normalizedKey, framework, StringComparison.Ordinal) {
+                    expectedForFramework = pair.Value ?? List[string]()
+                    break
+                }
+            }
+            let actualForFramework = if actualByFramework.TryGetValue(framework, out var outcomes) {
+                outcomes
+            } else {
+                cast[IReadOnlyList[TestCaseOutcome]](Array.Empty[TestCaseOutcome]())
+            }
+            let partial = Compare(expectedForFramework, actualForFramework)
+            expectedCount += partial.ExpectedCount
+            actualCount += partial.ActualCount
+            matched += partial.Matched
+            theoryRows += partial.TheoryRows
+            missing.AddRange(partial.Missing)
+            extra.AddRange(partial.Extra)
+        }
+        missing.Sort(StringComparer.Ordinal)
+        extra.Sort(StringComparer.Ordinal)
+        return TestNameParityResult(expectedCount, actualCount, matched, theoryRows, missing, extra)
+    }
+
     /// Compares the expected (C#) names with the actual (migrated) results.
     /// @param expected The C# original's discovered display names.
     /// @param actual The migrated run's per-case results.
