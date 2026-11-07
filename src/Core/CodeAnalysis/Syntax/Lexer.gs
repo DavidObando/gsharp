@@ -646,14 +646,13 @@ class Lexer {
         var hasPendingHigh = false
         var pendingHigh char = '\u0000'
         var pendingHighSpan = default(TextSpan)
+        var unpairedSurrogateSpans List[TextSpan]? = nil
         let FlushPendingHigh = func () {
             if !hasPendingHigh {
                 return
             }
-            Diagnostics.ReportInvalidUtf8StringLiteral(
-                TextLocation(text, pendingHighSpan),
-                "The decoded text contains an unpaired UTF-16 surrogate."
-            )
+            unpairedSurrogateSpans ??= List[TextSpan]()
+            unpairedSurrogateSpans!!.Add(pendingHighSpan)
             hasPendingHigh = false
         }
         let AppendUtf16Unit = func (unit char, unitSpan TextSpan) {
@@ -670,10 +669,8 @@ class Lexer {
                 pendingHigh = unit
                 pendingHighSpan = unitSpan
             } else if char.IsLowSurrogate(unit) {
-                Diagnostics.ReportInvalidUtf8StringLiteral(
-                    TextLocation(text, unitSpan),
-                    "The decoded text contains an unpaired UTF-16 surrogate."
-                )
+                unpairedSurrogateSpans ??= List[TextSpan]()
+                unpairedSurrogateSpans!!.Add(unitSpan)
             } else {
                 AppendUtf8Scalar(bytes, int32(unit))
             }
@@ -779,6 +776,14 @@ class Lexer {
             Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 3)))
         }
         FlushPendingHigh()
+        if unpairedSurrogateSpans != nil {
+            for span in unpairedSurrogateSpans {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    TextLocation(text, span),
+                    "The decoded text contains an unpaired UTF-16 surrogate."
+                )
+            }
+        }
         kind = SyntaxKind.Utf8StringToken
         value = bytes.ToImmutable()
     }

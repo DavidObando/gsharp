@@ -1,5 +1,6 @@
 package GSharp.Core.Tests.CodeAnalysis.Syntax
 
+import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
@@ -68,6 +69,23 @@ class Utf8StringLexerTests {
         Assert.Equal("GS0632", highDiag.Id)
         Assert.Equal(3, highDiag.Location.Span.Start)
         Assert.Equal(6, highDiag.Location.Span.Length)
+
+        SyntaxTree.ParseTokens(`u8"\uDC00\q"`, out var mixedEscapeAndSurrogate)
+        Assert.Collection(
+            mixedEscapeAndSurrogate,
+            (d Diagnostic) -> {
+                Assert.Equal("GS0632", d.Id)
+                Assert.Equal(9, d.Location.Span.Start)
+                Assert.Equal(2, d.Location.Span.Length)
+                Assert.Contains("Unknown text escape.", d.Message)
+            },
+            (d Diagnostic) -> {
+                Assert.Equal("GS0632", d.Id)
+                Assert.Equal(3, d.Location.Span.Start)
+                Assert.Equal(6, d.Location.Span.Length)
+                Assert.Contains("unpaired UTF-16 surrogate", d.Message)
+            }
+        )
     }
 
     @Fact

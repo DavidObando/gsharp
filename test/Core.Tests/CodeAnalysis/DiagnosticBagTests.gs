@@ -56,6 +56,25 @@ open class DiagnosticBagTests {
     }
 
     @Fact
+    func SuppressDuplicateDiagnostics_TruncateWithinSuppression_DoesNotSuppressNewlyAddedDuplicates() {
+        let location = MakeLocation("source")
+        let a = Diagnostic(location, "GS0001", DiagnosticSeverity.Warning, "a")
+        let b1 = Diagnostic(location, "GS0002", DiagnosticSeverity.Error, "b")
+        let b2 = Diagnostic(location, "GS0002", DiagnosticSeverity.Error, "b")
+        let bag = DiagnosticBag()
+        bag.Report(a)
+        bag.SuppressDuplicateDiagnostics(
+            () -> {
+                bag.TruncateTo(0)
+                bag.Report(b1)
+                bag.Report(b2)
+                return 0
+            }
+        )
+        Assert.Equal([]Diagnostic{b1, b2}, bag)
+    }
+
+    @Fact
     func SuppressDuplicateDiagnostics_BoundsIndexingWorkAcrossManyRoots_AndPreservesMultiplicity() {
         let location = MakeLocation("source")
         let bag = DiagnosticBag()

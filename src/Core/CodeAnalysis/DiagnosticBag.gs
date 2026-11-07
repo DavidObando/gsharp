@@ -17,32 +17,34 @@ import System.Runtime.CompilerServices
 /// Represents a collection of code analysis diagnostics information.
 partial class DiagnosticBag : IEnumerable[Diagnostic] {
     private let diagnostics ImmutableArray[Diagnostic].Builder = ImmutableArray.CreateBuilder[Diagnostic]()
+    private let diagnosticSerials List[int32] = List[int32]()
+    private var nextDiagnosticSerial int32
     private let duplicateSuppressions Stack[DuplicateSuppressionFrame] = Stack[DuplicateSuppressionFrame]()
-    private var duplicateIndex Dictionary[Diagnostic, List[int32]]?
+    private var duplicateIndex Dictionary[Diagnostic, List[(Diagnostic Diagnostic, Serial int32)]]?
     private var duplicateIndexCount int32
     private var duplicateSuppressionIndexedCount int32
 
     internal prop DuplicateSuppressionIndexedCount int32 -> duplicateSuppressionIndexedCount
 
     private sealed class DuplicateSuppressionFrame {
-        private let upperBound int32
+        private let maxSerial int32
         private let hasOwner bool
         private let owner TextLocation
         private var consumed HashSet[int32]?
 
-        init(upperBound int32, hasOwner bool, owner TextLocation) {
-            this.upperBound = upperBound
+        init(maxSerial int32, hasOwner bool, owner TextLocation) {
+            this.maxSerial = maxSerial
             this.hasOwner = hasOwner
             this.owner = owner
         }
 
-        prop UpperBound int32 -> upperBound
+        prop MaxSerial int32 -> maxSerial
 
-        func IsConsumed(index int32) bool -> consumed != nil && consumed!!.Contains(index)
+        func IsConsumed(serial int32) bool -> consumed != nil && consumed!!.Contains(serial)
 
-        func Consume(index int32) {
+        func Consume(serial int32) {
             consumed ??= HashSet[int32]()
-            consumed!!.Add(index)
+            consumed!!.Add(serial)
         }
 
         func MatchesOwner(diagnostic Diagnostic) bool {
@@ -115,7 +117,10 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         }
     }
 
-    private func OnDiagnosticRemoved(removed Diagnostic) {
+    private func RemoveDiagnosticAt(index int32) {
+        let removed = diagnostics[index]
+        diagnostics.RemoveAt(index)
+        diagnosticSerials.RemoveAt(index)
         duplicateIndex = nil
         duplicateIndexCount = 0
         reboundDiagnosticDepth.Remove(removed)
@@ -153,8 +158,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if count < diagnostics.Count {
             while diagnostics.Count > count {
                 let lastIndex = diagnostics.Count - 1
-                OnDiagnosticRemoved(diagnostics[lastIndex])
-                diagnostics.RemoveAt(lastIndex)
+                RemoveDiagnosticAt(lastIndex)
             }
         }
         if siblingRebindDepth == 0 {
@@ -178,8 +182,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
                 0
             }
             if depth <= siblingRebindDepth {
-                OnDiagnosticRemoved(diagnostic)
-                diagnostics.RemoveAt(i)
+                RemoveDiagnosticAt(i)
             }
         }
     }
@@ -198,8 +201,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if start < diagnostics.Count {
             while diagnostics.Count > start {
                 let lastIndex = diagnostics.Count - 1
-                OnDiagnosticRemoved(diagnostics[lastIndex])
-                diagnostics.RemoveAt(lastIndex)
+                RemoveDiagnosticAt(lastIndex)
             }
         }
     }
@@ -328,7 +330,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         if diagnostics.Count == 0 {
             return bind()
         }
-        duplicateSuppressions.Push(DuplicateSuppressionFrame(diagnostics.Count, hasOwner, owner))
+        duplicateSuppressions.Push(DuplicateSuppressionFrame(nextDiagnosticSerial, hasOwner, owner))
         try {
             return bind()
         } finally {
@@ -407,43 +409,46 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
             cascadeSuppressed.Add(diagnostic)
         }
         if duplicateSuppressions.TryPeek(out var frame) {
-            let targetCount = Math.Min(frame.UpperBound, diagnostics.Count)
             if duplicateIndex == nil {
-                duplicateIndex = Dictionary[Diagnostic, List[int32]](EquivalenceComparer)
+                duplicateIndex = Dictionary[Diagnostic, List[(Diagnostic Diagnostic, Serial int32)]](
+                    EquivalenceComparer
+                )
                 duplicateIndexCount = 0
             }
-            while duplicateIndexCount < targetCount {
-                let index = duplicateIndexCount
-                let existing = diagnostics[index]
+            while duplicateIndexCount < diagnostics.Count && diagnosticSerials[duplicateIndexCount] <= frame.MaxSerial {
+                let existing = diagnostics[duplicateIndexCount]
+                let serial = diagnosticSerials[duplicateIndexCount]
                 if !cascadeSuppressed.Contains(existing) {
                     if !duplicateIndex!!.TryGetValue(existing, out var bucket) {
-                        bucket = List[int32](1)
+                        bucket = List[(Diagnostic, int32)](1)
                         duplicateIndex!![existing] = bucket
                     }
-                    bucket.Add(index)
+                    bucket.Add((existing, serial))
                 }
                 duplicateIndexCount++
                 duplicateSuppressionIndexedCount++
             }
-            if duplicateIndex!!.TryGetValue(diagnostic, out var matchingIndices) {
-                for var i = 0; i < matchingIndices.Count; i++ {
-                    let index = matchingIndices[i]
-                    if index >= targetCount {
+            if duplicateIndex!!.TryGetValue(diagnostic, out var matchingEntries) {
+                for var i = 0; i < matchingEntries.Count; i++ {
+                    let entry = matchingEntries[i]
+                    if entry.Serial > frame.MaxSerial {
                         break
                     }
-                    if frame.IsConsumed(index) {
+                    if frame.IsConsumed(entry.Serial) {
                         continue
                     }
-                    let candidate = diagnostics[index]
+                    let candidate = entry.Diagnostic
                     if !reboundSuppressed.Contains(candidate) && !cascadeSuppressed.Contains(candidate) &&
                         frame.MatchesOwner(candidate) && AreEquivalent(candidate, diagnostic) {
-                        frame.Consume(index)
+                        frame.Consume(entry.Serial)
                         return
                     }
                 }
             }
         }
         diagnostics.Add(diagnostic)
+        nextDiagnosticSerial++
+        diagnosticSerials.Add(nextDiagnosticSerial)
         if siblingRebindDepth > 0 {
             reboundDiagnosticDepth[diagnostic] = siblingRebindDepth
         }
@@ -476,8 +481,7 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         for var addedIndex = added.Count - 1; addedIndex >= 0; addedIndex-- {
             for var diagnosticIndex = diagnostics.Count - 1; diagnosticIndex >= 0; diagnosticIndex-- {
                 if object.ReferenceEquals(diagnostics[diagnosticIndex], added[addedIndex]) {
-                    OnDiagnosticRemoved(diagnostics[diagnosticIndex])
-                    diagnostics.RemoveAt(diagnosticIndex)
+                    RemoveDiagnosticAt(diagnosticIndex)
                     break
                 }
             }
