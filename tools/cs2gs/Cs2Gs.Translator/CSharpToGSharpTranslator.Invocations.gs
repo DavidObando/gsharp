@@ -107,8 +107,8 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(invocation)
                 .Symbol is IMethodSymbol invokedMethod &&
-                CSharpToGSharpTranslator
-                .MethodMayRequireManagedReferenceArrayProjection(invokedMethod, this.context.Compilation) {
+                this
+                .MethodMayRequireManagedReferenceArrayProjection(invokedMethod) {
                 this.TryGetManagedReferenceArrayProjectedMethod(invocation, out _)
             }
             var target GExpression?
@@ -1078,20 +1078,7 @@ partial class CSharpToGSharpTranslator {
 
         private func AllocateCapturedReceiverName(
             receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-        ) string {
-            let stem = "receiver"
-            var candidate = stem
-            for var suffix = 2;
-                !this
-                .context
-                .SemanticModel
-                .LookupSymbols(receiverSyntax.SpanStart, name: candidate)
-                .IsEmpty ||
-                !this.TryClaimSynthesizedLocalName(candidate, receiverSyntax); suffix++ {
-                candidate = "${stem}_$suffix"
-            }
-            return candidate
-        }
+        ) string -> this.AllocateScopedSynthesizedLocalName("receiver", receiverSyntax)
 
         private func IsStableMethodGroupReceiver(
             receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
@@ -1717,10 +1704,7 @@ partial class CSharpToGSharpTranslator {
                 return operationParameter
             }
             let parameter IParameterSymbol? = this.GetArgumentParameter(argument, method, operationParameter)
-            if parameter != nil && CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
-                method,
-                this.context.Compilation
-            ) &&
+            if parameter != nil && this.MethodMayRequireManagedReferenceArrayProjection(method) &&
                 argument
                 .Parent
                 ?.Parent is Microsoft
@@ -4593,10 +4577,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(call)
                 .Symbol is not IMethodSymbol method ||
-                !CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
-                method,
-                this.context.Compilation
-            ) {
+                !this.MethodMayRequireManagedReferenceArrayProjection(method) {
                 return false
             }
             // Cache an in-progress sentinel before inspecting arguments and
@@ -6413,11 +6394,8 @@ partial class CSharpToGSharpTranslator {
                                 .ContainingType
                                 ?.IsGenericType == true
                         ) &&
-                            CSharpToGSharpTranslator
-                            .MethodMayRequireManagedReferenceArrayProjection(
-                            projectedCallMethod,
-                            this.context.Compilation
-                        ) {
+                            this
+                            .MethodMayRequireManagedReferenceArrayProjection(projectedCallMethod) {
                             this.RecordManagedReferenceArrayProjectionParent(projectedCall, projectedValue)
                             continue
                         }
@@ -12083,6 +12061,25 @@ partial class CSharpToGSharpTranslator {
                     default(InvocationExpressionSyntax?)
                 }
             }
+        }
+
+        private func MethodMayRequireManagedReferenceArrayProjection(method IMethodSymbol?) bool {
+            if method == nil {
+                return false
+            }
+            if this
+                .state
+                .ManagedReferenceArrayNullable
+                .MethodProjectionEligibility
+                .TryGetValue(method, out var eligible) {
+                return eligible
+            }
+            let computed = CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                method,
+                this.context.Compilation
+            )
+            this.state.ManagedReferenceArrayNullable.MethodProjectionEligibility[method] = computed
+            return computed
         }
     }
 

@@ -293,17 +293,7 @@ partial class CSharpToGSharpTranslator {
             if mainBinder != nil && !separateMainBinder {
                 hoistName = this.EmittedName(mainBinder, mainBinder.Name)
             } else {
-                let stem = "scrutinee"
-                hoistName = stem
-                for var suffix = 2;
-                    !this
-                    .context
-                    .SemanticModel
-                    .LookupSymbols(clause.SpanStart, name: hoistName!!)
-                    .IsEmpty ||
-                    !this.TryClaimSynthesizedLocalName(hoistName, clause); suffix++ {
-                    hoistName = "${stem}_$suffix"
-                }
+                hoistName = this.AllocateScopedSynthesizedLocalName("scrutinee", clause)
             }
             let hoistBinding = if separateMainBinder {
                 BindingKind.Let

@@ -74,6 +74,9 @@
          it is only loaded by programs that actually use channels. -->
     <GsharpChannelsRuntimeAssemblyFullPath Condition=" '$(GsharpChannelsRuntimeAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\channels\Gsharp.Runtime.Channels.dll</GsharpChannelsRuntimeAssemblyFullPath>
     <GsharpValuesRuntimeAssemblyFullPath Condition=" '$(GsharpValuesRuntimeAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\values\Gsharp.Runtime.Values.dll</GsharpValuesRuntimeAssemblyFullPath>
+    <_GsharpInitialExtensionsAssemblyFullPath>$(GsharpExtensionsAssemblyFullPath)</_GsharpInitialExtensionsAssemblyFullPath>
+    <_GsharpInitialChannelsRuntimeAssemblyFullPath>$(GsharpChannelsRuntimeAssemblyFullPath)</_GsharpInitialChannelsRuntimeAssemblyFullPath>
+    <_GsharpInitialValuesRuntimeAssemblyFullPath>$(GsharpValuesRuntimeAssemblyFullPath)</_GsharpInitialValuesRuntimeAssemblyFullPath>
 
     <!-- Pull in the gsharp language targets (CoreCompile override). -->
     <LanguageTargets>$(MSBuildThisFileDirectory)Gsharp.NET.Current.Sdk.targets</LanguageTargets>

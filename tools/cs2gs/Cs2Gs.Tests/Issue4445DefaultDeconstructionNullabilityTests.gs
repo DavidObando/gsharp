@@ -2221,22 +2221,138 @@ public sealed class Probe<T>
         this.callback = trackedLocal;
         takeSavedLocalPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var aliasRestorePair = (replacement, replacement);
+        void AliasRestoreLocal()
+        {
+            var (aliasRestoreLeft, _) = aliasRestorePair;
+            Fill(ref aliasRestoreLeft, replacement);
+        }
+        System.Action restoreViaLambda = () => this.callback = AliasRestoreLocal;
+        System.Action aliasOfRestore = restoreViaLambda;
+        this.callback = null;
+        aliasOfRestore();
+        aliasRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var finallyFieldPair = (replacement, replacement);
+        void FinallyFieldLocal()
+        {
+            var (finallyFieldLeft, _) = finallyFieldPair;
+            Fill(ref finallyFieldLeft, replacement);
+        }
+        void RestoreFieldInFinally()
+        {
+            try
+            {
+            }
+            finally
+            {
+                this.callback = FinallyFieldLocal;
+            }
+        }
+        this.callback = null;
+        RestoreFieldInFinally();
+        finallyFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var finallyLocalPair = (replacement, replacement);
+        void FinallyLocalFn()
+        {
+            var (finallyLocalLeft, _) = finallyLocalPair;
+            Fill(ref finallyLocalLeft, replacement);
+        }
+        System.Action? finallyLocalDelegate = null;
+        void RestoreLocalInFinally()
+        {
+            try
+            {
+            }
+            finally
+            {
+                finallyLocalDelegate = FinallyLocalFn;
+            }
+        }
+        RestoreLocalInFinally();
+        this.callback = finallyLocalDelegate;
+        finallyLocalPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var genericHelperRestorePair = (replacement, replacement);
+        void GenericHelperRestoreLocal()
+        {
+            var (genericHelperRestoreLeft, _) = genericHelperRestorePair;
+            Fill(ref genericHelperRestoreLeft, replacement);
+        }
+        this.callback = GenericHelperRestoreLocal;
+        this.secondCallback = this.callback;
+        this.callback = null;
+        RestoreFromSecondGeneric<int>(this);
+        this.secondCallback = null;
+        genericHelperRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var appendOtherFieldPair = (replacement, replacement);
+        void AppendOtherFieldLocal()
+        {
+            var (appendOtherFieldLeft, _) = appendOtherFieldPair;
+            Fill(ref appendOtherFieldLeft, replacement);
+        }
+        void AppendOther()
+        {
+            this.Happened += Other;
+        }
+        this.Happened = Other;
+        AppendOther();
+        this.Happened = (System.Action)AppendOtherFieldLocal + Other;
+        AppendOther();
+        appendOtherFieldPair = (default(T), replacement);
+        this.Happened?.Invoke();
+
+        var repeatedRestorePair = (replacement, replacement);
+        void RepeatedRestoreLocal()
+        {
+            var (repeatedRestoreLeft, _) = repeatedRestorePair;
+            Fill(ref repeatedRestoreLeft, replacement);
+        }
+        void RestoreFromSecondLocal()
+        {
+            this.callback = this.secondCallback;
+        }
+        this.callback = null;
+        this.secondCallback = null;
+        RestoreFromSecondLocal();
+        this.secondCallback = RepeatedRestoreLocal;
+        RestoreFromSecondLocal();
+        this.secondCallback = null;
+        repeatedRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 
     private System.Action? Saved => this.secondCallback;
 
     private static System.Action? GetFromHolder(Probe<T> holder) => holder.callback;
+
+    private static void RestoreFromSecondGeneric<U>(Probe<T> holder)
+    {
+        holder.callback = holder.secondCallback;
+    }
 }
 
 public class VirtualClearBase<T>
 {
     protected System.Action? callback;
+    protected System.Action? saved;
 
     protected static void Fill(ref T? value, T replacement) => value = replacement;
 
     protected virtual void Clear()
     {
         this.callback = null;
+    }
+
+    protected virtual void Restore()
+    {
     }
 
     protected virtual System.Action? GetSavedVirtual() => null;
@@ -2280,6 +2396,21 @@ public class VirtualClearBase<T>
         this.callback = this.SavedVirtual;
         virtualGetterPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var virtualRestorePair = (replacement, replacement);
+        void VirtualRestoreLocal()
+        {
+            var (virtualRestoreLeft, _) = virtualRestorePair;
+            Fill(ref virtualRestoreLeft, replacement);
+        }
+
+        this.callback = VirtualRestoreLocal;
+        this.saved = this.callback;
+        this.callback = null;
+        this.Restore();
+        this.saved = null;
+        virtualRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 }
 
@@ -2287,6 +2418,11 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
 {
     protected override void Clear()
     {
+    }
+
+    protected override void Restore()
+    {
+        this.callback = this.saved;
     }
 
     protected override System.Action? GetSavedVirtual() => this.callback;
@@ -2327,6 +2463,7 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
         Assert.Matches("\\b(let|var) lambdaLocalRestoreLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) virtualFactoryLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) virtualGetterLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualRestoreLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) asyncClearFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) asyncDelegateClearFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) asyncClearLocalLeft T\\? =", printed)
@@ -2334,6 +2471,12 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
         Assert.Matches("\\b(let|var) iteratorClearLocalLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) takeSavedFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) takeSavedLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) aliasRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) finallyFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) finallyLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) genericHelperRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) appendOtherFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) repeatedRestoreLeft T\\? =", printed)
 
         let part1 = `#nullable enable
 public sealed partial class SplitProbe<T>
@@ -2352,6 +2495,22 @@ public sealed partial class SplitProbe<T>
         this.callback = Local;
         this.callback = null;
         pair = (default(T), replacement);
+        this.callback?.Invoke();
+    }
+    public void CrossFileRestore(T replacement)
+    {
+        var crossRestorePair = (replacement, replacement);
+        void CrossRestoreLocal()
+        {
+            var (crossRestoreLeft, _) = crossRestorePair;
+            Fill(ref crossRestoreLeft, replacement);
+        }
+        this.callback = CrossRestoreLocal;
+        this.unusedCb = this.callback;
+        this.callback = null;
+        this.RestoreFromSaved();
+        this.unusedCb = null;
+        crossRestorePair = (default(T), replacement);
         this.callback?.Invoke();
     }
 }`
@@ -2373,6 +2532,10 @@ public sealed partial class SplitProbe<T>
         pair = (default(T), replacement);
         this.callback?.Invoke();
     }
+    private void RestoreFromSaved()
+    {
+        this.callback = this.unusedCb;
+    }
 }`
         let splitProject = CSharpProjectLoader.LoadInMemory(
             [](string, source string){("Part1.cs", part1), ("Part2.cs", part2)}
@@ -2385,6 +2548,7 @@ public sealed partial class SplitProbe<T>
         )
         Assert.DoesNotMatch("\\b(let|var) firstPartLeft T\\? =", splitPrinted)
         Assert.Matches("\\b(let|var) secondPartLeft T\\? =", splitPrinted)
+        Assert.Matches("\\b(let|var) crossRestoreLeft T\\? =", splitPrinted)
     }
 
     shared {

@@ -22,6 +22,7 @@ internal class ManagedReferenceArrayNullableState {
         ManagedReferenceArrayProjectedMethodByCall = Dictionary[ExpressionSyntax, IMethodSymbol?](
             ReferenceEqualityComparer.Instance
         )
+        MethodProjectionEligibility = Dictionary[IMethodSymbol, bool](SymbolEqualityComparer.Default)
         ManagedReferenceArrayProjectedLocalType = Dictionary[ILocalSymbol, ITypeSymbol?](SymbolEqualityComparer.Default)
         ProjectedBaseTypesInProgress = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
     }
@@ -41,6 +42,11 @@ internal class ManagedReferenceArrayNullableState {
     // Per-call effective method after managed-array projection. A null value
     // caches that the invocation or construction needs no substitution.
     prop ManagedReferenceArrayProjectedMethodByCall Dictionary[ExpressionSyntax, IMethodSymbol?] {
+        get;
+    }
+
+    // Per-method cached eligibility for managed-reference array projection (#4572).
+    prop MethodProjectionEligibility Dictionary[IMethodSymbol, bool] {
         get;
     }
 

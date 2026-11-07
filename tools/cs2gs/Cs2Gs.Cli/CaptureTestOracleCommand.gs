@@ -177,6 +177,7 @@ internal shared class CaptureTestOracleCommand {
                 config,
                 "--no-build",
                 "--list-tests",
+                "-p:TestTfmsInParallel=false",
                 "--",
                 CSharpTestOracle.RunSettingsArgument
             },
