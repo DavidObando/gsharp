@@ -414,7 +414,7 @@ namespace Demo
         static System.Threading.Tasks.Task<Box<Dictionary<string, int>>> CreateAsync() => System.Threading.Tasks.Task.FromResult(new Box<Dictionary<string, int>>(new Dictionary<string, int> { ["a"] = 1 }));
         static System.Threading.Tasks.Task<Box<T>> CreateInferredAsync<T>(T value) => System.Threading.Tasks.Task.FromResult(new Box<T>(value));
         static async System.Threading.Tasks.Task<int> UseAwaitedAsync() { var b = await CreateAsync(); var inferredBox = await CreateInferredAsync(Volatile.Read(ref cache!)); var syncFactory = () => Wrap(Volatile.Read(ref cache!)); var asyncFactory = () => CreateInferredAsync(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref full!)) + inferredBox.Use(() => Volatile.Read(ref cache!)) + syncFactory().Use(() => Volatile.Read(ref cache!)) + (await asyncFactory()).Use(() => Volatile.Read(ref cache!)); }
-        static int GenericInputArrayElem<T>(T seed) { var readers = new Func<T, Dictionary<string, int>>[1]; readers[0] = _ => Volatile.Read(ref full!); return readers[0](seed).Count; }
+        static int GenericInputArrayElem<T>(T seed) { List<T>? listCache = null; var inferredListReaders = new[] { () => Volatile.Read(ref listCache!) }; var readers = new Func<T, Dictionary<string, int>>[1]; readers[0] = _ => Volatile.Read(ref full!); return readers[0](seed).Count + (inferredListReaders[0]() == null ? 0 : 1); }
         static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
         static int UseChained() => Wrap(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!));
         static int UseChainedExplicit() => Wrap<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + Wrap(new Dictionary<string, int>()).Use(() => Volatile.Read(ref full!)) - 2;
@@ -422,7 +422,7 @@ namespace Demo
         static int UseNestedInferred() => WrapInner(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!)) + WrapInner<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + new Maker<string>().UseNestedGeneric(() => Volatile.Read(ref fullInner!));
         static int UseBlock() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => { return Volatile.Read(ref cache!); }); }
         static bool ReadInferred() => Read(() => Volatile.Read(ref cache!)) == null;
-        static int ReadExplicit() { var observed = Observe(() => Volatile.Read(ref full!)); return Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count + (observed == null ? 0 : 1); }
+        static int ReadExplicit() { var observed = Observe(() => Volatile.Read(ref full!)); Dictionary<string, int>? castObserved = Read((Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!))); return Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count + (observed == null ? 0 : 1) + (castObserved == null ? 1 : 0); }
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
         static int ReadExpandedParamsFixedReturn() => ReadParams(1, x => Volatile.Read(ref full!)).Count;
         static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
@@ -486,6 +486,8 @@ namespace Demo
         )
         Assert.Contains("Wrap(Dictionary[string, int32]()).Use(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("Observe(() -> Volatile.Read(&full)!!)", printed)
+        Assert.Contains("Read(Func[Dictionary[string, int32]]((() -> Volatile.Read(&full)!!)))", printed)
+        Assert.Contains("[]() -> List[T]?{() -> Volatile.Read(&listCache)}", printed)
         Assert.Contains("Read(() -> Volatile.Read(&cache)) == nil", printed)
         Assert.Contains("Read[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("ReadWithInput(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)

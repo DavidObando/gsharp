@@ -817,10 +817,19 @@ internal partial class ExpressionBinder {
                 ce.Location
             }
             var argument = permutedArgs[i]
-            if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var target) {
-                argument = lambdas.BindLambdaExpression(lambda, target)
+            if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} {
+                let sourceArgSyntax = if i < ce.Arguments.Count {
+                    OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[i])
+                } else {
+                    cast[ExpressionSyntax](lambda)
+                }
+                if TryBindLambdaExpressionWithTargetType(
+                    sourceArgSyntax,
+                    functionType.ParameterTypes[i],
+                    out var boundCallableArgLambda
+                ) {
+                    argument = boundCallableArgLambda!!
+                }
             }
             convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
         }

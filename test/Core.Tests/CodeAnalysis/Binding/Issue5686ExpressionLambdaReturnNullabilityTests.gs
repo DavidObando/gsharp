@@ -512,7 +512,14 @@ func Run() string? {
     let h = CheckInferred[string]()
     return a ?? b ?? c ?? d ?? e ?? f ?? g.Item1 ?? h
 }`)
-            yield AcceptedRow("ok-fixed-expression-tree-return", `func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
+            yield AcceptedRow("ok-fixed-expression-tree-return", `class StaticTree5686 {
+    var TakeField (Expression[Func[int32, string]]) -> string? = (e Expression[Func[int32, string]]) -> e.Compile()(1)
+    shared {
+        func Take(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
+        func TakeInt(e Expression[Func[int32, int32]]) int32 -> e.Compile()(1)
+    }
+}
+func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
 func Run() string? {
     let e Expression[Func[string]] = () -> Box().MaybeName
     let p = StrictSink5686.TakeExpression(() -> Box().MaybeName)
@@ -525,7 +532,11 @@ func Run() string? {
     let w = StrictSink5686.PickMixedNullability(() -> Box().MaybeName, true)
     let x = StrictSink5686.PickParams(true, () -> Box().MaybeName)
     let y = StrictSink5686.PickCustomParams(true, (a int32) -> Box().MaybeName)
-    return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u ?? v ?? w ?? x ?? y
+    let z1 = StaticTree5686.Take((a) -> Box().MaybeName)
+    let z2 = StaticTree5686.Take(checked((a) -> Box().MaybeName))
+    let _ = StaticTree5686.TakeInt(checked((a) -> a))
+    let z3 = StaticTree5686().TakeField((a) -> Box().MaybeName)
+    return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u ?? v ?? w ?? x ?? y ?? z1 ?? z2 ?? z3
 }`)
         }
 

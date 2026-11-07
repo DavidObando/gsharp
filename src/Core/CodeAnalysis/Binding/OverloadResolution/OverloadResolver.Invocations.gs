@@ -458,7 +458,17 @@ internal partial class OverloadResolver {
                 IsUntypedArrowLambda(lambdaSyntax) &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var lambdaTarget) {
-                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                argument = if argSyntax != nil &&
+                    (
+                    !(argSyntax is LambdaExpressionSyntax) || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(
+                        functionType.ParameterTypes[i],
+                        out _
+                    )
+                ) {
+                    bindExpressionWithTargetType(argSyntax, functionType.ParameterTypes[i])
+                } else {
+                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                }
             }
             convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
         }
@@ -633,7 +643,16 @@ internal partial class OverloadResolver {
                             IsUntypedArrowLambda(inLambdaSyntax) &&
                             MemberLookup
                             .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var inLambdaTarget) {
-                            argument = bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget!!)
+                            argument = if argumentSyntax != nil &&
+                                (
+                                !(argumentSyntax is LambdaExpressionSyntax) ||
+                                    MemberLookup
+                                    .TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
+                            ) {
+                                bindExpressionWithTargetType(argumentSyntax, parameter.Type)
+                            } else {
+                                bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget!!)
+                            }
                         }
                         let implicitIn = conversions.BindImplicitInArgument(
                             argumentLocation,
@@ -707,7 +726,16 @@ internal partial class OverloadResolver {
                 IsUntypedArrowLambda(lambdaSyntax) &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var lambdaTarget) {
-                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                argument = if argumentSyntax != nil &&
+                    (
+                    !(argumentSyntax is LambdaExpressionSyntax) ||
+                        MemberLookup
+                        .TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
+                ) {
+                    bindExpressionWithTargetType(argumentSyntax, parameter.Type)
+                } else {
+                    bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
+                }
             }
             converted.Add(conversions.BindConversion(argumentLocation, argument, parameter.Type))
         }

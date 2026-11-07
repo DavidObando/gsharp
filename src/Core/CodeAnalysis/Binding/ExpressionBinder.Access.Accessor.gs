@@ -4011,7 +4011,7 @@ internal partial class ExpressionBinder {
                             }
                         )!!
                     ).Add(staticArgIndex)
-                    boundArgument = BoundErrorExpression(inner)
+                    boundArgument = BoundErrorExpression(OverloadResolver.GetLambdaArgumentSyntax(inner) ?? inner)
                 }
                 if boundArgument == nil {
                     boundArgument = BindArgumentDeferringBranchy(inner)
@@ -4182,12 +4182,17 @@ internal partial class ExpressionBinder {
                     if !(rebound[idx] is BoundErrorExpression{Syntax: LambdaExpressionSyntax staticLambda}) {
                         continue
                     }
-                    if idx < method!!.Parameters.Length && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    let sourceArgSyntax = if idx < ce.Arguments.Count {
+                        OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
+                    } else {
+                        cast[ExpressionSyntax](staticLambda)
+                    }
+                    if idx < method!!.Parameters.Length && TryBindLambdaExpressionWithTargetType(
+                        sourceArgSyntax,
                         method!!.Parameters[idx].Type,
-                        out var staticTarget
-                    ) &&
-                        staticTarget != nil {
-                        rebound[idx] = lambdas.BindLambdaExpression(staticLambda, staticTarget)
+                        out var boundStaticLambda
+                    ) {
+                        rebound[idx] = boundStaticLambda!!
                     } else {
                         rebound[idx] = lambdas.BindLambdaExpression(staticLambda)
                     }

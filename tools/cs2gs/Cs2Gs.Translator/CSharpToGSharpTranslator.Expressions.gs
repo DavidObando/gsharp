@@ -4856,9 +4856,7 @@ partial class CSharpToGSharpTranslator {
             }
             let delegateType = UnwrapExpressionTreeDelegateType(elementTypeSymbol) as INamedTypeSymbol
             let invoke = delegateType?.DelegateInvokeMethod
-            if invoke == nil || ContainsTypeParameter(invoke.ReturnType) || this.ImplicitArrayDelegateSlotIsDeclared(
-                implicitArray
-            ) {
+            if invoke == nil || this.ImplicitArrayDelegateSlotIsDeclared(implicitArray) {
                 return elementType
             }
             if elementType is ArrowTypeReference arrow && arrow.ReturnTypes.Count == 1 {
@@ -6642,6 +6640,9 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
             if this.FindResultLambda(value) is not{} lambda {
+                return false
+            }
+            if this.LambdaHasExplicitDelegateCast(lambda) || ValueFeedsExplicitTypeArguments(lambda) {
                 return false
             }
             if this.LambdaResultFlowsToNullableSink(lambda) {
@@ -15890,6 +15891,9 @@ partial class CSharpToGSharpTranslator {
             if this.FindResultLambda(use) is not{} lambda {
                 return false
             }
+            if this.LambdaHasExplicitDelegateCast(lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+                return false
+            }
             var node Microsoft.CodeAnalysis.SyntaxNode? = lambda
             while (
                 node!!.Parent is Microsoft
@@ -15977,6 +15981,9 @@ partial class CSharpToGSharpTranslator {
             // scalar type and that final sink is emitted nullable, preserve nil
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
+            if this.LambdaHasExplicitDelegateCast(lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+                return false
+            }
             var current Microsoft.CodeAnalysis.SyntaxNode? = lambda
             while (
                 current!!.Parent is Microsoft
