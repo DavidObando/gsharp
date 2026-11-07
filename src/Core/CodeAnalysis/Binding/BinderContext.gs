@@ -107,8 +107,6 @@ internal class BinderContext {
         UnresolvedGotoLabels = Dictionary[string, TextLocation]()
         NarrowingFlow = NarrowingFlow()
         NarrowedVariables = NarrowingFrameStack()
-        PendingEarlyExitFrames = Dictionary[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]()
-        PendingSwitchExitFrames = Dictionary[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]]()
         PendingPatternVariableLeaks = Dictionary[BoundIfStatement, ImmutableArray[LocalVariableSymbol]]()
         PatternVariableNames = HashSet[string](StringComparer.Ordinal)
         InitialScope = BoundScope(parent)
@@ -343,85 +341,8 @@ internal class BinderContext {
     }
 
     /// Gets the narrowing facts that hold now, as a value (ADR-0208 section 7).
-    /// @remarks The stack threads the value beside the frames: the innermost
-    /// frame that holds a path wins. The frame stack stays the mechanism until the
-    /// consuming PR replaces it. The value has no external-callable facts, which
-    /// the statement binder owns.
-    /// Gets or sets the facts that the shadow join proves and that no frame holds
-    /// (ADR-0208 section 19, PR 1). Only the comparison mode reads or writes it.
-    internal var ShadowOverlay NarrowingState = NarrowingState.Empty
-
-    /// Gets or sets, for each overlay path, the frame type at the time the overlay
-    /// fact was made. A frame fact that differs from it is newer than the overlay fact.
-    internal var ShadowOverlayBase NarrowingState = NarrowingState.Empty
-
-    /// Gets the paths whose frame facts a header or a guard removed in the shadow
-    /// flow, with the frame count at that time. A frame below that count holds an
-    /// inherited fact, which is gone; a frame at or above it holds a newer proof.
-    internal let ShadowSuppressed Dictionary[AccessPath, int32] = Dictionary[AccessPath, int32]()
-
-    /// Whether the innermost frame fact of [`path`](paramref) is an inherited
-    /// fact that the shadow flow removed.
-    internal func ShadowIsSuppressed(path AccessPath) bool {
-        if ShadowSuppressed.Count == 0 || !ShadowSuppressed.TryGetValue(path, out var depth) {
-            return false
-        }
-        for var i = NarrowedVariables.Count - 1; i >= 0; i-- {
-            if NarrowedVariables[i].ContainsKey(path) {
-                return i < depth
-            }
-        }
-        return false
-    }
-
-    /// Returns the type that the shadow flow gives a read of [`path`](paramref),
-    /// where [`frameType`](paramref) is the frame answer. The newer of the frame
-    /// fact and the overlay fact wins.
-    internal func ShadowEffectiveType(path AccessPath, legacyType TypeSymbol?) TypeSymbol? {
-        let frameType = if ShadowIsSuppressed(path) {
-            default(TypeSymbol?)
-        } else {
-            legacyType
-        }
-        let overlayType = ShadowOverlay.NarrowedType(path)
-        if overlayType == nil {
-            return frameType
-        }
-        if frameType == nil {
-            return overlayType
-        }
-        let baseType = ShadowOverlayBase.NarrowedType(path)
-        return if baseType != nil && object.Equals(baseType, frameType) {
-            overlayType
-        } else {
-            frameType
-        }
-    }
-
+    /// @remarks Scope writes maintain the immutable state consumed by queries and exit joins.
     internal prop Narrowing NarrowingState -> NarrowedVariables.State
-
-    /// Gets the side-table that parks the else-branch narrowing frame of an
-    /// `if`-statement keyed by the resulting bound
-    /// (cref:BoundIfStatement) node identity. ADR-0069 / issue #700:
-    /// `BindBlockStatements` consults this table and lifts the frame
-    /// into the enclosing block's persistent narrowing scope when the
-    /// then-branch ends in an unconditional exit (return, throw, break,
-    /// continue), so subsequent reads in the block see the narrowing.
-    prop PendingEarlyExitFrames Dictionary[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]] {
-        get;
-    }
-
-    /// Gets the side-table that parks the post-switch narrowing frame for a
-    /// `switch` statement keyed by the resulting bound
-    /// (cref:BoundPatternSwitchStatement) node identity. ADR-0069
-    /// addendum / issue #712: when every non-default arm either ends in an
-    /// unconditional exit OR contributes the same narrowing on the
-    /// discriminator (and the default arm, if any, does likewise), the
-    /// common narrowing is lifted into the enclosing block's persistent
-    /// narrowing scope so subsequent reads in the block see the narrowing.
-    prop PendingSwitchExitFrames Dictionary[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]] {
-        get;
-    }
 
     /// Gets the ADR-0166 side-table that parks the pattern variables an
     /// `if`-statement leaks into the statements that follow it, keyed by
@@ -429,8 +350,7 @@ internal class BinderContext {
     /// records the condition's when-false variables when the then-branch ends
     /// in an unconditional exit (and the when-true variables when the else-
     /// branch does); `BindBlockStatements` declares them into the enclosing
-    /// block scope, the same lift (cref:PendingEarlyExitFrames) performs
-    /// for smart-cast narrowings.
+    /// block scope alongside the facts proved by the normal exit join.
     prop PendingPatternVariableLeaks Dictionary[BoundIfStatement, ImmutableArray[LocalVariableSymbol]] {
         get;
     }

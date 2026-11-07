@@ -18,8 +18,7 @@ import System.Reflection
 /// and no result depends on hash order. Equality is structural and ignores
 /// entry order. A state holds two kinds of fact: a narrowed type for each
 /// access path, and the set of variables that definitely hold an external
-/// callable. Both kinds join the same way. Nothing in the binder consumes
-/// this type yet (ADR-0208 section 19, PR 1).
+/// callable. Both kinds join the same way. Binding queries and normal exit joins consume this value.
 internal sealed class NarrowingState : IEquatable[NarrowingState] {
     private let paths ImmutableArray[AccessPath]
     private let types ImmutableArray[TypeSymbol]
@@ -93,6 +92,20 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             return this
         }
         return NarrowingState(paths, types, callables.Add(variable), false)
+    }
+
+    /// Replaces the callable facts without copying an unchanged set.
+    func WithExternalCallables(variables IReadOnlyCollection[VariableSymbol]) NarrowingState {
+        if unreachable ||
+            (
+            callables.Length == variables.Count && callables.All(
+                (variable VariableSymbol) -> variables.Contains(variable)
+            )
+        ) {
+            return this
+        }
+        let next = variables.ToImmutableArray()
+        return NarrowingState(paths, types, next, false)
     }
 
     /// Removes the fact of one path.

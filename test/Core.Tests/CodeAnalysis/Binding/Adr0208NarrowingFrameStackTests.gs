@@ -15,10 +15,27 @@ import System.Linq
 import System.Text.RegularExpressions
 import Xunit
 
-/// ADR-0208 section 19, PR 2 slice 1: the frame stack threads a (cref:NarrowingState)
-/// beside the frames. Every push, pop and frame write must update it, and
+/// ADR-0208: scope bookkeeping maintains the (cref:NarrowingState) consumed by every query.
+/// Every push, pop and frame write must update it, and
 /// (cref:NarrowingFrameStack.AssertParity) compares it with a fresh projection.
 open class Adr0208NarrowingFrameStackTests {
+    @Fact
+    func ScopeChanges_PreserveTheCallableFactsInTheState() {
+        let callable = Local("callable")
+        let x = Local("x")
+        let stack = NarrowingFrameStack()
+        stack.SetExternalCallables([]VariableSymbol{callable})
+        stack.Push(Facts(x, TypeSymbol.String))
+        stack.RemoveAt(0)
+        Assert.True(stack.State.IsExternalCallable(callable))
+        stack.Push(Facts(x, TypeSymbol.String))
+        stack.Clear()
+        Assert.True(stack.State.IsExternalCallable(callable))
+        stack.AssertParity()
+        stack.SetExternalCallables(Array.Empty[VariableSymbol]())
+        Assert.False(stack.State.IsExternalCallable(callable))
+    }
+
     @Fact
     func APushedFrame_IsProjectedInnermostFirst() {
         let x = Local("x")
@@ -164,7 +181,7 @@ open class Adr0208NarrowingFrameStackTests {
     }
 
     @Fact
-    func TheOneFrameWalk_AssertsParityOnEveryQuery() {
+    func TheStateQuery_AssertsParityOnEveryQuery() {
         let x = Local("x")
         let raw = Dictionary[AccessPath, TypeSymbol]()
         let stack = NarrowingFrameStack()
@@ -179,9 +196,7 @@ open class Adr0208NarrowingFrameStackTests {
     }
 
     @Fact
-    func NoBinderCodeWalksTheFramesOutsideTheOneFrameWalk() {
-        // Every narrowed-type lookup goes through NarrowingFrameStack.Query, so the
-        // parity assertion sees it (a direct walk skipped it once, in the call resolver).
+    func NoBinderCodeBypassesTheStateQuery() {
         let offenders = List[string]()
         for path in TestSource.SourceFiles(SearchOption.AllDirectories, "src/Core/CodeAnalysis/Binding") {
             if Path.GetFileNameWithoutExtension(path).StartsWith("NarrowingFrame", StringComparison.Ordinal) {
@@ -194,7 +209,7 @@ open class Adr0208NarrowingFrameStackTests {
         }
         Assert.True(
             offenders.Count == 0,
-            "Walk the frames with NarrowedVariables.Query: " + string.Join(", ", offenders)
+            "Read the state with NarrowedVariables.Query: " + string.Join(", ", offenders)
         )
     }
 

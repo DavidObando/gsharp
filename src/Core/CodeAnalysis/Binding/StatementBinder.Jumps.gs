@@ -6,6 +6,7 @@ package GSharp.Core.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding.OverloadResolution
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Lowering
 import GSharp.Core.CodeAnalysis.Lowering.Async
 import GSharp.Core.CodeAnalysis.Symbols
@@ -660,11 +661,6 @@ internal partial class StatementBinder {
         internal let DiagnosticCount int32
         internal let SuppressionCount int32
         internal let FrameLogMark int32
-        internal let PendingEarlyExitFrames[]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]]
-        internal let PendingSwitchExitFrames[]?KeyValuePair[
-            BoundPatternSwitchStatement,
-            Dictionary[AccessPath, TypeSymbol]
-        ]
         internal let ExternalCallableAliases[]?VariableSymbol
         internal let ActiveFinallyClauses[]?FinallyClauseSyntax
         internal let ActiveCleanupStatements[]?BoundStatement
@@ -684,8 +680,6 @@ internal partial class StatementBinder {
             diagnosticCount int32,
             suppressionCount int32,
             frameLogMark int32,
-            pendingEarlyExitFrames[]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]],
-            pendingSwitchExitFrames[]?KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]],
             externalCallableAliases[]?VariableSymbol,
             activeFinallyClauses[]?FinallyClauseSyntax,
             activeCleanupStatements[]?BoundStatement,
@@ -702,8 +696,6 @@ internal partial class StatementBinder {
             DiagnosticCount = diagnosticCount
             SuppressionCount = suppressionCount
             FrameLogMark = frameLogMark
-            PendingEarlyExitFrames = pendingEarlyExitFrames
-            PendingSwitchExitFrames = pendingSwitchExitFrames
             ExternalCallableAliases = externalCallableAliases
             ActiveFinallyClauses = activeFinallyClauses
             ActiveCleanupStatements = activeCleanupStatements
@@ -776,16 +768,6 @@ internal partial class StatementBinder {
         Diagnostics.Count,
         Diagnostics.SuppressionCount,
         speculativeFrameUndoLog.Count,
-        if binderCtx.PendingEarlyExitFrames.Count == 0 {
-            default([]?KeyValuePair[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]])
-        } else {
-            binderCtx.PendingEarlyExitFrames.ToArray()
-        },
-        if binderCtx.PendingSwitchExitFrames.Count == 0 {
-            default([]?KeyValuePair[BoundPatternSwitchStatement, Dictionary[AccessPath, TypeSymbol]])
-        } else {
-            binderCtx.PendingSwitchExitFrames.ToArray()
-        },
         if externalCallableAliases.Count == 0 {
             default([]?VariableSymbol)
         } else {
@@ -933,8 +915,6 @@ internal partial class StatementBinder {
     private func ApplyBaseSpeculativeBindState(state SpeculativeBindState) {
         Diagnostics.TruncateTo(state.DiagnosticCount)
         Diagnostics.RestoreSuppressionsTo(state.SuppressionCount)
-        RestoreEntries(binderCtx.PendingEarlyExitFrames, state.PendingEarlyExitFrames)
-        RestoreEntries(binderCtx.PendingSwitchExitFrames, state.PendingSwitchExitFrames)
         if externalCallableAliases.Count > 0 || state.ExternalCallableAliases != nil {
             RestoreItems(externalCallableAliases, state.ExternalCallableAliases)
             SyncExpressionCallableAliasesNow()
@@ -1110,21 +1090,6 @@ internal partial class StatementBinder {
         }
     }
 
-    private func RestoreEntries[TKey, TValue](
-        destination Dictionary[TKey, TValue],
-        snapshot[]?KeyValuePair[TKey, TValue]
-    ) {
-        if destination.Count == 0 && snapshot == nil {
-            return
-        }
-        destination.Clear()
-        if snapshot != nil {
-            for entry in snapshot {
-                destination.Add(entry.Key, entry.Value)
-            }
-        }
-    }
-
     private func RestoreItems[T](destination HashSet[T], snapshot[]?T) {
         if destination.Count == 0 && snapshot == nil {
             return
@@ -1190,38 +1155,61 @@ internal partial class StatementBinder {
     }
 
     private sealed class BoundNodePathFinder : BoundTreeWalker {
-        private let target BoundNode
-        internal let Path List[BoundNode] = List[BoundNode]()
-        internal var Found bool
+        private let targets HashSet[BoundNode] = HashSet[BoundNode](ReferenceEqualityComparer.Instance)
+        private let targetGotos Dictionary[SyntaxNode, List[BoundGotoStatement]] = Dictionary[
+            SyntaxNode,
+            List[BoundGotoStatement]
+        ](ReferenceEqualityComparer.Instance)
+        private let path List[BoundNode] = List[BoundNode]()
+        private let stopAfterFirst bool
+        internal let Paths Dictionary[BoundNode, List[BoundNode]] = Dictionary[BoundNode, List[BoundNode]](
+            ReferenceEqualityComparer.Instance
+        )
+        internal prop Found bool -> Paths.Count > 0
 
-        init(target BoundNode) {
-            this.target = target
+        init(targets IEnumerable[BoundNode], stopAfterFirst bool) {
+            this.stopAfterFirst = stopAfterFirst
+            for target in targets {
+                this.targets.Add(target)
+                if target is BoundGotoStatement gotoNode && target.Syntax is {} syntax {
+                    if !targetGotos.TryGetValue(syntax, out var gotos) {
+                        gotos = List[BoundGotoStatement]()
+                        targetGotos[syntax] = gotos
+                    }
+                    gotos.Add(gotoNode)
+                }
+            }
         }
 
         private func Enter(node BoundNode?) bool {
-            if Found || node == nil {
+            if (stopAfterFirst && Found) || node == nil {
                 return false
             }
-            Path.Add(node)
-            if object.ReferenceEquals(node, target) ||
-                (
-                node is BoundGotoStatement gotoNode &&
-                    target is BoundGotoStatement targetGoto &&
-                    gotoNode.Label == targetGoto.Label &&
-                    target.Syntax != nil &&
-                    object.ReferenceEquals(gotoNode.Syntax, target.Syntax)
+            CompilationMeasurements.Count("narrowing.break-path-visits")
+            path.Add(node)
+            if targets.Contains(node) {
+                Record(node)
+            }
+            if node is BoundGotoStatement gotoNode && node.Syntax is {} syntax && targetGotos.TryGetValue(
+                syntax,
+                out var gotos
             ) {
-                Found = true
-                return false
+                for target in gotos {
+                    if gotoNode.Label == target.Label {
+                        Record(target)
+                    }
+                }
             }
-            return true
+            return !stopAfterFirst || !Found
         }
 
-        private func Leave() {
-            if !Found {
-                Path.RemoveAt(Path.Count - 1)
+        private func Record(target BoundNode) {
+            if !Paths.ContainsKey(target) {
+                Paths[target] = List[BoundNode](path)
             }
         }
+
+        private func Leave() -> path.RemoveAt(path.Count - 1)
 
         override func VisitStatement(node BoundStatement?) {
             if !Enter(node) {
@@ -1336,23 +1324,29 @@ internal partial class StatementBinder {
         boundBody BoundStatement,
         condition BoundExpression?,
         loopEntryAliases ImmutableArray[VariableSymbol],
-        boundPost BoundStatement? = nil
+        boundPost BoundStatement? = nil,
+        indexedPaths Dictionary[BoundNode, List[BoundNode]]? = nil
     ) {
         if snapshot.BreakNode is not{} breakNode {
             return
         }
-        let finder = BoundNodePathFinder(breakNode)
-        finder.Visit(boundBody)
-        if !finder.Found && condition != nil {
-            finder.Visit(condition)
+        var path List[BoundNode]? = nil
+        if indexedPaths != nil {
+            indexedPaths.TryGetValue(breakNode, out path)
+        } else {
+            let finder = BoundNodePathFinder([]BoundNode{breakNode}, stopAfterFirst: true)
+            finder.Visit(boundBody)
+            if !finder.Found && condition != nil {
+                finder.Visit(condition)
+            }
+            if !finder.Found && boundPost != nil {
+                finder.Visit(boundPost)
+            }
+            finder.Paths.TryGetValue(breakNode, out path)
         }
-        if !finder.Found && boundPost != nil {
-            finder.Visit(boundPost)
-        }
-        if !finder.Found || finder.Path.Count < 2 {
+        if path == nil || path.Count < 2 {
             return
         }
-        let path = finder.Path
         let stepCount = path.Count - 1
         let childMinFrames = [stepCount]int32
         var minFrame = int32.MaxValue

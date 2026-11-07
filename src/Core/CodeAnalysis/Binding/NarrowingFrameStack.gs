@@ -11,8 +11,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 
-/// The stack of narrowing frames of one binder (ADR-0208 section 2), and the
-/// (cref:NarrowingState) that it keeps in step with the frames.
+/// Scope bookkeeping for the immutable narrowing state consumed by binding (ADR-0208).
 /// @remarks The state holds, for each path, the type of the innermost frame
 /// that has the path. Each push, pop and frame write updates the state for the
 /// paths it touches, so the state is threaded beside the frames and is not
@@ -75,8 +74,11 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
             frame.Owner = nil
         }
         frames.Clear()
-        // No frame is left, so no fact is: reset the state in one step.
-        threaded = NarrowingState.Empty
+        threaded = NarrowingState.Empty.WithExternalCallables(threaded.ExternalCallables)
+    }
+
+    internal func SetExternalCallables(variables IReadOnlyCollection[VariableSymbol]) {
+        threaded = threaded.WithExternalCallables(variables)
     }
 
     /// Gets or sets a callback notified before a frame entry on this stack is mutated.
@@ -92,17 +94,9 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
         Recompute(path)
     }
 
-    /// The one frame walk: returns the type of the innermost frame that has
-    /// [`path`](paramref), or `nil`. Every narrowed-type lookup in the binder
-    /// goes through it, so the parity assertion sees every query.
+    /// Reads the maintained state. The optional parity check verifies scope bookkeeping on every query.
     func Query(path AccessPath) TypeSymbol? {
-        var answer TypeSymbol? = nil
-        for var i = frames.Count - 1; i >= 0; i-- {
-            if frames[i].TryGetValue(path, out var narrowedType) {
-                answer = narrowedType
-                break
-            }
-        }
+        let answer = threaded.NarrowedType(path)
         if NarrowingParity.Enabled {
             NarrowingParity.Check(this, path, answer)
         }
@@ -112,7 +106,7 @@ internal sealed class NarrowingFrameStack : IReadOnlyList[NarrowingFrame] {
     /// Compares the threaded state with a fresh projection of the frames, and
     /// throws when they differ: a write reached a frame without being seen.
     func AssertParity() {
-        let projected = NarrowingState.FromFrames(this, ImmutableArray[VariableSymbol].Empty)
+        let projected = NarrowingState.FromFrames(this, threaded.ExternalCallables)
         if !threaded.Equals(projected) {
             throw InvalidOperationException(
                 "The threaded narrowing state ${threaded} differs from the projection of the frames ${projected}."

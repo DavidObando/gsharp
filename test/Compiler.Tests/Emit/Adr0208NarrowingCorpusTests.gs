@@ -28,6 +28,114 @@ import Xunit
 /// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1, n1, o1, o2 and o3 (issue #5206, amendment A1). They now
 /// record the new result. Rows R2 and R4 consume the normal branch exit states.
 open class Adr0208NarrowingCorpusTests {
+    @Fact
+    func ComposedScalarAssignment_InvalidatesAnErasedCallableAlias() {
+        let source = `import System
+func External() { }
+func Run() int32 {
+    var s string? = "safe"
+    let clear = func() { s = nil }
+    let external Action = External
+    var callback object? = external
+    if s == nil { return 0 }
+    {
+        {
+            callback = nil
+        }
+    }
+    cast[Action](callback)()
+    return s.Length
+}
+func Main() { }`
+        EveryProbe_KeepsItsRecordedResult("r5130_composed_alias", source, "GS0158@15:14", "reject", "", "R12")
+    }
+
+    @Theory
+    @InlineData("return -1")
+    @InlineData("continue")
+    @InlineData("break")
+    @InlineData("throw Exception()")
+    @InlineData("goto Done")
+    func NullConditionalBooleanExitGuard_ProvesTheReceiver(exit string) {
+        let source = `import System
+import System.Collections.Generic
+func Run(value Type?) int32 {
+    try {
+        for var i = 0; i < 1; i++ {
+            if value?.IsInterface != true { __EXIT__ }
+            let interfaces = List[Type]{value}
+            return interfaces.Count
+        }
+        Done:
+        return -1
+    } catch { return -1 }
+}
+func Main() {
+    Console.WriteLine(Run(nil))
+    Console.WriteLine(Run(typeof(string)))
+    Console.WriteLine(Run(typeof(IDisposable)))
+}`.Replace("__EXIT__", exit, StringComparison.Ordinal)
+        EveryProbe_KeepsItsRecordedResult("r5849_exit", source, "", "run", "-1|-1|1", "R9")
+    }
+
+    @Theory
+    @InlineData("")
+    @InlineData("if value?.IsInterface == false { return }")
+    func NullConditionalBooleanExitGuard_DoesNotProveTheNilFallthrough(guardText string) {
+        let source = `import System
+import System.Collections.Generic
+func Run(value Type?) {
+    __GUARD__
+    let interfaces = List[Type]{value}
+}
+func Main() { }`.Replace("__GUARD__", guardText, StringComparison.Ordinal)
+        EveryProbe_KeepsItsRecordedResult("r5849_nil", source, "GS0155@5:33", "reject", "", "R9")
+    }
+
+    @Theory
+    @InlineData("value?.IsInterface == true", "-1|-1|1")
+    @InlineData("true == value?.IsInterface", "-1|-1|1")
+    @InlineData("value?.IsInterface == false", "-1|1|-1")
+    @InlineData("!(value?.IsInterface != true)", "-1|-1|1")
+    func NullConditionalBooleanEquality_ProvesTheReceiverInExpressions(condition string, expected string) {
+        let source = `import System
+import System.Collections.Generic
+func Run(value Type?) int32 {
+    return if __CONDITION__ {
+        List[Type]{value}.Count
+    } else { -1 }
+}
+func Main() {
+    Console.WriteLine(Run(nil))
+    Console.WriteLine(Run(typeof(string)))
+    Console.WriteLine(Run(typeof(IDisposable)))
+}`.Replace("__CONDITION__", condition, StringComparison.Ordinal)
+        EveryProbe_KeepsItsRecordedResult("r5849_expression", source, "", "run", expected, "R9")
+    }
+
+    @Fact
+    func NullConditionalBooleanGetter_CannotProveAReceiverItReassigns() {
+        let source = `import System
+import System.Collections.Generic
+class Flag {
+    shared { var Clear (() -> void)? }
+    prop Ready bool {
+        get {
+            Clear?()
+            return true
+        }
+    }
+}
+func Run() {
+    var value Flag? = Flag()
+    Flag.Clear = func() { value = nil }
+    if value?.Ready != true { return }
+    let flags = List[Flag]{value}
+}
+func Main() { }`
+        EveryProbe_KeepsItsRecordedResult("r5849_getter_write", source, "GS0155@16:28", "reject", "", "R15")
+    }
+
     /// Compiles one probe, checks its diagnostics, and for a program that
     /// compiles verifies and runs it.
     /// @param name The probe name from the ADR section 4 table.
