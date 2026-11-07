@@ -362,10 +362,10 @@ class ReferenceResolver : IDisposable {
     func GetReferenceInfos() ImmutableArray[ReferenceInfo] {
         let builder = ImmutableArray.CreateBuilder[ReferenceInfo]()
         for asm in this.assemblies {
-            let location = asm.Location
-            if string.IsNullOrEmpty(location) || !File.Exists(location) {
+            if !TryGetAssemblyPath(asm, out var resolvedLocation) || !File.Exists(resolvedLocation) {
                 continue
             }
+            let location = resolvedLocation!!
             try {
                 let fileSize = uint32(FileInfo(location).Length)
                 var timeStamp uint32 = uint32(0)

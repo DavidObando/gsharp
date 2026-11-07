@@ -16,7 +16,8 @@ internal shared class RepositoryMirror {
     internal func Prepare(
         sourceRoot string?,
         destinationRoot string?,
-        generatedProjectPaths IReadOnlyDictionary[string, string]? = nil
+        generatedProjectPaths IReadOnlyDictionary[string, string]? = nil,
+        excludedScope RepositoryExcludedScope? = nil
     ) IReadOnlyList[string] {
         let source = Path.GetFullPath(sourceRoot!!)
         let destination = Path.GetFullPath(destinationRoot!!)
@@ -24,7 +25,7 @@ internal shared class RepositoryMirror {
         let files = RepositoryFileInventory.Enumerate(source)
         let verbatim = RepositoryVerbatimSources.Compute(source, files)
         let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(source, files)
-        ValidateCollisions(files, verbatim, copyAndTranslate)
+        ValidateCollisions(files, verbatim, copyAndTranslate, source, excludedScope)
         RepositoryGitMetadata.Prepare(source, destination)
         for relativePath in files {
             let extension = Path.GetExtension(relativePath)
@@ -294,11 +295,13 @@ internal shared class RepositoryMirror {
     private func ValidateCollisions(
         files IEnumerable[string],
         verbatim ISet[string],
-        copyAndTranslate ISet[string]? = nil
+        copyAndTranslate ISet[string]? = nil,
+        sourceRoot string? = nil,
+        excludedScope RepositoryExcludedScope? = nil
     ) {
         let destinations = Dictionary[string, string](StringComparer.OrdinalIgnoreCase)
         for source in files {
-            for destination in DestinationRelativePaths(source, verbatim, copyAndTranslate) {
+            for destination in DestinationRelativePaths(source, verbatim, copyAndTranslate, sourceRoot, excludedScope) {
                 if destinations.TryGetValue(destination, out var prior) && !string.Equals(
                     prior,
                     source,

@@ -621,6 +621,7 @@ internal partial class StatementBinder {
                         externalCallableAliases,
                         deferSyntax
                     )
+                    KillNonNullByRefExitEffects(cleanupEffect, externalCallableAliases, deferSyntax)
                     return fallsThrough
                 }
                 if statementSyntax is UsingStatementSyntax usingSyntax {
@@ -694,6 +695,7 @@ internal partial class StatementBinder {
                         externalCallableAliases,
                         usingSyntax
                     )
+                    KillNonNullByRefExitEffects(cleanupEffect, externalCallableAliases, usingSyntax)
                     return fallsThrough
                 }
                 if statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax {
@@ -766,6 +768,7 @@ internal partial class StatementBinder {
                         externalCallableAliases,
                         awaitUsingSyntax
                     )
+                    KillNonNullByRefExitEffects(cleanupEffect, externalCallableAliases, awaitUsingSyntax)
                     return fallsThrough
                 }
                 // ADR-0071 / issue #708: `guard let` extends the enclosing block's

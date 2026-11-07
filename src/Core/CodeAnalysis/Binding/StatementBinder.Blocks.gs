@@ -138,6 +138,7 @@ internal partial class StatementBinder {
                     let defaultEntry = binderCtx.Narrowing
                     let defaultOuterKills = BeginThenBranchConditionKills()
                     var defaultExitAliases HashSet[VariableSymbol]? = nil
+                    var defaultExitNonNullByRef HashSet[VariableSymbol]? = nil
                     var defaultBody = if defaultIndex == syntax.Cases.Length - 1 {
                         BindSwitchBody(caseSyntax.Body, nil, fallthroughState)
                     } else {
@@ -171,6 +172,7 @@ internal partial class StatementBinder {
                                 func () BoundNode {
                                     let body = BindSwitchBody(caseSyntax.Body, nil, fallthroughState)
                                     defaultExitAliases = CaptureExternalCallableAliases()
+                                    defaultExitNonNullByRef = CaptureNonNullByRefVariables()
                                     return body
                                 }
                             )
@@ -188,7 +190,7 @@ internal partial class StatementBinder {
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
                     let callableDefaultExit = defaultExitAliases ?? CaptureExternalCallableAliases()
-                    let nonNullByRefDefaultExit = CaptureNonNullByRefVariables()
+                    let nonNullByRefDefaultExit = defaultExitNonNullByRef ?? CaptureNonNullByRefVariables()
                     callableFallthrough = if endsInFallthrough {
                         callableDefaultExit
                     } else {
@@ -258,6 +260,9 @@ internal partial class StatementBinder {
                 // The pattern can replace an alias too, so the later arms do not start from it either.
                 if removedAliases != nil {
                     callableEntry.ExceptWith(removedAliases)
+                }
+                if header.RemovedNonNullByRef is {} removedNonNull {
+                    nonNullByRefEntry.ExceptWith(removedNonNull)
                 }
                 if guard_ is {} boundGuard {
                     ShadowAddGuard(shadowFlow, boundGuard)
@@ -460,6 +465,7 @@ internal partial class StatementBinder {
         // A handler can observe every protected write, including writes on paths that do not complete normally.
         RestoreNonNullByRefVariables(nonNullByRefEntry)
         InvalidateNarrowingsForAssignedVariables(syntax.TryBlock, tryBlock, aliasesAtEntry: callableEntry)
+        InvalidateNonNullByRefForEffects(tryMutations, tryMutations.MayMutateMemberPaths)
         let nonNullByRefExceptionalEntry = CaptureNonNullByRefVariables()
         let callableExceptionalEntry = HashSet[VariableSymbol](callableEntry)
         RemoveAssignedAliases(callableExceptionalEntry, tryMutations)
@@ -545,6 +551,7 @@ internal partial class StatementBinder {
                     BoundExpressionStatement(nil, filter),
                     aliasesAtEntry: filterAliasesAtEntry
                 )
+                nonNullByRefExceptionalEntry.IntersectWith(binderCtx.NonNullByRefVariables)
             }
             let (filterWhenTrue, _) = PatternVariables.Classify(filter)
             let catchEntry = binderCtx.Narrowing
@@ -589,7 +596,13 @@ internal partial class StatementBinder {
         if syntax.FinallyClause != nil {
             let protectedRegion = BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock: nil)
             InvalidateNarrowingsForAssignedVariables(syntax, protectedRegion, aliasesAtEntry: callableEntry)
+            let protectedMutations = NewCollector(nil, callableEntry)
+            protectedMutations.Visit(protectedRegion)
+            RestoreNonNullByRefVariables(nonNullByRefEntry)
+            InvalidateNonNullByRefForEffects(protectedMutations, protectedMutations.MayMutateMemberPaths)
+            nonNullByRefFinallyEntries.IntersectWith(binderCtx.NonNullByRefVariables)
             InvalidateNarrowingsForEnclosingFilters(enclosingFilters)
+            nonNullByRefFinallyEntries.IntersectWith(binderCtx.NonNullByRefVariables)
             RestoreExternalCallableAliases(callableFinallyEntries)
             RestoreNonNullByRefVariables(nonNullByRefFinallyEntries)
             if speculativeReturnDepth > 0 {
@@ -610,6 +623,11 @@ internal partial class StatementBinder {
                 exceptionHandlerRegions.Pop()
                 currentStatementListFallsThrough = inheritedReachability
             }
+            let nonNullByRefAfterFinally = CaptureNonNullByRefVariables()
+            RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)
+            let normalFinallyAliases = finallyEntryExternalCallableAliases[syntax.FinallyClause!!]
+            KillNonNullByRefExitEffects(finallyBlock!!, normalFinallyAliases, syntax.FinallyClause)
+            binderCtx.NonNullByRefVariables.UnionWith(nonNullByRefAfterFinally)
         } else {
             RestoreExternalCallableAliases(callableExits ?? callableEntry)
             RestoreNonNullByRefVariables(nonNullByRefExits ?? nonNullByRefEntry)

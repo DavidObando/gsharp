@@ -200,6 +200,8 @@ def select(paths, event, projects=None, go_exists=None):
             jobs.update({"discover-tests", "tests", "test-partition"})
         if harnesses:
             jobs.add("harness")
+        if any(p in {"build/selfhost-fixpoint.py", "build/test-selfhost-fixpoint.py"} for p in paths):
+            jobs.add("fixpoint")
         if any(Path(p).suffix == ".gs" for p in paths) or areas.intersection(SUITES):
             jobs.add("format")
         if "build" in jobs:

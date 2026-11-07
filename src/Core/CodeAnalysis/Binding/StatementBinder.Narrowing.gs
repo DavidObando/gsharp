@@ -868,6 +868,43 @@ internal partial class StatementBinder {
         }
     }
 
+    private func InvalidateNonNullByRefForEffects(
+        effects AssignedRootsCollector,
+        dropAllMemberPaths bool,
+        filterWrites List[(TryBlock SyntaxNode?, Names HashSet[string])]? = nil
+    ) {
+        if binderCtx.NonNullByRefVariables.Count == 0 {
+            return
+        }
+        for variable in binderCtx.NonNullByRefVariables.ToArray() {
+            let varPath = AccessPath.ForVariable(variable)
+            let killed = (filterWrites != nil && FilterWritesVariable(filterWrites, variable)) ||
+                (effects.MayMutateGlobalRoots && variable is GlobalVariableSymbol && !variable.IsReadOnly) ||
+                StatementKillsPath(effects, varPath, dropAllMemberPaths, effects.MayWriteStorageOf(varPath))
+            if killed {
+                binderCtx.NonNullByRefVariables.Remove(variable)
+            }
+        }
+    }
+
+    private func KillNonNullByRefExitEffects(
+        statement BoundStatement,
+        aliases IReadOnlyCollection[VariableSymbol],
+        anchor SyntaxNode? = nil
+    ) {
+        if binderCtx.NonNullByRefVariables.Count == 0 {
+            return
+        }
+        let effects = GetStatementEffects(statement, aliases)
+        let syntax = anchor ?? statement.Syntax
+        let filters = if syntax == nil {
+            default(List[(TryBlock SyntaxNode?, Names HashSet[string])]?)
+        } else {
+            EnclosingFilterWrites(syntax, effects)
+        }
+        InvalidateNonNullByRefForEffects(effects, effects.MayMutateMemberPaths, filters)
+    }
+
     // The writes that the filters of enclosing `try` statements make, when the statement
     // can run after one of them; otherwise `nil`.
     private func EnclosingFilterWrites(statementSyntax SyntaxNode, effects AssignedRootsCollector) List[
@@ -5528,12 +5565,14 @@ internal partial class StatementBinder {
             frame Dictionary[AccessPath, TypeSymbol]?,
             boundGuard BoundExpression?,
             removedAliases HashSet[VariableSymbol]?,
+            removedNonNullByRef HashSet[VariableSymbol]?,
             mayRemoveDiscriminantFact bool
         ) {
             Pattern = pattern
             Frame = frame
             Guard = boundGuard
             RemovedAliases = removedAliases
+            RemovedNonNullByRef = removedNonNullByRef
             MayRemoveDiscriminantFact = mayRemoveDiscriminantFact
         }
 
@@ -5550,6 +5589,10 @@ internal partial class StatementBinder {
         }
 
         prop RemovedAliases HashSet[VariableSymbol]? {
+            get;
+        }
+
+        prop RemovedNonNullByRef HashSet[VariableSymbol]? {
             get;
         }
 
@@ -5572,6 +5615,7 @@ internal partial class StatementBinder {
     ) SwitchArmHeader {
         // The aliases that the header removes, statements inside a guard's block included, against its entry.
         let aliasesBefore = CaptureExternalCallableAliases()
+        let nonNullByRefBefore = CaptureNonNullByRefVariables()
         let pattern = patterns.BindPattern(valueSyntax, discriminant.Type)
         ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern, aliasesBefore)
         let evaluated = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
@@ -5585,6 +5629,7 @@ internal partial class StatementBinder {
         }
         var boundGuard BoundExpression? = nil
         var removedAliases HashSet[VariableSymbol]? = nil
+        var removedNonNullByRef HashSet[VariableSymbol]? = nil
         var guardMayRemove = false
         if guardSyntax != nil {
             let guardAliasesBefore = CaptureExternalCallableAliases()
@@ -5598,7 +5643,18 @@ internal partial class StatementBinder {
         if aliasesBefore.Count > 0 {
             removedAliases = aliasesBefore
         }
-        return SwitchArmHeader(pattern, frame, boundGuard, removedAliases, testMayRemove || guardMayRemove)
+        nonNullByRefBefore.ExceptWith(binderCtx.NonNullByRefVariables)
+        if nonNullByRefBefore.Count > 0 {
+            removedNonNullByRef = nonNullByRefBefore
+        }
+        return SwitchArmHeader(
+            pattern,
+            frame,
+            boundGuard,
+            removedAliases,
+            removedNonNullByRef,
+            testMayRemove || guardMayRemove
+        )
     }
 
     /// #5629: applies a header that was bound before a `default` again where its arm is dispatched, since the
@@ -5615,6 +5671,9 @@ internal partial class StatementBinder {
         if header.RemovedAliases is {} removed {
             externalCallableAliases.ExceptWith(removed)
             SyncExpressionCallableAliasesNow()
+        }
+        if header.RemovedNonNullByRef is {} removedNonNull {
+            binderCtx.NonNullByRefVariables.ExceptWith(removedNonNull)
         }
         return header.RemovedAliases
     }
@@ -5648,12 +5707,14 @@ internal partial class StatementBinder {
         let outer = BeginThenBranchConditionKills()
         let entry = binderCtx.Narrowing
         let entryAliases = CaptureExternalCallableAliases()
+        let entryNonNullByRef = CaptureNonNullByRefVariables()
         bindLaterTests()
         let headerKills = conditionKillJournal!!
         conditionKillJournal = outer
         let bound = bind()
         if !fallsThrough {
             RestoreExternalCallableAliases(entryAliases)
+            RestoreNonNullByRefVariables(entryNonNullByRef)
         }
         if fallsThrough {
             outer?.AddRange(headerKills)

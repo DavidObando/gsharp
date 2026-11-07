@@ -136,6 +136,7 @@ internal shared class RepositoryVerbatimSources {
             let visiting = HashSet[string](StringComparer.OrdinalIgnoreCase)
             if FindNearestDirectoryBuildFile(projectDirectory, "Directory.Build.props", sharedByPath) is {} dirProps {
                 CollectDocumentOperations(
+                    root,
                     dirProps.Path,
                     dirProps.Original,
                     dirProps.Document,
@@ -150,6 +151,7 @@ internal shared class RepositoryVerbatimSources {
                 )
             }
             CollectDocumentOperations(
+                root,
                 projectNormalized,
                 projectOriginal,
                 projectDocument,
@@ -168,6 +170,7 @@ internal shared class RepositoryVerbatimSources {
                 sharedByPath
             ) is {} dirTargets {
                 CollectDocumentOperations(
+                    root,
                     dirTargets.Path,
                     dirTargets.Original,
                     dirTargets.Document,
@@ -217,6 +220,7 @@ internal shared class RepositoryVerbatimSources {
     }
 
     private func CollectDocumentOperations(
+        sourceRoot string,
         documentPath string,
         originalPath string,
         document XDocument,
@@ -242,12 +246,14 @@ internal shared class RepositoryVerbatimSources {
                     let importConditional = inheritedConditional || IsConditionalOrDynamic(element)
                     for importedPath in ResolveImportedPaths(
                         importAttr,
+                        sourceRoot,
                         documentDirectory,
                         projectDirectory,
                         sharedByPath
                     ) {
                         if sharedByPath.TryGetValue(importedPath, out var sharedDoc) {
                             CollectDocumentOperations(
+                                sourceRoot,
                                 importedPath,
                                 sharedDoc.Original,
                                 sharedDoc.Document,
@@ -353,6 +359,7 @@ internal shared class RepositoryVerbatimSources {
 
     private func ResolveImportedPaths(
         importValue string?,
+        sourceRoot string,
         documentDirectory string,
         projectDirectory string,
         sharedByPath Dictionary[string, (Original string, Document XDocument)]
@@ -363,22 +370,42 @@ internal shared class RepositoryVerbatimSources {
         }
         for raw in importValue.Split(';', StringSplitOptions.RemoveEmptyEntries) {
             let trimmed = raw.Trim()
+            let usesThisFileDir = trimmed.Contains("$$(MSBuildThisFileDirectory)", StringComparison.OrdinalIgnoreCase)
             let usesProjectDir = trimmed.Contains("$$(MSBuildProjectDirectory)", StringComparison.OrdinalIgnoreCase)
-            let text = trimmed
+            var text = trimmed
                 .Replace("$$(MSBuildThisFileDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace("$$(MSBuildProjectDirectory)", string.Empty, StringComparison.OrdinalIgnoreCase)
                 .Replace('\\', '/')
-                .TrimStart('/')
+            if usesThisFileDir || usesProjectDir {
+                text = text.TrimStart('/')
+            }
             if text.Contains("$$(", StringComparison.Ordinal) || text.Contains("@(", StringComparison.Ordinal) ||
                 text.Contains("%(", StringComparison.Ordinal) {
                 continue
             }
-            let baseDir = if usesProjectDir {
-                projectDirectory
+            var resolved string? = nil
+            if !usesThisFileDir && !usesProjectDir && Path.IsPathRooted(trimmed) {
+                if text.Contains('*', StringComparison.Ordinal) || text.Contains('?', StringComparison.Ordinal) {
+                    let normalizedRoot = sourceRoot.Replace('\\', '/').TrimEnd('/')
+                    if text.StartsWith(normalizedRoot + "/", StringComparison.OrdinalIgnoreCase) {
+                        resolved = Resolve(string.Empty, text.Substring(normalizedRoot.Length + 1))
+                    }
+                } else {
+                    let fullImported = Path.GetFullPath(trimmed)
+                    let relative = Path.GetRelativePath(sourceRoot, fullImported).Replace('\\', '/')
+                    if !Path.IsPathRooted(relative) && !relative.Equals("..", StringComparison.Ordinal) &&
+                        !relative.StartsWith("../", StringComparison.Ordinal) {
+                        resolved = Resolve(string.Empty, relative)
+                    }
+                }
             } else {
-                documentDirectory
+                let baseDir = if usesProjectDir {
+                    projectDirectory
+                } else {
+                    documentDirectory
+                }
+                resolved = Resolve(baseDir, text)
             }
-            let resolved string? = Resolve(baseDir, text)
             if resolved == nil {
                 continue
             }

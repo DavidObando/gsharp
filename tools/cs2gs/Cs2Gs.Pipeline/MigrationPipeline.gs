@@ -120,12 +120,18 @@ class MigrationPipeline {
             runDir,
             repositoryLayout
         )
+        let excludedScope RepositoryExcludedScope? = if repositoryLayout {
+            RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
+        } else {
+            default(RepositoryExcludedScope?)
+        }
         var repositoryFiles IReadOnlyList[string]? = nil
         if repositoryLayout {
             repositoryFiles = RepositoryMirror.Prepare(
                 this.options.SourceRoot,
                 destinationRoot,
-                this.options.GeneratedProjectPaths
+                this.options.GeneratedProjectPaths,
+                excludedScope
             )
             let verbatimWarnings = List[string]()
             RepositoryVerbatimSources.Compute(this.options.SourceRoot, repositoryFiles, verbatimWarnings)
@@ -161,11 +167,6 @@ class MigrationPipeline {
             apps.Select((app CorpusApp) -> app.ProjectPath),
             evaluatedProjectReferences
         )
-        let excludedScope RepositoryExcludedScope? = if repositoryLayout {
-            RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
-        } else {
-            default(RepositoryExcludedScope?)
-        }
         var passthroughCompileSources IReadOnlyDictionary[string, IReadOnlyList[string]]? = nil
         if repositoryLayout && this.options.PassthroughProjectPaths.Count > 0 {
             let sources = Dictionary[string, IReadOnlyList[string]](StringComparer.OrdinalIgnoreCase)

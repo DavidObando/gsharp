@@ -325,6 +325,19 @@ class Issue4850VerbatimSourcesTests : IDisposable {
     }
 
     @Fact
+    func RootedImportUnderSourceRoot_ResolvesToSharedProps() {
+        let rootedImport = Path.Combine(this.root, "shared", "common.props")
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"" + rootedImport + "\" /></Project>"
+        )
+        this.Write("shared/common.props", "<Project><ItemGroup><None Include=\"Data.cs\" /></ItemGroup></Project>")
+        this.Write("a/Data.cs", "class D {}")
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory())
+        Assert.Equal([]string{"a/Data.cs"}, verbatim.ToArray())
+    }
+
+    @Fact
     func FileBasedDotnetRunHelper_IsVerbatim_WithoutMisclassifyingUnrelatedProgramCs() {
         this.Write(
             "build/test-selfhost-stage2.py",

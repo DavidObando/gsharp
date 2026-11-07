@@ -338,6 +338,13 @@ EndGlobal
         Assert.Equal(2, written.Count)
         Assert.False(File.Exists(Path.Combine(destination, "src", "vs-gsharp", "VsGsharp.slnx")))
         Assert.False(File.Exists(Path.Combine(destination, "templates", "xunit", "GsharpLibrary.slnx")))
+
+        // A template containing both Product.sln and Product.slnx must not fail Prepare's collision check.
+        File.WriteAllText(Path.Combine(tplDir, "GsharpLibrary.slnx"), "<Solution />")
+        let prepareDest = Path.Combine(this.root, "prepare-dest")
+        let prepared = RepositoryMirror.Prepare(source, prepareDest, excludedScope: excluded)
+        Assert.Contains("templates/xunit/GsharpLibrary.sln".Replace('/', Path.DirectorySeparatorChar), prepared)
+        Assert.Contains("templates/xunit/GsharpLibrary.slnx".Replace('/', Path.DirectorySeparatorChar), prepared)
     }
 
     shared {

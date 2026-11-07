@@ -755,6 +755,27 @@ if flag {
     OutS(&s)
 }
 let _ = InS(&s)`, "s")
+    @InlineData(`func Clear(ref s string?) bool { s = nil; return false }
+var s string? = "x"
+switch 0 {
+    case _ when Clear(&s) {}
+    default { let _ = InS(&s) }
+}`, "s")
+    @InlineData(`import System
+var s string? = "x"
+try {
+    s = nil
+    throw Exception()
+} catch {
+    let _ = InS(&s)
+}`, "s")
+    @InlineData(`func Reset() {}
+var s string? = nil
+{
+    defer Reset()
+    OutS(&s)
+}
+let _ = InS(&s)`, "s")
     func SubExpressionWriteAndConditionalOut_InvalidateOrIsolateNonNullByRefFact(body string, parameterName string) {
         let result = EmittedOracle.Evaluate(Callees + "\n" + body)
         let warning = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0612")
