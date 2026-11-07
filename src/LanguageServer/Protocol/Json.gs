@@ -4,9 +4,14 @@
 
 package GSharp.LanguageServer.Protocol
 
+import StreamJsonRpc
+import StreamJsonRpc.Protocol
 import System
+import System.Buffers
 import System.Collections.Generic
+import System.Text
 import System.Text.Json
+import System.Text.Json.Nodes
 import System.Text.Json.Serialization
 
 /// Central System.Text.Json configuration for the language server protocol.
@@ -17,6 +22,12 @@ shared class LspJson {
         get {
             return _options
         }
+    }
+
+    func CreateFormatter() LspJsonFormatter {
+        let formatter = LspJsonFormatter()
+        formatter.JsonSerializerOptions = _options
+        return formatter
     }
 
     private func Create() JsonSerializerOptions {
@@ -234,4 +245,45 @@ class DiagnosticCodeConverter : JsonConverter[DiagnosticCode] {
         value DiagnosticCode,
         options JsonSerializerOptions
     ) -> writer.WriteStringValue(value?.Value)
+}
+
+/// JSON-RPC formatter that accepts LSP requests carrying `"params": null`
+/// (e.g. `shutdown` and `exit`), which StreamJsonRpc's `SystemTextJsonFormatter`
+/// otherwise rejects before method dispatch.
+open class LspJsonFormatter : SystemTextJsonFormatter, IJsonRpcMessageTextFormatter, IJsonRpcMessageFormatter {
+    private func (IJsonRpcMessageFormatter) Deserialize(content ReadOnlySequence[uint8]) JsonRpcMessage {
+        return DeserializeCore(content, this.Encoding)
+    }
+
+    private func (IJsonRpcMessageTextFormatter) Deserialize(
+        content ReadOnlySequence[uint8],
+        encoding Encoding
+    ) JsonRpcMessage {
+        return DeserializeCore(content, encoding)
+    }
+
+    private func DeserializeCore(content ReadOnlySequence[uint8], encoding Encoding) JsonRpcMessage {
+        try {
+            return base.Deserialize(content, encoding)
+        } catch (InvalidOperationException) {
+            if WithoutNullParams(content, encoding) is {} stripped {
+                return base.Deserialize(stripped, encoding)
+            }
+            rethrow
+        }
+    }
+
+    shared {
+        private func WithoutNullParams(content ReadOnlySequence[uint8], encoding Encoding) ReadOnlySequence[uint8]? {
+            try {
+                let text = encoding.GetString(content.ToArray())
+                if JsonNode.Parse(text) is JsonObject obj && obj.TryGetPropertyValue("params", out var paramsNode) &&
+                    paramsNode == nil {
+                    obj.Remove("params")
+                    return ReadOnlySequence[uint8](encoding.GetBytes(obj.ToJsonString()))
+                }
+            } catch (JsonException) { }
+            return nil
+        }
+    }
 }

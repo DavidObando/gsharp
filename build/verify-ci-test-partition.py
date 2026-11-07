@@ -26,10 +26,18 @@ Usage: verify-ci-test-partition.py [--solution GSharp.slnx] [--configuration Rel
 
 import argparse
 import json
+import platform
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+
+def default_platform() -> str | None:
+    machine = platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        return "ARM64"
+    return None
 
 
 def matrix(solution: str, projects=None) -> list[dict]:
@@ -56,13 +64,17 @@ def assembly_for(project: str, configuration: str, repo_root: Path) -> Path:
     return candidates[0]
 
 
-def list_tests(assembly: Path) -> list[str]:
+def list_tests(assembly: Path, vstest_platform: str | None = default_platform()) -> list[str]:
     with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as handle:
         listing = Path(handle.name)
     try:
+        command = [
+            "dotnet", "vstest", str(assembly),
+            *( [f"/Platform:{vstest_platform}"] if vstest_platform else [] ),
+            "--ListFullyQualifiedTests", f"--ListTestsTargetPath:{listing}",
+        ]
         subprocess.run(
-            ["dotnet", "vstest", str(assembly),
-             "--ListFullyQualifiedTests", f"--ListTestsTargetPath:{listing}"],
+            command,
             check=True, capture_output=True, text=True,
         )
         return [line.strip() for line in listing.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -133,6 +145,7 @@ def main() -> int:
     parser.add_argument("--solution", default="GSharp.slnx")
     parser.add_argument("--configuration", default="Release")
     parser.add_argument("--projects", default=None)
+    parser.add_argument("--platform", default=default_platform())
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -149,7 +162,7 @@ def main() -> int:
     failures: list[str] = []
     total = 0
     for project, shards in sorted(shards_by_project.items()):
-        tests = list_tests(assembly_for(project, args.configuration, repo_root))
+        tests = list_tests(assembly_for(project, args.configuration, repo_root), args.platform)
         total += len(tests)
         owners = {test: [s["name"] for s in shards if matches(test, s["filter"])] for test in tests}
 

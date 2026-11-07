@@ -81,7 +81,7 @@ class Lowerer : BoundTreeRewriter {
             // goto target from the PREVIOUS arm — the constant fast path
             // keeps only one arm's body, so the label (and the fallthrough
             // chain) would vanish. Keep the full switch shape.
-            return base.RewritePatternSwitchStatement(node)
+            return RewritePatternSwitchStatementWithDiscriminant(node, discriminant)
         }
         var defaultArm BoundPatternSwitchArm? = nil
         for arm in node.Arms {
@@ -90,7 +90,7 @@ class Lowerer : BoundTreeRewriter {
                 continue
             }
             if !(RewritePattern(arm.Pattern!!) is BoundConstantPattern{Value: BoundLiteralExpression patternLiteral}) {
-                return base.RewritePatternSwitchStatement(node)
+                return RewritePatternSwitchStatementWithDiscriminant(node, discriminant)
             }
             let matches = if literal.Type == TypeSymbol.Float32 {
                 literal.Value is float32 leftF32 && patternLiteral.Value is float32 rightF32 && leftF32 == rightF32

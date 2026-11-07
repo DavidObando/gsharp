@@ -5522,7 +5522,14 @@ internal partial class ExpressionBinder {
                 default: nil
             }
             if writeBack == nil {
-                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, syntax.LeftHandSide.ToString())
+                let targetName = switch propertyTarget {
+                    case variable is BoundVariableExpression: variable.Variable.Name
+                    case field is BoundFieldAccessExpression: field.Field.Name
+                    case property is BoundPropertyAccessExpression: property.Property.Name
+                    case clr is BoundClrPropertyAccessExpression: clr.Member.Name
+                    default: syntax.LeftHandSide.SyntaxTree.Text.ToString(syntax.LeftHandSide.Span)
+                }
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, targetName)
                 return BoundErrorExpression(syntax)
             }
         }

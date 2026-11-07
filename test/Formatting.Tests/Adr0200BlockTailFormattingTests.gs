@@ -41,7 +41,29 @@ let w = if true { 1 } else { throw System.Exception("x") }`
         Assert.Contains("        case 1, 2: 10\n        default: {\n            return 0\n        }", normalized)
         Assert.Contains("func g(c bool) -> if c {\n    log()\n}", normalized)
         Assert.Contains("    switch x {\n        case 1: log()\n        default: log()\n    }", normalized)
+        Assert.Contains("let v = {\n    let a = 1\n    {\n        a + 1\n    }\n}", normalized)
         Assert.Contains("} else {\n    throw System.Exception(\"x\")\n}", normalized)
         Assert.Equal(text, GSharpFormatter.Format(result.Text!!).Text!!.ToString())
+    }
+
+    @Fact
+    func Issue4983_NestedBlocksInExpressionAndStatementContainers_StayOnTheirOwnLine() {
+        const source = `func main() {
+    let v = {
+        let a = 1
+        { a + 1 }
+    }
+    let b = 2
+    {
+        let c = b + v
+    }
+}`
+        let result = GSharpFormatter.Format(SourceText.From(source))
+        Assert.Empty(result.Diagnostics)
+        let normalized = result.Text!!.ToString().Replace("\r\n", "\n")
+        Assert.Contains("    let v = {\n        let a = 1\n        {\n            a + 1\n        }\n    }", normalized)
+        Assert.Contains("    let b = 2\n    {\n        let c = b + v\n    }", normalized)
+        Assert.DoesNotContain("let a = 1 {", normalized)
+        Assert.DoesNotContain("let b = 2 {", normalized)
     }
 }

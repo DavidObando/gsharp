@@ -638,6 +638,7 @@ shared class GSharpFormatter {
 
             private func IsLineContainer(node SyntaxNode) bool -> node is CompilationUnitSyntax ||
                 node is BlockStatementSyntax ||
+                node is BlockExpressionSyntax ||
                 node is StructDeclarationSyntax ||
                 node is InterfaceDeclarationSyntax ||
                 node is EnumDeclarationSyntax ||
@@ -651,6 +652,7 @@ shared class GSharpFormatter {
 
             private func IsLineItem(node SyntaxNode) bool -> node is MemberSyntax ||
                 node is StatementSyntax ||
+                (node is ExpressionSyntax && node.Parent is BlockExpressionSyntax) ||
                 node is SwitchCaseSyntax ||
                 node is SwitchExpressionArmSyntax ||
                 node is SelectCaseSyntax ||

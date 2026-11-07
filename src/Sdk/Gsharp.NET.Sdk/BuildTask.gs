@@ -373,7 +373,10 @@ open class BuildTask : Task, ICancelableTask {
         this.WorkerGrant = coreLease.Grant
         args[1] = "--workers:${coreLease.Grant}"
         if !string.IsNullOrEmpty(this.ResponseFilePath) {
-            Directory.CreateDirectory(Path.GetDirectoryName(this.ResponseFilePath) ?? ".")
+            let responseFileDirectory = Path.GetDirectoryName(this.ResponseFilePath)
+            if !string.IsNullOrEmpty(responseFileDirectory) {
+                Directory.CreateDirectory(responseFileDirectory)
+            }
             File.WriteAllLines(this.ResponseFilePath, args, Encoding.UTF8)
         }
         if this.UseSharedCompilation && this.References.Length == 0 {

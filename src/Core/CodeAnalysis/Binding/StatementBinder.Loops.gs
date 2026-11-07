@@ -597,7 +597,11 @@ internal partial class StatementBinder {
                 aliasesAtEntry: externalCallableAliasesAtInitEntry
             )
             if binderCtx.NarrowedVariables.Count > 0 {
-                ApplyAssignmentNarrowing(init, binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1])
+                ApplyAssignmentNarrowing(
+                    init,
+                    binderCtx.NarrowedVariables[binderCtx.NarrowedVariables.Count - 1],
+                    externalCallableAliasesAtInitEntry
+                )
             }
             UpdateExternalCallableAliases(init, externalCallableAliasesAtInitEntry)
         }

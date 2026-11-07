@@ -836,6 +836,17 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten statement.
     protected open func RewritePatternSwitchStatement(node BoundPatternSwitchStatement) BoundStatement {
         let discriminant = RewriteExpression(node.Discriminant)
+        return RewritePatternSwitchStatementWithDiscriminant(node, discriminant)
+    }
+
+    /// Rewrites a bound pattern switch statement using an already-rewritten discriminant.
+    /// @param node The pattern switch statement.
+    /// @param discriminant The already-rewritten discriminant expression.
+    /// @returns The rewritten statement.
+    internal func RewritePatternSwitchStatementWithDiscriminant(
+        node BoundPatternSwitchStatement,
+        discriminant BoundExpression
+    ) BoundStatement {
         var builder ImmutableArray[BoundPatternSwitchArm].Builder? = nil
         for var i = 0; i < node.Arms.Length; i++ {
             let arm = node.Arms[i]
