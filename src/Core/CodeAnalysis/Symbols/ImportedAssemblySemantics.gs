@@ -36,7 +36,8 @@ internal shared class ImportedAssemblySemantics {
     /// marker — recorded for EVERY gsc-compiled value-type struct with at
     /// least one ADR-0159 magic-collection-typed field (map/slice/fixed
     /// array/sequence), independent of the (cref:TypeSemanticsMetadataKey)
-    /// gate (which only marks `data struct`/primary-constructor types).
+    /// gate (which marks all classes, `data struct` types, and
+    /// primary-constructor structs, but not plain value-type structs).
     /// A struct literal for a type imported from another assembly (or, for
     /// the REPL, an EARLIER submission) has no access to the declaring
     /// compilation's own (cref:StructSymbol.InstanceFieldInitializers),
@@ -245,7 +246,7 @@ internal shared class ImportedAssemblySemantics {
     /// Issue #3329: looks up [`type`](paramref)'s magic-collection-field
     /// marker — the field-name-to-shape-tag map recorded by
     /// (cref:MagicCollectionFieldsMetadataKey) (independent of
-    /// (cref:TryGetTypeSemantics)'s `data struct`/primary-ctor
+    /// (cref:TryGetTypeSemantics)'s class/`data struct`/primary-ctor
     /// gate, so a PLAIN struct's magic-collection fields are covered too).
     /// @param type The reflected CLR type to inspect.
     /// @param fieldKinds The field name to marker-tag map on success.
