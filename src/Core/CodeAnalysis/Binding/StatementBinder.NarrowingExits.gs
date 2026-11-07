@@ -177,15 +177,8 @@ internal partial class StatementBinder {
         var exit = KillExitEffects(binderCtx.Narrowing, statement, aliases, syntax)
         let postconditions = NarrowingFrame()
         ApplyMemberNotNullNarrowings(statement, postconditions)
+        ApplyAssignmentNarrowing(statement, postconditions, aliases)
         exit = exit.WithAll(postconditions.Entries)
-        if statement is BoundExpressionStatement{Expression: BoundAssignmentExpression assignment} &&
-            TryClassifyNonNullAssignment(assignment, out var variable, out var type) {
-            exit = exit.With(AccessPath.ForVariable(variable!!), type!!)
-        }
-        if statement is BoundExpressionStatement expressionStatement &&
-            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliases) is {} assignments {
-            exit = exit.WithAll(assignments)
-        }
         if loopExitFacts.TryGetValue(syntax, out var loopFacts) {
             exit = exit.WithAll(loopFacts)
         }
