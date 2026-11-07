@@ -834,7 +834,8 @@ internal shared class ExternalClrOverrideResolver {
             contract = awaitedContract
         }
         if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
-            return ReturnNullabilityConforms(contract, returnType)
+            return ReturnNullabilityConforms(contract, returnType) &&
+                (returnRefKind != RefKind.Ref || ReturnNullabilityConforms(returnType, contract))
         }
         return allowCovariantReturn &&
             returnRefKind == RefKind.None &&

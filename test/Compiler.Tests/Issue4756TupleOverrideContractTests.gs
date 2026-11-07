@@ -419,6 +419,74 @@ class Issue4756TupleOverrideContractTests {
     }
 
     @Theory
+    @InlineData("ref", "?", "", false)
+    @InlineData("ref", "?", "?", true)
+    @InlineData("ref readonly", "?", "", true)
+    @InlineData("", "?", "", true)
+    @InlineData("ref readonly", "", "?", false)
+    @InlineData("", "", "?", false)
+    func TupleReturn_OnlyWritableAliasesRequireBothDirections(
+        modifier string,
+        nativeAnnotation string,
+        sourceAnnotation string,
+        accepted bool
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let prefix = if modifier == "" {
+            ""
+        } else {
+            modifier + " "
+        }
+        let native = fixture.CompileCSharp(
+            "#nullable enable\nnamespace Alias4795;\npublic sealed class Box { }\n" +
+                "public abstract class Contract { public abstract ${prefix}(Box$nativeAnnotation Value, int Code) Read(); }",
+            "nativeAlias4795"
+        )
+        let value = if modifier == "" {
+            "row"
+        } else {
+            "ref row"
+        }
+        let (exit, output) = fixture.TryCompile(
+            "package Alias4795\nclass Rows : Contract {\n" +
+                "    var row (Value Box$sourceAnnotation, Code int32) = (Box(), 1)\n" +
+                "    override func Read() ${prefix}(Value Box$sourceAnnotation, Code int32) { return $value }\n}",
+            "Alias4795",
+            executable: false,
+            "/r:" + native
+        )
+        let emitted = Path.Combine(fixture.Directory, "Alias4795.dll")
+        if !accepted {
+            Assert.NotEqual(0, exit)
+            Assert.Contains("error GS0185", output, StringComparison.Ordinal)
+            Assert.Contains("Alias4795.gs(4,19,4,", output, StringComparison.Ordinal)
+            Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+            Assert.False(File.Exists(emitted))
+            return
+        }
+        Assert.True(exit == 0, output)
+        let action = if modifier == "ref" {
+            "ref var row = ref rows.Read(); row.Value = null; row.Code = 9; " +
+                "if (rows.Read().Value != null || rows.Read().Code != 9) throw new Exception(\"alias\");"
+        } else {
+            "var row = rows.Read(); if (row.Value == null || row.Code != 1) throw new Exception(\"nonnull result\");"
+        }
+        let expected = if modifier == "ref" {
+            "alias:nil;code:9"
+        } else {
+            "return:nonnull;code:1"
+        }
+        let consumer = fixture.CompileCSharp(
+            "using System;\nusing Alias4795;\npublic static class Consumer {\n" +
+                "public static string Run() { Contract rows = new Rows(); $action return \"$expected\"; }\n}",
+            "consumerAlias4795",
+            native,
+            emitted
+        )
+        VerifyAndRun(native, emitted, consumer, expected)
+    }
+
+    @Theory
     @InlineData("Task", "disable", "", true)
     @InlineData("ValueTask", "disable", "", true)
     @InlineData("Task", "enable", "", false)
