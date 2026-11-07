@@ -119,8 +119,8 @@ class CSharpTestOracle {
             let lines = (output ?? string.Empty).Replace("\r\n", "\n").Split('\n')
             let names = List[string]()
             let frameworkGroups = Dictionary[string, List[string]](StringComparer.Ordinal)
+            let pendingFrameworks = Queue[string]()
             var currentFramework string? = nil
-            var pendingFramework string? = nil
             var sawHeader = false
             var inBlock = false
             var allBlocksHaveFramework = true
@@ -129,13 +129,16 @@ class CSharpTestOracle {
             for line in lines {
                 let trimmed = line.Trim()
                 if !inBlock && TryParseBannerFramework(trimmed) is {} bannerFramework {
-                    pendingFramework = bannerFramework
+                    pendingFrameworks.Enqueue(bannerFramework)
                 }
                 if string.Equals(trimmed, ListHeader, StringComparison.Ordinal) {
                     sawHeader = true
                     inBlock = true
-                    currentFramework = pendingFramework
-                    pendingFramework = nil
+                    currentFramework = if pendingFrameworks.Count > 0 {
+                        pendingFrameworks.Dequeue()
+                    } else {
+                        nil
+                    }
                     if string.IsNullOrEmpty(currentFramework) {
                         allBlocksHaveFramework = false
                     }
@@ -150,7 +153,7 @@ class CSharpTestOracle {
                     inBlock = false
                     currentFramework = nil
                     if TryParseBannerFramework(trimmed) is {} nextBannerFramework {
-                        pendingFramework = nextBannerFramework
+                        pendingFrameworks.Enqueue(nextBannerFramework)
                     }
                     continue
                 }
@@ -394,16 +397,21 @@ class CSharpTestOracle {
                     return nil
                 }
                 if IsAsciiDigits(versionPart) {
-                    let normalizedVersion = if int32.TryParse(versionPart, out var major) && major >= 5 && major < 40 {
-                        "$major.0"
-                    } else {
-                        versionPart
+                    if IsCompactNetFrameworkVersion(versionPart) {
+                        return if platformSuffix != nil {
+                            "net$versionPart-$platformSuffix"
+                        } else {
+                            "net$versionPart"
+                        }
                     }
-                    return if platformSuffix != nil {
-                        "net$normalizedVersion-$platformSuffix"
-                    } else {
-                        "net$normalizedVersion"
+                    if int32.TryParse(versionPart, out var major) && major >= 5 && major <= 10 {
+                        return if platformSuffix != nil {
+                            "net$major.0-$platformSuffix"
+                        } else {
+                            "net$major.0"
+                        }
                     }
+                    return nil
                 }
                 if IsMajorMinorDigits(versionPart) {
                     return lower
@@ -411,6 +419,24 @@ class CSharpTestOracle {
             }
             return nil
         }
+
+        private func IsCompactNetFrameworkVersion(versionPart string) bool -> versionPart is "10" or
+            "11" or
+            "20" or
+            "30" or
+            "35" or
+            "40" or
+            "45" or
+            "451" or
+            "452" or
+            "46" or
+            "461" or
+            "462" or
+            "47" or
+            "471" or
+            "472" or
+            "48" or
+            "481"
 
         private func IsAsciiDigits(value string) bool {
             if value.Length == 0 {
@@ -468,8 +494,9 @@ class CSharpTestOracle {
             if string.IsNullOrWhiteSpace(path) {
                 return nil
             }
-            for segment in path.Split('/', '\\') {
-                if NormalizeTargetFramework(segment) is {} tfm {
+            let segments = path.Split('/', '\\')
+            for var i = segments.Length - 1; i >= 0; i-- {
+                if NormalizeTargetFramework(segments[i]) is {} tfm {
                     return tfm
                 }
             }

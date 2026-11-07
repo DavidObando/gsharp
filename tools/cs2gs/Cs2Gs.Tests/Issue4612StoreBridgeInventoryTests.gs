@@ -39,7 +39,8 @@ open class Issue4612StoreBridgeInventoryTests {
         let actual = SortedDictionary[string, int32](StringComparer.Ordinal)
         var funneled = 0
         var coreCalls = 0
-        if CommittedCompilerSource.IsGSharp(repoRoot) {
+        let isGSharp = CommittedCompilerSource.IsGSharp(repoRoot)
+        if isGSharp {
             for file in CommittedCompilerSource.GSharpFiles(repoRoot, "tools/cs2gs/Cs2Gs.Translator") {
                 let tree = GSharpSyntaxTree.Parse(File.ReadAllText(file))
                 Assert.Empty(tree.Diagnostics)
@@ -119,6 +120,17 @@ open class Issue4612StoreBridgeInventoryTests {
             ),
             StringComparer.Ordinal
         )
+        if !isGSharp {
+            expected.Remove("BridgeDeconstructedElementStore")
+            expected.Remove("BuildBridgedTupleLeaf")
+            expected.Remove("BuildBridgedTupleLiteral")
+            expected.Remove("ForgiveInitializerElementValue")
+            expected.Remove("RewriteRecordDeconstruction")
+            expected.Remove("TryBridgeTupleValue")
+            expected["BuildPatternNarrowingReplacement"] = 4
+            expected["TranslateExtendedPropertyLink"] = 2
+            expected["TryBuildNestedNegatedGuardHoist"] = 1
+        }
         if !expected.SequenceEqual(actual) {
             let message = StringBuilder()
                 .AppendLine("A `!!` construction in the translator is neither handed to ReportStoreBridge nor listed.")
@@ -155,6 +167,7 @@ open class Issue4612StoreBridgeInventoryTests {
             ["ForgiveInitializerElementValue"] = (1, "C# flow analysis proved the closure-assigned value non-null"),
             ["MaterializeFallbackPatternBindings"] = (1, "pattern binding narrowed by the enclosing test"),
             ["NarrowToType"] = (1, "type-test narrowing, not a store"),
+            ["RewriteRecordDeconstruction"] = (1, "record Deconstruct receiver"),
             ["SnapshotReorderedDelegateTarget"] = (1, "delegate call receiver"),
             ["TranslateAssignmentAsExpression"] = (1, "result of an assignment expression, not a store"),
             ["TranslateAssignmentTarget"] = (2, "assignment-target receiver"),

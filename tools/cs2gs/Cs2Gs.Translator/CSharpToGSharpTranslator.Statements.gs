@@ -2019,7 +2019,7 @@ partial class CSharpToGSharpTranslator {
             }
             for reference in method.OriginalDefinition.DeclaringSyntaxReferences {
                 let declaration = reference.GetSyntax()
-                if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                     continue
                 }
                 switch declaration {
@@ -2126,6 +2126,7 @@ partial class CSharpToGSharpTranslator {
             if !this.IsNonLocalDelegateStorage(storage) {
                 return HashSet[int32]{0}
             }
+            using let _ = this.context.UseSemanticModelFor((enclosingExecutable ?? storage).SyntaxTree)
             let activeCompleted = completedQueries ?? Dictionary[string, HashSet[int32]](StringComparer.Ordinal)
             let activeCycleFlags = cycleFlags ?? List[bool]()
             if !isConstructedTarget && localFunction != nil && localFunction.IsGenericMethod {
@@ -2194,7 +2195,7 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
-            let predecessorBlocks = GetPredecessorClosure(useBlock!!)
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
             let cycleStorageKey = if predecessorBlocks.Contains(useBlock!!) || scopedStorageKey.Length == 0 {
                 scopedStorageKey
             } else {
@@ -2280,15 +2281,7 @@ partial class CSharpToGSharpTranslator {
                         if !block.IsReachable || !predecessorBlocks.Contains(block) {
                             continue
                         }
-                        var states = HashSet[int32]()
-                        if block.Kind == BasicBlockKind.Entry {
-                            states.UnionWith(entryStates)
-                        }
-                        for predecessor in block.Predecessors {
-                            if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                                states.UnionWith(predecessorStates)
-                            }
-                        }
+                        var states = AccumulateBlockInputStates(graph!!, block, entryStates, computedOutputs)
                         for operation in block.Operations {
                             states = this.ApplyDelegateReachingOperation(
                                 operation,
@@ -2335,8 +2328,8 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             var reaching = HashSet[int32]()
-            if useBlock!!.Kind == BasicBlockKind.Entry {
-                let entryStates = if callerChain == nil || callerChain.Count == 0 {
+            let useEntryStates = if useBlock!!.Kind == BasicBlockKind.Entry {
+                if callerChain == nil || callerChain.Count == 0 {
                     HashSet[int32]{0}
                 } else {
                     let lastCaller = callerChain[callerChain.Count - 1]
@@ -2369,13 +2362,10 @@ partial class CSharpToGSharpTranslator {
                         HashSet[int32]{0, 1, 2}
                     }
                 }
-                reaching.UnionWith(entryStates)
+            } else {
+                HashSet[int32]()
             }
-            for predecessor in useBlock!!.Predecessors {
-                if outputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                    reaching.UnionWith(predecessorStates)
-                }
-            }
+            reaching.UnionWith(AccumulateBlockInputStates(graph!!, useBlock!!, useEntryStates, outputs))
             for var i = 0; i < useOperationIndex; i++ {
                 reaching = this.ApplyDelegateReachingOperation(
                     useBlock!!.Operations[i],
@@ -2449,6 +2439,7 @@ partial class CSharpToGSharpTranslator {
         ) HashSet[int32] {
             let activeCompleted = completedQueries ?? Dictionary[string, HashSet[int32]](StringComparer.Ordinal)
             let activeCycleFlags = cycleFlags ?? List[bool]()
+            using let _ = this.context.UseSemanticModelFor(enclosingExecutable?.SyntaxTree)
             if !isConstructedTarget && localFunction != nil && localFunction.IsGenericMethod {
                 let targets = this.GetConstructedLocalFunctionTargets(localFunction, enclosingExecutable)
                 let combinedStates = HashSet[int32]()
@@ -2553,7 +2544,7 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
-            let predecessorBlocks = GetPredecessorClosure(useBlock!!)
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
             let entryStates = if callerChain == nil || callerChain.Count == 0 {
                 HashSet[int32]{0}
             } else {
@@ -2585,15 +2576,7 @@ partial class CSharpToGSharpTranslator {
                     if !block.IsReachable || !predecessorBlocks.Contains(block) {
                         continue
                     }
-                    var states = HashSet[int32]()
-                    if block.Kind == BasicBlockKind.Entry {
-                        states.UnionWith(entryStates)
-                    }
-                    for predecessor in block.Predecessors {
-                        if outputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                            states.UnionWith(predecessorStates)
-                        }
-                    }
+                    var states = AccumulateBlockInputStates(graph!!, block, entryStates, outputs)
                     for operation in block.Operations {
                         states = this.ApplyLocalDelegateReachingOperation(
                             operation,
@@ -2632,15 +2615,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             } while changed
-            var reaching = HashSet[int32]()
-            if useBlock!!.Kind == BasicBlockKind.Entry {
-                reaching.UnionWith(entryStates)
-            }
-            for predecessor in useBlock!!.Predecessors {
-                if outputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                    reaching.UnionWith(predecessorStates)
-                }
-            }
+            var reaching = AccumulateBlockInputStates(graph!!, useBlock!!, entryStates, outputs)
             for var i = 0; i < useOperationIndex; i++ {
                 reaching = this.ApplyLocalDelegateReachingOperation(
                     useBlock!!.Operations[i],
@@ -2720,21 +2695,171 @@ partial class CSharpToGSharpTranslator {
             return reaching
         }
 
-        private func GetPredecessorClosure(targetBlock BasicBlock) HashSet[BasicBlock] {
-            let closure = HashSet[BasicBlock]()
-            let worklist = Queue[BasicBlock]()
-            for predecessor in targetBlock.Predecessors {
+        private func NearestEnclosingFinallyRegion(region ControlFlowRegion?) ControlFlowRegion? {
+            var current = region
+            while current != nil {
+                if current.Kind == ControlFlowRegionKind.Finally {
+                    return current
+                }
+                current = current.EnclosingRegion
+            }
+            return nil
+        }
+
+        private func GetFinallyRegionOutputStates(
+            graph ControlFlowGraph,
+            finallyRegion ControlFlowRegion,
+            computedOutputs Dictionary[BasicBlock, HashSet[int32]]
+        ) HashSet[int32] {
+            let states = HashSet[int32]()
+            for var ordinal = finallyRegion.FirstBlockOrdinal; ordinal <= finallyRegion.LastBlockOrdinal; ordinal++ {
+                let candidate = graph.Blocks[ordinal]
+                if !candidate.IsReachable || NearestEnclosingFinallyRegion(candidate.EnclosingRegion) != finallyRegion {
+                    continue
+                }
+                let exitsFinally = (
+                    candidate.FallThroughSuccessor is {} fallThrough &&
+                        fallThrough.Destination == nil &&
+                        fallThrough.Semantics == ControlFlowBranchSemantics.StructuredExceptionHandling
+                ) ||
+                    (
+                    candidate.ConditionalSuccessor is {} conditional &&
+                        conditional.Destination == nil &&
+                        conditional.Semantics == ControlFlowBranchSemantics.StructuredExceptionHandling
+                )
+                if exitsFinally && computedOutputs.TryGetValue(candidate, out var candidateStates) {
+                    states.UnionWith(candidateStates)
+                }
+            }
+            return states
+        }
+
+        private func AccumulateBlockInputStates(
+            graph ControlFlowGraph,
+            block BasicBlock,
+            entryStates HashSet[int32],
+            computedOutputs Dictionary[BasicBlock, HashSet[int32]]
+        ) HashSet[int32] {
+            let states = HashSet[int32]()
+            if block.Kind == BasicBlockKind.Entry {
+                states.UnionWith(entryStates)
+            }
+            if block
+                .EnclosingRegion
+                .Kind == ControlFlowRegionKind.Finally &&
+                block.Ordinal == block
+                .EnclosingRegion
+                .FirstBlockOrdinal {
+                let finallyRegion = block.EnclosingRegion
+                for sourceBlock in graph.Blocks {
+                    if !sourceBlock.IsReachable {
+                        continue
+                    }
+                    for branch in[]ControlFlowBranch? {
+                        sourceBlock.FallThroughSuccessor,
+                        sourceBlock.ConditionalSuccessor
+                    } {
+                        if branch == nil || branch.FinallyRegions.IsEmpty {
+                            continue
+                        }
+                        for var i = 0; i < branch.FinallyRegions.Length; i++ {
+                            if branch.FinallyRegions[i] != finallyRegion {
+                                continue
+                            }
+                            if i == 0 {
+                                if computedOutputs.TryGetValue(branch.Source, out var sourceStates) {
+                                    states.UnionWith(sourceStates)
+                                }
+                            } else {
+                                states.UnionWith(
+                                    GetFinallyRegionOutputStates(graph, branch.FinallyRegions[i - 1], computedOutputs)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            for predecessor in block.Predecessors {
+                if predecessor.FinallyRegions.IsEmpty {
+                    if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
+                        states.UnionWith(predecessorStates)
+                    }
+                } else {
+                    let lastFinally = predecessor.FinallyRegions[predecessor.FinallyRegions.Length - 1]
+                    states.UnionWith(GetFinallyRegionOutputStates(graph, lastFinally, computedOutputs))
+                }
+            }
+            return states
+        }
+
+        private func EnqueueBranchPredecessors(
+            graph ControlFlowGraph,
+            block BasicBlock,
+            closure HashSet[BasicBlock],
+            worklist Queue[BasicBlock]
+        ) {
+            if block
+                .EnclosingRegion
+                .Kind == ControlFlowRegionKind.Finally &&
+                block.Ordinal == block
+                .EnclosingRegion
+                .FirstBlockOrdinal {
+                let finallyRegion = block.EnclosingRegion
+                for sourceBlock in graph.Blocks {
+                    if !sourceBlock.IsReachable {
+                        continue
+                    }
+                    for branch in[]ControlFlowBranch? {
+                        sourceBlock.FallThroughSuccessor,
+                        sourceBlock.ConditionalSuccessor
+                    } {
+                        if branch == nil || branch.FinallyRegions.IsEmpty {
+                            continue
+                        }
+                        for var i = 0; i < branch.FinallyRegions.Length; i++ {
+                            if branch.FinallyRegions[i] != finallyRegion {
+                                continue
+                            }
+                            if closure.Add(branch.Source) {
+                                worklist.Enqueue(branch.Source)
+                            }
+                            for var j = 0; j < i; j++ {
+                                let priorFinally = branch.FinallyRegions[j]
+                                for var ord = priorFinally.FirstBlockOrdinal;
+                                    ord <= priorFinally.LastBlockOrdinal;
+                                    ord++ {
+                                    let finallyBlock = graph.Blocks[ord]
+                                    if closure.Add(finallyBlock) {
+                                        worklist.Enqueue(finallyBlock)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for predecessor in block.Predecessors {
                 if closure.Add(predecessor.Source) {
                     worklist.Enqueue(predecessor.Source)
                 }
-            }
-            while worklist.Count > 0 {
-                let current = worklist.Dequeue()
-                for predecessor in current.Predecessors {
-                    if closure.Add(predecessor.Source) {
-                        worklist.Enqueue(predecessor.Source)
+                for finallyRegion in predecessor.FinallyRegions {
+                    for var ord = finallyRegion.FirstBlockOrdinal; ord <= finallyRegion.LastBlockOrdinal; ord++ {
+                        let finallyBlock = graph.Blocks[ord]
+                        if closure.Add(finallyBlock) {
+                            worklist.Enqueue(finallyBlock)
+                        }
                     }
                 }
+            }
+        }
+
+        private func GetPredecessorClosure(graph ControlFlowGraph, targetBlock BasicBlock) HashSet[BasicBlock] {
+            let closure = HashSet[BasicBlock]()
+            let worklist = Queue[BasicBlock]()
+            EnqueueBranchPredecessors(graph, targetBlock, closure, worklist)
+            while worklist.Count > 0 {
+                let current = worklist.Dequeue()
+                EnqueueBranchPredecessors(graph, current, closure, worklist)
             }
             return closure
         }
@@ -2887,28 +3012,121 @@ partial class CSharpToGSharpTranslator {
             return states
         }
 
+        private func ResolveDelegateLocalCallableTargets(
+            delegateLocal ILocalSymbol,
+            usePosition int32,
+            enclosingExecutable SyntaxNode?,
+            visitedLocals HashSet[ISymbol],
+            resolvedDeclarations List[SyntaxNode],
+            ref allDefinite bool,
+            ref mayDispatchDynamically bool
+        ) {
+            if !visitedLocals.Add(delegateLocal) {
+                allDefinite = false
+                return
+            }
+            let reachingValues = this.GetReachingLocalValues(
+                delegateLocal,
+                usePosition,
+                preserveDelegateCompoundAssignments: true
+            )
+            if reachingValues.Count != 1 || this.LocalHasNonDirectWrite(delegateLocal, enclosingExecutable) {
+                allDefinite = false
+            }
+            for value in reachingValues {
+                let unwrappedValue = Unwrap(value)
+                if unwrappedValue is AnonymousFunctionExpressionSyntax anonValue {
+                    resolvedDeclarations.Add(anonValue)
+                    continue
+                }
+                if unwrappedValue != nil && this.context.Compilation.ContainsSyntaxTree(unwrappedValue.SyntaxTree) {
+                    using let _ = this.context.UseSemanticModelFor(unwrappedValue.SyntaxTree)
+                    let valueSymbol = this.context.GetSymbolInfo(unwrappedValue).Symbol
+                    if valueSymbol is IMethodSymbol methodValue {
+                        if DelegateCalleeMayDispatchDynamically(nil, methodValue) {
+                            allDefinite = false
+                            mayDispatchDynamically = true
+                        }
+                        for reference in methodValue.OriginalDefinition.DeclaringSyntaxReferences {
+                            let declaration = reference.GetSyntax()
+                            if this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
+                                resolvedDeclarations.Add(declaration)
+                            }
+                        }
+                        continue
+                    }
+                    if valueSymbol is ILocalSymbol aliasedLocal {
+                        this.ResolveDelegateLocalCallableTargets(
+                            aliasedLocal,
+                            unwrappedValue.SpanStart,
+                            enclosingExecutable ?? FindEnclosingExecutable(unwrappedValue),
+                            HashSet[ISymbol](visitedLocals, SymbolEqualityComparer.Default),
+                            resolvedDeclarations,
+                            ref allDefinite,
+                            ref mayDispatchDynamically
+                        )
+                        continue
+                    }
+                }
+                allDefinite = false
+                for subNode in value.DescendantNodesAndSelf() {
+                    if subNode is AnonymousFunctionExpressionSyntax subAnon {
+                        resolvedDeclarations.Add(subAnon)
+                    } else if subNode is ExpressionSyntax subExpr &&
+                        this
+                        .context
+                        .Compilation
+                        .ContainsSyntaxTree(subExpr.SyntaxTree) {
+                        using let _ = this.context.UseSemanticModelFor(subExpr.SyntaxTree)
+                        let subSymbol = this.context.GetSymbolInfo(subExpr).Symbol
+                        if subSymbol is IMethodSymbol subMethod {
+                            if DelegateCalleeMayDispatchDynamically(nil, subMethod) {
+                                mayDispatchDynamically = true
+                            }
+                            for reference in subMethod.OriginalDefinition.DeclaringSyntaxReferences {
+                                let declaration = reference.GetSyntax()
+                                if this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
+                                    resolvedDeclarations.Add(declaration)
+                                }
+                            }
+                        } else if subSymbol is ILocalSymbol subLocal && subExpr != unwrappedValue {
+                            this.ResolveDelegateLocalCallableTargets(
+                                subLocal,
+                                subExpr.SpanStart,
+                                enclosingExecutable ?? FindEnclosingExecutable(subExpr),
+                                HashSet[ISymbol](visitedLocals, SymbolEqualityComparer.Default),
+                                resolvedDeclarations,
+                                ref allDefinite,
+                                ref mayDispatchDynamically
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         private func GetInvokedCallableTargets(
             invocation InvocationExpressionSyntax,
             enclosingExecutable SyntaxNode?,
-            out isDynamicOrAmbiguous bool
+            out isDynamicOrAmbiguous bool,
+            out mayDispatchDynamically bool
         ) IReadOnlyList[SyntaxNode] {
             isDynamicOrAmbiguous = true
-            if invocation.SyntaxTree != this
-                .context
-                .SemanticModel
-                .SyntaxTree ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol callee {
+            mayDispatchDynamically = false
+            if !this.context.Compilation.ContainsSyntaxTree(invocation.SyntaxTree) {
+                return Array.Empty[SyntaxNode]()
+            }
+            using let _ = this.context.UseSemanticModelFor(invocation.SyntaxTree)
+            if this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol callee {
                 return Array.Empty[SyntaxNode]()
             }
             if callee.MethodKind != MethodKind.DelegateInvoke {
-                isDynamicOrAmbiguous = DelegateCalleeMayDispatchDynamically(invocation, callee)
+                mayDispatchDynamically = DelegateCalleeMayDispatchDynamically(invocation, callee)
+                isDynamicOrAmbiguous = mayDispatchDynamically
                 let directDeclarations = List[SyntaxNode]()
                 for reference in callee.OriginalDefinition.DeclaringSyntaxReferences {
                     let declaration = reference.GetSyntax()
-                    if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                    if this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                         directDeclarations.Add(declaration)
                     }
                 }
@@ -2930,78 +3148,32 @@ partial class CSharpToGSharpTranslator {
                 isDynamicOrAmbiguous = false
                 return []SyntaxNode{directAnon}
             }
-            if target != nil && target.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+            if target != nil && this.context.Compilation.ContainsSyntaxTree(target.SyntaxTree) {
                 let targetSymbol = this.context.GetSymbolInfo(target).Symbol
                 if targetSymbol is IMethodSymbol directMethod {
-                    isDynamicOrAmbiguous = DelegateCalleeMayDispatchDynamically(nil, directMethod)
+                    mayDispatchDynamically = DelegateCalleeMayDispatchDynamically(nil, directMethod)
+                    isDynamicOrAmbiguous = mayDispatchDynamically
                     let directMethodDeclarations = List[SyntaxNode]()
                     for reference in directMethod.OriginalDefinition.DeclaringSyntaxReferences {
                         let declaration = reference.GetSyntax()
-                        if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                        if this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                             directMethodDeclarations.Add(declaration)
                         }
                     }
                     return directMethodDeclarations
                 }
                 if targetSymbol is ILocalSymbol delegateLocal {
-                    let reachingValues = this.GetReachingLocalValues(
+                    let resolvedDeclarations = List[SyntaxNode]()
+                    var allDefinite = true
+                    this.ResolveDelegateLocalCallableTargets(
                         delegateLocal,
                         invocation.SpanStart,
-                        preserveDelegateCompoundAssignments: true
+                        enclosingExecutable ?? FindEnclosingExecutable(invocation),
+                        HashSet[ISymbol](SymbolEqualityComparer.Default),
+                        resolvedDeclarations,
+                        ref allDefinite,
+                        ref mayDispatchDynamically
                     )
-                    let resolvedDeclarations = List[SyntaxNode]()
-                    var allDefinite = reachingValues.Count == 1 && !this.LocalHasNonDirectWrite(
-                        delegateLocal,
-                        enclosingExecutable ?? FindEnclosingExecutable(invocation)
-                    )
-                    for value in reachingValues {
-                        let unwrappedValue = Unwrap(value)
-                        if unwrappedValue is AnonymousFunctionExpressionSyntax anonValue {
-                            resolvedDeclarations.Add(anonValue)
-                            continue
-                        }
-                        if unwrappedValue != nil &&
-                            unwrappedValue.SyntaxTree == this
-                            .context
-                            .SemanticModel
-                            .SyntaxTree &&
-                            this
-                            .context
-                            .GetSymbolInfo(unwrappedValue)
-                            .Symbol is IMethodSymbol methodValue {
-                            if DelegateCalleeMayDispatchDynamically(nil, methodValue) {
-                                allDefinite = false
-                            }
-                            for reference in methodValue.OriginalDefinition.DeclaringSyntaxReferences {
-                                let declaration = reference.GetSyntax()
-                                if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
-                                    resolvedDeclarations.Add(declaration)
-                                }
-                            }
-                            continue
-                        }
-                        allDefinite = false
-                        for subNode in value.DescendantNodesAndSelf() {
-                            if subNode is AnonymousFunctionExpressionSyntax subAnon {
-                                resolvedDeclarations.Add(subAnon)
-                            } else if subNode is ExpressionSyntax subExpr &&
-                                subExpr.SyntaxTree == this
-                                .context
-                                .SemanticModel
-                                .SyntaxTree &&
-                                this
-                                .context
-                                .GetSymbolInfo(subExpr)
-                                .Symbol is IMethodSymbol subMethod {
-                                for reference in subMethod.OriginalDefinition.DeclaringSyntaxReferences {
-                                    let declaration = reference.GetSyntax()
-                                    if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
-                                        resolvedDeclarations.Add(declaration)
-                                    }
-                                }
-                            }
-                        }
-                    }
                     isDynamicOrAmbiguous = !allDefinite || resolvedDeclarations.Count != 1
                     if resolvedDeclarations.Count > 0 {
                         return resolvedDeclarations
@@ -3025,7 +3197,12 @@ partial class CSharpToGSharpTranslator {
             completedQueries Dictionary[string, HashSet[int32]],
             cycleFlags List[bool]
         ) HashSet[int32] {
-            let targets = this.GetInvokedCallableTargets(invocation, enclosingExecutable, out var isDynamicOrAmbiguous)
+            let targets = this.GetInvokedCallableTargets(
+                invocation,
+                enclosingExecutable,
+                out var isDynamicOrAmbiguous,
+                out _
+            )
             if targets.Count == 0 {
                 return states
             }
@@ -3037,9 +3214,10 @@ partial class CSharpToGSharpTranslator {
                 invocation
             )
             for declaration in targets {
-                if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                     continue
                 }
+                using let _ = this.context.UseSemanticModelFor(declaration.SyntaxTree)
                 let declCallKey = "${this.GetSyntaxTreeCacheId(declaration.SyntaxTree)}:localcall:${declaration.SpanStart}"
                 let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
                 if !nextVisitedStorage.Add(declCallKey) {
@@ -3083,15 +3261,12 @@ partial class CSharpToGSharpTranslator {
                         if !block.IsReachable {
                             continue
                         }
-                        var blockStates = HashSet[int32]()
-                        if block.Kind == BasicBlockKind.Entry {
-                            blockStates.UnionWith(currentStates)
-                        }
-                        for predecessor in block.Predecessors {
-                            if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                                blockStates.UnionWith(predecessorStates)
-                            }
-                        }
+                        var blockStates = AccumulateBlockInputStates(
+                            calleeGraph!!,
+                            block,
+                            currentStates,
+                            computedOutputs
+                        )
                         for operation in block.Operations {
                             blockStates = this.ApplyLocalDelegateReachingOperation(
                                 operation,
@@ -3171,6 +3346,10 @@ partial class CSharpToGSharpTranslator {
         private func IsNonLocalDelegateStorage(expression ExpressionSyntax?) bool {
             var expression = expression
             expression = Unwrap(expression)
+            if expression == nil || !this.context.Compilation.ContainsSyntaxTree(expression.SyntaxTree) {
+                return false
+            }
+            using let _ = this.context.UseSemanticModelFor(expression.SyntaxTree)
             return (this.context.GetSymbolInfo(expression).Symbol is IFieldSymbol or IPropertySymbol or IEventSymbol) ||
                 (
                 expression is ElementAccessExpressionSyntax &&
@@ -3343,7 +3522,15 @@ partial class CSharpToGSharpTranslator {
             completedQueries Dictionary[string, HashSet[int32]],
             cycleFlags List[bool]
         ) HashSet[int32] {
-            let targets = this.GetInvokedCallableTargets(invocation, enclosingExecutable, out var isDynamicOrAmbiguous)
+            let targets = this.GetInvokedCallableTargets(
+                invocation,
+                enclosingExecutable,
+                out var isDynamicOrAmbiguous,
+                out var mayDispatchDynamically
+            )
+            if mayDispatchDynamically {
+                return HashSet[int32]{0, 1, 2}
+            }
             if targets.Count == 0 {
                 return states
             }
@@ -3355,9 +3542,10 @@ partial class CSharpToGSharpTranslator {
                 invocation
             )
             for declaration in targets {
-                if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                if !this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                     continue
                 }
+                using let _ = this.context.UseSemanticModelFor(declaration.SyntaxTree)
                 let declCallKey = "${this.GetSyntaxTreeCacheId(declaration.SyntaxTree)}:storagecall:${declaration.SpanStart}"
                 let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
                 if !nextVisitedStorage.Add(declCallKey) {
@@ -3401,15 +3589,12 @@ partial class CSharpToGSharpTranslator {
                         if !block.IsReachable {
                             continue
                         }
-                        var blockStates = HashSet[int32]()
-                        if block.Kind == BasicBlockKind.Entry {
-                            blockStates.UnionWith(currentStates)
-                        }
-                        for predecessor in block.Predecessors {
-                            if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
-                                blockStates.UnionWith(predecessorStates)
-                            }
-                        }
+                        var blockStates = AccumulateBlockInputStates(
+                            calleeGraph!!,
+                            block,
+                            currentStates,
+                            computedOutputs
+                        )
                         for operation in block.Operations {
                             blockStates = this.ApplyDelegateReachingOperation(
                                 operation,
@@ -3485,6 +3670,7 @@ partial class CSharpToGSharpTranslator {
             completedQueries Dictionary[string, HashSet[int32]]? = nil,
             cycleFlags List[bool]? = nil
         ) HashSet[int32] {
+            using let _ = this.context.UseSemanticModelFor(expression?.SyntaxTree)
             var expression = expression
             while expression != nil {
                 if expression is ParenthesizedExpressionSyntax paren {
@@ -4012,51 +4198,47 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil || unwrapped is ThisExpressionSyntax {
                 return "this"
             }
-            if unwrapped.SyntaxTree == this
-                .context
-                .SemanticModel
-                .SyntaxTree &&
-                this
-                .context
-                .GetSymbolInfo(unwrapped)
-                .Symbol is {} symbol {
-                if symbol is ILocalSymbol || symbol is IParameterSymbol {
-                    let symbolLocation = symbol.Locations.FirstOrDefault()
-                    let treeId = this.GetSyntaxTreeCacheId(symbolLocation?.SourceTree ?? unwrapped.SyntaxTree)
-                    let loc = symbolLocation?.SourceSpan.Start ?? -1
-                    if symbol is ILocalSymbol receiverLocal && this.IsLocalReassigned(receiverLocal) &&
-                        usePosition != nil {
-                        let origins = this.GetIndexedDelegateReceiverOrigins(
-                            unwrapped,
-                            HashSet[ISymbol](SymbolEqualityComparer.Default),
-                            usePosition
-                        )
-                        if origins.Count > 0 {
-                            let originKey = string.Join(
-                                ",",
-                                origins.Select(
-                                    (
-                                        origin ExpressionSyntax
-                                    ) -> "${this.GetSyntaxTreeCacheId(origin.SyntaxTree)}:${origin.SpanStart}:${origin.Span.Length}"
-                                )
-                                    .OrderBy((key string) -> key, StringComparer.Ordinal)
+            if this.context.Compilation.ContainsSyntaxTree(unwrapped.SyntaxTree) {
+                using let _ = this.context.UseSemanticModelFor(unwrapped.SyntaxTree)
+                if this.context.GetSymbolInfo(unwrapped).Symbol is {} symbol {
+                    if symbol is ILocalSymbol || symbol is IParameterSymbol {
+                        let symbolLocation = symbol.Locations.FirstOrDefault()
+                        let treeId = this.GetSyntaxTreeCacheId(symbolLocation?.SourceTree ?? unwrapped.SyntaxTree)
+                        let loc = symbolLocation?.SourceSpan.Start ?? -1
+                        if symbol is ILocalSymbol receiverLocal && this.IsLocalReassigned(receiverLocal) &&
+                            usePosition != nil {
+                            let origins = this.GetIndexedDelegateReceiverOrigins(
+                                unwrapped,
+                                HashSet[ISymbol](SymbolEqualityComparer.Default),
+                                usePosition
                             )
-                            return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc[$originKey]"
+                            if origins.Count > 0 {
+                                let originKey = string.Join(
+                                    ",",
+                                    origins.Select(
+                                        (
+                                            origin ExpressionSyntax
+                                        ) -> "${this.GetSyntaxTreeCacheId(origin.SyntaxTree)}:${origin.SpanStart}:${origin.Span.Length}"
+                                    )
+                                        .OrderBy((key string) -> key, StringComparer.Ordinal)
+                                )
+                                return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc[$originKey]"
+                            }
+                            return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc@$usePosition"
                         }
-                        return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc@$usePosition"
+                        return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc"
                     }
-                    return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc"
-                }
-                if symbol is IFieldSymbol || symbol is IPropertySymbol {
-                    let prefix = if symbol.IsStatic {
-                        "static"
-                    } else {
-                        this.GetDelegateReceiverCycleKey(
-                            (unwrapped as MemberAccessExpressionSyntax)?.Expression,
-                            usePosition
-                        )
+                    if symbol is IFieldSymbol || symbol is IPropertySymbol {
+                        let prefix = if symbol.IsStatic {
+                            "static"
+                        } else {
+                            this.GetDelegateReceiverCycleKey(
+                                (unwrapped as MemberAccessExpressionSyntax)?.Expression,
+                                usePosition
+                            )
+                        }
+                        return "$prefix.${symbol.Name}"
                     }
-                    return "$prefix.${symbol.Name}"
                 }
             }
             return unwrapped.ToString()
@@ -4105,24 +4287,31 @@ partial class CSharpToGSharpTranslator {
                 mappedReceiverOverride = nil
                 return true
             }
-            if effectiveReceiver.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+            if !this.context.Compilation.ContainsSyntaxTree(effectiveReceiver.SyntaxTree) {
                 return false
             }
+            using let _ = this.context.UseSemanticModelFor(effectiveReceiver.SyntaxTree)
             let receiverSymbol = this.context.GetSymbolInfo(effectiveReceiver).Symbol
             if receiverSymbol is IParameterSymbol parameter {
                 if callSite is not InvocationExpressionSyntax invocationCallSite ||
-                    invocationCallSite.SyntaxTree != this
+                    !this
                     .context
-                    .SemanticModel
-                    .SyntaxTree ||
-                    this
+                    .Compilation
+                    .ContainsSyntaxTree(invocationCallSite.SyntaxTree) {
+                    return false
+                }
+                using let _ = this.context.UseSemanticModelFor(invocationCallSite.SyntaxTree)
+                if this
                     .context
                     .SemanticModel
                     .GetOperation(invocationCallSite) is not IInvocationOperation invocationOp {
                     return false
                 }
                 for argumentOp in invocationOp.Arguments {
-                    if !SymbolEqualityComparer.Default.Equals(argumentOp.Parameter, parameter) {
+                    if !SymbolEqualityComparer.Default.Equals(
+                        argumentOp.Parameter?.OriginalDefinition,
+                        parameter.OriginalDefinition
+                    ) {
                         continue
                     }
                     if argumentOp.Syntax is ArgumentSyntax argSyntax {
@@ -4387,7 +4576,12 @@ partial class CSharpToGSharpTranslator {
         // what was written; a property or custom/virtual event does not. Anything whose
         // writes cannot be proven to replace the stored delegate is opaque and only ever widens.
         private func IsOpaqueDelegateStorage(storage ExpressionSyntax) bool {
-            let symbol ISymbol? = this.context.GetSymbolInfo(Unwrap(storage)).Symbol
+            let unwrapped = Unwrap(storage)
+            if unwrapped == nil || !this.context.Compilation.ContainsSyntaxTree(unwrapped.SyntaxTree) {
+                return true
+            }
+            using let _ = this.context.UseSemanticModelFor(unwrapped.SyntaxTree)
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
             if symbol is IPropertySymbol {
                 return true
             }
@@ -4412,9 +4606,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func GetNormalizedDelegateStorageSymbol(expression ExpressionSyntax?) ISymbol? {
-            if expression == nil || expression.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+            if expression == nil || !this.context.Compilation.ContainsSyntaxTree(expression.SyntaxTree) {
                 return nil
             }
+            using let _ = this.context.UseSemanticModelFor(expression.SyntaxTree)
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
             if symbol is IFieldSymbol{AssociatedSymbol: IEventSymbol associatedEvent} {
                 return associatedEvent
@@ -4881,6 +5076,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func CreateControlFlowGraphCore(executable SyntaxNode?) ControlFlowGraph? {
+            using let _ = this.context.UseSemanticModelFor(executable?.SyntaxTree)
             if executable is LocalFunctionStatementSyntax localFunction {
                 let parent ControlFlowGraph? = this.CreateControlFlowGraph(FindEnclosingExecutable(executable))
                 let symbol IMethodSymbol? = this.context.SemanticModel.GetDeclaredSymbol(localFunction)
