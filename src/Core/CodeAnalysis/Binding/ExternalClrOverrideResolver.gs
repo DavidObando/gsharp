@@ -104,6 +104,7 @@ internal shared class ExternalClrOverrideResolver {
                 !ReturnMatches(
                 ClrNullability.GetSignatureType(method.ReturnParameter),
                 returnType,
+                externalBase!!,
                 returnRefKind,
                 typeSubstitutions,
                 method,
@@ -784,9 +785,10 @@ internal shared class ExternalClrOverrideResolver {
     private func ReturnMatches(
         clrReturnType Type?,
         returnType TypeSymbol,
+        containingType TypeSymbol,
         returnRefKind RefKind,
         typeSubstitutions ImmutableArray[TypeArgumentSubstitution],
-        openMethodDefinition MethodInfo? = nil,
+        openMethodDefinition MethodInfo,
         methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
         isAsync bool = false,
         isAsyncVoid bool = false,
@@ -798,8 +800,9 @@ internal shared class ExternalClrOverrideResolver {
             return false
         }
         let clrReturnsByRef = clrReturnType.IsByRef
-        if (returnRefKind != RefKind.None) != clrReturnsByRef ||
-            (openMethodDefinition != nil && RefCapabilities.GetReturnRefKind(openMethodDefinition) != returnRefKind) {
+        if (returnRefKind != RefKind.None) != clrReturnsByRef || RefCapabilities.GetReturnRefKind(
+            openMethodDefinition
+        ) != returnRefKind {
             return false
         }
         if clrReturnsByRef {
@@ -823,10 +826,20 @@ internal shared class ExternalClrOverrideResolver {
             }
             clrReturnType = unwrappedReturnType
         }
-        if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
-            return true
+        var contract = MemberLookup.GetClrMethodReturnTypeSymbol(containingType, openMethodDefinition)
+        if isAsync {
+            if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(contract, out var awaitedContract) {
+                return false
+            }
+            contract = awaitedContract
         }
-        return allowCovariantReturn && returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType)
+        if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
+            return ReturnNullabilityConforms(contract, returnType)
+        }
+        return allowCovariantReturn &&
+            returnRefKind == RefKind.None &&
+            IsCovariantReturn(clrReturnType, returnType) &&
+            ReturnNullabilityConforms(contract, returnType)
     }
 
     private func TryUnwrapClrAsyncReturnType(
@@ -863,6 +876,28 @@ internal shared class ExternalClrOverrideResolver {
             "System.Threading.Tasks.Task"
         }
         return !type.IsGenericType && string.Equals(type.FullName, expectedName, StringComparison.Ordinal)
+    }
+
+    private func ReturnNullabilityConforms(contract TypeSymbol, implementation TypeSymbol) bool {
+        if contract.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+            implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+            return false
+        }
+        // Tuple elements are returned values. Generic arguments have their own variance and invariance rules.
+        if !TupleTypeSymbol.TryGetTupleShape(contract.StripToBareShape(), out _) {
+            return true
+        }
+        let contractPositions = contract.GetElementPositions()
+        let implementationPositions = implementation.GetElementPositions()
+        if contractPositions.Length != implementationPositions.Length {
+            return false
+        }
+        for var i = 0; i < contractPositions.Length; i++ {
+            if !ReturnNullabilityConforms(contractPositions[i], implementationPositions[i]) {
+                return false
+            }
+        }
+        return true
     }
 
     private func PropertyTypeMatches(
