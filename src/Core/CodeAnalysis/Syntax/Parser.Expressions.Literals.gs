@@ -670,7 +670,7 @@ open partial class Parser {
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
         // The true arm is nested; the false arm continues the outer expression.
-        let whenTrue = ParseExpression()
+        let whenTrue = ParseExpression(colonTerminated: true)
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()
         let whenFalse = ParseAssignmentExpression()

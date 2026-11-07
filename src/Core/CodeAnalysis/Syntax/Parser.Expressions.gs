@@ -12,16 +12,26 @@ import System.Linq
 import System.Runtime.CompilerServices
 
 open partial class Parser {
-    private func ParseExpression(stopAtTopLevelLogical bool = false) ExpressionSyntax {
+    private func ParseExpression(
+        stopAtTopLevelLogical bool = false,
+        stopAtTopLevelConditional bool = false,
+        colonTerminated bool = false
+    ) ExpressionSyntax {
         // Recursion safety: ParseAssignmentExpression (the immediate delegate)
         // carries the issue #1602 recursion-depth guard for the whole
         // expression pipeline.
         let outerBoundary = this.stopAtTopLevelLogical
+        let outerConditionalBoundary = this.suppressTopLevelConditionalTail
+        let outerColonTerminated = this.colonTerminatedExpression
         this.stopAtTopLevelLogical = stopAtTopLevelLogical
+        this.suppressTopLevelConditionalTail = stopAtTopLevelConditional
+        this.colonTerminatedExpression = colonTerminated
         try {
             return ParseAssignmentExpression()
         } finally {
             this.stopAtTopLevelLogical = outerBoundary
+            this.suppressTopLevelConditionalTail = outerConditionalBoundary
+            this.colonTerminatedExpression = outerColonTerminated
         }
     }
 
@@ -162,7 +172,7 @@ open partial class Parser {
         // (`cond ? ref a : ref b`), produce a ConditionalRefArgumentExpression
         // for backward compatibility; otherwise produce the general
         // ConditionalExpressionSyntax.
-        if Current.Kind == SyntaxKind.QuestionToken {
+        if !suppressTopLevelConditionalTail && Current.Kind == SyntaxKind.QuestionToken {
             expression = ParseConditionalTail(expression)
         }
         // ADR-0060 §13: indirect assignment `*p = expr`. Detected when the

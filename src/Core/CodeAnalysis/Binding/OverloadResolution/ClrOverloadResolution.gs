@@ -7754,6 +7754,18 @@ internal shared class ClrOverloadResolution {
         )
     }
 
+    internal func SatisfiesSingleGenericParameterConstraints(
+        typeParam Type,
+        erasedArg Type,
+        argSymbol TypeSymbol
+    ) bool -> SatisfiesDeclaredConstraints(
+        []Type{typeParam},
+        []Type{erasedArg},
+        ImmutableArray.Create[TypeSymbol?](argSymbol),
+        out _,
+        out _
+    )
+
     private func SatisfiesDeclaredConstraints(
         typeParams[]Type,
         typeArgs[]Type,

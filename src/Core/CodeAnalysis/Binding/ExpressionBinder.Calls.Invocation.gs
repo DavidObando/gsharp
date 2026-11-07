@@ -2473,6 +2473,20 @@ internal partial class ExpressionBinder {
             // user-type receivers (struct/class/interface). Issue #1188:
             // extension functions overload, so select the best matching
             // overload across all (receiver, name) candidates.
+            if receiver != nil &&
+                receiver.Type is NullableTypeSymbol symbolicNullableReceiver &&
+                NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullableReceiver) &&
+                TryBindSymbolicNullableInstanceCall(
+                receiver,
+                symbolicNullableReceiver,
+                methodName,
+                arguments,
+                ce,
+                argumentNames,
+                out var symbolicNullableCall
+            ) {
+                return symbolicNullableCall!!
+            }
             if TryBindExtensionFunctionOverload(
                 receiver,
                 methodName,
@@ -3949,6 +3963,86 @@ internal partial class ExpressionBinder {
         } finally {
             Diagnostics.TruncateTo(diagnosticMark)
         }
+    }
+
+    private func TryBindSymbolicNullableInstanceCall(
+        receiver BoundExpression,
+        nullableReceiver NullableTypeSymbol,
+        methodName string,
+        arguments ImmutableArray[BoundExpression],
+        ce CallExpressionSyntax,
+        argumentNames ImmutableArray[string],
+        @NotNullWhen(true) out result BoundExpression?
+    ) bool {
+        result = nil
+        if methodName != "GetValueOrDefault" {
+            return false
+        }
+        if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
+            openNullable == nil {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        if ce.TypeArgumentList != nil {
+            Diagnostics.ReportWrongTypeArgumentCount(
+                ce.TypeArgumentList.Location,
+                methodName,
+                0,
+                ce.TypeArgumentList.Arguments.Count
+            )
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        var openMethod MethodInfo? = nil
+        for candidate in openNullable.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+            if candidate.Name == "GetValueOrDefault" && candidate.GetParameters().Length == arguments.Length {
+                openMethod = candidate
+                break
+            }
+        }
+        if openMethod == nil {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, 1, arguments.Length)
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        let underlying = nullableReceiver.UnderlyingType
+        if arguments.Length == 0 {
+            result = BoundImportedInstanceCallExpression(
+                ce,
+                receiver,
+                openMethod,
+                underlying,
+                ImmutableArray[BoundExpression].Empty
+            )
+            return true
+        }
+        let parameterName = openMethod.GetParameters()[0].Name ?? "defaultValue"
+        if !argumentNames.IsDefault && !string.IsNullOrEmpty(argumentNames[0]) && argumentNames[0] != parameterName {
+            Diagnostics.ReportNamedArgumentParameterNotFound(ce.Location, methodName, argumentNames[0])
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        if ce.Arguments[0] is RefArgumentExpressionSyntax refArgument {
+            Diagnostics.ReportRefKindMismatch(
+                refArgument.Location,
+                1,
+                parameterName,
+                "none",
+                refArgument.RefKindModifier.ValueText
+            )
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        let convertedArgument = conversions.BindConversion(ce.Arguments[0].Location, arguments[0], underlying)
+        result = BoundImportedInstanceCallExpression(
+            ce,
+            receiver,
+            openMethod,
+            underlying,
+            ImmutableArray.Create(convertedArgument)
+        )
+        return true
     }
 
     shared {

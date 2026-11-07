@@ -239,16 +239,134 @@ internal partial class ExpressionBinder {
         } else {
             default(IReadOnlyList[string?]?)
         }
+        let probes = GetImportedExtensionProbeReceivers(type)
+        let isSymbolicReceiver = type.ClrType == nil || TypeSymbol.ContainsSameCompilationUserType(type)
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
-                if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, type, argumentCount, argumentNames) {
-                    return true
+                if isSymbolicReceiver {
+                    if SymbolicExtensionCandidateMayApply(candidate, type, probes, argumentCount, argumentNames) {
+                        return true
+                    }
+                    continue
+                }
+                for probe in probes {
+                    if ClrOverloadResolution.MayAcceptExtensionReceiver(
+                        candidate,
+                        probe,
+                        argumentCount,
+                        argumentNames
+                    ) {
+                        return true
+                    }
                 }
             } catch (ex Exception) when !(ex is OutOfMemoryException) {
                 return true
             }
         }
         return false
+    }
+
+    private func SymbolicExtensionCandidateMayApply(
+        candidate MethodInfo,
+        type TypeSymbol,
+        probes List[TypeSymbol],
+        argumentCount int32?,
+        argumentNames IReadOnlyList[string?]?
+    ) bool {
+        let parameters = candidate.GetParameters()
+        if parameters.Length == 0 {
+            return false
+        }
+        if argumentCount is {} count {
+            let isParams = parameters[parameters.Length - 1].IsDefined(typeof(ParamArrayAttribute), false)
+            let maxUserArgs = if isParams {
+                int32.MaxValue
+            } else {
+                parameters.Length - 1
+            }
+            let fixedUpper = if isParams {
+                parameters.Length - 1
+            } else {
+                parameters.Length
+            }
+            var minUserArgs = 0
+            for var i = 1; i < fixedUpper; i++ {
+                if !parameters[i].IsOptional {
+                    minUserArgs = i
+                }
+            }
+            if count < minUserArgs || count > maxUserArgs {
+                return false
+            }
+        }
+        if argumentNames != nil && !ClrOverloadResolution.TryBuildNamedArgumentReordering(
+            candidate,
+            argumentNames.Count,
+            argumentNames,
+            out _
+        ) &&
+            !ClrOverloadResolution
+            .TryBuildNamedArgumentReordering(candidate, argumentNames.Count, argumentNames, isExpanded: true, out _) {
+            return false
+        }
+        var parameterType = parameters[0].ParameterType
+        if parameterType.IsByRef {
+            parameterType = parameterType.GetElementType() ?? parameterType
+        }
+        if parameterType.IsGenericParameter {
+            let erasedCarrier = if type is EnumSymbol {
+                typeof(int32)
+            } else {
+                typeof(object)
+            }
+            return ClrOverloadResolution.SatisfiesSingleGenericParameterConstraints(parameterType, erasedCarrier, type)
+        }
+        for probe in probes {
+            if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, argumentCount, argumentNames) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func GetImportedExtensionProbeReceivers(type TypeSymbol) List[TypeSymbol] {
+        let probes = List[TypeSymbol]()
+        switch type {
+            case structType is StructSymbol {
+                let baseClr = if structType.IsClass {
+                    GetInheritedClrBaseType(structType) ?? typeof(object)
+                } else {
+                    typeof(System.ValueType)
+                }
+                probes.Add(TypeSymbol.FromClrTypeWithoutNullability(baseClr, NullabilityFreeReason.TypeStructure))
+                for clrInterface in structType.ImplementedClrInterfaces {
+                    probes.Add(clrInterface)
+                }
+            }
+            case _ is EnumSymbol {
+                probes.Add(
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Enum), NullabilityFreeReason.TypeStructure)
+                )
+            }
+            case typeParameter is TypeParameterSymbol {
+                let baseClr = if typeParameter.HasValueTypeConstraint {
+                    typeof(System.ValueType)
+                } else {
+                    typeof(object)
+                }
+                probes.Add(TypeSymbol.FromClrTypeWithoutNullability(baseClr, NullabilityFreeReason.TypeStructure))
+                if typeParameter.ClrInterfaceConstraint is {} clrInterface {
+                    probes.Add(clrInterface)
+                }
+                if typeParameter.ClassConstraint is {} classConstraint {
+                    probes.Add(classConstraint)
+                }
+            }
+            default {
+                probes.Add(type)
+            }
+        }
+        return probes
     }
 
     private func BindAccessorStepOnReceiver(

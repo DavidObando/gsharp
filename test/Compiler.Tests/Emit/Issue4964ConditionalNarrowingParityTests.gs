@@ -1528,6 +1528,122 @@ func NestedConditionals(flag bool) int32 -> ` + nested + `
         Assert.True(swLarge.ElapsedMilliseconds < 10_000, "128-term chain took ${swLarge.ElapsedMilliseconds}ms")
     }
 
+    @Fact
+    func Issue4970_4975_5001_IsTernaryCondition_ExpressionTreeReturn_And_SymbolicNullableGetValueOrDefault() {
+        let result = CompileAndRun(`import System
+import System.Collections.Generic
+import System.Linq.Expressions
+
+class Dog {
+    let Age int32 = 4
+}
+
+struct Point {
+    var X int32
+    var Y int32
+}
+
+enum Color { Red, Green }
+
+func isString(o object) int32 -> o is string ? 1 : 0
+func notIsString(o object) int32 -> o !is string ? 1 : 0
+func isDog(o object) int32 -> o is Dog ? 1 : 0
+func isNullableInt(o object) int32 -> o is int32? ? 1 : 0
+func isStringWithVarArms(o object, a int32, b int32) int32 -> o is string ? a : b
+func nestedOuterConditional(flag bool, o object) bool -> flag ? o is int32? : false
+func id(x int32) int32 -> x
+func nestedParenConditional(flag bool, o object) int32 -> flag ? (o is string ? 1 : 0) : 2
+func nestedCallArgConditional(flag bool, o object) int32 -> flag ? id(o is string ? 1 : 0) : 2
+
+func exprArrow() Expression[Func[int32]] -> () -> 11
+func exprBlock() Expression[Func[int32]] {
+    return () -> 22
+}
+
+func pointDefault(p Point?) int32 -> p.GetValueOrDefault().X
+func pointFallback(p Point?) int32 -> p.GetValueOrDefault(Point{X: 9, Y: 8}).Y
+func pointGuarded(p Point?) int32 -> p != nil ? p.GetValueOrDefault().Y : -1
+func colorFallback(c Color?) Color -> c.GetValueOrDefault(Color.Green)
+func genericDefault[T struct](x T?) T -> x.GetValueOrDefault()
+func genericFallback[T struct](x T?, fallback T) T -> x != nil ? x.GetValueOrDefault(fallback) : fallback
+
+Console.WriteLine("${isString("hi")} ${isString(5)} ${notIsString("hi")} ${notIsString(5)}")
+Console.WriteLine("${isDog(Dog{})} ${isDog("no")} ${isNullableInt(3)} ${isStringWithVarArms("hi", 7, 9)}")
+Console.WriteLine("${nestedOuterConditional(true, 3)} ${nestedOuterConditional(true, "x")} ${nestedParenConditional(true, "hi")} ${nestedCallArgConditional(true, 5)}")
+Console.WriteLine("${exprArrow().Compile()()} ${exprBlock().Compile()()}")
+Console.WriteLine("${pointDefault(Point{X: 3, Y: 4})} ${pointDefault(nil)} ${pointFallback(nil)}")
+Console.WriteLine("${pointGuarded(Point{X: 3, Y: 4})} ${pointGuarded(nil)} ${colorFallback(nil) == Color.Green}")
+Console.WriteLine("${genericDefault[Point](Point{X: 5, Y: 6}).X} ${genericFallback[Point](nil, Point{X: 1, Y: 2}).Y}")
+`)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "1 0 0 1",
+                "1 0 1 7",
+                "True False 1 0",
+                "11 22",
+                "3 0 8",
+                "4 -1 True",
+                "5 2"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
+
+        // Issue #4970: deeply nested `o is T ? o is T ? ...` conditionals must
+        // parse in linear time without exponential re-parsing.
+        var nestedExpr = "1"
+        var depth = 0
+        while depth < 25 {
+            nestedExpr = "o is string ? " + nestedExpr + " : 0"
+            depth++
+        }
+        let nestedTree = SyntaxTree.Parse("func deep(o object) int32 -> " + nestedExpr)
+        Assert.Empty(nestedTree.Diagnostics)
+
+        // Issue #4975: in a fresh gsc process (without xUnit having preloaded
+        // System.Linq.Expressions into the host AppDomain), Expression[Func[T]]
+        // must still resolve via ReferenceResolver.WellKnownBclAssemblyNames.
+        let isolatedDir = Path.Combine(AppContext.BaseDirectory, "Issue4975OutOfProcess", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(isolatedDir)
+        try {
+            let srcPath = Path.Combine(isolatedDir, "rt.gs")
+            let dllPath = Path.Combine(isolatedDir, "rt.dll")
+            File.WriteAllText(srcPath, `package P
+import System
+import System.Linq.Expressions
+import System.Collections.Generic
+func a() List[int32] -> List[int32]()
+func b() Expression[Func[int32]] -> () -> 1
+func c() Expression[Func[int32]] {
+    return () -> 1
+}
+func d() int32 {
+    let e Expression[Func[int32]] = () -> 1
+    return e.Compile()()
+}
+`)
+            let psi = ProcessStartInfo("dotnet"){
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = isolatedDir
+            }
+            psi.ArgumentList.Add(typeof(Program).Assembly.Location)
+            psi.ArgumentList.Add(srcPath)
+            psi.ArgumentList.Add("/out:" + dllPath)
+            psi.ArgumentList.Add("/target:library")
+            psi.ArgumentList.Add("/targetframework:net10.0")
+            let (exitCode, stdout, stderr) = IlVerifier.RunProcess(psi, dllPath, 30_000)
+            Assert.True(exitCode == 0, "gsc out-of-process failed (${exitCode}):\n${stdout}\n${stderr}")
+            IlVerifier.Verify(dllPath)
+        } finally {
+            try {
+                Directory.Delete(isolatedDir, recursive: true)
+            } catch { }
+        }
+    }
+
     shared {
         /// Binds `func f(<parameters>) <returnType> -> <body>` and renders its
         /// diagnostics as `id:covered-text` entries joined by `;`.
