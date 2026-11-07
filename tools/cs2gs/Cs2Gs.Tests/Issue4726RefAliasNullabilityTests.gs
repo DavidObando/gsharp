@@ -293,9 +293,11 @@ public static class Obj {
         return alias ?? "fallback";
     }
 }`
+        let printed = Translate(source)
+        Assert.DoesNotContain("string?", printed)
         AssertParity(
             source,
-            Translate(source),
+            printed,
             if choose {
                 "fixed"
             } else {
