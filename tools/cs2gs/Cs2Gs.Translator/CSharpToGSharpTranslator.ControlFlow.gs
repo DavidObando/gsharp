@@ -1440,7 +1440,16 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let localName string? = this.EmittedName(designation, designation!!.Identifier)
-            let localType GTypeReference? = this.typeMapper.Map(binder.Type, this.context, designation!!.GetLocation())
+            let localSymbolType = if this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) &&
+                inputIsNonNull {
+                binder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+            } else {
+                binder.Type
+            }
+            let localType GTypeReference? = this.PromoteIfUsedAsNullable(
+                this.typeMapper.Map(localSymbolType, this.context, designation!!.GetLocation()),
+                binder
+            )
             statements.Add(IfStatement(Negate(positiveTest), then))
             statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType, replacement))
             this.state.PatternBindings[binder] = IdentifierExpression(localName)

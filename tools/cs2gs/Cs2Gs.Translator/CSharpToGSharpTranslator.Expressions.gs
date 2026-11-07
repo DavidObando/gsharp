@@ -4521,27 +4521,27 @@ partial class CSharpToGSharpTranslator {
                 isNonNull = decided
                 return true
             }
-            if local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is SingleVariableDesignationSyntax{
-                Parent: Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .VarPatternSyntax{
-                    Parent: Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ListPatternSyntax or
-                        Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .SlicePatternSyntax
-                }
-            } {
+            let capturePattern = (
+                local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as SingleVariableDesignationSyntax
+            )?.Parent as Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .VarPatternSyntax
+            var captureParent = capturePattern?.Parent
+            while captureParent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                captureParent = parenthesized.Parent
+            }
+            if captureParent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .ListPatternSyntax or
+                Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .SlicePatternSyntax {
                 let inputType = capturedInputType ??
                     (
                     if this

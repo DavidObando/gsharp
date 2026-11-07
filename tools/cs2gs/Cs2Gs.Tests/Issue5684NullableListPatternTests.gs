@@ -403,6 +403,45 @@ namespace Demo
     }
 
     @Fact
+    func GroupedListBindings_PreserveReferenceNullabilityAndSnapshots() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Positive(string[]? current)
+        {
+            if (current is [((var first))]) { current[0] = "different"; return first.Length; }
+            return 0;
+        }
+        static int Negative(string[]? current)
+        {
+            if (current is not [(var first)]) { return 0; }
+            current[0] = "different";
+            return first.Length;
+        }
+        static int Slice(string? current)
+        {
+            if (current is not ['a', .. ((var rest))]) { return 0; }
+            current = "different";
+            return rest.Length;
+        }
+        static int NullableElement(string?[]? current)
+        {
+            if (current is not [((var first))]) { return 0; }
+            return first?.Length ?? -1;
+        }
+        public static string Run() =>
+            Positive(new[] { "abc" }) + " " + Positive(null) + " " +
+            Negative(new[] { "abc" }) + " " + Negative(null) + " " +
+            Slice("ab") + " " + Slice(null) + " " +
+            NullableElement(new string?[] { null }) + " " + NullableElement(null);
+    }
+}`, "3 0 3 0 1 0 -1 0")
+    }
+
+    @Fact
     func NullableSwitchListArms_PreserveRuntimeMatches() {
         AssertRuns(`
 #nullable enable
