@@ -48,6 +48,9 @@ namespace RecordDeconstruction {
     @InlineData("await foreach")
     @InlineData("nested")
     @InlineData("nested foreach")
+    @InlineData("pattern")
+    @InlineData("switch pattern")
+    @InlineData("method group")
     func MetadataRecursiveAndForEachConsumers_ReportLocatedGaps(shape string) {
         let producer = CSharpProjectLoader.LoadInMemory([](string, string){("Producer.cs", `
 namespace Producer {
@@ -63,11 +66,15 @@ namespace Producer {
             case "foreach": "foreach (var (x, y) in new[] { r }) { System.Console.WriteLine(x + y); }"
             case "await foreach": "await foreach (var (x, y) in Values(r)) { System.Console.WriteLine(x + y); }"
             case "nested": "var ((x, y), tag) = (r, 1);"
+            case "pattern": "if (r is Producer.R(30, 2)) return \"matched\";"
+            case "switch pattern": "return r switch { Producer.R(30, 2) => \"matched\", _ => \"\" };"
+            case "method group": "Read read = r.Deconstruct; read(out var x, out var y);"
             default: "foreach (var ((x, y), tag) in new[] { (r, 1) }) { System.Console.WriteLine(x + y + tag); }"
         }
         let source = (`
 namespace RecordDeconstruction {
     public static class Probe {
+        public delegate void Read(out int x, out int y);
         public static async System.Threading.Tasks.Task<string> Run() {
             var r = new Producer.R { X = 2, Y = 3 };
             STATEMENT
@@ -108,12 +115,47 @@ namespace RecordDeconstruction {
         Assert.Contains("migrated producer", gap.Message)
         let location = gap.Location!!
         Assert.Equal("Consumer.cs", location.SourceTree!!.FilePath)
-        let site = if shape == "nested" || shape == "nested foreach" {
-            "(x, y)"
-        } else {
-            shape
+        let site = switch shape {
+            case "nested" or "nested foreach": "(x, y)"
+            case "pattern" or "switch pattern": "Producer.R(30, 2)"
+            case "method group": "r.Deconstruct"
+            default: shape
         }
         Assert.Equal(source.IndexOf(site, StringComparison.Ordinal), location.SourceSpan.Start)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func InheritedAdapters_DoNotCollideWithDerivedLiftedHelpers(derivedFirst bool) {
+        let parent = ("Parent.cs", `
+namespace RecordDeconstruction {
+    public record Parent {
+        public int Value = 7;
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+    }
+}`)
+        let child = ("Child.cs", `
+namespace RecordDeconstruction {
+    public record Child : Parent {
+        public string Work() {
+            int deconstructTuple() { return Bounce<int>(0); }
+            int Bounce<T>(int n) { return n == 0 ? Value : deconstructTuple(); }
+            var (x, y) = this;
+            return $"{x},{y},{deconstructTuple()}";
+        }
+    }
+    public static class Probe {
+        public static string Run() => new Child().Work();
+    }
+}`)
+        Verify(
+            if derivedFirst {
+                [](string, string){child, parent}
+            } else {
+                [](string, string){parent, child}
+            }
+        )
     }
 
     @Theory

@@ -84,6 +84,23 @@ partial class CSharpToGSharpTranslator {
 
         private func BeginRecordPatternDecision(owner SyntaxNode) {
             this.recordPatternCaches.Remove(owner)
+            for pattern in owner.DescendantNodes().OfType[RecursivePatternSyntax]() {
+                let decision = pattern.Ancestors().FirstOrDefault(
+                    (ancestor SyntaxNode) -> ancestor is IsPatternExpressionSyntax or
+                        SwitchExpressionSyntax or
+                        SwitchStatementSyntax
+                )
+                if object.ReferenceEquals(decision, owner) &&
+                    pattern.PositionalPatternClause != nil &&
+                    this.RecordPatternNeedsDeconstruction(pattern) &&
+                    this
+                    .context
+                    .SemanticModel
+                    .GetOperation(pattern) is IRecursivePatternOperation operation &&
+                    operation.DeconstructSymbol is IMethodSymbol method {
+                    this.ReportMetadataRecordDeconstruction(method, pattern)
+                }
+            }
             let patterns = owner
                 .DescendantNodes()
                 .OfType[RecursivePatternSyntax]()

@@ -1224,6 +1224,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateMemberAccess(member MemberAccessExpressionSyntax) GExpression? {
+            if member
+                .Name
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                member.Parent is not InvocationExpressionSyntax &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(member) is IMethodReferenceOperation reference {
+                this.ReportMetadataRecordDeconstruction(reference.Method, member)
+            }
             // ADR-0169 analyzer mode: idioms that need more than a member
             // rename (e.g. name.Identifier -> expr.GetLastToken()).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerMemberAccess(member, out var analyzerIdiom) {

@@ -176,6 +176,7 @@ internal class LiftedLocalFunctionNameAllocator {
             this.localNamesByType.TryGetValue(owner!!, out var localNames)
             var candidate string? = localName
             for var suffix = 2; occupied.Contains(candidate!!) || used.Contains(candidate!!) ||
+                this.RelatedAssignedNameExists(owner!!, candidate!!, recordAdaptersOnly: true) ||
                 this
                 .aliasNames
                 .Contains(candidate!!) || localNames?.Contains(candidate!!) == true ||
@@ -202,8 +203,10 @@ internal class LiftedLocalFunctionNameAllocator {
                 used = HashSet[string](StringComparer.Ordinal)
                 this.usedByType.Add(owner, used)
             }
-            if used.Contains(name) || this.aliasNames.Contains(name) ||
-                (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
+            if used.Contains(name) || this.RelatedAssignedNameExists(owner, name, recordAdaptersOnly: false) ||
+                this
+                .aliasNames
+                .Contains(name) || (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
                 return false
             }
             used.Add(name)
@@ -211,6 +214,39 @@ internal class LiftedLocalFunctionNameAllocator {
             this.assigned.Add(key, name)
             return true
         }
+    }
+
+    private func RelatedAssignedNameExists(owner ISymbol, name string, recordAdaptersOnly bool) bool {
+        if owner is not INamedTypeSymbol type || !this.helperNames.Contains(name) {
+            return false
+        }
+        for pair in this.assigned {
+            if pair.Value != name || pair.Key.ContainingType is not INamedTypeSymbol other {
+                continue
+            }
+            if recordAdaptersOnly &&
+                !(
+                pair.Key is IMethodSymbol{MethodKind: MethodKind.Ordinary} method &&
+                    EmittedNameAllocator.IsUserRecordDeconstruct(method)
+            ) {
+                continue
+            }
+            if this.IsTypeOrBase(type, other) || this.IsTypeOrBase(other, type) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func IsTypeOrBase(type INamedTypeSymbol, expected INamedTypeSymbol) bool {
+        var current INamedTypeSymbol? = type
+        while current != nil {
+            if SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, expected.OriginalDefinition) {
+                return true
+            }
+            current = current.BaseType
+        }
+        return false
     }
 
     func AllocateBackingField(property IPropertySymbol?, occupied ISet[string], baseName string) string {
