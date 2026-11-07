@@ -36,15 +36,43 @@ internal partial class ExpressionBinder {
         Rhs BoundExpression?,
         RhsTargetType TypeSymbol?,
         NullableType NullableTypeSymbol?,
-        NonNullableReferenceTarget bool
+        NonNullableReferenceTarget bool,
+        IncomingTargetNarrowedType TypeSymbol?
     ) {
         // Bind the LHS as a read-side expression. This decides the lvalue
         // shape (variable / field / property / indexer) we need to mirror
         // on the write side, and surfaces the type to validate nullability.
-        let boundRead = BindExpression(syntax.Target)
+        var boundRead = BindExpression(syntax.Target)
+        var incomingTargetNarrowedType TypeSymbol? = nil
+        if boundRead is BoundVariableExpression{
+            NarrowedType: not nil,
+            Variable: {Type: NullableTypeSymbol or PlatformTypeSymbol}
+        } narrowedVar {
+            incomingTargetNarrowedType = narrowedVar.NarrowedType
+            boundRead = BoundVariableExpression(narrowedVar.Syntax, narrowedVar.Variable)
+        } else if boundRead is BoundFieldAccessExpression{NarrowedType: not nil} narrowedField &&
+            (narrowedField.SubstitutedType ?? narrowedField.Field.Type) is NullableTypeSymbol or
+            PlatformTypeSymbol {
+            boundRead = if narrowedField.InterfaceType != nil {
+                BoundFieldAccessExpression(
+                    narrowedField.Syntax,
+                    narrowedField.Field,
+                    narrowedField.InterfaceType,
+                    narrowedField.SubstitutedType
+                )
+            } else {
+                BoundFieldAccessExpression(
+                    narrowedField.Syntax,
+                    narrowedField.Receiver,
+                    narrowedField.StructType,
+                    narrowedField.Field,
+                    narrowedField.SubstitutedType
+                )
+            }
+        }
         if boundRead is BoundErrorExpression || boundRead.Type == TypeSymbol.Error {
             let _ = BindExpression(syntax.Value)
-            return (nil, nil, nil, nil, false)
+            return (nil, nil, nil, nil, false, nil)
         }
         var nullableType NullableTypeSymbol? = boundRead.Type as NullableTypeSymbol
         // ADR-0186 §6: `??=` accepts a `T!` left operand and GS0298 does not
@@ -68,7 +96,7 @@ internal partial class ExpressionBinder {
         if nullableType == nil && !isNonNullableReferenceTarget {
             Diagnostics.ReportNullCoalescingAssignmentTargetNotNullable(syntax.OperatorToken.Location, boundRead.Type)
             let _ = BindExpression(syntax.Value)
-            return (nil, nil, nil, nil, false)
+            return (nil, nil, nil, nil, false, nil)
         }
         // Bind the RHS, converting it to the LHS's nullable type so the
         // author can write either an underlying-typed value (which lifts
@@ -82,9 +110,16 @@ internal partial class ExpressionBinder {
         MergeBranchExpressionNarrowingFrames(beforeRhsFrames)
         intersectNarrowingWithSnapshot?(preRhsSnapshot)
         if boundRhs is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error {
-            return (nil, nil, nil, nil, false)
+            return (nil, nil, nil, nil, false, nil)
         }
-        return (boundRead, boundRhs, rhsTargetType, nullableType, isNonNullableReferenceTarget)
+        return (
+            boundRead,
+            boundRhs,
+            rhsTargetType,
+            nullableType,
+            isNonNullableReferenceTarget,
+            incomingTargetNarrowedType
+        )
     }
 
     /// ADR-0072 / issue #709: binds `target ??= value` in statement position
@@ -106,9 +141,33 @@ internal partial class ExpressionBinder {
         syntax NullCoalescingAssignmentExpressionSyntax,
         createVariableMutationChecker((BoundExpression) -> (VariableSymbol) -> bool)? = nil
     ) BoundStatement {
-        let (boundRead, boundRhs, _, _, isNonNullableReferenceTarget) = BindNullCoalescingAssignmentOperands(syntax)
-        if boundRead == nil || boundRhs == nil {
+        let (
+            boundRead,
+            boundRhs,
+            rhsTargetType,
+            nullableType,
+            isNonNullableReferenceTarget,
+            incomingTargetNarrowedType
+        ) = BindNullCoalescingAssignmentOperands(syntax)
+        if boundRead == nil || boundRhs == nil || rhsTargetType == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
+        }
+        let preConversion = if boundRhs is BoundConversionExpression lift && lift.Type == rhsTargetType {
+            lift.Expression
+        } else {
+            boundRhs
+        }
+        let underlying TypeSymbol? = nullableType?.UnderlyingType
+        let assignedValueType = if underlying != nil && ProvesNestedNonNil(preConversion, underlying) {
+            underlying
+        } else if incomingTargetNarrowedType != nil &&
+            underlying != nil &&
+            StatementBinder.AssignmentTypePreservesNarrowing(incomingTargetNarrowedType, underlying) {
+            incomingTargetNarrowedType
+        } else if preConversion.Type is PlatformTypeSymbol {
+            boundRhs.Type
+        } else {
+            preConversion.Type
         }
         let mayReassignVariable = if createVariableMutationChecker == nil {
             default(((VariableSymbol) -> bool)?)
@@ -161,7 +220,8 @@ internal partial class ExpressionBinder {
             snapshotReceivers: false,
             rhsHasAwait: rhsHasAwait,
             mayReassignVariable: mayReassignVariable,
-            createVariableMutationChecker: createVariableMutationChecker
+            createVariableMutationChecker: createVariableMutationChecker,
+            assignedValueType: assignedValueType
         )
         if read == nil || write == nil {
             return BoundExpressionStatement(statement, BoundErrorExpression(nil))
@@ -229,7 +289,8 @@ internal partial class ExpressionBinder {
             operandRhs,
             operandTargetType,
             nullableType,
-            isNonNullableReferenceTarget
+            isNonNullableReferenceTarget,
+            incomingTargetNarrowedType
         ) = BindNullCoalescingAssignmentOperands(syntax)
         if operandRead == nil || operandRhs == nil || operandTargetType == nil {
             return BoundErrorExpression(nil)
@@ -281,6 +342,17 @@ internal partial class ExpressionBinder {
             }
         }
         let rhsHasAwait = AsyncBoundTreeQueries.HasAwait(boundRhs)
+        let assignedValueType = if underlying != nil && ProvesNestedNonNil(preConversion, underlying) {
+            underlying
+        } else if incomingTargetNarrowedType != nil &&
+            underlying != nil &&
+            StatementBinder.AssignmentTypePreservesNarrowing(incomingTargetNarrowedType, underlying) {
+            incomingTargetNarrowedType
+        } else if preConversion.Type is PlatformTypeSymbol {
+            boundRhs.Type
+        } else {
+            preConversion.Type
+        }
         let (read, write) = TryBuildNullCoalescingReadWrite(
             syntax,
             syntax,
@@ -290,7 +362,8 @@ internal partial class ExpressionBinder {
             storedValue,
             preStatements,
             snapshotReceivers: true,
-            rhsHasAwait: rhsHasAwait
+            rhsHasAwait: rhsHasAwait,
+            assignedValueType: assignedValueType
         )
         if read == nil || write == nil {
             return BoundErrorExpression(nil)
@@ -370,14 +443,18 @@ internal partial class ExpressionBinder {
         snapshotReceivers bool,
         rhsHasAwait bool = false,
         mayReassignVariable((VariableSymbol) -> bool)? = nil,
-        createVariableMutationChecker((BoundExpression) -> (VariableSymbol) -> bool)? = nil
+        createVariableMutationChecker((BoundExpression) -> (VariableSymbol) -> bool)? = nil,
+        assignedValueType TypeSymbol? = nil
     )(Read BoundExpression?, Write BoundExpression?) {
         let memberReceiver = GetNullCoalescingReceiver(boundRead)
         if memberReceiver != nil && !ReceiverTypeIsReference(memberReceiver.Type) {
             if ReceiverBlocksValueTypeMemberWrite(memberReceiver) || RefCapabilities.IsReadOnlyReference(
                 memberReceiver
             ) {
-                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, syntax.Target.ToString())
+                Diagnostics.ReportCannotAssign(
+                    syntax.OperatorToken.Location,
+                    GetNullCoalescingReadOnlyReceiverName(memberReceiver, boundRead, syntax.Target)
+                )
                 return (nil, nil)
             }
             if !IsWritableStructFieldReceiver(memberReceiver) && !RefCapabilities.IsNativeRefReturningCall(
@@ -385,7 +462,7 @@ internal partial class ExpressionBinder {
             ) {
                 Diagnostics.ReportFieldAssignmentThroughStructTemporary(
                     syntax.OperatorToken.Location,
-                    syntax.Target.ToString(),
+                    GetNullCoalescingTargetMemberName(boundRead, syntax.Target),
                     memberReceiver.Type
                 )
                 return (nil, nil)
@@ -409,7 +486,7 @@ internal partial class ExpressionBinder {
                         Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, varExpr.Variable.Name)
                         return (nil, nil)
                     }
-                    let write = BoundAssignmentExpression(writeAnchor, varExpr.Variable, boundRhs)
+                    let write = BoundAssignmentExpression(writeAnchor, varExpr.Variable, boundRhs, assignedValueType)
                     return (boundRead, write)
                 }
             }
@@ -1170,11 +1247,14 @@ internal partial class ExpressionBinder {
         /// @param valueType The right-hand side's pre-conversion type.
         /// @param underlying The target's underlying non-nullable type.
         /// @returns `true` when the value is statically non-nil.
-        private func ProvesNonNil(
-            valueType TypeSymbol,
-            underlying TypeSymbol
-        ) bool -> valueType is not PlatformTypeSymbol &&
+        private func ProvesNonNil(valueType TypeSymbol?, underlying TypeSymbol) bool -> valueType != nil &&
+            valueType is not PlatformTypeSymbol &&
             StatementBinder.AssignmentTypePreservesNarrowing(valueType, underlying)
+
+        private func ProvesNestedNonNil(
+            value BoundExpression?,
+            underlying TypeSymbol
+        ) bool -> StatementBinder.NestedAssignmentPreservesNarrowing(value, underlying)
 
         /// The class in [`receiverType`](paramref)'s hierarchy that declares
         /// [`property`](paramref) (instance or static).
@@ -1275,6 +1355,60 @@ internal partial class ExpressionBinder {
                 }
             }
             return nil
+        }
+
+        private func GetNullCoalescingReadOnlyReceiverName(
+            receiver BoundExpression,
+            boundRead BoundExpression,
+            targetSyntax ExpressionSyntax
+        ) string {
+            var current BoundExpression? = receiver
+            while current != nil {
+                switch current {
+                    case BoundDereferenceExpression{Operand: {} operand} {
+                        current = operand
+                    }
+                    case BoundVariableExpression{Variable: {} variable} when variable.IsReadOnly ||
+                        RefCapabilities.IsReadOnlyReference(current) {
+                        return variable.Name
+                    }
+                    case BoundFieldAccessExpression{Field: {IsReadOnly: true} field} {
+                        return field.Name
+                    }
+                    case BoundFieldAccessExpression{Receiver: {} innerReceiver} {
+                        current = innerReceiver
+                    }
+                    case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsInitOnly ||
+                        field.IsLiteral {
+                        return field.Name
+                    }
+                    case BoundClrPropertyAccessExpression{Receiver: {} innerReceiver} {
+                        current = innerReceiver
+                    }
+                    case BoundTupleElementAccessExpression{Receiver: {} innerReceiver} {
+                        current = innerReceiver
+                    }
+                    default {
+                        current = nil
+                    }
+                }
+            }
+            return GetNullCoalescingTargetMemberName(boundRead, targetSyntax)
+        }
+
+        private func GetNullCoalescingTargetMemberName(
+            boundRead BoundExpression,
+            targetSyntax ExpressionSyntax
+        ) string -> switch boundRead {
+            case field is BoundFieldAccessExpression: field.Field.Name
+            case property is BoundPropertyAccessExpression: property.Property.Name
+            case clr is BoundClrPropertyAccessExpression: clr.Member.Name
+            case index is BoundClrIndexExpression: index.Indexer.Name
+            case userCall is BoundUserInstanceCallExpression when FindIndexerByGetter(
+                userCall.Receiver.Type,
+                userCall.Method
+            ) != nil: "this[]"
+            default: targetSyntax.SyntaxTree.Text.ToString(targetSyntax.Span)
         }
     }
 }

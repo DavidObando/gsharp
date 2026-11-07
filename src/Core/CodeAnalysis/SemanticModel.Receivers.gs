@@ -831,14 +831,38 @@ partial class SemanticModel {
                 Variable: ImplicitStaticPropertyVariableSymbol staticProperty
             }: staticProperty.Property
             case variable is BoundVariableExpression: variable.Variable
-            case call is BoundCallExpression: ReferencedCallSymbol(call.Function, call.Type)
+            case call is BoundCallExpression: ReferencedCallSymbol(
+                call.StaticGenericOwnerType ?? cast[TypeSymbol?](call.StaticGenericInterfaceOwnerType),
+                call.Function,
+                call.Type
+            )
             case constrained is BoundConstrainedStaticCallExpression: ReferencedCallSymbol(
+                constrained.ConstrainedInterfaceType ?? constrained.TypeParameter.InterfaceConstraint,
                 constrained.InterfaceMethod,
                 constrained.Type
             )
-            case userCall is BoundUserInstanceCallExpression: ReferencedCallSymbol(userCall.Method, userCall.Type)
-            case baseCall is BoundBaseClassCallExpression: baseCall.Method ?? cast[Symbol?](baseCall.Property)
-            case baseCall is BoundBaseInterfaceCallExpression: baseCall.Method
+            case userCall is BoundUserInstanceCallExpression: ReferencedCallSymbol(
+                userCall.ConstrainedInterfaceType ?? userCall.Receiver.Type,
+                userCall.Method,
+                userCall.Type
+            )
+            case baseCall is BoundBaseClassCallExpression: if baseCall.Method != nil {
+                SubstituteGroupMember(baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass, baseCall.Method)
+            } else if baseCall.Property != nil {
+                SubstituteSourceMember(
+                    TypeMemberModel.ResolveStaticMemberOwner(
+                        baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass,
+                        baseCall.BaseClass
+                    ),
+                    baseCall.Property
+                )
+            } else {
+                default(Symbol?)
+            }
+            case baseCall is BoundBaseInterfaceCallExpression: SubstituteGroupMember(
+                baseCall.Interface,
+                baseCall.Method
+            )
             // A read through a constructed generic interface keeps the
             // declaration's property and records the substituted type beside
             // it; show the property at that type. References still match it
@@ -856,18 +880,30 @@ partial class SemanticModel {
         }
     }
 
-    private func ReferencedCallSymbol(function FunctionSymbol?, type TypeSymbol) Symbol? {
-        if function?.AssociatedSymbol is PropertySymbol property && object.ReferenceEquals(
+    private func ReferencedCallSymbol(receiverType TypeSymbol?, function FunctionSymbol?, type TypeSymbol) Symbol? {
+        if function == nil {
+            return nil
+        }
+        if function.AssociatedSymbol is PropertySymbol property && object.ReferenceEquals(
             property.GetterSymbol,
             function
         ) {
+            if receiverType != nil {
+                let unwrapped = UnwrapNullability(receiverType)
+                if unwrapped is StructSymbol or InterfaceSymbol {
+                    let substituted = SubstituteSourceMember(unwrapped, property)
+                    if !object.ReferenceEquals(substituted, property) {
+                        return substituted
+                    }
+                }
+            }
             return if !object.ReferenceEquals(type, property.Type) {
                 property.WithSignature(type, property.Parameters)
             } else {
                 property
             }
         }
-        return function
+        return SubstituteGroupMember(receiverType, function)
     }
 
     /// Gets the imported member a bound call or read refers to, as the symbol (cref:LookupMembers) answers.
