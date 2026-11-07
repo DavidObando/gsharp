@@ -93,6 +93,9 @@
     <Nullable Condition="'$(IsTestProject)' != 'true' and '$(IsToolingProject)' != 'true'">enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Issue #4910: treat duplicate assembly reference resolution conflicts (MSB3243) as errors. -->
+    <WarningsAsErrors>$(WarningsAsErrors);MSB3243</WarningsAsErrors>
+    <MSBuildWarningsAsErrors>$(MSBuildWarningsAsErrors);MSB3243</MSBuildWarningsAsErrors>
     <HighEntropyVA>true</HighEntropyVA>
     <Deterministic>true</Deterministic>
     <!-- Validate test documentation without publishing test-only XML files.

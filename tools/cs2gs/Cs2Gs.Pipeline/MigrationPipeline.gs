@@ -309,7 +309,11 @@ class MigrationPipeline {
             Timestamp: timestamp,
             GscVersion: gscVersion,
             GscPath: gscPath,
-            Succeeded: true
+            Succeeded: true,
+            RequestedStages: this
+                .Stages
+                .Select((stage IMigrationStage) -> TriageSerialization.StageName(stage.Kind))
+                .ToList()
         }
         this.options.InvalidTranslatedProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
         this.options.InvalidCompiledProjectPaths = HashSet[string](StringComparer.OrdinalIgnoreCase)
@@ -543,7 +547,11 @@ class MigrationPipeline {
             Timestamp: timestamp,
             GscVersion: gscVersion,
             GscPath: gscPath,
-            Succeeded: true
+            Succeeded: true,
+            RequestedStages: this
+                .Stages
+                .Select((stage IMigrationStage) -> TriageSerialization.StageName(stage.Kind))
+                .ToList()
         }
         let appResults = Dictionary[string, AppResult](StringComparer.OrdinalIgnoreCase)
         let orderedApps = this.OrderForSdkBuild(selectedApps, evaluatedProjectReferences)

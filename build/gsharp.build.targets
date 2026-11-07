@@ -41,4 +41,23 @@
       <FileWrites Include="$(_GsharpRepositoryBuildToolsCache)" />
     </ItemGroup>
   </Target>
+
+  <!-- Issue #4910: fail the build if an in-tree Gsharp.Runtime.* ProjectReference is paired with
+       the pinned SDK package's _ExplicitReference for the same assembly (which silently shadows
+       the in-tree build when assembly versions match). Projects that reference an in-tree runtime
+       must set GsharpNoChannelsRuntime=true / GsharpNoValuesRuntime=true. -->
+  <Target Name="_GsharpValidateInTreeRuntimeReferences"
+          BeforeTargets="ResolveAssemblyReferences;CoreCompile"
+          Condition="'$(Language)' == 'Gsharp' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_GsharpInTreeRuntimeProjectReference Include="@(ProjectReference)"
+                                            Condition="'%(ProjectReference.ReferenceOutputAssembly)' != 'false' and ('%(Filename)' == 'Gsharp.Runtime.Channels' or '%(Filename)' == 'Gsharp.Runtime.Values')" />
+      <_GsharpSdkRuntimeExplicitReference Include="@(_ExplicitReference)"
+                                          Condition="'%(Filename)' == 'Gsharp.Runtime.Channels' or '%(Filename)' == 'Gsharp.Runtime.Values'" />
+    </ItemGroup>
+    <Error Condition="'@(_GsharpInTreeRuntimeProjectReference->WithMetadataValue('Filename', 'Gsharp.Runtime.Channels'))' != '' and '@(_GsharpSdkRuntimeExplicitReference->WithMetadataValue('Filename', 'Gsharp.Runtime.Channels'))' != ''"
+           Text="Project '$(MSBuildProjectFile)' has an in-tree ProjectReference to Gsharp.Runtime.Channels and also receives the SDK's _ExplicitReference ('$(GsharpChannelsRuntimeAssemblyFullPath)'). Set &lt;GsharpNoChannelsRuntime&gt;true&lt;/GsharpNoChannelsRuntime&gt; so the SDK copy cannot shadow the in-tree build (#4910)." />
+    <Error Condition="'@(_GsharpInTreeRuntimeProjectReference->WithMetadataValue('Filename', 'Gsharp.Runtime.Values'))' != '' and '@(_GsharpSdkRuntimeExplicitReference->WithMetadataValue('Filename', 'Gsharp.Runtime.Values'))' != ''"
+           Text="Project '$(MSBuildProjectFile)' has an in-tree ProjectReference to Gsharp.Runtime.Values and also receives the SDK's _ExplicitReference ('$(GsharpValuesRuntimeAssemblyFullPath)'). Set &lt;GsharpNoValuesRuntime&gt;true&lt;/GsharpNoValuesRuntime&gt; so the SDK copy cannot shadow the in-tree build (#4910)." />
+  </Target>
 </Project>

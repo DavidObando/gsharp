@@ -12462,7 +12462,7 @@ partial class CSharpToGSharpTranslator {
             target Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             isArgument bool
         ) bool {
-            let stripped = StripParentheses(target)
+            let stripped = UnwrapParenthesesAndSuppressions(target)!!
             if stripped is Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationExpressionSyntax {
                 return false
             }

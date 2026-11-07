@@ -4,11 +4,12 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.Compiler.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- Issue #4910: exercise this checkout's runtime, not the pinned SDK's implicit runtime reference. -->
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Exercise this checkout's runtime, not the pin's implicit runtime reference. -->
-    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
     <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
     <ProjectReference Include="@(GsharpCompiler-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpRepl-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" ReferenceOutputAssembly="false" />
