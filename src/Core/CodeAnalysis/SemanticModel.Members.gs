@@ -234,18 +234,48 @@ partial class SemanticModel {
                 copy.ExternalOverriddenRemoveMethod = clrEvent.ExternalOverriddenRemoveMethod
                 copy.ExternalOverriddenRaiseMethod = clrEvent.ExternalOverriddenRaiseMethod
                 copy.ImportedMember = clrEvent.ImportedMember
-                if clrEvent.ContainingType is {} containing {
-                    copy.AnchorContainingType(containing)
+                if !clrEvent.Attributes.IsDefaultOrEmpty {
+                    copy.SetAttributes(clrEvent.Attributes)
                 }
+                copy.AnchorContainingType(owner)
                 if clrEvent.GetDocumentation() is {} documentation {
                     copy.SetDocumentation(documentation)
                 }
                 return copy
             }
-            case function is FunctionSymbol when owner is StructSymbol {
+            case functionSymbol is FunctionSymbol when owner is (StructSymbol or InterfaceSymbol) {
+                var function = functionSymbol
+                if owner is InterfaceSymbol{Definition: {} ifaceDef} ifaceOwner && !object.ReferenceEquals(
+                    ifaceDef,
+                    ifaceOwner
+                ) &&
+                    !function.IsStatic &&
+                    function.ReceiverType == nil &&
+                    function.Declaration != nil {
+                    for openCandidate in ifaceDef.Methods {
+                        if object.ReferenceEquals(openCandidate.Declaration, function.Declaration) {
+                            function = openCandidate
+                            break
+                        }
+                    }
+                }
                 let returnType = SubstituteMemberType(owner, function.Type)
                 let parameters = SubstituteParameters(owner, function.Parameters, out var parametersChanged)
-                if object.ReferenceEquals(returnType, function.Type) && !parametersChanged {
+                let receiver = if function.ReceiverType != nil {
+                    owner
+                } else {
+                    default(TypeSymbol?)
+                }
+                let staticOwner = if function.StaticOwnerType != nil {
+                    owner
+                } else {
+                    default(TypeSymbol?)
+                }
+                if object.ReferenceEquals(returnType, function.Type) && !parametersChanged && object.ReferenceEquals(
+                    receiver,
+                    function.ReceiverType
+                ) &&
+                    object.ReferenceEquals(staticOwner, function.StaticOwnerType) {
                     return function
                 }
                 let copy = FunctionSymbol(
@@ -255,22 +285,14 @@ partial class SemanticModel {
                     function.Declaration,
                     function.Package,
                     function.Accessibility,
-                    if function.ReceiverType != nil {
-                        owner
-                    } else {
-                        default(TypeSymbol?)
-                    },
+                    receiver,
                     function.ExplicitReceiverParameter,
                     function.IsOpen,
                     function.IsOverride
                 )
                 copy.ReturnRefKind = function.ReturnRefKind
                 copy.IsStatic = function.IsStatic
-                copy.StaticOwnerType = if function.StaticOwnerType != nil {
-                    owner
-                } else {
-                    default(TypeSymbol?)
-                }
+                copy.StaticOwnerType = staticOwner
                 copy.IsAbstract = function.IsAbstract
                 copy.IsAsync = function.IsAsync
                 copy.IsAsyncVoid = function.IsAsyncVoid
@@ -283,9 +305,17 @@ partial class SemanticModel {
                 if !function.TypeParameters.IsDefaultOrEmpty {
                     copy.TypeParameters = function.TypeParameters
                 }
-                if function.ContainingType is {} containing {
-                    copy.AnchorContainingType(containing)
+                if !function.Attributes.IsDefaultOrEmpty {
+                    copy.SetAttributes(function.Attributes)
                 }
+                if function.ThisParameter is {} sourceThis && copy.ThisParameter is {} copyThis {
+                    copyThis.IsScoped = sourceThis.IsScoped
+                    copyThis.IsUnscopedRefReceiver = sourceThis.IsUnscopedRefReceiver
+                    if !sourceThis.Attributes.IsDefaultOrEmpty {
+                        copyThis.SetAttributes(sourceThis.Attributes)
+                    }
+                }
+                copy.AnchorContainingType(owner)
                 if function.GetDocumentation() is {} documentation {
                     copy.SetDocumentation(documentation)
                 }
@@ -313,6 +343,9 @@ partial class SemanticModel {
             let copy = ParameterSymbol(parameter, parameterType, parameter.DeclaringSyntax)
             if parameter.HasExplicitDefaultValue {
                 copy.SetExplicitDefaultValue(parameter.ExplicitDefaultValue)
+            }
+            if !parameter.Attributes.IsDefaultOrEmpty {
+                copy.SetAttributes(parameter.Attributes)
             }
             builder.Add(copy)
         }
@@ -781,6 +814,11 @@ partial class SemanticModel {
             }
             let extensionCall = CallCandidateRecorder.IsSourceExtensionCall(call, token.Parent)
             let receiverType TypeSymbol? = switch call {
+                case staticCall is BoundCallExpression: staticCall.StaticGenericOwnerType ??
+                    cast[TypeSymbol?](staticCall.StaticGenericInterfaceOwnerType) ??
+                    staticCall
+                    .Function
+                    .StaticOwnerType
                 case instanceCall is BoundImportedInstanceCallExpression: instanceCall.ConstrainedInterfaceType ??
                     instanceCall
                     .Receiver
@@ -793,7 +831,10 @@ partial class SemanticModel {
                     constrainedCall
                     .TypeParameter
                     .InterfaceConstraint
-                case userCall is BoundUserInstanceCallExpression: userCall.Receiver.Type
+                case userCall is BoundUserInstanceCallExpression: userCall.ConstrainedInterfaceType ??
+                    userCall
+                    .Receiver
+                    .Type
                 case baseInterfaceCall is BoundBaseInterfaceCallExpression: baseInterfaceCall.Interface
                 default: default(TypeSymbol?)
             }
@@ -885,23 +926,77 @@ partial class SemanticModel {
             case typeParameter is TypeParameterSymbol: typeParameter.ClassConstraint as StructSymbol
             default: default(StructSymbol?)
         }
-        if structReceiver != nil && function.ReceiverType is StructSymbol declaredOwner {
+        if structReceiver != nil && (function.ReceiverType ?? function.StaticOwnerType) is StructSymbol declaredOwner {
             let owner = TypeMemberModel.ResolveStaticMemberOwner(structReceiver, declaredOwner)
             return SubstituteSourceMember(owner, function)
         }
-        if unwrapped is InterfaceSymbol interfaceReceiver &&
-            interfaceReceiver.Definition != nil &&
-            !object.ReferenceEquals(interfaceReceiver.Definition, interfaceReceiver) &&
-            function.ReceiverType is InterfaceSymbol declaredInterface &&
-            object
-            .ReferenceEquals(interfaceReceiver.Definition, declaredInterface.Definition ?? declaredInterface) {
-            for candidate in interfaceReceiver.Methods {
-                if function.Declaration != nil && object.ReferenceEquals(candidate.Declaration, function.Declaration) {
-                    return candidate
+        if (function.ReceiverType ?? function.StaticOwnerType ?? function.ContainingType) is InterfaceSymbol{
+            Definition: {} directDef
+        } directIface &&
+            !object.ReferenceEquals(directDef, directIface) {
+            return SubstituteSourceMember(directIface, function)
+        }
+        for candidateIface in EnumerateCandidateInterfaces(unwrapped) {
+            if (
+                function.ReceiverType ?? function.StaticOwnerType ?? function.ContainingType
+            ) is InterfaceSymbol declaredInterface {
+                if candidateIface.Definition != nil && !object.ReferenceEquals(
+                    candidateIface.Definition,
+                    candidateIface
+                ) &&
+                    object
+                    .ReferenceEquals(
+                    candidateIface.Definition ?? candidateIface,
+                    declaredInterface.Definition ?? declaredInterface
+                ) {
+                    return SubstituteSourceMember(candidateIface, function)
+                }
+            } else if !function.IsStatic && function.Declaration != nil {
+                if candidateIface.Definition is {} defIface && !object.ReferenceEquals(defIface, candidateIface) {
+                    for openCandidate in defIface.Methods {
+                        if object.ReferenceEquals(openCandidate.Declaration, function.Declaration) {
+                            return SubstituteSourceMember(candidateIface, openCandidate)
+                        }
+                    }
                 }
             }
         }
         return member
+    }
+
+    private func EnumerateCandidateInterfaces(type TypeSymbol) sequence[InterfaceSymbol] {
+        switch type {
+            case iface is InterfaceSymbol {
+                for candidate in iface.SelfAndAllBaseInterfaces() {
+                    yield candidate
+                }
+            }
+            case structure is StructSymbol {
+                for current in structure.GetHierarchy() {
+                    if !current.Interfaces.IsDefaultOrEmpty {
+                        for declared in current.Interfaces {
+                            if declared != nil {
+                                for candidate in declared.SelfAndAllBaseInterfaces() {
+                                    yield candidate
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            case typeParameter is TypeParameterSymbol {
+                if typeParameter.ClassConstraint is StructSymbol classStruct {
+                    for candidate in EnumerateCandidateInterfaces(classStruct) {
+                        yield candidate
+                    }
+                }
+                if typeParameter.InterfaceConstraint is {} ifaceConstraint {
+                    for candidate in ifaceConstraint.SelfAndAllBaseInterfaces() {
+                        yield candidate
+                    }
+                }
+            }
+        }
     }
 
     // An imported member can differ from its G# spelling (`@return` in metadata is `return_`).

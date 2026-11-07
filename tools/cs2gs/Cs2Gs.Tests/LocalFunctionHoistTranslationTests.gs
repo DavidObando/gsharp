@@ -501,7 +501,12 @@ Printed:
         /// it — proving the translated snippet actually binds (issue #2231's GS0125
         /// forward-reference bug is a binder-time error that a parse-only round-trip
         /// cannot catch).
-        internal func CompileAndRun(printed string, callExpression string, expectedOutput string? = nil) {
+        internal func CompileAndRun(
+            printed string,
+            callExpression string,
+            expectedOutput string? = nil,
+            rejectRedundantAssertions bool = false
+        ) {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -526,12 +531,25 @@ Printed:
 Translated G#:
 ` + printed
             )
+            if rejectRedundantAssertions {
+                Assert.True(
+                    !compile.Output.Contains("GS0536", StringComparison.Ordinal),
+                    "gsc must not report redundant assertions. Output:\n" +
+                        compile.Output +
+                        "\nTranslated G#:\n" +
+                        printed
+                )
+            }
             let run = ProcessRunner.Run("dotnet", []string{dllPath}, timeout: TimeSpan.FromSeconds(30))
             Assert.False(run.TimedOut, (`Translated program timed out and was killed. Output:
 ` + "${run.Output}"))
             Assert.True(run.ExitCode == 0, "Translated snippet must run successfully. Output:\n" + run.Output)
             if expectedOutput != nil {
-                Assert.Equal(expectedOutput, run.Stdout.Trim())
+                if rejectRedundantAssertions {
+                    Assert.Equal(expectedOutput + Environment.NewLine, run.Stdout)
+                } else {
+                    Assert.Equal(expectedOutput, run.Stdout.Trim())
+                }
             }
         }
 

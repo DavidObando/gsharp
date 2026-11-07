@@ -532,13 +532,18 @@ partial class CSharpToGSharpTranslator {
         ) ITypeSymbol? {
             if receiverType is IArrayTypeSymbol array {
                 return if mappedArrayElementType == nil {
-                    receiverType
+                    array.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                 } else {
                     cast[ITypeSymbol](
                         this
                             .context
                             .Compilation
-                            .CreateArrayTypeSymbol(mappedArrayElementType, array.Rank, array.NullableAnnotation)
+                            .CreateArrayTypeSymbol(
+                            mappedArrayElementType,
+                            array.Rank,
+                            mappedArrayElementType.NullableAnnotation
+                        )
+                            .WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                     )
                 }
             }
@@ -688,7 +693,13 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsPatternQualifiesForNativeVariables(isPattern IsPatternExpressionSyntax) bool {
-            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) {
+            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) || this.PatternRequiresLoweredListTest(
+                isPattern.Pattern,
+                this.ResolveDeclaredReceiverType(
+                    this.context.GetTypeInfo(isPattern.Expression).Type,
+                    isPattern.Expression
+                )
+            ) {
                 return false
             }
             let regions = this.ComputeNativePatternVariableRegions(isPattern)
@@ -799,6 +810,20 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.UsesNativeBooleanPatternTest(isPattern)
+            if !native && !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
+                isPattern.Expression
+            ) {
+                return false
+            }
+            if !native && this.NeedsNullableValueListSnapshot(
+                isPattern.Pattern,
+                this.ResolveDeclaredReceiverType(
+                    this.context.GetTypeInfo(isPattern.Expression).Type,
+                    isPattern.Expression
+                )
+            ) {
+                return false
+            }
             return if native {
                 this.GetNativePatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil
             } else {
@@ -912,6 +937,9 @@ partial class CSharpToGSharpTranslator {
                     return (nil, nil, nil, underlyingType)
                 }
                 return (nil, nil, nil, nil)
+            }
+            if pattern is ListPatternSyntax || pattern is RecursivePatternSyntax{Type: nil} {
+                return (nil, nil, underlyingType, nil)
             }
             return (this.GetTypeTestNarrowedType(pattern, inputType), nil, nil, nil)
         }

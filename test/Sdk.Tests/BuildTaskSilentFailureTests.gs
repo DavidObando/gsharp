@@ -6,8 +6,11 @@ package GSharp.Sdk.Tests
 
 import Gsharp.NET.Sdk.Tools
 import Microsoft.Build.Framework
+import Microsoft.Build.Utilities
+import System
 import System.Collections
 import System.Collections.Generic
+import System.IO
 import Xunit
 
 /// 6.2 SilentEmitFailure invariant (boundary ring): verifies that the real
@@ -83,6 +86,36 @@ open class BuildTaskSilentFailureTests {
         let message = Assert.Single(engine.Messages)
         Assert.Equal(line, message.Message)
         Assert.Equal(MessageImportance.Low, message.Importance)
+    }
+
+    @Fact
+    func Issue5047_BareResponseFilePath_DoesNotThrowArgumentException() {
+        let workDir = Path.Combine(
+            Environment.CurrentDirectory,
+            "TestArtifacts",
+            "issue5047-" + Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(workDir)
+        let previousDir = Environment.CurrentDirectory
+        try {
+            let srcFile = Path.Combine(workDir, "input.gs")
+            File.WriteAllText(srcFile, "open class Sample { }")
+            Environment.CurrentDirectory = workDir
+            let (task, _) = CreateTask()
+            task.GsharpCompilerFullPath = Path.Combine(workDir, "missing-gsc.dll")
+            task.OutputPath = workDir
+            task.OutputName = "Sample"
+            task.TempOutputPath = workDir
+            task.TargetFramework = "net10.0"
+            task.OutputType = "Library"
+            task.ResponseFilePath = "first.rsp"
+            task.Compile = []ITaskItem{TaskItem("input.gs")}
+            let _ = task.Execute()
+            Assert.True(File.Exists(Path.Combine(workDir, "first.rsp")))
+        } finally {
+            Environment.CurrentDirectory = previousDir
+            Directory.Delete(workDir, recursive: true)
+        }
     }
 
     private class RecordingBuildEngine : IBuildEngine {

@@ -337,22 +337,22 @@ partial class CSharpToGSharpTranslator {
                     // contract; expression trees and nullable delegate results
                     // stay assertion-free.
                     let bodyExpression = cast[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax](lambda.Body)
+                    let invoke = this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod
+                    let targetType = GetEffectiveReturnType(
+                        invoke?.ReturnType,
+                        lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
+                    )
                     expressionBody = this.TranslateExpression(bodyExpression)
                     if this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(bodyExpression) {
                         expressionBody = this.ReportStoreBridge(
                             bodyExpression,
                             expressionBody,
                             NonNullAssertionExpression(expressionBody),
-                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod
+                            invoke
                         )
                     } else if this.IsGSharpNullableAnalyzerExpression(bodyExpression) &&
                         this
-                        .AnalyzerBridgeTargetIsNonNull(
-                        GetEffectiveReturnType(
-                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod?.ReturnType,
-                            lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
-                        )
-                    ) {
+                        .AnalyzerBridgeTargetIsNonNull(targetType) {
                         // Issue #4356: a `T?`-only-in-G# analyzer value returned
                         // where the delegate's EFFECTIVE G# result is non-null —
                         // the `T` of an async `Task<T>`, never the envelope — the
@@ -362,7 +362,19 @@ partial class CSharpToGSharpTranslator {
                             bodyExpression,
                             expressionBody,
                             EnsureNonNullAssertion(expressionBody),
-                            this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod
+                            invoke
+                        )
+                    } else if !this.LambdaResultFlowsToNullableSink(lambda) && !this.LambdaResultFeedsUnobservedTaskRun(
+                        bodyExpression
+                    ) &&
+                        this
+                        .SlotTypeIsDeclared(invoke, bodyExpression) {
+                        expressionBody = this.ForgiveNullableReferenceValue(
+                            bodyExpression,
+                            expressionBody,
+                            targetType,
+                            invoke,
+                            includePromotedValue: this.LambdaTargetIsTranslatedSourceOrSiblingSlot(lambda)
                         )
                     }
                 } finally {
@@ -676,7 +688,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1031,7 +1044,8 @@ partial class CSharpToGSharpTranslator {
                     bindings,
                     usedDesignators,
                     guards,
-                    mutableBindings
+                    mutableBindings,
+                    node.GoverningExpression
                 )
                 for (symbol, replacement) in bindings {
                     this.state.PatternBindings[symbol] = replacement
@@ -1255,7 +1269,8 @@ partial class CSharpToGSharpTranslator {
                                 bindings,
                                 usedDesignators,
                                 guards,
-                                mutableBindings
+                                mutableBindings,
+                                node.Expression
                             )
                             // Issue #1730: install the pattern's bindings before
                             // translating the `when` guard and the case body, so
@@ -2457,8 +2472,24 @@ partial class CSharpToGSharpTranslator {
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             usedDesignators HashSet[string],
             guards List[GExpression],
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)],
+            receiverSyntax ExpressionSyntax
         ) GPattern? {
+            let inputType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(receiverSyntax).Type,
+                receiverSyntax
+            )
+            if !PatternIntroducesBinding(pattern) && this.PatternRequiresLoweredListTest(pattern, inputType) {
+                let temp = this.NewSpillName()
+                let local = IdentifierExpression(temp)
+                if this.ReceiverValueIsPromotedNullable(receiverSyntax) || this.NullableReferenceValueMayBeNull(
+                    receiverSyntax
+                ) {
+                    this.state.GSharpNullablePatternReceivers.Add(local)
+                }
+                guards.Add(this.TranslatePatternTest(local, pattern, inputType))
+                return VarPattern(temp)
+            }
             if pattern is RecursivePatternSyntax &&
                 pattern.Type != nil &&
                 pattern.PropertyPatternClause != nil &&

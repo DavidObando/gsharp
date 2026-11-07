@@ -1216,25 +1216,33 @@ shared class SemanticLookup {
                         .Concat(iface.StaticMethods)
                         .Concat(iface.PrivateMethods)
                         .Concat(iface.StaticPrivateMethods) {
-                        if method.Declaration is {Identifier: {IsMissing: false} methodIdentifier} {
-                            declarations[methodIdentifier] = method
+                        if method.Declaration is {} methodDecl {
+                            if !methodDecl.Identifier.IsMissing {
+                                declarations[methodDecl.Identifier] = method
+                            }
+                            MapParameters(methodDecl.Parameters.ToArray(), method.Parameters, declarations)
                         }
                     }
-                    MapMembersByName(
-                        declarations,
-                        iface.Declaration.Properties.Select((p PropertyDeclarationSyntax) -> p.Identifier),
-                        iface.Properties
-                    )
-                    MapMembersByName(
-                        declarations,
-                        iface.Declaration.Events.Select((e EventDeclarationSyntax) -> e.Identifier),
-                        iface.Events
-                    )
-                    MapMembersByName(
-                        declarations,
-                        iface.Declaration.StaticFields.Select((f FieldDeclarationSyntax) -> f.Identifier),
-                        iface.StaticFields.Concat(iface.ConstFields)
-                    )
+                    for prop in iface.Properties {
+                        if prop.Declaration is {} propDecl {
+                            if !propDecl.Identifier.IsMissing {
+                                declarations[propDecl.Identifier] = prop
+                            }
+                            if propDecl.Parameters is {} propParams {
+                                MapParameters(propParams.ToArray(), prop.Parameters, declarations)
+                            }
+                        }
+                    }
+                    for evt in iface.Events {
+                        if evt.Declaration is {Identifier: {IsMissing: false} evtIdentifier} {
+                            declarations[evtIdentifier] = evt
+                        }
+                    }
+                    for field in iface.StaticFields.Concat(iface.ConstFields) {
+                        if field.Declaration is FieldDeclarationSyntax{Identifier: {IsMissing: false} fieldIdentifier} {
+                            declarations[fieldIdentifier] = field
+                        }
+                    }
                 }
             }
         }
@@ -1299,35 +1307,26 @@ shared class SemanticLookup {
         globals[aggregate.Name] = aggregate
         if aggregate.Declaration != nil {
             declarations[aggregate.Declaration!!.Identifier] = aggregate
-            var allFieldIdentifiers = aggregate.Declaration!!.Fields.Select((f FieldDeclarationSyntax) -> f.Identifier)
-            var allPropertyIdentifiers = aggregate.Declaration!!.Properties.Select(
-                (p PropertyDeclarationSyntax) -> p.Identifier
-            )
-            var allEventIdentifiers = aggregate.Declaration!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
-            if aggregate.Declaration!!.SharedBlock != nil {
-                allFieldIdentifiers = allFieldIdentifiers.Concat(
-                    aggregate.Declaration!!.SharedBlock!!.Fields.Select((f FieldDeclarationSyntax) -> f.Identifier)
-                )
-                allPropertyIdentifiers = allPropertyIdentifiers.Concat(
-                    aggregate.Declaration!!.SharedBlock!!.Properties.Select(
-                        (p PropertyDeclarationSyntax) -> p.Identifier
-                    )
-                )
-                allEventIdentifiers = allEventIdentifiers.Concat(
-                    aggregate.Declaration!!.SharedBlock!!.Events.Select((e EventDeclarationSyntax) -> e.Identifier)
-                )
+            for field in aggregate.Fields.Concat(aggregate.StaticFields).Concat(aggregate.ConstFields) {
+                if field.Declaration is FieldDeclarationSyntax{Identifier: {IsMissing: false} fieldIdentifier} {
+                    declarations[fieldIdentifier] = field
+                }
             }
-            MapMembersByName(
-                declarations,
-                allFieldIdentifiers,
-                aggregate.Fields.Concat(aggregate.StaticFields).Concat(aggregate.ConstFields)
-            )
-            MapMembersByName(
-                declarations,
-                allPropertyIdentifiers,
-                aggregate.Properties.Concat(aggregate.StaticProperties)
-            )
-            MapMembersByName(declarations, allEventIdentifiers, aggregate.Events.Concat(aggregate.StaticEvents))
+            for prop in aggregate.Properties.Concat(aggregate.StaticProperties) {
+                if prop.Declaration is {} propDecl {
+                    if !propDecl.Identifier.IsMissing {
+                        declarations[propDecl.Identifier] = prop
+                    }
+                    if propDecl.Parameters is {} propParams {
+                        MapParameters(propParams.ToArray(), prop.Parameters, declarations)
+                    }
+                }
+            }
+            for evt in aggregate.Events.Concat(aggregate.StaticEvents) {
+                if evt.Declaration is {Identifier: {IsMissing: false} evtIdentifier} {
+                    declarations[evtIdentifier] = evt
+                }
+            }
             for method in aggregate.Methods.Concat(aggregate.StaticMethods) {
                 if method.Declaration != nil {
                     if !method.Declaration!!.Identifier.IsMissing {
@@ -1349,30 +1348,38 @@ shared class SemanticLookup {
         parameters ImmutableArray[ParameterSymbol],
         declarations Dictionary[SyntaxToken, Symbol]
     ) {
-        let symbolIndex = parameters.Length - syntaxParameters.Length
-        for var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++ {
-            // ADR-0185: every MapParameters caller passes a named function's,
-            // method's, or constructor's syntax parameters, never a
-            // (possibly destructured) arrow-lambda's.
-            declarations[syntaxParameters[i].Identifier!!] = parameters[symbolIndex + i]
+        if syntaxParameters.Length == 0 || parameters.IsDefaultOrEmpty {
+            return
         }
-    }
-
-    private func MapMembersByName(
-        declarations Dictionary[SyntaxToken, Symbol],
-        identifiers IEnumerable[SyntaxToken],
-        symbols IEnumerable[Symbol]
-    ) {
-        let byName = Dictionary[string, Symbol](StringComparer.Ordinal)
-        for symbol in symbols {
-            if symbol?.Name != nil {
-                byName[symbol.Name] = symbol
+        let tree = syntaxParameters[0].SyntaxTree
+        var mappedByToken = false
+        for parameter in parameters {
+            if parameter.DeclaringSyntax is SyntaxToken identifier &&
+                !identifier.IsMissing &&
+                identifier.SyntaxTree == tree {
+                declarations[identifier] = parameter
+                mappedByToken = true
             }
         }
-        for identifier in identifiers {
-            if identifier != nil && !identifier.IsMissing && byName.TryGetValue(identifier.Text, out var symbol) {
-                declarations[identifier] = symbol
+        if mappedByToken {
+            return
+        }
+        let survivingSyntax = List[SyntaxToken](syntaxParameters.Length)
+        let seenNames = HashSet[string](StringComparer.Ordinal)
+        for syntaxParam in syntaxParameters {
+            if syntaxParam.Identifier is {} identifier && !identifier.IsMissing {
+                let name = identifier.ValueText
+                if name == "_" || seenNames.Add(name) {
+                    survivingSyntax.Add(identifier)
+                }
             }
+        }
+        let symbolIndex = parameters.Length - survivingSyntax.Count
+        if symbolIndex < 0 {
+            return
+        }
+        for var i = 0; i < survivingSyntax.Count && symbolIndex + i < parameters.Length; i++ {
+            declarations[survivingSyntax[i]] = parameters[symbolIndex + i]
         }
     }
 

@@ -2127,6 +2127,75 @@ class Program {
 `, "CS0029", line: 4, column: 44, length: 3, oracleCompanion: "CS1662")
     }
 
+    /// Issue #5686: an expression-bodied function literal converts its result to the target delegate's return
+    /// type, as a block-bodied literal's `return` statement does. A `T?` result at a non-null `T` delegate
+    /// return reports GS0155 at the body expression; a nullable delegate return or an asserted result compiles
+    /// and runs as in C#.
+    @Fact
+    func ExpressionLiteral_NullableResultAtNonNullDelegateReturn_ReportsConversion() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        RejectConsumer(fixture, `import System
+func Maybe() string? -> nil
+func Main() {
+    let f () -> string = () -> Maybe()
+    Console.Write(f())
+}
+`, "GS0155", line: 4, column: 32, length: 7)
+        RejectConsumer(fixture, `import System
+func Maybe() string? -> nil
+func Main() {
+    let f Func[string] = () -> Maybe()
+    Console.Write(f())
+}
+`, "GS0155", line: 4, column: 32, length: 7)
+        RejectConsumer(fixture, `import System
+delegate D() string;
+func Maybe() string? -> nil
+func Main() {
+    let f D = () -> Maybe()
+    Console.Write(f())
+}
+`, "GS0155", line: 5, column: 21, length: 7)
+        RejectConsumer(fixture, `import System
+import FunctionControl
+func Maybe() string? -> nil
+func Main() {
+    Console.Write(Calls.NsOne(() -> Maybe()))
+}
+`, "GS0155", line: 5, column: 37, length: 7)
+        Check(fixture, `import System
+import FunctionControl
+delegate D() string;
+delegate NullableD() string?;
+func Maybe() string? -> nil
+func Present() string? -> "ok"
+func Main() {
+    let f () -> string? = () -> Maybe()
+    let g Func[string?] = () -> nil
+    let h NullableD = () -> Maybe()
+    let k () -> string = () -> Present()!!
+    let m D = () -> Present()!!
+    Console.Write((f() == nil).ToString() + (g() == nil).ToString() + (h() == nil).ToString() + k() + m() + Calls.NsOne(() -> Present()!!))
+}
+`, `using System;
+using FunctionControl;
+delegate string D();
+delegate string? NullableD();
+class Program {
+    static string? Maybe() => null;
+    static string? Present() => "ok";
+    static void Main() {
+        Func<string?> f = () => Maybe();
+        Func<string?> g = () => null;
+        NullableD h = () => Maybe();
+        Func<string> k = () => Present()!;
+        D m = () => Present()!;
+        Console.Write((f() == null).ToString() + (g() == null).ToString() + (h() == null).ToString() + k() + m() + Calls.NsOne(() => Present()!));
+    }
+}
+`, "TrueTrueTrueokokF2")
+    }
+
     /// Issue #5543 controls: a by-value delegate slot, a source `in` slot and an explicit address keep their
     /// selection. A function value still needs a delegate that it can keep (#5536).
     @Fact

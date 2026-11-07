@@ -1055,10 +1055,17 @@ partial class CSharpToGSharpTranslator {
         ) GTypeReference? {
             // Issue #5541: the positions that oblivious container storage and the
             // elements give the literal's element type, nested positions included.
-            let elementType GTypeReference? = if literal != nil {
+            var elementType GTypeReference? = if literal != nil {
                 this.PromoteObliviousArrayElement(mappedElementType, elementTypeSymbol, literal)
             } else {
                 mappedElementType
+            }
+            if literal is ImplicitArrayCreationExpressionSyntax implicitArray {
+                elementType = this.PromoteInferredDelegateArrayElementType(
+                    elementType,
+                    elementTypeSymbol,
+                    implicitArray
+                )
             }
             if elementType == nil ||
                 elementType.IsNullable ||

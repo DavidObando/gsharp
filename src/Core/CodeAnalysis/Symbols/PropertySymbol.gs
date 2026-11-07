@@ -277,6 +277,12 @@ class PropertySymbol : Symbol {
             OriginalDefinition = OriginalDefinition ?? this
         }
         // The documentation is binder-attached state, not part of the declaration.
+        if !Attributes.IsDefaultOrEmpty {
+            copy.SetAttributes(Attributes)
+        }
+        if ContainingType is {} containing {
+            copy.AnchorContainingType(containing)
+        }
         if this.GetDocumentation() is {} documentation {
             copy.SetDocumentation(documentation)
         }

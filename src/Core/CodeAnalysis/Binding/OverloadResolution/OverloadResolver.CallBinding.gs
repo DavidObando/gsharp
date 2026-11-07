@@ -2234,6 +2234,16 @@ internal partial class OverloadResolver {
                     !TypeSymbol.ContainsTypeParameter(expectedType) &&
                     MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var deferredTarget) &&
                     deferredTarget != nil {
+                    if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _) {
+                        let targetedTree = bindExpressionWithTargetType(deferredLambda, expectedType)
+                        boundArguments[i] = if parameter.RefKind == RefKind.In {
+                            conversions.BindImplicitInArgument(lambdaLoc, targetedTree, expectedType, parameter)
+                        } else {
+                            targetedTree
+                        }
+                        hasErrors |= parameter.RefKind == RefKind.In && boundArguments[i] is BoundErrorExpression
+                        continue
+                    }
                     let targeted = bindLambdaWithTarget!!(deferredLambda, deferredTarget)
                     // Issue #4400: at an `in` delegate parameter the target-
                     // bound lambda is a value; pass it by readonly reference.

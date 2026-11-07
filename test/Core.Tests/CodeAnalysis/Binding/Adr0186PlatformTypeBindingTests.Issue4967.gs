@@ -65,4 +65,31 @@ partial class Adr0186PlatformTypeBindingTests {
     var t string? = nil
     Console.WriteLine(first + " " + second + " " + (t ??= Ob.Value()))`, NullabilityMode.PlatformTypes).Trim())
     }
+
+    /// A nested assignment of an oblivious platform value into a nullable local
+    /// does not run a non-null check, so `x ??= (y = Ob.Nil())` and
+    /// `let v = (x ??= (y = Ob.Nil()))` must leave `x` nullable.
+    @Fact
+    func Issue4978_NestedAssignmentFromObliviousMethod_DoesNotNarrowTarget() {
+        using let world = World()
+        let stmtResult = world.Compile(`    var x string? = nil
+    var y string? = nil
+    x ??= (y = Ob.Nil())
+    Console.WriteLine(x.Length)`, NullabilityMode.PlatformTypes)
+        Assert.False(stmtResult.Success, Describe(stmtResult))
+        Assert.Contains(
+            stmtResult.Diagnostics,
+            (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Length", StringComparison.Ordinal)
+        )
+
+        let exprResult = world.Compile(`    var x string? = nil
+    var y string? = nil
+    let value = (x ??= (y = Ob.Nil()))
+    Console.WriteLine(x.Length)`, NullabilityMode.PlatformTypes)
+        Assert.False(exprResult.Success, Describe(exprResult))
+        Assert.Contains(
+            exprResult.Diagnostics,
+            (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Length", StringComparison.Ordinal)
+        )
+    }
 }

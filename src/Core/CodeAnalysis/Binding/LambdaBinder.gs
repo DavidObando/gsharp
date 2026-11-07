@@ -1040,13 +1040,48 @@ internal class LambdaBinder {
         targetFunctionType FunctionTypeSymbol? = nil,
         inferReturnTypeFromBody bool = false,
         acceptsNaturalType((TypeSymbol) -> bool)? = nil,
-        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil,
+        isExpressionTreeTarget bool = false
+    ) BoundExpression {
+        var checkedParent = syntax.Parent
+        while checkedParent is ParenthesizedExpressionSyntax {
+            checkedParent = checkedParent.Parent
+        }
+        if checkedParent is CheckedExpressionSyntax checkedExpression {
+            using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
+            return BindLambdaExpressionCore(
+                syntax,
+                targetFunctionType,
+                inferReturnTypeFromBody,
+                acceptsNaturalType,
+                discardedTargetDiagnostics,
+                isExpressionTreeTarget
+            )
+        }
+        return BindLambdaExpressionCore(
+            syntax,
+            targetFunctionType,
+            inferReturnTypeFromBody,
+            acceptsNaturalType,
+            discardedTargetDiagnostics,
+            isExpressionTreeTarget
+        )
+    }
+
+    private func BindLambdaExpressionCore(
+        syntax LambdaExpressionSyntax,
+        targetFunctionType FunctionTypeSymbol? = nil,
+        inferReturnTypeFromBody bool = false,
+        acceptsNaturalType((TypeSymbol) -> bool)? = nil,
+        discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]? = nil,
+        isExpressionTreeTarget bool = false
     ) BoundExpression {
         let key = RetriedFunctionLiteralKey(
             syntax,
             targetFunctionType,
             inferReturnTypeFromBody,
-            acceptsNaturalType != nil
+            acceptsNaturalType != nil,
+            isExpressionTreeTarget
         )
         if TryReuseRetriedFunctionLiteral(key, acceptsNaturalType, discardedTargetDiagnostics, out var cached) {
             return cached!!
@@ -1060,6 +1095,7 @@ internal class LambdaBinder {
             inferReturnTypeFromBody,
             acceptsNaturalType,
             discardedTargetDiagnostics,
+            isExpressionTreeTarget,
             &keptNaturalType
         )
         RecordRetriedFunctionLiteral(
@@ -1079,6 +1115,7 @@ internal class LambdaBinder {
         inferReturnTypeFromBody bool,
         acceptsNaturalType((TypeSymbol) -> bool)?,
         discardedTargetDiagnostics List[ImmutableArray[Diagnostic]]?,
+        isExpressionTreeTarget bool,
         ref keptNaturalType bool
     ) BoundExpression {
         let startMark = Diagnostics.Count
@@ -1466,10 +1503,12 @@ internal class LambdaBinder {
         // nested lambdas) to receive the same context as declared functions.
         // Partial generic inference still uses the poisoned placeholder and
         // infers the return from the body.
+        let outerScope = Scope
+        let outerFunction = getCurrentFunction()
         let syntheticName = "<lambda${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
         let placeholderReturnType = if !inferReturnTypeFromBody &&
             contextualReturnType != nil &&
-            !TypeSymbol.ContainsTypeParameter(contextualReturnType) &&
+            !binderCtx.ContainsOutOfScopeTypeParameter(contextualReturnType, outerFunction) &&
             contextualReturnType
             .ClrType
             ?.ContainsGenericParameters != true {
@@ -1491,8 +1530,6 @@ internal class LambdaBinder {
         } else {
             default(DeferredReturnState?)
         }
-        let outerScope = Scope
-        let outerFunction = getCurrentFunction()
         Scope = BoundScope(outerScope)
         setCurrentFunction(placeholder)
         placeholder.LexicalEnclosingType = ResolveLexicalEnclosingType(outerFunction)
@@ -1571,6 +1608,7 @@ internal class LambdaBinder {
         // enclosing function's labels and loop stack exactly like the
         // function-literal path above.
         let savedFrame = EnterNestedFrame(syntax.Body)
+        let lambdaScope = Scope
         var boundBody BoundExpression
         try {
             var bodyTargetType TypeSymbol? = contextualReturnType
@@ -1622,13 +1660,21 @@ internal class LambdaBinder {
             )
             let targetBody = deferredReturns.WithTargetOperands(boundBody)
             let trialMark = Diagnostics.Count
-            let converted = ApplyInferredReturnTypeConversion(
-                targetBody,
-                syntax,
-                placeholderReturnType,
-                true,
-                deferredReturns
-            )
+            var converted BoundExpression
+            Scope = lambdaScope
+            setCurrentFunction(placeholder)
+            try {
+                converted = ApplyInferredReturnTypeConversion(
+                    targetBody,
+                    syntax,
+                    placeholderReturnType,
+                    true,
+                    deferredReturns
+                )
+            } finally {
+                Scope = outerScope
+                setCurrentFunction(outerFunction)
+            }
             let targetDiagnostics = deferredReturns.OperandDiagnostics().AddRange(Diagnostics.VisibleSince(trialMark))
             Diagnostics.TruncateTo(trialMark)
             // The body fits the target only when the target-typed inference adopts the target return type, which
@@ -1657,8 +1703,19 @@ internal class LambdaBinder {
             } else {
                 Diagnostics.AddRange(targetDiagnostics)
                 boundBody = converted
-                returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync, Scope)
+                returnType = if boundBody is BoundErrorExpression {
+                    TypeSymbol.Error
+                } else if isExpressionTreeTarget {
+                    returnType
+                } else {
+                    placeholderReturnType
+                }
             }
+        } else if !isExpressionTreeTarget &&
+            placeholderReturnType != TypeSymbol.Error &&
+            placeholderReturnType != TypeSymbol.Void &&
+            !(boundBody is BoundErrorExpression) {
+            returnType = placeholderReturnType
         }
         if isAsync && isAsyncIteratorReturnType(returnType) {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType)
@@ -1690,10 +1747,6 @@ internal class LambdaBinder {
         synthetic.IsAsync = isAsync
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask
         synthetic.LexicalEnclosingType = placeholder.LexicalEnclosingType
-        // ADR-0076 / issue #716: rewrite the bound body so every return
-        // statement's expression is converted to the inferred return type.
-        // We deferred the conversion in BindReturnStatement; apply it now.
-        boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         let bodyStatements = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -1706,32 +1759,43 @@ internal class LambdaBinder {
         // `bodyStatements` is the single list every body-statement,
         // including this prelude, is collected into below.
         bodyStatements.AddRange(destructuringPrelude)
-        if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
-            let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
-            if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
-                boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+        Scope = lambdaScope
+        setCurrentFunction(placeholder)
+        try {
+            // ADR-0076 / issue #716: rewrite the bound body so every return
+            // statement's expression is converted to the inferred return type.
+            // We deferred the conversion in BindReturnStatement; apply it now.
+            boundBody = ApplyInferredReturnTypeConversion(boundBody, syntax, returnType, defersReturnConversion)
+            if (returnType == TypeSymbol.Void || returnType == TypeSymbol.Error) && boundBody is BoundBlockExpression {
+                let materializedBodyType = TypeSymbol.MaterializeNeverFunctionReturns(boundBody.Type)
+                if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
+                    boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
+                }
             }
-        }
-        if returnType != TypeSymbol.Void &&
-            returnType != TypeSymbol.Error &&
-            boundBody is BoundBlockExpression{
-            Expression: BoundVariableExpression{Variable: LocalVariableSymbol cleanupResultLocal}
-        } cleanupBlock &&
-            cleanupResultLocal
-            .Name
-            .StartsWith("<blockResult", StringComparison.Ordinal) && cleanupBlock.Type != returnType {
-            boundBody = conversions.BindConversion(syntax.Body.Location, cleanupBlock, returnType)
-        }
-        if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
-            // Block body — emit the prefix statements, then either a return-
-            // statement on the trailing expression (when the lambda returns a
-            // value) or an expression-statement + void return (when it doesn't).
-            for stmt in blockExpr.Statements {
-                bodyStatements.Add(stmt)
+            if returnType != TypeSymbol.Void &&
+                returnType != TypeSymbol.Error &&
+                boundBody is BoundBlockExpression{
+                Expression: BoundVariableExpression{Variable: LocalVariableSymbol cleanupResultLocal}
+            } cleanupBlock &&
+                cleanupResultLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) && cleanupBlock.Type != returnType {
+                boundBody = conversions.BindConversion(syntax.Body.Location, cleanupBlock, returnType)
             }
-            EmitTrailingExpression(bodyStatements, syntax, blockExpr.Expression, returnType)
-        } else {
-            EmitTrailingExpression(bodyStatements, syntax, boundBody, returnType)
+            if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
+                // Block body — emit the prefix statements, then either a return-
+                // statement on the trailing expression (when the lambda returns a
+                // value) or an expression-statement + void return (when it doesn't).
+                for stmt in blockExpr.Statements {
+                    bodyStatements.Add(stmt)
+                }
+                EmitTrailingExpression(bodyStatements, syntax, blockExpr.Expression, returnType)
+            } else {
+                EmitTrailingExpression(bodyStatements, syntax, boundBody, returnType)
+            }
+        } finally {
+            Scope = outerScope
+            setCurrentFunction(outerFunction)
         }
         let bodyBlock = BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable())
         CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location)
@@ -1756,7 +1820,12 @@ internal class LambdaBinder {
         // ClosureCaptureLegalityChecker so the `go`-statement closure path
         // (StatementBinder.BindGoStatement) applies the exact same rules.
         ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location)
-        let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured)
+        let deferredRuntimeReturnValidation = isExpressionTreeTarget ||
+            targetFunctionType == nil ||
+            inferReturnTypeFromBody
+        let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured){
+            DeferredExpressionTreeReturnValidation = deferredRuntimeReturnValidation
+        }
         if !needsExplicitParameterAdapter {
             return literal
         }
@@ -1766,11 +1835,13 @@ internal class LambdaBinder {
             expression: "targetFunctionType"
         )
         let adapterTarget = FunctionTypeSymbol.Get(target.ParameterTypes, target.IsVariadic, observableReturnType)
-        return CreateErasedFunctionLiteralAdapter(
+        let adapted = CreateErasedFunctionLiteralAdapter(
             literal,
             adapterTarget,
             ImmutableArray.Create(exactTargetParameterSlots)
         )
+        adapted.DeferredExpressionTreeReturnValidation = deferredRuntimeReturnValidation
+        return adapted
     }
 
     /// Synthesizes an "erased" function-literal adapter: a wrapper
@@ -2689,10 +2760,18 @@ internal class LambdaBinder {
             }
             return
         }
+        let trailingLocation = (syntax.Body as BlockExpressionSyntax)?.Expression?.Location ?? syntax.Body.Location
         let trailingConverted = if trailing.Type == returnType {
             trailing
+        } else if (
+            trailing.Type is TupleTypeSymbol || trailing.Type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}
+        ) &&
+            (returnType is TupleTypeSymbol || returnType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) &&
+            ConversionClassifier
+            .HasReferenceNullabilityReturnMismatch(trailing.Type, returnType) {
+            conversions.BindLambdaReturnTupleConversion(trailingLocation, trailing, returnType)
         } else {
-            conversions.BindConversion(syntax.Body.Location, trailing, returnType)
+            conversions.BindConversion(trailingLocation, trailing, returnType)
         }
         bodyStatements.Add(BoundReturnStatement(syntax.Body, trailingConverted))
     }
@@ -2767,16 +2846,27 @@ internal class LambdaBinder {
         internal let Target FunctionTypeSymbol?
         internal let InferReturn bool
         internal let Speculative bool
+        internal let IsExpressionTree bool
 
-        init(syntax SyntaxNode, target FunctionTypeSymbol?, inferReturn bool, speculative bool) {
+        init(
+            syntax SyntaxNode,
+            target FunctionTypeSymbol?,
+            inferReturn bool,
+            speculative bool,
+            isExpressionTree bool = false
+        ) {
             Syntax = syntax
             Target = target
             InferReturn = inferReturn
             Speculative = speculative
+            IsExpressionTree = isExpressionTree
         }
 
         func Equals(other RetriedFunctionLiteralKey) bool -> object.ReferenceEquals(Syntax, other.Syntax) &&
-            object.Equals(Target, other.Target) && InferReturn == other.InferReturn && Speculative == other.Speculative
+            object.Equals(Target, other.Target) &&
+            InferReturn == other.InferReturn &&
+            Speculative == other.Speculative &&
+            IsExpressionTree == other.IsExpressionTree
 
         override func Equals(obj object?) bool -> obj is RetriedFunctionLiteralKey other && Equals(other)
 
@@ -2784,7 +2874,8 @@ internal class LambdaBinder {
             ReferenceEqualityComparer.Instance.GetHashCode(Syntax),
             Target,
             InferReturn,
-            Speculative
+            Speculative,
+            IsExpressionTree
         )
     }
 
@@ -4934,9 +5025,18 @@ internal class LambdaBinder {
                 var allCandidatesConvert = targetReturn != nil
                 if targetReturn != nil {
                     for candidate in candidates {
-                        if candidate != TypeSymbol.Error && !Conversion.Classify(candidate, targetReturn)
-                            .IsImplicit &&
-                            !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(candidate, targetReturn) {
+                        if candidate != TypeSymbol.Error &&
+                            (
+                            ConversionClassifier.HasReferenceNullabilityReturnMismatch(candidate, targetReturn) ||
+                                (
+                                !Conversion.Classify(candidate, targetReturn)
+                                    .IsImplicit &&
+                                    !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                                    candidate,
+                                    targetReturn
+                                )
+                            )
+                        ) {
                             allCandidatesConvert = false
                             break
                         }
@@ -4978,10 +5078,16 @@ internal class LambdaBinder {
                 return TypeSymbol.Void
             }
             let resolvedResult = result ?? TypeSymbol.Error
-            let finalResult = if resolvedResult != TypeSymbol.Null {
+            var finalResult = if resolvedResult != TypeSymbol.Null {
                 TupleTypeSymbol.ResolveNilElements(resolvedResult)
             } else {
                 resolvedResult
+            }
+            if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} &&
+                finalResult is TupleTypeSymbol &&
+                Conversion
+                .Classify(finalResult, targetReturn).IsImplicit {
+                finalResult = NullableTypeSymbol.Get(finalResult)
             }
             return MaterializeRefReturn(finalResult)
         }

@@ -102,6 +102,13 @@ partial class SemanticModel {
                 return PublicCompletionView(namedCall)
             }
         }
+        if node is BaseClassCallExpressionSyntax baseCallSyntax &&
+            index
+            .Value
+            .BoundBySyntax
+            .TryGetValue(baseCallSyntax.Call, out var baseCallBound) {
+            return PublicCompletionView(baseCallBound)
+        }
         return nil
     }
 
@@ -213,7 +220,9 @@ partial class SemanticModel {
                     current is BoundPropertyAccessExpression ||
                     current is BoundCallExpression ||
                     current is BoundConstrainedStaticCallExpression ||
-                    current is BoundUserInstanceCallExpression
+                    current is BoundUserInstanceCallExpression ||
+                    current is BoundBaseClassCallExpression ||
+                    current is BoundBaseInterfaceCallExpression
             ) &&
                 ReferencedSourceSymbol(expression) is {} widened {
                 return SymbolInfo(widened)

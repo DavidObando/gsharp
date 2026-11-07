@@ -382,7 +382,11 @@ namespace Demo
 
     shared {
         // Runs `P.Run()` of the C# and of its translation, compares the output, and returns the translation.
-        internal func AssertRunsLikeCSharp(source string, expectedOutput string? = nil) string {
+        internal func AssertRunsLikeCSharp(
+            source string,
+            expectedOutput string? = nil,
+            rejectRedundantAssertions bool = false
+        ) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
             Assert.True(
                 project.BoundWithoutErrors,
@@ -409,7 +413,18 @@ namespace Demo
             let document = Assert.Single(project.Documents)
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-            LocalFunctionHoistTranslationTests.CompileAndRun(printed, "System.Console.WriteLine(P.Run())", expected)
+            if rejectRedundantAssertions {
+                Assert.DoesNotContain(
+                    context.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+                )
+            }
+            LocalFunctionHoistTranslationTests.CompileAndRun(
+                printed,
+                "System.Console.WriteLine(P.Run())",
+                expected,
+                rejectRedundantAssertions
+            )
             return printed
         }
     }

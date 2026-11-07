@@ -71,6 +71,7 @@ func Test() {
         Assert.Equal(diagnosticId, error.Id)
         Assert.Equal(source.IndexOf("??=", StringComparison.Ordinal), error.Location.Span.Start)
         Assert.Equal(3, error.Location.Span.Length)
+        Assert.DoesNotContain("└──", error.Message, StringComparison.Ordinal)
     }
 
     @Theory

@@ -383,7 +383,10 @@ internal class ConversionClassifier {
         // Issue #3355: bind a block against its target before converting so
         // target-only trailing forms (`default`, untyped lambdas, branchy
         // expressions) receive their expected type.
-        if syntax is BlockExpressionSyntax {
+        let targetsLambda = type != nil &&
+            ContainsNestedLambdaSyntax(syntax) &&
+            (!allowExplicit || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _))
+        if syntax is BlockExpressionSyntax || targetsLambda {
             return bindExpressionWithTargetType(syntax, type!!)
         }
         // ADR-0055 Tier 4: contextual conversion of an interpolated string to
@@ -1042,6 +1045,9 @@ internal class ConversionClassifier {
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type!!, Diagnostics)
             return BoundConversionExpression(nil, type!!, expressionTreeLiteral)
         }
+        if RequiresRuntimeDelegateReturnValidation(expression, type, out var runtimeLambdaSyntax) {
+            return bindExpressionWithTargetType(runtimeLambdaSyntax!!, type!!)
+        }
         if expression is BoundFunctionLiteralExpression refUpcastLiteral &&
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type!!, out _) &&
             !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type!!, out _) &&
@@ -1390,23 +1396,34 @@ internal class ConversionClassifier {
             // declares at that position — mirroring C#'s CS8123. Converting
             // a named-tuple-typed VALUE to a differently-named target is
             // silent: names are metadata over the positional shape.
-            if expression is BoundTupleLiteralExpression &&
+            if expression is BoundTupleLiteralExpression identityTupleLiteral &&
                 expression.Type is TupleTypeSymbol identitySourceTuple &&
                 type is TupleTypeSymbol identityTargetTuple &&
-                !object.ReferenceEquals(identitySourceTuple, identityTargetTuple) &&
-                identitySourceTuple.HasNames &&
-                identityTargetTuple
-                .HasNames {
-                for var i = 0; i < identitySourceTuple.Arity; i++ {
-                    let sourceName string? = identitySourceTuple.ElementNames[i]
-                    let targetName string? = identityTargetTuple.ElementNames[i]
-                    if sourceName != nil && targetName != nil && !string.Equals(
-                        sourceName,
-                        targetName,
-                        StringComparison.Ordinal
-                    ) {
-                        Diagnostics.ReportTupleElementNameMismatch(diagnosticLocation, sourceName, targetName)
+                !object
+                .ReferenceEquals(identitySourceTuple, identityTargetTuple) {
+                if identitySourceTuple.HasNames && identityTargetTuple.HasNames {
+                    for var i = 0; i < identitySourceTuple.Arity; i++ {
+                        let sourceName string? = identitySourceTuple.ElementNames[i]
+                        let targetName string? = identityTargetTuple.ElementNames[i]
+                        if sourceName != nil && targetName != nil && !string.Equals(
+                            sourceName,
+                            targetName,
+                            StringComparison.Ordinal
+                        ) {
+                            Diagnostics.ReportTupleElementNameMismatch(diagnosticLocation, sourceName, targetName)
+                        }
                     }
+                }
+                if !object.ReferenceEquals(identitySourceTuple.WithoutNames(), identityTargetTuple.WithoutNames()) &&
+                    identitySourceTuple.Arity == identityTargetTuple.Arity &&
+                    ContainsTupleFunctionLiteral(identityTupleLiteral) {
+                    return BindTupleConversion(
+                        diagnosticLocation,
+                        expression,
+                        identitySourceTuple,
+                        identityTargetTuple,
+                        allowExplicit
+                    )
                 }
             }
             return expression
@@ -1652,7 +1669,27 @@ internal class ConversionClassifier {
             if type is TupleTypeSymbol targetTuple && sourceTuple.Arity == targetTuple.Arity {
                 return BindTupleConversion(diagnosticLocation, expression, sourceTuple, targetTuple, allowExplicit)
             }
-            if sourceTuple.HasNilElement {
+            if type is NullableTypeSymbol nullableTarget &&
+                nullableTarget.UnderlyingType is TupleTypeSymbol innerTargetTuple &&
+                innerTargetTuple.Arity == sourceTuple.Arity &&
+                (
+                !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceTuple, innerTargetTuple) ||
+                    (
+                    expression is BoundTupleLiteralExpression nullableTupleLiteral &&
+                        ContainsTupleFunctionLiteral(nullableTupleLiteral)
+                )
+            ) {
+                expression = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    innerTargetTuple,
+                    allowExplicit
+                )
+                if expression is BoundErrorExpression {
+                    return expression
+                }
+            } else if sourceTuple.HasNilElement {
                 let targetTuple = if type is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol innerTarget} &&
                     innerTarget.Arity == sourceTuple.Arity {
                     innerTarget
@@ -2212,12 +2249,19 @@ internal class ConversionClassifier {
                         GetClrParameterTargetType(argument.Type, parameters[paramIndex])
                     let rejectionTargetType = substituted ??
                         (
-                        if method != nil && !symbolicMethodTypeArgs.IsDefaultOrEmpty {
+                        if method != nil {
                             MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
                                 receiverType,
                                 method,
                                 paramIndex,
                                 symbolicMethodTypeArgs
+                            ) ??
+                                (
+                                if receiverType != nil {
+                                    MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                                } else {
+                                    default(TypeSymbol?)
+                                }
                             )
                         } else {
                             default(TypeSymbol?)
@@ -2241,6 +2285,15 @@ internal class ConversionClassifier {
                     // its own expression-tree handling) unchanged.
                     let isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression &&
                         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
+                    let isRuntimeDelegateReturnMismatch = !isExpressionTreeLiteralTarget &&
+                        RequiresRuntimeDelegateReturnValidation(
+                        argument,
+                        rejectionTargetType,
+                        out _,
+                        method,
+                        paramIndex,
+                        call
+                    )
                     // Issue #2347: an unresolved method group's natural type is
                     // the Error sentinel (see
                     // ClrOverloadResolution.IsUnresolvedMethodGroupArgument), so
@@ -2280,6 +2333,8 @@ internal class ConversionClassifier {
                             call?.Location ?? default(TextLocation)
                         }
                         rebound = BindContextualOpenLiteral(location, argument, targetType)
+                    } else if isRuntimeDelegateReturnMismatch {
+                        rebound = BindConversion(rejectionLocation, argument, rejectionTargetType, allowExplicit: false)
                     } else if argument.Type != targetType &&
                         parameterConversion.IsExplicit &&
                         TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var implicitArg) {
@@ -4067,6 +4122,329 @@ internal class ConversionClassifier {
         return BindConversion(diagnosticLocation, call, targetType, allowExplicit, trackNarrowing: false)
     }
 
+    internal func RequiresRuntimeDelegateReturnValidation(
+        expression BoundExpression,
+        targetType TypeSymbol?,
+        @NotNullWhen(true) out lambdaSyntax LambdaExpressionSyntax?,
+        method MethodInfo? = nil,
+        paramIndex int32 = -1,
+        call CallExpressionSyntax? = nil
+    ) bool {
+        lambdaSyntax = nil
+        if targetType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
+            return false
+        }
+        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
+            literal == nil ||
+            !literal.DeferredExpressionTreeReturnValidation {
+            return false
+        }
+        let syntax = literal.Syntax as LambdaExpressionSyntax
+        let sourceFunction = literal.FunctionType as FunctionTypeSymbol
+        if syntax == nil || sourceFunction == nil || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+            targetType,
+            out var targetFunction
+        ) ||
+            targetFunction == nil {
+            return false
+        }
+        if !AreRuntimeDelegateParametersCompatible(literal, sourceFunction, targetFunction) {
+            return false
+        }
+        var sourceReturn = sourceFunction.ReturnType
+        var targetReturn = targetFunction.ReturnType
+        if literal.Function.IsAsync {
+            if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(sourceReturn, out var unwrappedSource) ||
+                !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetReturn, out var unwrappedTarget) ||
+                unwrappedSource == nil ||
+                unwrappedTarget == nil {
+                return false
+            }
+            sourceReturn = unwrappedSource
+            targetReturn = unwrappedTarget
+        }
+        let openReturnClrType = GetInferredOpenDelegateReturnClrType(method, paramIndex, call, literal.Function.IsAsync)
+        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn, openReturnClrType) {
+            return false
+        }
+        lambdaSyntax = syntax
+        return true
+    }
+
+    private func AreRuntimeDelegateParametersCompatible(
+        literal BoundFunctionLiteralExpression,
+        sourceFunction FunctionTypeSymbol,
+        targetFunction FunctionTypeSymbol
+    ) bool {
+        if sourceFunction.Arity != targetFunction.Arity {
+            return false
+        }
+        for var i = 0; i < sourceFunction.Arity; i++ {
+            let parameterType = sourceFunction.ParameterTypes[i]
+            let targetParameterType = targetFunction.ParameterTypes[i]
+            if parameterType == TypeSymbol.Error || targetParameterType == TypeSymbol.Error {
+                return false
+            }
+            let refKind = if i < literal.Function.Parameters.Length {
+                literal.Function.Parameters[i].RefKind
+            } else {
+                RefKind.None
+            }
+            let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                targetParameterType,
+                parameterType
+            )
+            let conversion = Conversion.ClassifyNonStructural(targetParameterType, parameterType)
+            let structurallyCompatibleDelegate = parameterType is FunctionTypeSymbol writtenFunctionType &&
+                !(targetParameterType is FunctionTypeSymbol) &&
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                targetParameterType,
+                out var targetDelegateFunctionType
+            ) &&
+                Conversion
+                .ClassifyNonStructural(targetDelegateFunctionType!!, writtenFunctionType).IsImplicit
+            let compatible = runtimeEquivalent ||
+                structurallyCompatibleDelegate ||
+                (
+                refKind == RefKind.None &&
+                    (
+                    conversion.IsImplicit ||
+                        HasUserDefinedImplicitConversionForTypes(targetParameterType, parameterType)
+                )
+            )
+            if !compatible {
+                return false
+            }
+        }
+        return true
+    }
+
+    internal func BuildRuntimeDelegateValidationTarget(
+        expression BoundExpression,
+        targetType TypeSymbol,
+        method MethodInfo? = nil,
+        paramIndex int32 = -1,
+        call CallExpressionSyntax? = nil
+    ) TypeSymbol {
+        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
+            literal == nil ||
+            literal.FunctionType is not FunctionTypeSymbol sourceFunction ||
+            !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(targetType, out var targetFunction) ||
+            targetFunction == nil {
+            return targetType
+        }
+        let openReturnClrType = GetInferredOpenDelegateReturnClrType(method, paramIndex, call, literal.Function.IsAsync)
+        if openReturnClrType == nil || literal.Function.IsAsync {
+            return targetType
+        }
+        let mergedReturn = MergeInferredTupleReturnPositions(
+            sourceFunction.ReturnType,
+            targetFunction.ReturnType,
+            openReturnClrType
+        )
+        if object.ReferenceEquals(mergedReturn, targetFunction.ReturnType) {
+            return targetType
+        }
+        return FunctionTypeSymbol.Get(targetFunction.ParameterTypes, targetFunction.IsVariadic, mergedReturn)
+    }
+
+    private func GetInferredOpenDelegateReturnClrType(
+        method MethodInfo?,
+        paramIndex int32,
+        call CallExpressionSyntax?,
+        isAsync bool
+    ) Type? {
+        if method == nil {
+            return nil
+        }
+        if !method.IsGenericMethod {
+            return nil
+        }
+        if call?.TypeArgumentList is {} typeArgs && typeArgs.Arguments.Count > 0 {
+            return nil
+        }
+        var openMethod MethodInfo
+        var openParameters[]ParameterInfo
+        try {
+            openMethod = if method.IsGenericMethodDefinition {
+                method
+            } else {
+                method.GetGenericMethodDefinition()
+            }
+            openParameters = openMethod.GetParameters()
+        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+            return nil
+        }
+        if paramIndex < 0 || paramIndex >= openParameters.Length {
+            return nil
+        }
+        var openParameterType Type? = GetPlainValueClrParameterType(openParameters[paramIndex])
+        if MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out var innerDelegate) {
+            openParameterType = innerDelegate
+        }
+        let invoke MethodInfo? = openParameterType?.GetMethodSafe("Invoke")
+        var openReturn Type? = invoke?.ReturnType
+        if isAsync && openReturn != nil && openReturn.IsGenericType {
+            let taskArgs = openReturn.GetGenericArguments()
+            if taskArgs.Length == 1 {
+                openReturn = taskArgs[0]
+            }
+        }
+        return openReturn
+    }
+
+    private func MergeInferredTupleReturnPositions(
+        sourceReturn TypeSymbol,
+        targetReturn TypeSymbol,
+        openReturnClrType Type?
+    ) TypeSymbol {
+        if openReturnClrType == nil {
+            return targetReturn
+        }
+        if openReturnClrType.IsGenericParameter && openReturnClrType.DeclaringMethod != nil {
+            return sourceReturn
+        }
+        let unwrappedSourceTuple = if sourceReturn is TupleTypeSymbol directSourceTuple {
+            directSourceTuple
+        } else if sourceReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableSourceTuple} {
+            nullableSourceTuple
+        } else {
+            default(TupleTypeSymbol?)
+        }
+        let unwrappedTargetTuple = if targetReturn is TupleTypeSymbol directTargetTuple {
+            directTargetTuple
+        } else if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableTargetTuple} {
+            nullableTargetTuple
+        } else {
+            default(TupleTypeSymbol?)
+        }
+        if unwrappedSourceTuple == nil ||
+            unwrappedTargetTuple == nil ||
+            unwrappedSourceTuple.Arity != unwrappedTargetTuple.Arity {
+            return targetReturn
+        }
+        let builder = ImmutableArray.CreateBuilder[TypeSymbol](unwrappedTargetTuple.Arity)
+        var changed = false
+        for var i = 0; i < unwrappedTargetTuple.Arity; i++ {
+            let existing = unwrappedTargetTuple.ElementTypes[i]
+            let mergedElem = MergeInferredTupleReturnPositions(
+                unwrappedSourceTuple.ElementTypes[i],
+                existing,
+                GetOpenTupleElementClrType(openReturnClrType, i)
+            )
+            if !object.ReferenceEquals(mergedElem, existing) {
+                changed = true
+            }
+            builder.Add(mergedElem)
+        }
+        if !changed {
+            return targetReturn
+        }
+        let rebuiltTuple = TupleTypeSymbol.Get(builder.MoveToImmutable(), unwrappedTargetTuple.ElementNames)
+        return if targetReturn is NullableTypeSymbol {
+            NullableTypeSymbol.Get(rebuiltTuple)
+        } else {
+            rebuiltTuple
+        }
+    }
+
+    internal func BindLambdaReturnTupleConversion(
+        diagnosticLocation TextLocation,
+        expression BoundExpression,
+        targetType TypeSymbol
+    ) BoundExpression {
+        if expression is BoundTupleLiteralExpression &&
+            expression.Type is TupleTypeSymbol sourceTuple &&
+            (targetType is TupleTypeSymbol || targetType is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol}) {
+            let targetTuple = if targetType is TupleTypeSymbol directTarget {
+                directTarget
+            } else {
+                cast[TupleTypeSymbol](cast[NullableTypeSymbol](targetType).UnderlyingType)
+            }
+            if sourceTuple.Arity == targetTuple.Arity {
+                let convertedTuple = BindTupleConversion(
+                    diagnosticLocation,
+                    expression,
+                    sourceTuple,
+                    targetTuple,
+                    allowExplicit: false
+                )
+                return if convertedTuple is BoundErrorExpression || object.ReferenceEquals(targetType, targetTuple) {
+                    convertedTuple
+                } else {
+                    BoundConversionExpression(nil, targetType, convertedTuple, binderCtx.IsCheckedContext)
+                }
+            }
+        }
+        Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, targetType)
+        return BoundErrorExpression(expression.Syntax)
+    }
+
+    private func ContainsTupleFunctionLiteral(tuple BoundTupleLiteralExpression) bool {
+        for element in tuple.Elements {
+            if ContainsResultFunctionLiteral(element) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ContainsResultFunctionLiteral(expression BoundExpression?) bool {
+        return switch expression {
+            case nil: false
+            case _ is BoundFunctionLiteralExpression: true
+            case tuple is BoundTupleLiteralExpression: ContainsTupleFunctionLiteral(tuple)
+            case conditional is BoundConditionalExpression: ContainsResultFunctionLiteral(conditional.WhenTrue) ||
+                ContainsResultFunctionLiteral(conditional.WhenFalse)
+            case switchExpr is BoundSwitchExpression: switchExpr.Arms.Any(
+                (arm BoundSwitchExpressionArm) -> ContainsResultFunctionLiteral(arm.Result)
+            )
+            case block is BoundBlockExpression: ContainsResultFunctionLiteral(block.Expression)
+            case binary is BoundBinaryExpression: ContainsResultFunctionLiteral(binary.Left) ||
+                ContainsResultFunctionLiteral(binary.Right)
+            case conv is BoundConversionExpression: ContainsResultFunctionLiteral(conv.Expression)
+            default: false
+        }
+    }
+
+    internal func ContainsNestedLambdaSyntax(syntax ExpressionSyntax) bool {
+        var syntax = syntax
+        while syntax is ParenthesizedExpressionSyntax || syntax is CheckedExpressionSyntax {
+            syntax = if syntax is ParenthesizedExpressionSyntax parenthesized {
+                parenthesized.Expression
+            } else {
+                cast[CheckedExpressionSyntax](syntax).Expression
+            }
+        }
+        return switch syntax {
+            case _ is LambdaExpressionSyntax: true
+            case BlockExpressionSyntax{Expression: {} tail}: ContainsNestedLambdaSyntax(tail)
+            case conditional is ConditionalExpressionSyntax: ContainsNestedLambdaSyntax(conditional.WhenTrue) ||
+                ContainsNestedLambdaSyntax(conditional.WhenFalse)
+            case ifExpression is IfExpressionSyntax: ContainsNestedLambdaSyntax(ifExpression.ThenBlock) ||
+                (ifExpression.ElseExpression != nil && ContainsNestedLambdaSyntax(ifExpression.ElseExpression))
+            case ifLetExpression is IfLetExpressionSyntax: ContainsNestedLambdaSyntax(ifLetExpression.ThenBlock) ||
+                (ifLetExpression.ElseExpression != nil && ContainsNestedLambdaSyntax(ifLetExpression.ElseExpression))
+            case switchExpression is SwitchExpressionSyntax: switchExpression.Arms.Any(
+                (arm SwitchExpressionArmSyntax) -> ContainsNestedLambdaSyntax(arm.Result)
+            )
+            case binary is BinaryExpressionSyntax when binary
+                .OperatorToken
+                .Kind == SyntaxKind.QuestionQuestionToken: ContainsNestedLambdaSyntax(binary.Left) ||
+                ContainsNestedLambdaSyntax(binary.Right)
+            case tupleLiteral is TupleLiteralExpressionSyntax: tupleLiteral.Elements.Any(
+                (element ExpressionSyntax) -> ContainsNestedLambdaSyntax(
+                    if element is NamedTupleElementSyntax named {
+                        named.Expression
+                    } else {
+                        element
+                    }
+                )
+            )
+            default: false
+        }
+    }
+
     /// Issue #1256: lowers a non-identity implicit tuple-to-tuple conversion
     /// into a tuple literal of per-element converted accesses, rebuilding the
     /// target (cref:System.ValueTuple) so the emitted IL is verifiable.
@@ -4113,17 +4491,34 @@ internal class ConversionClassifier {
                     } else {
                         element.Syntax as ExpressionSyntax
                     }
-                    if earlierElementChangedNarrowing && elementSyntax != nil {
+                    if elementSyntax != nil {
                         let unwrappedSyntax = if elementSyntax is NamedTupleElementSyntax named {
                             named.Expression
                         } else {
                             elementSyntax
                         }
-                        Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
-                        element = if rebindTupleElement != nil {
-                            rebindTupleElement!!(element, unwrappedSyntax)
-                        } else {
-                            bindExpression(unwrappedSyntax)
+                        let elementTargetsLambda = ContainsNestedLambdaSyntax(unwrappedSyntax) &&
+                            (
+                            !allowExplicit || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                                targetTuple.ElementTypes[i],
+                                out _
+                            )
+                        )
+                        if earlierElementChangedNarrowing {
+                            Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
+                            element = if elementTargetsLambda {
+                                bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
+                            } else if rebindTupleElement != nil {
+                                rebindTupleElement!!(element, unwrappedSyntax)
+                            } else {
+                                bindExpression(unwrappedSyntax)
+                            }
+                        } else if elementTargetsLambda && !object.ReferenceEquals(
+                            element.Type,
+                            targetTuple.ElementTypes[i]
+                        ) {
+                            Diagnostics.RemoveDiagnosticsIn(unwrappedSyntax.Location)
+                            element = bindExpressionWithTargetType(unwrappedSyntax, targetTuple.ElementTypes[i])
                         }
                     }
                     let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
@@ -5242,6 +5637,115 @@ internal class ConversionClassifier {
             } else {
                 expression
             }
+        }
+
+        private func GetOpenTupleElementClrType(openType Type?, index int32) Type? {
+            if openType == nil || index < 0 {
+                return nil
+            }
+            var current Type = openType
+            if current.IsGenericType && string.Equals(
+                current.GetGenericTypeDefinition().FullName,
+                "System.Nullable`1",
+                StringComparison.Ordinal
+            ) {
+                let nullableArgs = current.GetGenericArguments()
+                if nullableArgs.Length == 1 {
+                    current = nullableArgs[0]
+                }
+            }
+            var remaining = index
+            while current.IsGenericType {
+                let defName = current.GetGenericTypeDefinition().FullName
+                if defName == nil || !defName.StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
+                    return nil
+                }
+                let args = current.GetGenericArguments()
+                if remaining < 7 {
+                    return if remaining < args.Length {
+                        args[remaining]
+                    } else {
+                        default(Type?)
+                    }
+                }
+                if args.Length < 8 {
+                    return nil
+                }
+                current = args[7]
+                remaining -= 7
+            }
+            return nil
+        }
+
+        func HasReferenceNullabilityReturnMismatch(
+            sourceReturn TypeSymbol,
+            targetReturn TypeSymbol,
+            openReturnClrType Type? = nil
+        ) bool {
+            if openReturnClrType != nil &&
+                openReturnClrType.IsGenericParameter &&
+                openReturnClrType.DeclaringMethod != nil {
+                return false
+            }
+            let unwrappedSourceTuple = if sourceReturn is TupleTypeSymbol directSourceTuple {
+                directSourceTuple
+            } else if sourceReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableSourceTuple} {
+                nullableSourceTuple
+            } else {
+                default(TupleTypeSymbol?)
+            }
+            let unwrappedTargetTuple = if targetReturn is TupleTypeSymbol directTargetTuple {
+                directTargetTuple
+            } else if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableTargetTuple} {
+                nullableTargetTuple
+            } else {
+                default(TupleTypeSymbol?)
+            }
+            if unwrappedSourceTuple != nil &&
+                unwrappedTargetTuple != nil &&
+                unwrappedSourceTuple.Arity == unwrappedTargetTuple
+                .Arity {
+                for var i = 0; i < unwrappedSourceTuple.Arity; i++ {
+                    if HasReferenceNullabilityReturnMismatch(
+                        unwrappedSourceTuple.ElementTypes[i],
+                        unwrappedTargetTuple.ElementTypes[i],
+                        GetOpenTupleElementClrType(openReturnClrType, i)
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if sourceReturn == TypeSymbol.Void ||
+                sourceReturn == TypeSymbol.Error ||
+                targetReturn == TypeSymbol.Void ||
+                targetReturn == TypeSymbol.Error ||
+                targetReturn
+                .ClrType
+                ?.ContainsGenericParameters == true ||
+                object.ReferenceEquals(sourceReturn, targetReturn) || NullableLifting.IsAnyValueTypeNullable(
+                sourceReturn as NullableTypeSymbol
+            ) ||
+                NullableLifting.IsAnyValueTypeNullable(targetReturn as NullableTypeSymbol) ||
+                targetReturn is NullableTypeSymbol ||
+                targetReturn is PlatformTypeSymbol {
+                return false
+            }
+            if Conversion.Classify(sourceReturn, targetReturn)
+                .IsImplicit ||
+                HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn) {
+                return false
+            }
+            if sourceReturn == TypeSymbol.Null {
+                return Conversion.Classify(TypeSymbol.Null, NullableTypeSymbol.Get(targetReturn)).IsImplicit
+            }
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(sourceReturn, targetReturn) {
+                return true
+            }
+            if sourceReturn is NullableTypeSymbol sourceNullable {
+                return Conversion.Classify(sourceNullable.UnderlyingType, targetReturn).IsImplicit
+            }
+            return false
         }
 
         /// Checks the symbolic and CLR implicit conversion operators for a type pair.

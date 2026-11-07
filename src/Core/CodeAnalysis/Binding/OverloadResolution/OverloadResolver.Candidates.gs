@@ -1327,8 +1327,12 @@ internal partial class OverloadResolver {
 
     private func IsNestedLambdaResultShapeCompatible(syntax ExpressionSyntax, target FunctionTypeSymbol) bool {
         var syntax = syntax
-        while syntax is ParenthesizedExpressionSyntax parenthesized {
-            syntax = parenthesized.Expression
+        while syntax is ParenthesizedExpressionSyntax || syntax is CheckedExpressionSyntax {
+            syntax = if syntax is ParenthesizedExpressionSyntax parenthesized {
+                parenthesized.Expression
+            } else {
+                cast[CheckedExpressionSyntax](syntax).Expression
+            }
         }
         return switch syntax {
             case nestedLambda is LambdaExpressionSyntax: IsLambdaReturnShapeCompatible(nestedLambda, target)
