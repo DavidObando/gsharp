@@ -4380,6 +4380,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         CollectOverrideContractEdges(compilation, edges)
         CollectTupleContractEdges(compilation, tupleTainted, tupleContractEdges)
         CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleContractEdges)
+        CollectRefArrayAliasEdges(compilation, edges)
         // A signature component shares one contract, even when only one
         // implementation inherits a fixed non-null metadata position.
         let fixedTupleContracts = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
@@ -4454,6 +4455,52 @@ internal shared class ObliviousNullabilityAnalyzer {
             paramsElementTainted,
             paramsElementEdges
         )
+    }
+
+    private func CollectRefArrayAliasEdges(compilation Compilation, edges List[(Target ISymbol, Source ISymbol)]) {
+        let aliases = Dictionary[ISymbol, Dictionary[int32, ISymbol]](SymbolEqualityComparer.Default)
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+                var target ISymbol? = if reference.Parent is EqualsValueClauseSyntax{
+                    Parent: VariableDeclaratorSyntax declaration
+                } {
+                    model.GetDeclaredSymbol(declaration)
+                } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+                    model.GetEnclosingSymbol(reference.SpanStart)
+                } else {
+                    default(ISymbol?)
+                }
+                if target is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                    target = property
+                }
+                if !IsRefStorageSymbol(target) {
+                    continue
+                }
+                var receiver = Unwrap(reference.Expression, unwrapSuppressions: true)
+                var depth = 0
+                while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+                    .Type is IArrayTypeSymbol {
+                    depth++
+                    receiver = Unwrap(access.Expression, unwrapSuppressions: true)
+                }
+                let source = Canonical(model.GetSymbolInfo(receiver).Symbol)
+                if depth == 0 || source == nil {
+                    continue
+                }
+                if !aliases.TryGetValue(source, out var positions) {
+                    positions = Dictionary[int32, ISymbol]()
+                    aliases.Add(source, positions)
+                }
+                let canonicalTarget = Canonical(target)!!
+                if positions.TryGetValue(depth, out var other) {
+                    edges.Add((canonicalTarget, other))
+                    edges.Add((other, canonicalTarget))
+                } else {
+                    positions.Add(depth, canonicalTarget)
+                }
+            }
+        }
     }
 
     private func SeedEfEntityPropertyTaint(compilation Compilation, tainted HashSet[ISymbol]) {
@@ -7162,33 +7209,9 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     internal func IsRefStorageSymbol(symbol ISymbol?) bool -> symbol is ILocalSymbol{RefKind: not RefKind.None} ||
         symbol is IMethodSymbol{ReturnsByRef: true} or
-        IMethodSymbol{ReturnsByRefReadonly: true}
-
-    internal func RefStorageInitializers(symbol ISymbol) sequence[ExpressionSyntax] {
-        for reference in symbol.DeclaringSyntaxReferences {
-            let declaration = reference.GetSyntax()
-            if declaration is VariableDeclaratorSyntax{Initializer: {Value: RefExpressionSyntax initializer}} &&
-                symbol is ILocalSymbol{RefKind: not RefKind.None} {
-                yield initializer.Expression
-                continue
-            }
-            let (arrow, body) = switch declaration {
-                case method is MethodDeclarationSyntax when IsRefStorageSymbol(symbol):
-                (method.ExpressionBody?.Expression, method.Body)
-                case function is LocalFunctionStatementSyntax when IsRefStorageSymbol(symbol):
-                (function.ExpressionBody?.Expression, function.Body)
-                default: (default(ExpressionSyntax?), default(BlockSyntax?))
-            }
-            if arrow is RefExpressionSyntax arrowReference {
-                yield arrowReference.Expression
-            }
-            for statement in EnumerateOwnReturns(body) {
-                if statement.Expression is RefExpressionSyntax returned {
-                    yield returned.Expression
-                }
-            }
-        }
-    }
+        IMethodSymbol{ReturnsByRefReadonly: true} ||
+        symbol is IPropertySymbol{ReturnsByRef: true} or
+        IPropertySymbol{ReturnsByRefReadonly: true}
 
     // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their

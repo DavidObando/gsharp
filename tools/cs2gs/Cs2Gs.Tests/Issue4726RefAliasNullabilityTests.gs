@@ -191,6 +191,85 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ArrayRefReturn_UsesItsElementStorage(blockBody bool) {
+        let body = if blockBody {
+            "{ return ref xs[0]; }"
+        } else {
+            "=> ref xs[0];"
+        }
+        let source = `public static class Obj {
+    private static string[] xs = new[] { "x" };
+    public static ref string Borrow() ` + body + `
+    public static string Run() {
+        ref string alias = ref Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Fact
+    func ArrayRefAliases_ShareTheElementContract() {
+        const source = `public static class Obj {
+    public static string Run() {
+        var xs = new[] { "x" };
+        ref string first = ref xs[0];
+        ref string second = ref xs[0];
+        return first ?? second;
+    }
+}`
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Fact
+    func FixedRefReturn_ConstrainsItsObliviousFieldStorage() {
+        const source = `public static class Obj {
+    private static string text = "x";
+#nullable enable
+    public static ref string Borrow() => ref text;
+#nullable disable
+    public static string Run() {
+        ref string alias = ref Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Theory
+    @InlineData("property")
+    @InlineData("getter")
+    @InlineData("indexer")
+    func RefGetters_KeepTheFixedStorageContract(shape string) {
+        let member = switch shape {
+            case "property": "public ref string Borrow => ref Text;"
+            case "getter": "public ref readonly string Borrow { get { return ref Text; } }"
+            default: "public ref string this[int index] => ref Text;"
+        }
+        let access = if shape == "indexer" {
+            "holder[0]"
+        } else {
+            "holder.Borrow"
+        }
+        let source = `#nullable enable
+public class Holder {
+    public string Text = "x";
+#nullable disable
+    ` + member + `
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref readonly string alias = ref ` + access + `;
+        return alias ?? "fallback";
+    }
+}`
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
     @InlineData("default(string)")

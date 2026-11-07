@@ -35,6 +35,28 @@ partial class CSharpToGSharpTranslator {
 
         private var repositoryCompilationsByIdentity Dictionary[AssemblyIdentity, CSharpCompilation]?
         private var repositorySharedDocumentPaths HashSet[string]?
+        private var refStorageSlots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]?
+
+        private class RefStorageSlot {
+            let Symbol ISymbol
+            let Depth int32
+            var Parent RefStorageSlot? = nil
+            let Members List[RefStorageSlot] = List[RefStorageSlot]()
+
+            init(symbol ISymbol, depth int32) {
+                this.Symbol = symbol
+                this.Depth = depth
+                this.Members.Add(this)
+            }
+
+            func Root() RefStorageSlot {
+                var root = this
+                while root.Parent != nil {
+                    root = root.Parent!!
+                }
+                return root
+            }
+        }
 
         // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
         // backing `EmittedAssemblyIdentities()` below — see that method for
@@ -2074,9 +2096,8 @@ partial class CSharpToGSharpTranslator {
             if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
                 return false
             }
-            if checkRefStorage && ObliviousNullabilityAnalyzer.IsRefStorageSymbol(symbol) &&
-                this.RefStorageHasFixedNonNullContract(symbol, HashSet[ISymbol](SymbolEqualityComparer.Default)) {
-                return false
+            if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
+                return this.RefStorageIsNullable(slot, includeArrays: true)
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
             // project of this migration is seen here through that project's
@@ -2277,30 +2298,157 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func RefStorageHasFixedNonNullContract(symbol ISymbol?, visited HashSet[ISymbol]) bool {
-            if symbol == nil || !visited.Add(symbol) {
-                return false
+        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
+            let symbol = if reference.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declaration} {
+                model.GetDeclaredSymbol(declaration)
+            } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+                model.GetEnclosingSymbol(reference.SpanStart)
+            } else {
+                default(ISymbol?)
             }
-            for initializer in ObliviousNullabilityAnalyzer.RefStorageInitializers(symbol) {
-                if !this.context.Compilation.ContainsSyntaxTree(initializer.SyntaxTree) {
-                    continue
+            let normalized = if symbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                cast[ISymbol](property)
+            } else {
+                symbol
+            }
+            return if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(normalized) {
+                normalized?.OriginalDefinition
+            } else {
+                default(ISymbol?)
+            }
+        }
+
+        private func GetRefStorageSlot(symbol ISymbol, depth int32) RefStorageSlot {
+            let canonical = symbol.OriginalDefinition
+            let slots = this.refStorageSlots!!
+            if !slots.TryGetValue(canonical, out var positions) {
+                positions = Dictionary[int32, RefStorageSlot]()
+                slots.Add(canonical, positions)
+            }
+            if !positions.TryGetValue(depth, out var slot) {
+                slot = RefStorageSlot(canonical, depth)
+                positions.Add(depth, slot)
+            }
+            return slot
+        }
+
+        private func ConnectRefStorage(target RefStorageSlot, expression ExpressionSyntax, model SemanticModel) {
+            let storage = UnwrapParenthesesAndSuppressions(expression)!!
+            if storage is RefExpressionSyntax nested {
+                this.ConnectRefStorage(target, nested.Expression, model)
+                return
+            }
+            if storage is ConditionalExpressionSyntax conditional {
+                this.ConnectRefStorage(target, conditional.WhenTrue, model)
+                this.ConnectRefStorage(target, conditional.WhenFalse, model)
+                return
+            }
+            var receiver ExpressionSyntax = storage
+            var depth = 0
+            while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+                .Type is IArrayTypeSymbol {
+                depth++
+                receiver = UnwrapParenthesesAndSuppressions(access.Expression)!!
+            }
+            var source = model.GetSymbolInfo(receiver).Symbol
+            if source is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                source = property
+            }
+            if source == nil {
+                return
+            }
+            if depth > 0 {
+                source = this.GetArrayStorageOwner(source, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? source
+            }
+            let left = target.Root()
+            let right = this.GetRefStorageSlot(source!!, depth).Root()
+            if object.ReferenceEquals(left, right) {
+                return
+            }
+            right.Parent = left
+            left.Members.AddRange(right.Members)
+            right.Members.Clear()
+        }
+
+        private func EnsureRefStorageSlots() {
+            if this.refStorageSlots != nil {
+                return
+            }
+            this.refStorageSlots = Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]](
+                SymbolEqualityComparer.Default
+            )
+            for tree in this.context.Compilation.SyntaxTrees {
+                let model = this.context.Compilation.GetSemanticModel(tree)
+                using let modelScope = this.context.UseSemanticModelFor(tree)
+                for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+                    if this.RefStorageDestination(reference, model) is {} destination {
+                        this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
+                    }
                 }
-                using let modelScope = this.context.UseSemanticModelFor(initializer.SyntaxTree)
-                let storage = UnwrapParenthesesAndSuppressions(initializer)!!
-                let source = this.context.GetSymbolInfo(storage).Symbol
-                if ObliviousNullabilityAnalyzer.SymbolValueType(source) is {
+            }
+        }
+
+        private func TryGetRefStorageSlot(symbol ISymbol?, depth int32) RefStorageSlot? {
+            if symbol == nil {
+                return nil
+            }
+            this.EnsureRefStorageSlots()
+            return if this.refStorageSlots!!.TryGetValue(symbol.OriginalDefinition, out var positions) &&
+                positions.TryGetValue(depth, out var slot) {
+                slot
+            } else {
+                default(RefStorageSlot?)
+            }
+        }
+
+        private func RefStorageSlotType(slot RefStorageSlot) ITypeSymbol? {
+            var type = ObliviousNullabilityAnalyzer.SymbolValueType(slot.Symbol)
+            for var depth = 0; depth < slot.Depth; depth++ {
+                type = (type as IArrayTypeSymbol)?.ElementType
+            }
+            return type
+        }
+
+        private func RefStorageIsNullable(slot RefStorageSlot, includeArrays bool) bool {
+            let members = slot.Root().Members
+            // A fixed declaration constrains every name of the same storage.
+            for member in members {
+                if member.Depth == 0 && this.RefStorageSlotType(member) is {
                     IsReferenceType: true,
                     NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
                 } &&
-                    !this.ShouldPromoteToNullableReference(source, checkRefStorage: false) {
-                    return true
+                    !this.ShouldPromoteToNullableReference(member.Symbol, checkRefStorage: false) {
+                    return false
                 }
-                if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(source) && this.RefStorageHasFixedNonNullContract(
-                    source,
-                    visited
+            }
+            for member in members {
+                if this.RefStorageSlotType(member)
+                    ?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    (
+                    member.Depth == 0 && this.ShouldPromoteToNullableReference(member.Symbol, checkRefStorage: false)
                 ) {
                     return true
                 }
+            }
+            if includeArrays {
+                for member in members {
+                    if member.Depth > 0 && this.IsWidenedArrayElementStorage(
+                        member.Symbol,
+                        string.Join(".", Enumerable.Repeat("0", member.Depth))
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func RefStorageArrayIsNullable(symbol ISymbol, position string) bool {
+            if this.TryGetRefStorageSlot(symbol, position.Split('.').Length) is {} slot {
+                return this.RefStorageIsNullable(slot, includeArrays: false)
             }
             return false
         }
