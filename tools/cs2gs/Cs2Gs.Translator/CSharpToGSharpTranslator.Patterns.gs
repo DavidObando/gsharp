@@ -2459,14 +2459,20 @@ partial class CSharpToGSharpTranslator {
                 // narrows it, so its reads below the guard assert too.
                 memberReceiver = EnsureNonNullAssertion(receiver)
             }
+            let userDeconstruct = this.UserRecordPatternDeconstruct(recursive)
             // The typed form of the same hazard (`Outer(Inner(var a, _))`): a
             // stored capture's type test narrows it only inside the test
             // block, but a descendant binding reads it after the test, so
             // member reads go through the narrowed `(t as Inner)!!`.
-            if recursive.Type != nil && isNestedPatternMember && this.state.StoredPatternCaptures.Contains(receiver!!) {
+            if userDeconstruct != nil &&
+                recursive.Type != nil &&
+                isNestedPatternMember &&
+                this
+                .state
+                .StoredPatternCaptures
+                .Contains(receiver!!) {
                 memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
             }
-            let userDeconstruct = this.UserRecordPatternDeconstruct(recursive)
             if userDeconstruct != nil {
                 let positionalTest = this.TranslateRecordPositionalPatternTest(
                     memberReceiver,
