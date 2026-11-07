@@ -810,7 +810,7 @@ namespace Demo
         public bool IsStereo(Entry? e) => e?.ChannelCount == 2;
     }
 }`)
-        Assert.Contains("== (2 as uint16?)", printed)
+        Assert.Contains("== uint16?(2)", printed)
     }
 
     /// Defect #914-3 guard: when the operands already share an underlying numeric

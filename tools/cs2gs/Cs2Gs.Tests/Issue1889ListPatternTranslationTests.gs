@@ -187,8 +187,9 @@ namespace Corpus.Issue1889
     }
 }
 `)
-        Assert.Contains("buffer[0] != nil", rendered, StringComparison.Ordinal)
-        Assert.Contains("buffer[0].Value == 1", rendered, StringComparison.Ordinal)
+        Assert.Contains("buffer[0] is var __spill0", rendered, StringComparison.Ordinal)
+        Assert.Contains("__spill0 != nil", rendered, StringComparison.Ordinal)
+        Assert.Contains("__spill0.Value == 1", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
     }
 

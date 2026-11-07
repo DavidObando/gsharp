@@ -226,8 +226,10 @@ Run(Box{Pet: Dog{Name: "Rex"}})
         Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Message.Contains("Bark", StringComparison.Ordinal))
     }
 
+    /// ADR-0208 R21 (#5786): a write of a `var` field stores no link of a stable path, so the fact on
+    /// `b.Pet` survives it.
     @Fact
-    func InterveningMemberAssignment_InvalidatesMemberPathNarrowing() {
+    func InterveningVarFieldWrite_KeepsMemberPathNarrowing() {
         let result = Evaluate(Hierarchy + `
 class Box { var Other int32 = 0 let Pet Animal }
 func Run(b Box) string {
@@ -237,7 +239,27 @@ func Run(b Box) string {
 }
 Run(Box{Pet: Dog{Name: "Rex"}})
 `)
-        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Message.Contains("Bark", StringComparison.Ordinal))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof", result.Value)
+    }
+
+    /// An index write, a constructor write of the `let` link itself, and a field write whose location can hold
+    /// the storage of a by-reference root still remove the fact (ADR-0208 R20, R21).
+    @Theory
+    @InlineData(
+        "class Box { let Others []int32 let Pet Animal }\nfunc Run(b Box) string {\n    if b.Pet !is Dog { return \"\" }\n    b.Others[0] = 1\n    return b.Pet.Bark()\n}\nRun(Box{Others: []int32{0}, Pet: Dog{Name: \"Rex\"}})"
+    )
+    @InlineData(
+        "class Box {\n    let Pet Animal\n    init(first Animal, second Animal) {\n        this.Pet = first\n        if this.Pet !is Dog { return }\n        this.Pet = second\n        let _ = this.Pet.Bark()\n    }\n}\nBox(Dog{Name: \"Rex\"}, Cat{Name: \"Tom\"})"
+    )
+    @InlineData(
+        "struct Box { let Pet Animal }\nclass Holder { var box Box }\nfunc Run(ref b Box, h Holder, fresh Box) string {\n    if b.Pet !is Dog { return \"\" }\n    h.box = fresh\n    return b.Pet.Bark()\n}\nlet h = Holder{box: Box{Pet: Dog{Name: \"Rex\"}}}\nRun(ref h.box, h, Box{Pet: Cat{Name: \"Tom\"}})"
+    )
+    func InterveningWriteThatCanReachThePath_InvalidatesMemberPathNarrowing(body string) {
+        let result = Evaluate(Hierarchy + body)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0159", diagnostic.Id)
+        Assert.Contains("Bark", diagnostic.Message, StringComparison.Ordinal)
     }
 
     @Fact

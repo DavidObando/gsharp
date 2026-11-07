@@ -424,15 +424,33 @@ var answer = Run()`)
     }
 
     @Fact
-    func MemberIncrement_InvalidatesMemberPathNarrowing() {
-        // The desugared `b.Other++` write must drop member-path smart casts
-        // exactly like the equivalent `b.Other = b.Other + 1` form.
-        let diagnostics = Bind(`open class Animal { var Name string }
+    func MemberIncrement_KeepsMemberPathNarrowingLikeAPlainWrite() {
+        // The desugared `b.Other++` write treats member-path smart casts
+        // exactly like the equivalent `b.Other = b.Other + 1` form. A write of
+        // a `var` field keeps them (ADR-0208 R21, #5786).
+        let result = EmittedOracle.Evaluate(`open class Animal { var Name string }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box { var Other int32 = 0 let Pet Animal }
 func Run(b Box) string {
     if b.Pet !is Dog { return "" }
     b.Other++
+    return b.Pet.Bark()
+}
+Run(Box{Pet: Dog{Name: "Rex"}})`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof", result.Value)
+    }
+
+    @Fact
+    func MemberIndexIncrement_InvalidatesMemberPathNarrowing() {
+        // An increment of an element is an index write, which keeps the full
+        // member-write rule (ADR-0208 R21).
+        let diagnostics = Bind(`open class Animal { var Name string }
+class Dog : Animal { func Bark() string { return "woof" } }
+class Box { let Others []int32 let Pet Animal }
+func Run(b Box) string {
+    if b.Pet !is Dog { return "" }
+    b.Others[0]++
     return b.Pet.Bark()
 }`)
         Assert.Contains(diagnostics, (d Diagnostic) -> d.Message.Contains("Bark", StringComparison.Ordinal))

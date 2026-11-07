@@ -48,6 +48,19 @@ partial class CSharpToGSharpTranslator {
                 case identifier is IdentifierNameSyntax {
                     return this.TranslateIdentifierName(identifier)
                 }
+                case qualified is QualifiedNameSyntax when this.context.GetSymbolInfo(qualified).Symbol is
+                IFieldSymbol{IsConst: true} constantField {
+                    // The older `is` syntax parses qualified constants as names, not member-access expressions.
+                    let name = if this.InAnalyzerApiMode {
+                        this.nameAllocator.GetName(this.MapAnalyzerMemberName(qualified, constantField.Name))
+                    } else {
+                        this.EmittedName(constantField, constantField.Name)
+                    }
+                    return MemberAccessExpression(
+                        this.StaticQualifierReceiver(constantField.ContainingType, qualified.GetLocation()),
+                        name
+                    )
+                }
                 case refExpression is RefExpressionSyntax {
                     return this.TranslateRefExpression(refExpression)
                 }
@@ -113,6 +126,14 @@ partial class CSharpToGSharpTranslator {
                 case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.AsExpression) || binary.IsKind(
                     SyntaxKind.IsExpression
                 ) {
+                    // A name after `is` can bind to a constant instead of a type (#5675).
+                    if binary.IsKind(SyntaxKind.IsExpression) && !this.IsTypeReferencePattern(binary.Right) {
+                        return this.TranslateConstantPatternTest(
+                            this.TranslateExpression(binary.Left),
+                            binary.Right,
+                            this.context.GetTypeInfo(binary.Left).Type
+                        )
+                    }
                     // Issue #4173: a BARE `expr is Type` with no designator,
                     // pattern combinator, or subpattern parses as this OLDER
                     // BinaryExpressionSyntax/IsExpression node, not a pattern —
@@ -761,7 +782,9 @@ partial class CSharpToGSharpTranslator {
         private func UsesNativeBooleanPatternTest(
             isPattern IsPatternExpressionSyntax
         ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
-            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) &&
+            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternRequiresValueEquality(
+            isPattern.Pattern
+        ) &&
             (
             this.RequiresNativePatternNarrowing(isPattern) ||
                 (
@@ -834,24 +857,52 @@ partial class CSharpToGSharpTranslator {
                     return PatternTestExpression(receiver, pattern)
                 }
             }
-            // A pattern that binds a designation, or tests more than one
-            // sub-pattern, reads the translated scrutinee more than once:
-            // `BuildPatternNarrowingReplacement` substitutes it at every binder
-            // reference, a recursive/property pattern re-embeds it per member
-            // test, and `and`/`or`/parenthesized combinators re-embed it per
-            // branch. A non-trivial scrutinee (anything beyond a bare
-            // identifier/`this`/literal — e.g. a method call or a property read
-            // with a side effect) must then be evaluated exactly once into a
-            // local and reused, matching C# semantics (issue #1731). A pattern
-            // that reads the scrutinee at most once (a bare type test, a
-            // constant/relational pattern) is left untouched, avoiding an
-            // unnecessary temp. Some shapes (a single escaping/non-smart-
-            // castable declaration pattern over a reference type) are already
-            // hoisted more precisely by <see cref="TryBuildPositiveGuardHoist"/>/
-            // <see cref="TryBuildNegatedGuardHoist"/> before reaching here — for
-            // those, `receiver` is already a bare local and this is a no-op.
-            if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) {
-                receiver = this.SpillOperand(receiver!!, isPattern.Expression)
+            if this.ReceiverValueIsPromotedNullable(isPattern.Expression) || this.NullableReferenceValueMayBeNull(
+                isPattern.Expression
+            ) {
+                this.state.GSharpNullablePatternReceivers.Add(receiver!!)
+            }
+            // Keep snapshots at the pattern's evaluation point, not ahead of earlier operands or arguments.
+            if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
+                isPattern.Expression,
+                receiver
+            ) {
+                if !PatternIntroducesBinding(isPattern.Pattern) {
+                    return this.BindPatternMemberOnce(
+                        receiver,
+                        (local GExpression) -> this.TranslatePatternTest(
+                            local,
+                            isPattern.Pattern,
+                            receiverType,
+                            isPattern.Expression
+                        )
+                    )
+                }
+                let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+                if declarations != nil && receiverType != nil && receiverType.TypeKind != TypeKind.Error {
+                    return this.StorePatternMemberOnce(
+                        receiver,
+                        receiverType,
+                        receiverType.IsReferenceType || this.IsGSharpNullablePatternReceiver(receiver),
+                        declarations,
+                        (local GExpression) -> this.MaterializeFallbackPatternBindings(
+                            isPattern,
+                            local,
+                            this.TranslatePatternTest(
+                                local,
+                                isPattern.Pattern,
+                                receiverType,
+                                isPattern.Expression,
+                                isNestedPatternMember: true
+                            )
+                        )
+                    )
+                }
+                receiver = this.SpillOperand(
+                    receiver!!,
+                    isPattern.Expression,
+                    forceNonTrivial: !this.PatternReceiverCanBeDuplicated(isPattern.Expression, receiver)
+                )
             }
             let test = this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression)
             return this.ResetRecordPatternCaches(
@@ -1084,24 +1135,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        /// Issue #4356: whether the boolean lowering of [`pattern`](paramref)
-        /// over a NULLABLE nested member embeds that member more than once — a
-        /// type test, a `!= nil` guard, and one read per property/positional
-        /// subpattern each read it, and a designation re-reads it wherever it is
-        /// used. That is the shape where a re-read is not merely redundant but
-        /// wrong: the first read is what the nil test (or type test) proved,
-        /// and a later read that yields nil throws where C# matches or falls
-        /// through. A single subpattern over a member that needs no guard reads
-        /// it once and needs no local.
-        ///
-        /// A NON-nullable member re-read by member tests alone (`expr.Kind == A ||
-        /// expr.Kind == B` for `{ Kind: A or B }`) is left as it was: it cannot fail
-        /// a nil test it never had, the self-migration inventory keeps the
-        /// synthesized temporaries it would add retired
-        /// (Issue3347RemainingSpillInventoryTests), and it is a pre-existing
-        /// readability tradeoff outside #4356. Issue #4315: a non-nullable
-        /// member that now also takes the `!= nil` guard IS read more than once,
-        /// like a nullable one, and is bound once.
+        /// Whether fallback lowering reuses a nested value that needs a snapshot.
+        /// A subpattern can mutate even a field or auto-property between reads.
         /// @param pattern The nested pattern.
         /// @param receiverType The receiver's declared C# type, if known.
         /// @param receiver The translated receiver (for the analyzer-mode registry).
@@ -1112,7 +1147,6 @@ partial class CSharpToGSharpTranslator {
             receiver GExpression?
         ) bool {
             let gsharpNullable = this.IsGSharpNullablePatternReceiver(receiver)
-            let stableMember = this.IsStablePatternReceiver(receiver)
             let CountReads = func (current PatternSyntax?) int32 {
                 switch current {
                     case recursive is RecursivePatternSyntax {
@@ -1165,52 +1199,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            let nullableMember = gsharpNullable ||
-                (
-                receiverType != nil &&
-                    (
-                    (
-                        receiverType.IsReferenceType &&
-                            receiverType.NullableAnnotation == Microsoft
-                            .CodeAnalysis
-                            .NullableAnnotation
-                            .Annotated
-                    ) ||
-                        receiverType
-                        .OriginalDefinition
-                        ?.SpecialType == SpecialType.System_Nullable_T
-                )
-            )
-            // Issue #4315: a declared-non-null reference member that a bare
-            // recursive pattern now also guards is read by the guard and again by
-            // its member tests, exactly like a nullable one. Only that shape
-            // widens the gate: a non-recursive pattern over such a member
-            // (`{ Name: "a" or "b" }`) keeps its pre-#4315 repeated reads.
-            let guardedNonNullMember = !nullableMember && !this.NullGuardIsProvablyRedundant(
-                receiver,
-                receiverType,
-                nil,
-                false
-            ) &&
-                !stableMember &&
-                receiverType != nil &&
-                !receiverType.IsValueType &&
-                this.ContainsBareRecursivePattern(pattern)
-            let designatedUnstableMember = !stableMember && PatternIntroducesBinding(pattern)
-            return (nullableMember || guardedNonNullMember || designatedUnstableMember) && CountReads(pattern) > 1
-        }
-
-        private func ContainsBareRecursivePattern(pattern PatternSyntax?) bool {
-            return switch pattern {
-                case recursive is RecursivePatternSyntax: recursive.Type == nil
-                case unary is UnaryPatternSyntax: this.ContainsBareRecursivePattern(unary.Pattern)
-                case parenthesized is ParenthesizedPatternSyntax: this.ContainsBareRecursivePattern(
-                    parenthesized.Pattern
-                )
-                case binary is BinaryPatternSyntax: this.ContainsBareRecursivePattern(binary.Left) ||
-                    this.ContainsBareRecursivePattern(binary.Right)
-                default: false
-            }
+            return CountReads(pattern) > 1
         }
 
         /// Issue #4356: THE test for whether an extended-property-path link is
@@ -1297,6 +1286,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsAutoPropertySyntax(syntax SyntaxNode) bool {
+            if syntax is ParameterSyntax {
+                return true
+            }
             if syntax is not PropertyDeclarationSyntax declaration {
                 return false
             }
@@ -1425,11 +1417,11 @@ partial class CSharpToGSharpTranslator {
             .GSharpNullablePatternReceivers
             .Contains(receiver)
 
-        /// Issue #4356: binds a nested pattern member to a `let` local once,
+        /// Issue #4356: binds a nested pattern member to a native capture once,
         /// inside the test that reads it, and translates that test over the local.
         /// @param member The member value, e.g. `o.P`.
         /// @param test Builds the test over the bound local.
-        /// @returns `{ let t = member; test(t) }`.
+        /// @returns `member is var t && test(t)`.
         private func BindPatternMemberOnce(member GExpression?, test(GExpression) -> GExpression) GExpression {
             let temp = this.NewSpillName()
             let local = IdentifierExpression(temp)
@@ -1442,10 +1434,7 @@ partial class CSharpToGSharpTranslator {
             if member is IndexExpression {
                 this.state.BareSliceElementReads.Add(local)
             }
-            return BlockExpression(
-                List[GStatement]{LocalDeclarationStatement(BindingKind.Let, temp, type: nil, initializer: member)},
-                test(local)
-            )
+            return BinaryExpression(PatternTestExpression(member, VarPattern(temp)), "&&", test(local))
         }
 
         /// Issue #4356: as (cref:BindPatternMemberOnce), for a nested
@@ -1491,28 +1480,14 @@ partial class CSharpToGSharpTranslator {
             receiverSyntax ExpressionSyntax? = nil,
             isNestedPatternMember bool = false
         ) GExpression {
-            // Issue #4356: C# evaluates a subpattern's member ONCE and tests
-            // every nested subpattern against that one value; for a NULLABLE
-            // member (see LoweredPatternReadsReceiverMoreThanOnce) a re-read can
-            // be nil after the first read was proved non-nil. TranslateIsPattern
-            // applies that rule to the top-level scrutinee (it spills a
-            // non-trivial one into a local when the pattern reads it more than
-            // once); this is the same rule for a NESTED member (`o.P` in
-            // `{ P: { X: 0 } }`, `{ P: (0, 0) }`, `{ P: not { X: 1 } }`, a list
-            // element), which the lowering below would otherwise re-embed in a
-            // `!= nil` guard and in every member test — reading an unstable
-            // getter twice, where a value that is non-nil and then nil throws.
-            // The local is bound INSIDE the test (`{ let t = o.P; t != nil &&
-            // t.X == 0 }`), never in the statement prologue, so it is evaluated
-            // only after the enclosing guard has proved `o` non-nil; and a `let`
-            // local is smart-cast by that guard, so no `!!` is needed.
-            // A pattern that declares a designation needs its binder's
-            // replacement visible OUTSIDE the test, so its local is a `var`
-            // declared in the enclosing declaration seam and only ASSIGNED
-            // inside the test (`{ t = o.P; t != nil && t.X == 0 }`) — same
-            // single read, same evaluation order. In ADR-0169 analyzer mode a
-            // member whose G# counterpart is `T?` but whose Roslyn type is a
-            // struct counts as nullable here too (GSharpNullablePatternReceivers).
+            let receiverType = if pattern is RelationalPatternSyntax {
+                this.GetPatternInputType(pattern, receiverType)
+            } else {
+                receiverType
+            }
+            // C# stores each member value before testing its subpatterns. Later getters can mutate even fields and auto-properties.
+            // A native capture reads the member only after its enclosing guard, and keeps that value throughout the test.
+            // Escaping designations instead need outer storage, assigned at the same evaluation point.
             if isNestedPatternMember && !IsTrivialOperand(receiver!!) && this.LoweredPatternReadsReceiverMoreThanOnce(
                 pattern,
                 receiverType,
@@ -1571,29 +1546,8 @@ partial class CSharpToGSharpTranslator {
                     // to a TYPE, so it is a type test, not an equality. `x is T`.
                     return this.BuildTypeTestExpression(receiver, constant.Expression, constant)
                 }
-                case constant is ConstantPatternSyntax when receiverType?.SpecialType == SpecialType.System_Object {
-                    // Issue #3501: an `object?`-typed receiver (`token.Value is
-                    // true`) has no `==` against the constant's type (GS0129),
-                    // but gsc binds the constant PATTERN over object natively —
-                    // keep the `is` form.
-                    return BinaryExpression(receiver, "is", this.TranslateExpression(constant.Expression))
-                }
                 case constant is ConstantPatternSyntax {
-                    // `x is 0` / `x is "moov"` / `x is true` lowers to an equality
-                    // test (ADR-0115 §B). gsc does not narrow it, so a test whose
-                    // narrowing C# relies on keeps the native form instead
-                    // (RequiresNativePatternNarrowing, issue #5626). A numeric literal is retyped to the receiver's
-                    // type so `uint8? is 11` → `b == (11 as uint8?)` (G# has no
-                    // implicit numeric promotion: a bare `b == 11` is GS0129).
-                    return BinaryExpression(
-                        receiver,
-                        "==",
-                        this.CoercePatternConstant(
-                            constant.Expression,
-                            this.TranslateExpression(constant.Expression),
-                            receiverType
-                        )
-                    )
+                    return this.TranslateConstantPatternTest(receiver, constant.Expression, receiverType)
                 }
                 case relational is RelationalPatternSyntax {
                     // `x is > 0` → `x > 0` (with the same numeric retyping).
@@ -1833,21 +1787,14 @@ partial class CSharpToGSharpTranslator {
                     elementReceiver,
                     element,
                     elementType,
-                    isNestedPatternMember: isNestedPatternMember ||
-                        (PatternIntroducesBinding(element) && element is not VarPatternSyntax)
+                    isNestedPatternMember: true
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
-            // Issue #4356: a list pattern never matches nil, and a NESTED member
-            // tested with one (`{ P: [1] }`, `P` an `int[]?`) or a hoisted
-            // nullable scrutinee arrives here bound to a `let` local that is
-            // `T?` in G#. Guard it first: the guard both makes the pattern fall
-            // through on nil, as C# does, and smart-casts the local for the
-            // `.Length` / index reads.
+            // A list pattern never matches nil. Guard nullable receivers before reading their length or elements.
             if this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                 (
-                isNestedPatternMember &&
-                    receiverType != nil &&
+                receiverType != nil &&
                     receiverType.IsReferenceType == true &&
                     receiverType.NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -2012,16 +1959,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 case constant is ConstantPatternSyntax {
-                    // `x is not 6` → `x != 6` (with numeric retyping to the receiver).
-                    return BinaryExpression(
-                        receiver,
-                        "!=",
-                        this.CoercePatternConstant(
-                            constant.Expression,
-                            this.TranslateExpression(constant.Expression),
-                            receiverType
-                        )
-                    )
+                    return this.TranslateConstantPatternTest(receiver, constant.Expression, receiverType, negated: true)
                 }
                 case RecursivePatternSyntax{Type: nil} emptyRecursive when(
                     emptyRecursive.PropertyPatternClause is nil or {Subpatterns: {Count: 0}}
@@ -2083,13 +2021,89 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Retypes a constant/relational pattern's literal operand to the receiver's
-        // numeric type so the lowered `==`/`!=`/`<`… comparison type-checks. G# has
-        // no implicit numeric promotion, so `uint8? is 11` lowered to `b == 11`
-        // (where `11` is `int32`) is GS0129; coercing the literal yields the
-        // accepted `b == (11 as uint8?)`. Mirrors the constant branch of
-        // <see cref="TranslateBinaryExpression"/>. Non-numeric receivers/literals
-        // (string/enum/type tests) are left untouched.
+        // Both Roslyn syntax forms use this decision. An equality does not narrow its input (#5626).
+        private func TranslateConstantPatternTest(
+            receiver GExpression?,
+            constantSyntax ExpressionSyntax,
+            receiverType ITypeSymbol?,
+            negated bool = false
+        ) GExpression {
+            let receiverType = this.GetPatternInputType(constantSyntax.Parent as PatternSyntax, receiverType)
+            let constant GExpression? = if this.IsNullPatternValue(constantSyntax) {
+                LiteralExpression.Null()
+            } else {
+                this.TranslateExpression(constantSyntax)
+            }
+            if this.ConstantPatternUsesValueEquality(receiverType, constantSyntax) {
+                // Put the constant first: a user input's Equals override must not control the match.
+                let equals = InvocationExpression(
+                    MemberAccessExpression(TypeExpression(NamedTypeReference("object")), "Equals"),
+                    List[GExpression]{this.CoercePatternConstant(constantSyntax, constant, receiverType)!!, receiver!!}
+                )
+                return if negated {
+                    cast[GExpression](UnaryExpression("!", ParenthesizedExpression(equals)))
+                } else {
+                    equals
+                }
+            }
+            return BinaryExpression(
+                receiver,
+                if negated {
+                    "!="
+                } else {
+                    "=="
+                },
+                this.CoercePatternConstant(constantSyntax, constant, receiverType)
+            )
+        }
+
+        private func ConstantPatternUsesValueEquality(receiverType ITypeSymbol?, constant ExpressionSyntax) bool ->
+        !IsNullLiteral(constant) && !this.IsTypeReferencePattern(constant) &&
+            (
+            this.IsNullPatternValue(constant) ||
+                receiverType?.TypeKind == TypeKind.TypeParameter ||
+                (
+                receiverType != nil &&
+                    receiverType.IsReferenceType &&
+                    receiverType.SpecialType != SpecialType.System_String
+            ) ||
+                this.IsNaNPatternConstant(constant)
+        )
+
+        private func IsNaNPatternConstant(expression ExpressionSyntax) bool {
+            let constant = this.context.SemanticModel.GetConstantValue(expression)
+            return constant.HasValue &&
+                ((constant.Value is float64 d && float64.IsNaN(d)) || (constant.Value is float32 f && float32.IsNaN(f)))
+        }
+
+        private func PatternRequiresValueEquality(pattern PatternSyntax) bool -> pattern
+            .DescendantNodesAndSelf()
+            .OfType[ConstantPatternSyntax]()
+            .Any(
+            (constant ConstantPatternSyntax) -> this.ConstantPatternUsesValueEquality(
+                this.GetPatternComparisonReceiverType(constant),
+                constant.Expression
+            )
+        )
+
+        private func GetPatternInputType(pattern PatternSyntax?, receiverType ITypeSymbol?) ITypeSymbol? {
+            if pattern == nil || this.context.SemanticModel.GetOperation(pattern) is not IPatternOperation operation {
+                return receiverType
+            }
+            var root = pattern
+            while root.Parent is PatternSyntax parent {
+                root = parent
+            }
+            let rootInput = (this.context.SemanticModel.GetOperation(root) as IPatternOperation)?.InputType
+            // Keep projected input types unless an enclosing pattern changed the leaf's semantic input.
+            return if rootInput != nil && !SymbolEqualityComparer.Default.Equals(operation.InputType, rootInput) {
+                operation.InputType
+            } else {
+                receiverType ?? operation.InputType
+            }
+        }
+
+        // Convert numeric pattern constants to the receiver's numeric type without a runtime downcast (#5676).
         private func CoercePatternConstant(
             constantSyntax ExpressionSyntax,
             constant GExpression?,
@@ -2300,6 +2314,13 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if recursive.PropertyPatternClause != nil {
+                let sharedPrefixes Dictionary[string, GExpression]? = if recursive.PropertyPatternClause!!
+                    .Subpatterns
+                    .Count((sub SubpatternSyntax) -> sub.NameColon == nil && sub.ExpressionColon != nil) > 1 {
+                    Dictionary[string, GExpression](StringComparer.Ordinal)
+                } else {
+                    nil
+                }
                 for sub in recursive.PropertyPatternClause!!.Subpatterns {
                     if sub.NameColon == nil && sub.ExpressionColon == nil {
                         this.context.ReportUnsupported(
@@ -2336,7 +2357,8 @@ partial class CSharpToGSharpTranslator {
                         memberTest = this.TranslateExtendedPropertyMemberTest(
                             sub.ExpressionColon!!.Expression,
                             sub.Pattern,
-                            memberReceiver
+                            memberReceiver,
+                            sharedPrefixes
                         )
                     }
                     test = if test == nil {
@@ -2563,7 +2585,8 @@ partial class CSharpToGSharpTranslator {
         private func TranslateExtendedPropertyMemberTest(
             memberPath ExpressionSyntax,
             leafPattern PatternSyntax,
-            receiver GExpression?
+            receiver GExpression?,
+            sharedPrefixes Dictionary[string, GExpression]? = nil
         ) GExpression {
             let names = SplitMemberPath(memberPath)
             // `intermediateExprs[i]` is the sub-expression whose runtime value
@@ -2581,7 +2604,15 @@ partial class CSharpToGSharpTranslator {
                 intermediateExprs[pos] = memberAccess.Expression
                 current = memberAccess.Expression
             }
-            return this.TranslateExtendedPropertyLink(names, intermediateExprs, 0, receiver, memberPath, leafPattern)
+            return this.TranslateExtendedPropertyLink(
+                names,
+                intermediateExprs,
+                0,
+                receiver,
+                memberPath,
+                leafPattern,
+                sharedPrefixes
+            )
         }
 
         // Issue #4356: one link of an extended property path. A nullable
@@ -2597,7 +2628,8 @@ partial class CSharpToGSharpTranslator {
             index int32,
             memberReceiver GExpression?,
             memberPath ExpressionSyntax,
-            leafPattern PatternSyntax
+            leafPattern PatternSyntax,
+            sharedPrefixes Dictionary[string, GExpression]? = nil
         ) GExpression {
             if index == names.Count - 1 {
                 let finalMemberAccess GExpression = MemberAccessExpression(memberReceiver, names[index])
@@ -2624,71 +2656,54 @@ partial class CSharpToGSharpTranslator {
             // conversion, #1943), so the next link reads it through `!!` —
             // safe, the guard just proved it has a value.
             let nullableValueLink = IsNullableValueType(declaredType)
-            if this.IsNullablePatternLink(declaredType, intermediateExprs[index]) {
-                if gsharpNullableLink {
-                    this.state.GSharpNullablePatternReceivers.Add(link)
-                }
-                let rest(GExpression) -> GExpression = (local GExpression) -> BinaryExpression(
-                    BinaryExpression(local, "!=", LiteralExpression.Null()),
-                    "&&",
-                    this.TranslateExtendedPropertyLink(
-                        names,
-                        intermediateExprs,
-                        index + 1,
-                        if nullableValueLink {
-                            cast[GExpression](NonNullAssertionExpression(local))
-                        } else {
-                            local
-                        },
-                        memberPath,
-                        leafPattern
-                    )
-                )
-                // A leaf that declares a designation (`Identifier.Text: var t`)
-                // leaves its binder's replacement reading through this local
-                // after the test, so the local must outlive the block: a `var`
-                // declared in the enclosing seam, assigned in the test.
-                let declarations List[GStatement]? = this
-                    .state
-                    .ShortCircuitSpillDeclarations ??
-                    this
-                    .state
-                    .PendingSpillPrologue
-                if PatternIntroducesBinding(leafPattern) && declarations != nil && declaredType != nil {
-                    // The binder's replacement reads the next link through this
-                    // `var` AFTER the test, where the guard no longer narrows
-                    // it, so that read asserts — safe, the guard proved it.
-                    return this.StorePatternMemberOnce(
-                        link,
-                        declaredType,
-                        gsharpNullableLink,
-                        declarations,
-                        func (local GExpression) GExpression {
-                            return BinaryExpression(
-                                BinaryExpression(local, "!=", LiteralExpression.Null()),
-                                "&&",
-                                this.TranslateExtendedPropertyLink(
-                                    names,
-                                    intermediateExprs,
-                                    index + 1,
-                                    NonNullAssertionExpression(local),
-                                    memberPath,
-                                    leafPattern
-                                )
-                            )
-                        }
-                    )
-                }
-                return this.BindPatternMemberOnce(link, rest)
+            let prefix = string.Join(".", names.Take(index + 1))
+            let needsGuard = this.IsNullablePatternLink(declaredType, intermediateExprs[index]) ||
+                (sharedPrefixes != nil && declaredType?.IsReferenceType == true)
+            if gsharpNullableLink {
+                this.state.GSharpNullablePatternReceivers.Add(link)
             }
-            return this.TranslateExtendedPropertyLink(
-                names,
-                intermediateExprs,
-                index + 1,
-                link,
-                memberPath,
-                leafPattern
-            )
+            let rest(GExpression) -> GExpression = func (local GExpression) GExpression {
+                let next = this.TranslateExtendedPropertyLink(
+                    names,
+                    intermediateExprs,
+                    index + 1,
+                    if nullableValueLink || (needsGuard && this.state.StoredPatternCaptures.Contains(local)) {
+                        cast[GExpression](NonNullAssertionExpression(local))
+                    } else {
+                        local
+                    },
+                    memberPath,
+                    leafPattern,
+                    sharedPrefixes
+                )
+                return if needsGuard {
+                    cast[GExpression](
+                        BinaryExpression(BinaryExpression(local, "!=", LiteralExpression.Null()), "&&", next)
+                    )
+                } else {
+                    next
+                }
+            }
+            if !needsGuard && sharedPrefixes == nil {
+                return rest(link)
+            }
+            if sharedPrefixes != nil && sharedPrefixes.TryGetValue(prefix, out var previous) {
+                return rest(previous)
+            }
+            let capture(GExpression) -> GExpression = func (local GExpression) GExpression {
+                if sharedPrefixes != nil {
+                    sharedPrefixes[prefix] = local
+                }
+                return rest(local)
+            }
+            // Shared prefixes can serve later binders outside this test block. Declare storage outside; assign it at first use.
+            let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+            if (sharedPrefixes != nil || PatternIntroducesBinding(leafPattern)) &&
+                declarations != nil &&
+                declaredType != nil {
+                return this.StorePatternMemberOnce(link, declaredType, gsharpNullableLink, declarations, capture)
+            }
+            return this.BindPatternMemberOnce(link, capture)
         }
 
         // Issue #1891: lowers an extended property subpattern's dotted member

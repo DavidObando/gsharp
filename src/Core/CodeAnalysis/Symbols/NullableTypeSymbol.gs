@@ -89,6 +89,7 @@ class NullableTypeSymbol : TypeSymbol {
                 case array is ArrayTypeSymbol: "[${array.Length}]?${array.ElementType.Name}"
                 case array is RectangularArrayTypeSymbol: "[${String(',', array.Rank - 1)}]?${array.ElementType.Name}"
                 case function is FunctionTypeSymbol: "(${function.Name})?"
+                case functionPointer is FunctionPointerTypeSymbol: "(${functionPointer.Name})?"
                 default: underlyingType.Name + "?"
             }
         }

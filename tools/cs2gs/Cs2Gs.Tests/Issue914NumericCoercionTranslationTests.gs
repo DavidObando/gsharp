@@ -43,10 +43,9 @@ namespace Demo
         Assert.DoesNotContain("as uint8", printed)
     }
 
-    /// Task 1 guard: a nullable value-type target keeps the `as` form, which
-    /// G# accepts (`(2 as uint16?)`).
+    /// A nullable numeric target needs a value conversion, not a boxed type test (#5676).
     @Fact
-    func NumericCoercion_NullableValueTarget_KeepsAsForm() {
+    func NumericCoercion_NullableValueTarget_UsesConversionCallForm() {
         let printed = TranslateUnit(`
 namespace Demo
 {
@@ -57,7 +56,7 @@ namespace Demo
         public bool IsStereo(Entry? e) => e?.ChannelCount == 2;
     }
 }`)
-        Assert.Contains("(2 as uint16?)", printed)
+        Assert.Contains("uint16?(2)", printed)
     }
 
     /// Task 2: a bitwise operator over differing numeric operands is promoted, so
