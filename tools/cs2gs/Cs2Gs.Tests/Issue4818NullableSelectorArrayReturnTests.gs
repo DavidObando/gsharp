@@ -19,10 +19,17 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 
+public delegate TResult Reader<TResult, TArg>(TArg value);
+
 public static class Extensions
 {
     public static object[] Ignore<T>(this IEnumerable<T> values) =>
         new[] { new object() };
+
+    public static IEnumerable<TResult> SelectCustom<TSource, TResult>(
+        this IEnumerable<TSource> values,
+        Reader<TResult, TSource> selector) =>
+        values.Select(v => selector(v));
 }
 
 public static class Probe
@@ -102,6 +109,11 @@ public static class Probe
             .ToArray();
     }
 
+    public static string[] CustomReaderValues() =>
+        new[] { 1 }
+            .SelectCustom((Reader<string, int>)(x => x.ToString()))
+            .ToArray();
+
 }`
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Probe.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
@@ -118,6 +130,8 @@ public static class Probe
             printed.Substring(signature, Math.Min(300, printed.Length - signature))
         )
         Assert.DoesNotContain("argument.Value!!", printed, StringComparison.Ordinal)
+        Assert.Contains("Reader[string, int32]", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Reader[string, int32?]", printed, StringComparison.Ordinal)
         Assert.Contains("func Names() []string", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("func Names() []string?", printed, StringComparison.Ordinal)
         Assert.Contains("func Reprojected() []object", printed, StringComparison.Ordinal)

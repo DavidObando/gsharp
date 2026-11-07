@@ -3702,12 +3702,13 @@ partial class CSharpToGSharpTranslator {
                     }
                     case castExpr is CastExpressionSyntax {
                         let _ = tuplePath
-                        if UnwrapExpressionTreeDelegateType(
+                        let castTargetType = UnwrapExpressionTreeDelegateType(
                             this.context.GetTypeInfo(castExpr.Type).Type
-                        ) is INamedTypeSymbol{DelegateInvokeMethod: {}} {
-                            return !this.IsObliviousCompilation() || this.LambdaBodyReturnsNilableBeyondItsCSharpType(
-                                lambda
-                            ) ||
+                        )
+                        if castTargetType is INamedTypeSymbol{DelegateInvokeMethod: {}} {
+                            return !this.IsObliviousCompilation() ||
+                                !IsSystemFuncDelegate(castTargetType) ||
+                                this.LambdaBodyReturnsNilableBeyondItsCSharpType(lambda) ||
                                 !this.LambdaResultFlowsToNullableSink(lambda, ignoreExplicitDelegateCast: true)
                         }
                         node = castExpr
@@ -3922,6 +3923,14 @@ partial class CSharpToGSharpTranslator {
         } else {
             type
         }
+
+        private func IsSystemFuncDelegate(type ITypeSymbol?) bool -> type is INamedTypeSymbol{
+            TypeKind: TypeKind.Delegate,
+            IsGenericType: true,
+            Name: "Func",
+            ContainingNamespace: {} ns
+        } &&
+            ns.ToDisplayString() == "System"
 
         private func CallReceiverSlotIsDeclared(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,

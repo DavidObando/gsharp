@@ -12938,6 +12938,7 @@ partial class Binder {
                         case iface is InterfaceSymbol: StructSymbol.CollectEnclosingTypeParameters(iface).AddRange(
                             iface.DeclaredTypeParameters
                         )
+                        case del is DelegateTypeSymbol: del.TypeParameters
                         default: ImmutableArray[TypeParameterSymbol].Empty
                     }
                     for var i = 0; i < userParamArgs.Length; i++ {
@@ -13168,6 +13169,11 @@ partial class Binder {
                     definition = i.Definition ?? i
                     typeArguments = Conversion.GetEffectiveInterfaceTypeArguments(i)
                     return !typeArguments.IsDefaultOrEmpty
+                }
+                case d is DelegateTypeSymbol when !d.TypeArguments.IsDefaultOrEmpty {
+                    definition = d.Definition ?? d
+                    typeArguments = d.TypeArguments
+                    return true
                 }
                 default {
                     definition = nil

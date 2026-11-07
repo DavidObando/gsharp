@@ -4339,6 +4339,7 @@ partial class CSharpToGSharpTranslator {
             if targetSymbol is INamedTypeSymbol delegateTarget && delegateTarget.TypeKind == TypeKind.Delegate {
                 targetType = this.typeMapper.MapNominalDelegate(delegateTarget, this.context, cast.Type.GetLocation())
                 if this.IsObliviousCompilation() &&
+                    IsSystemFuncDelegate(delegateTarget) &&
                     Unparenthesize(cast.Expression) is AnonymousFunctionExpressionSyntax castLambda &&
                     !this.LambdaBodyReturnsNilableBeyondItsCSharpType(castLambda) &&
                     this.LambdaResultFlowsToNullableSink(castLambda, ignoreExplicitDelegateCast: true) &&
