@@ -667,10 +667,13 @@ open partial class Parser {
     // the binder can reject mismatches; otherwise returns the general
     // ConditionalExpressionSyntax (ADR-0062).
     private func ParseConditionalTail(condition ExpressionSyntax) ExpressionSyntax {
+        if TryTakeCachedConditionalTail(condition) is {} cachedConditional {
+            return cachedConditional
+        }
         let questionToken = NextToken()
         let whenTrueMod SyntaxToken? = TryConsumeInnerRefModifier()
         // The true arm is nested; the false arm continues the outer expression.
-        let whenTrue = ParseExpression(colonTerminated: true)
+        let whenTrue = ParseExpression(colonTerminatedDepth: this.colonTerminatedDepth + 1)
         let colonToken = MatchToken(SyntaxKind.ColonToken)
         let whenFalseMod SyntaxToken? = TryConsumeInnerRefModifier()
         let whenFalse = ParseAssignmentExpression()

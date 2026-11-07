@@ -16,14 +16,45 @@ open partial class Parser {
     private var patternNestingDepth int32
     private var inPatternTypeClause bool
     private var suppressTopLevelConditionalTail bool
-    private var colonTerminatedExpression bool
-    private var conditionalQuestionCache Dictionary[(int32, bool), bool]?
+    private var colonTerminatedDepth int32
+    private var conditionalTailCache Dictionary[
+        (int32, int32, bool, int32, int32, int32, int32),
+        CachedConditionalTail?
+    ]?
     private enum PatternParseContext {
         General,
         IsExpression,
         IsExpressionBodyHeader,
         SwitchStatement,
         SwitchExpression
+    }
+
+    private struct CachedConditionalTail {
+        let WhenTrueMod SyntaxToken?
+        let WhenTrue ExpressionSyntax
+        let ColonToken SyntaxToken
+        let WhenFalseMod SyntaxToken?
+        let WhenFalse ExpressionSyntax
+        let EndPosition int32
+        let EndTokens ImmutableArray[SyntaxToken]
+
+        init(
+            whenTrueMod SyntaxToken?,
+            whenTrue ExpressionSyntax,
+            colonToken SyntaxToken,
+            whenFalseMod SyntaxToken?,
+            whenFalse ExpressionSyntax,
+            endPosition int32,
+            endTokens ImmutableArray[SyntaxToken]
+        ) {
+            WhenTrueMod = whenTrueMod
+            WhenTrue = whenTrue
+            ColonToken = colonToken
+            WhenFalseMod = whenFalseMod
+            WhenFalse = whenFalse
+            EndPosition = endPosition
+            EndTokens = endTokens
+        }
     }
 
     private func ParseSwitchStatement() StatementSyntax {
@@ -90,7 +121,7 @@ open partial class Parser {
             let guard_ = if bodyFollows {
                 ParseExpressionInBodyHeader()
             } else {
-                ParseExpression(colonTerminated: true)
+                ParseExpression(colonTerminatedDepth: 1)
             }
             return (whenKeyword, guard_)
         }
@@ -243,8 +274,52 @@ open partial class Parser {
     private func ParsePatternOperandExpression() ExpressionSyntax -> ParseExpression(
         stopAtTopLevelConditional: patternNestingDepth == 0 &&
             (patternParseContext is PatternParseContext.IsExpression or PatternParseContext.IsExpressionBodyHeader),
-        colonTerminated: this.colonTerminatedExpression
+        colonTerminatedDepth: this.colonTerminatedDepth
     )
+
+    private func GetConditionalTailCacheKey()(int32, int32, bool, int32, int32, int32, int32) -> (
+        Current.Position,
+        this.colonTerminatedDepth,
+        this.stopAtTopLevelLogical,
+        this.suppressStructLiteral,
+        this.suppressTrailingObjectInitializer,
+        this.suppressRangeOperator,
+        this.skimBraceBodies
+    )
+
+    private func TryTakeCachedConditionalTail(condition ExpressionSyntax) ExpressionSyntax? {
+        if conditionalTailCache == nil || !conditionalTailCache!!.TryGetValue(
+            GetConditionalTailCacheKey(),
+            out var cached
+        ) ||
+            cached is not{} tail {
+            return nil
+        }
+        let questionToken = NextToken()
+        position = tail.EndPosition
+        tokens = tail.EndTokens
+        return if tail.WhenTrueMod != nil || tail.WhenFalseMod != nil {
+            ConditionalRefArgumentExpressionSyntax(
+                syntaxTree,
+                condition,
+                questionToken,
+                tail.WhenTrueMod,
+                tail.WhenTrue,
+                tail.ColonToken,
+                tail.WhenFalseMod,
+                tail.WhenFalse
+            )
+        } else {
+            ConditionalExpressionSyntax(
+                syntaxTree,
+                condition,
+                questionToken,
+                tail.WhenTrue,
+                tail.ColonToken,
+                tail.WhenFalse
+            )
+        }
+    }
 
     // Issue #4970: in `o is T ? a : b` and `o !is T ? a : b`, the `?` after `T`
     // opens the conditional expression when it is followed by an expression and
@@ -266,149 +341,83 @@ open partial class Parser {
             next.Kind != SyntaxKind.HatToken {
             return false
         }
-        let cacheKey = (Current.Position, this.colonTerminatedExpression)
-        if conditionalQuestionCache != nil && conditionalQuestionCache!!.TryGetValue(cacheKey, out var cached) {
-            return cached
+        let cacheKey = GetConditionalTailCacheKey()
+        if conditionalTailCache != nil && conditionalTailCache!!.TryGetValue(cacheKey, out var cached) {
+            return cached != nil
         }
-        let result = ComputeShouldLeaveQuestionTokenForConditional()
-        conditionalQuestionCache ??= Dictionary[(int32, bool), bool]()
-        conditionalQuestionCache!![cacheKey] = result
-        return result
+        let computed = ComputeCachedConditionalTail()
+        conditionalTailCache ??= Dictionary[(int32, int32, bool, int32, int32, int32, int32), CachedConditionalTail?]()
+        conditionalTailCache!![cacheKey] = computed
+        return computed != nil
     }
 
-    private func ComputeShouldLeaveQuestionTokenForConditional() bool {
-        if IsPatternDesignationCandidateAt(1, Current) {
-            let afterDesignation = Peek(2)
-            if afterDesignation.Kind == SyntaxKind.ColonToken {
-                return if !this.colonTerminatedExpression {
-                    true
-                } else {
-                    ScanForConditionalColon(startOffset: 3)
+    private func ComputeCachedConditionalTail() CachedConditionalTail? {
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        let savedInPatternTypeClause = inPatternTypeClause
+        let savedPatternContext = patternParseContext
+        let savedPatternNestingDepth = patternNestingDepth
+        let savedSuppressConditional = suppressTopLevelConditionalTail
+        let savedColonTerminatedDepth = colonTerminatedDepth
+        let savedStructLiteral = suppressStructLiteral
+        let savedObjectInitializer = suppressTrailingObjectInitializer
+        let savedRangeOperator = suppressRangeOperator
+        try {
+            inPatternTypeClause = false
+            patternParseContext = PatternParseContext.General
+            patternNestingDepth = 0
+            suppressTopLevelConditionalTail = false
+            NextToken()
+            let whenTrueMod = TryConsumeInnerRefModifier()
+            let whenTrue = ParseExpression(colonTerminatedDepth: savedColonTerminatedDepth + 1)
+            if Diagnostics.Count != savedDiagnosticCount || Current.Kind != SyntaxKind.ColonToken {
+                return nil
+            }
+            let colonToken = NextToken()
+            let whenFalseMod = TryConsumeInnerRefModifier()
+            colonTerminatedDepth = savedColonTerminatedDepth
+            let whenFalse = ParseAssignmentExpression()
+            if Diagnostics.Count != savedDiagnosticCount {
+                return nil
+            }
+            let endPosition = position
+            let endTokens = tokens
+            for var d = 0; d < savedColonTerminatedDepth; d++ {
+                if Current.Kind != SyntaxKind.ColonToken {
+                    return nil
+                }
+                if d + 1 < savedColonTerminatedDepth {
+                    NextToken()
+                    let _ = TryConsumeInnerRefModifier()
+                    colonTerminatedDepth = savedColonTerminatedDepth - d - 1
+                    let _ = ParseAssignmentExpression()
+                    if Diagnostics.Count != savedDiagnosticCount {
+                        return nil
+                    }
                 }
             }
-            if CanFollowPatternDesignation(afterDesignation) {
-                return false
-            }
-        }
-        return ScanForConditionalColon(startOffset: 1)
-    }
-
-    private func CanFollowPatternDesignation(token SyntaxToken) bool {
-        if token.Kind == SyntaxKind.IdentifierToken && (token.Text is "and" or "or" or "when") {
-            return true
-        }
-        return switch token.Kind {
-            case SyntaxKind.AmpersandAmpersandToken or
-                SyntaxKind.PipePipeToken or
-                SyntaxKind.EqualsEqualsToken or
-                SyntaxKind.BangEqualsToken or
-                SyntaxKind.OpenBraceToken or
-                SyntaxKind.CloseBraceToken or
-                SyntaxKind.CloseSquareBracketToken or
-                SyntaxKind.CloseParenthesisToken or
-                SyntaxKind.CommaToken or
-                SyntaxKind.RightArrowToken or
-                SyntaxKind.SemicolonToken or
-                SyntaxKind.QuestionToken or
-                SyntaxKind.EndOfFileToken or
-                SyntaxKind.ElseKeyword or
-                SyntaxKind.CaseKeyword or
-                SyntaxKind.DefaultKeyword: true
-            default: false
-        }
-    }
-
-    private func ScanForConditionalColon(startOffset int32) bool {
-        var parenDepth = 0
-        var bracketDepth = 0
-        var braceDepth = 0
-        var offset = startOffset
-        while true {
-            let token = Peek(offset)
-            let kind = token.Kind
-            if kind == SyntaxKind.EndOfFileToken {
-                return false
-            }
-            if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
-                switch kind {
-                    case SyntaxKind.CloseParenthesisToken,
-                    SyntaxKind.CloseSquareBracketToken,
-                    SyntaxKind.CloseBraceToken,
-                    SyntaxKind.SemicolonToken,
-                    SyntaxKind.CommaToken,
-                    SyntaxKind.EqualsToken,
-                    SyntaxKind.PackageKeyword,
-                    SyntaxKind.ImportKeyword,
-                    SyntaxKind.FuncKeyword,
-                    SyntaxKind.StructKeyword,
-                    SyntaxKind.ClassKeyword,
-                    SyntaxKind.InterfaceKeyword,
-                    SyntaxKind.EnumKeyword,
-                    SyntaxKind.IfKeyword,
-                    SyntaxKind.SwitchKeyword,
-                    SyntaxKind.ReturnKeyword,
-                    SyntaxKind.LetKeyword,
-                    SyntaxKind.VarKeyword,
-                    SyntaxKind.ConstKeyword,
-                    SyntaxKind.WhileKeyword,
-                    SyntaxKind.ForKeyword,
-                    SyntaxKind.BreakKeyword,
-                    SyntaxKind.ContinueKeyword {
-                        return false
-                    }
-                    case SyntaxKind.OpenBraceToken {
-                        if patternParseContext == PatternParseContext.IsExpressionBodyHeader {
-                            return false
-                        }
-                        braceDepth++
-                    }
-                    case SyntaxKind.OpenParenthesisToken {
-                        parenDepth++
-                    }
-                    case SyntaxKind.OpenSquareBracketToken, SyntaxKind.QuestionOpenBracketToken {
-                        bracketDepth++
-                    }
-                    case SyntaxKind.ColonToken {
-                        if offset == startOffset {
-                            return false
-                        }
-                        let afterColon = Peek(offset + 1).Kind
-                        return !(
-                            afterColon is SyntaxKind.EndOfFileToken or
-                                SyntaxKind.CloseParenthesisToken or
-                                SyntaxKind.CloseSquareBracketToken or
-                                SyntaxKind.CloseBraceToken or
-                                SyntaxKind.SemicolonToken or
-                                SyntaxKind.CommaToken or
-                                SyntaxKind.ColonToken
-                        )
-                    }
-                    default { }
-                }
-            } else {
-                switch kind {
-                    case SyntaxKind.OpenParenthesisToken {
-                        parenDepth++
-                    }
-                    case SyntaxKind.CloseParenthesisToken {
-                        parenDepth--
-                    }
-                    case SyntaxKind.OpenSquareBracketToken, SyntaxKind.QuestionOpenBracketToken {
-                        bracketDepth++
-                    }
-                    case SyntaxKind.CloseSquareBracketToken {
-                        bracketDepth--
-                    }
-                    case SyntaxKind.OpenBraceToken {
-                        braceDepth++
-                    }
-                    case SyntaxKind.CloseBraceToken {
-                        braceDepth--
-                    }
-                    default { }
-                }
-            }
-            offset++
+            return CachedConditionalTail(
+                whenTrueMod,
+                whenTrue,
+                colonToken,
+                whenFalseMod,
+                whenFalse,
+                endPosition,
+                endTokens
+            )
+        } finally {
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
+            inPatternTypeClause = savedInPatternTypeClause
+            patternParseContext = savedPatternContext
+            patternNestingDepth = savedPatternNestingDepth
+            suppressTopLevelConditionalTail = savedSuppressConditional
+            colonTerminatedDepth = savedColonTerminatedDepth
+            suppressStructLiteral = savedStructLiteral
+            suppressTrailingObjectInitializer = savedObjectInitializer
+            suppressRangeOperator = savedRangeOperator
         }
     }
 

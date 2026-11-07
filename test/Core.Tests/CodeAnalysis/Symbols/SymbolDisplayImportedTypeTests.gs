@@ -169,6 +169,20 @@ func echoPoint(p Point) {
         let echoHover = SymbolDisplay.ToDisplayString(echoSymbol, SymbolDisplayFormat.Hover)
         Assert.StartsWith("async func ", echoHover)
         Assert.EndsWith("Point", echoHover)
+
+        using let uninferableFixture = CSharpFixture(
+            "namespace UninferableContract { public static class BadExt { public static int GetValueOrDefault<T, U>(this T value) where T : struct => 999; } }"
+        )
+        let fallbackTree = SyntaxTree.Parse(`import UninferableContract
+struct Point {
+    var X int32
+}
+func guardedFallback(p Point?) int32 -> p != nil ? p.GetValueOrDefault().X : -1
+`)
+        let fallbackCompilation = Compilation(uninferableFixture.RuntimeReferences(), fallbackTree)
+        using let fallbackStream = MemoryStream()
+        let fallbackResult = fallbackCompilation.Emit(fallbackStream)
+        Assert.Empty(fallbackResult.Diagnostics)
     }
 
     shared {

@@ -1330,40 +1330,19 @@ internal shared class ClrOverloadResolution {
         if !receiverMatches {
             return false
         }
-        let typeParameters = method.GetGenericArguments()
-        var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
-        if argumentNames != nil {
-            if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
-                !TryBuildNamedArgumentReordering(
-                method,
-                argumentNames.Count,
-                argumentNames,
-                isExpanded: true,
-                out mapping
-            ) {
-                remainingParameters = Array.Empty[ParameterInfo]()
-            } else if mapping != nil {
-                remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
-            }
-        }
-        let argumentDependent = typeParameters
-            .Where(
-            (typeParameter Type) -> (argumentCount == nil && !MentionsGenericParameter(parameterType, typeParameter)) ||
-                remainingParameters.Any(
-                (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
-            )
-        )
-            .Select((typeParameter Type) -> typeParameter.Name)
-            .ToHashSet(StringComparer.Ordinal)
-        if typeParameters.Any(
-            (typeParameter Type) -> !bounds.ContainsKey(typeParameter.Name) && !argumentDependent.Contains(
-                typeParameter.Name
-            )
+        if !AllExtensionTypeParametersMayBeInferred(
+            method,
+            parameterType,
+            bounds.Keys,
+            argumentCount,
+            argumentNames,
+            out var argumentDependent
         ) {
             return false
         }
         if requiresIdentity {
-            let independent = typeParameters
+            let independent = method
+                .GetGenericArguments()
                 .Where(
                 (parameter Type) -> argumentDependent.Contains(parameter.Name) &&
                     !MentionsGenericParameter(parameterType, parameter)
@@ -1459,6 +1438,48 @@ internal shared class ClrOverloadResolution {
             }
         }
         return false
+    }
+
+    internal func AllExtensionTypeParametersMayBeInferred(
+        method MethodInfo,
+        parameterType Type,
+        inferredFromReceiver ICollection[string],
+        argumentCount int32?,
+        argumentNames IReadOnlyList[string?]?,
+        out argumentDependent HashSet[string]
+    ) bool {
+        let parameters = method.GetParameters()
+        let typeParameters = method.GetGenericArguments()
+        var remainingParameters = parameters.Skip(1).Take(argumentCount ?? int32.MaxValue).ToArray()
+        if argumentNames != nil {
+            if !TryBuildNamedArgumentReordering(method, argumentNames.Count, argumentNames, out var mapping) &&
+                !TryBuildNamedArgumentReordering(
+                method,
+                argumentNames.Count,
+                argumentNames,
+                isExpanded: true,
+                out mapping
+            ) {
+                remainingParameters = Array.Empty[ParameterInfo]()
+            } else if mapping != nil {
+                remainingParameters = mapping.Skip(1).Select((index int32) -> parameters[index]).ToArray()
+            }
+        }
+        let dependent = typeParameters
+            .Where(
+            (typeParameter Type) -> (argumentCount == nil && !MentionsGenericParameter(parameterType, typeParameter)) ||
+                remainingParameters.Any(
+                (parameter ParameterInfo) -> MentionsGenericParameter(parameter.ParameterType, typeParameter)
+            )
+        )
+            .Select((typeParameter Type) -> typeParameter.Name)
+            .ToHashSet(StringComparer.Ordinal)
+        argumentDependent = dependent
+        return !typeParameters.Any(
+            (typeParameter Type) -> !inferredFromReceiver.Contains(typeParameter.Name) && !dependent.Contains(
+                typeParameter.Name
+            )
+        )
     }
 
     private func OpenExtensionReceiverStandardShapeMayApply(

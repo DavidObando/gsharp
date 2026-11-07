@@ -1554,6 +1554,13 @@ func nestedOuterConditional(flag bool, o object) bool -> flag ? o is int32? : fa
 func id(x int32) int32 -> x
 func nestedParenConditional(flag bool, o object) int32 -> flag ? (o is string ? 1 : 0) : 2
 func nestedCallArgConditional(flag bool, o object) int32 -> flag ? id(o is string ? 1 : 0) : 2
+func isStringWithComparisonArm(o object, a int32, b int32) bool -> o is string ? a == b : false
+func isStringWithNestedTernaryArm(o object, flag bool) int32 -> o is string ? flag ? 1 : 0 : 2
+func isStringWithIfArm(o object, flag bool) int32 -> o is string ? if flag { 1 } else { 2 } : 0
+func isStringWithSwitchArm(o object, flag bool) int32 -> o is string ? switch flag { case true: 1 default: 2 } : 0
+func outerTernaryWithPatternDesignationAndTernaryFalseArm(flag bool, o object) bool -> flag ? o is int32? n : true ? false : true
+
+func (self Point?) GetValueOrDefault(a int32, b int32) int32 -> a + b
 
 func exprArrow() Expression[Func[int32]] -> () -> 11
 func exprBlock() Expression[Func[int32]] {
@@ -1563,6 +1570,7 @@ func exprBlock() Expression[Func[int32]] {
 func pointDefault(p Point?) int32 -> p.GetValueOrDefault().X
 func pointFallback(p Point?) int32 -> p.GetValueOrDefault(Point{X: 9, Y: 8}).Y
 func pointGuarded(p Point?) int32 -> p != nil ? p.GetValueOrDefault().Y : -1
+func pointTwoArgExtension(p Point?) int32 -> p.GetValueOrDefault(4, 6)
 func colorFallback(c Color?) Color -> c.GetValueOrDefault(Color.Green)
 func genericDefault[T struct](x T?) T -> x.GetValueOrDefault()
 func genericFallback[T struct](x T?, fallback T) T -> x != nil ? x.GetValueOrDefault(fallback) : fallback
@@ -1570,8 +1578,9 @@ func genericFallback[T struct](x T?, fallback T) T -> x != nil ? x.GetValueOrDef
 Console.WriteLine("${isString("hi")} ${isString(5)} ${notIsString("hi")} ${notIsString(5)}")
 Console.WriteLine("${isDog(Dog{})} ${isDog("no")} ${isNullableInt(3)} ${isStringWithVarArms("hi", 7, 9)}")
 Console.WriteLine("${nestedOuterConditional(true, 3)} ${nestedOuterConditional(true, "x")} ${nestedParenConditional(true, "hi")} ${nestedCallArgConditional(true, 5)}")
+Console.WriteLine("${isStringWithComparisonArm("hi", 3, 3)} ${isStringWithNestedTernaryArm("hi", true)} ${isStringWithIfArm("hi", false)} ${isStringWithSwitchArm("hi", true)} ${outerTernaryWithPatternDesignationAndTernaryFalseArm(true, 3)}")
 Console.WriteLine("${exprArrow().Compile()()} ${exprBlock().Compile()()}")
-Console.WriteLine("${pointDefault(Point{X: 3, Y: 4})} ${pointDefault(nil)} ${pointFallback(nil)}")
+Console.WriteLine("${pointDefault(Point{X: 3, Y: 4})} ${pointDefault(nil)} ${pointFallback(nil)} ${pointTwoArgExtension(nil)}")
 Console.WriteLine("${pointGuarded(Point{X: 3, Y: 4})} ${pointGuarded(nil)} ${colorFallback(nil) == Color.Green}")
 Console.WriteLine("${genericDefault[Point](Point{X: 5, Y: 6}).X} ${genericFallback[Point](nil, Point{X: 1, Y: 2}).Y}")
 `)
@@ -1581,8 +1590,9 @@ Console.WriteLine("${genericDefault[Point](Point{X: 5, Y: 6}).X} ${genericFallba
                 "1 0 0 1",
                 "1 0 1 7",
                 "True False 1 0",
+                "True 1 2 1 True",
                 "11 22",
-                "3 0 8",
+                "3 0 8 10",
                 "4 -1 True",
                 "5 2"
             ) +

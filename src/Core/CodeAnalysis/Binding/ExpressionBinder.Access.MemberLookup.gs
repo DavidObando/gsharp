@@ -99,8 +99,10 @@ internal partial class ExpressionBinder {
     /// @param callSyntax The unbound call, or `nil` for a method group.
     /// @returns `false` only when no member of that name can apply.
     private func NarrowedTypeMayHaveMember(type TypeSymbol, name string, callSyntax CallExpressionSyntax?) bool {
-        if !$scope.TryLookupExtensionFunctions(type, name).IsDefaultOrEmpty {
-            return true
+        for ext in $scope.TryLookupExtensionFunctions(type, name) {
+            if ext.Parameters.Length > 0 && !(ext.Parameters[0].Type is NullableTypeSymbol) {
+                return true
+            }
         }
         if ImportedExtensionMayApply(type, name, callSyntax) {
             return true
@@ -319,7 +321,15 @@ internal partial class ExpressionBinder {
             } else {
                 typeof(object)
             }
-            return ClrOverloadResolution.SatisfiesSingleGenericParameterConstraints(parameterType, erasedCarrier, type)
+            return ClrOverloadResolution.AllExtensionTypeParametersMayBeInferred(
+                candidate,
+                parameterType,
+                []string{parameterType.Name},
+                argumentCount,
+                argumentNames,
+                out _
+            ) &&
+                ClrOverloadResolution.SatisfiesSingleGenericParameterConstraints(parameterType, erasedCarrier, type)
         }
         for probe in probes {
             if ClrOverloadResolution.MayAcceptExtensionReceiver(candidate, probe, argumentCount, argumentNames) {

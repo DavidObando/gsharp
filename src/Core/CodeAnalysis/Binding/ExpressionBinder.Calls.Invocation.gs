@@ -3975,22 +3975,12 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if methodName != "GetValueOrDefault" {
+        if methodName != "GetValueOrDefault" || ce.TypeArgumentList != nil {
             return false
         }
         if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
             openNullable == nil {
             Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
-            result = BoundErrorExpression(nil)
-            return true
-        }
-        if ce.TypeArgumentList != nil {
-            Diagnostics.ReportWrongTypeArgumentCount(
-                ce.TypeArgumentList.Location,
-                methodName,
-                0,
-                ce.TypeArgumentList.Arguments.Count
-            )
             result = BoundErrorExpression(nil)
             return true
         }
@@ -4002,9 +3992,7 @@ internal partial class ExpressionBinder {
             }
         }
         if openMethod == nil {
-            Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, 1, arguments.Length)
-            result = BoundErrorExpression(nil)
-            return true
+            return false
         }
         let underlying = nullableReceiver.UnderlyingType
         if arguments.Length == 0 {
@@ -4019,22 +4007,17 @@ internal partial class ExpressionBinder {
         }
         let parameterName = openMethod.GetParameters()[0].Name ?? "defaultValue"
         if !argumentNames.IsDefault && !string.IsNullOrEmpty(argumentNames[0]) && argumentNames[0] != parameterName {
-            Diagnostics.ReportNamedArgumentParameterNotFound(ce.Location, methodName, argumentNames[0])
-            result = BoundErrorExpression(nil)
-            return true
+            return false
         }
-        if ce.Arguments[0] is RefArgumentExpressionSyntax refArgument {
-            Diagnostics.ReportRefKindMismatch(
-                refArgument.Location,
-                1,
-                parameterName,
-                "none",
-                refArgument.RefKindModifier.ValueText
-            )
-            result = BoundErrorExpression(nil)
-            return true
+        if ce.Arguments[0] is RefArgumentExpressionSyntax {
+            return false
         }
+        let diagnosticMark = Diagnostics.Count
         let convertedArgument = conversions.BindConversion(ce.Arguments[0].Location, arguments[0], underlying)
+        if Diagnostics.Count != diagnosticMark {
+            Diagnostics.TruncateTo(diagnosticMark)
+            return false
+        }
         result = BoundImportedInstanceCallExpression(
             ce,
             receiver,

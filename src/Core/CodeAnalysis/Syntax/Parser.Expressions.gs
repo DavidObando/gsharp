@@ -15,23 +15,23 @@ open partial class Parser {
     private func ParseExpression(
         stopAtTopLevelLogical bool = false,
         stopAtTopLevelConditional bool = false,
-        colonTerminated bool = false
+        colonTerminatedDepth int32 = 0
     ) ExpressionSyntax {
         // Recursion safety: ParseAssignmentExpression (the immediate delegate)
         // carries the issue #1602 recursion-depth guard for the whole
         // expression pipeline.
         let outerBoundary = this.stopAtTopLevelLogical
         let outerConditionalBoundary = this.suppressTopLevelConditionalTail
-        let outerColonTerminated = this.colonTerminatedExpression
+        let outerColonTerminatedDepth = this.colonTerminatedDepth
         this.stopAtTopLevelLogical = stopAtTopLevelLogical
         this.suppressTopLevelConditionalTail = stopAtTopLevelConditional
-        this.colonTerminatedExpression = colonTerminated
+        this.colonTerminatedDepth = colonTerminatedDepth
         try {
             return ParseAssignmentExpression()
         } finally {
             this.stopAtTopLevelLogical = outerBoundary
             this.suppressTopLevelConditionalTail = outerConditionalBoundary
-            this.colonTerminatedExpression = outerColonTerminated
+            this.colonTerminatedDepth = outerColonTerminatedDepth
         }
     }
 
