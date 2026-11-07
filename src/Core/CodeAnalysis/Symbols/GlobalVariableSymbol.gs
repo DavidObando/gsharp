@@ -55,5 +55,8 @@ class GlobalVariableSymbol : VariableSymbol {
     func SetConstantValue(value object?) {
         IsConst = true
         ConstantValue = value
+        if value == nil {
+            Type = Type.ForNullConstant()
+        }
     }
 }

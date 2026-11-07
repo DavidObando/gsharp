@@ -398,6 +398,9 @@ internal class PatternBinder {
         } else {
             conversions.BindConversion(syntax.Expression.Location, expression, discriminantType)
         }
+        if value is BoundConversionExpression inputConversion && !object.ReferenceEquals(value, expression) {
+            inputConversion.IsPatternInputConversion = true
+        }
         var op BoundBinaryOperator? = BoundBinaryOperator.Bind(
             SyntaxKind.EqualsEqualsToken,
             discriminantType,

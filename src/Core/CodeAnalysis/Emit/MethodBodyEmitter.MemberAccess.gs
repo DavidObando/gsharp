@@ -38,6 +38,10 @@ internal partial class MethodBodyEmitter {
             this.EmitLiteral(BoundLiteralExpression(nil, globalConst.ConstantValue, globalConst.Type))
             return
         }
+        if variable is LocalVariableSymbol{IsConst: true} localConst {
+            this.EmitLiteral(BoundLiteralExpression(nil, localConst.ConstantValue, localConst.Type))
+            return
+        }
         // Issue #2771: emitter-owned variable operations (notably `?.`
         // captures) bypass MoveNextBodyRewriter's bound-node substitution.
         if this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField) {
