@@ -27,6 +27,89 @@ import System
 /// `int[]?` field was rejected with GS0154.
 open class Issue4422ByRefNullableStorageBinderTests {
     @Theory
+    @InlineData("Clear(&slot)")
+    @InlineData("Writer().Clear(&slot)")
+    @InlineData("let sink = Sink(&slot)")
+    func GenericOutInference_UsesDeclaredSupertypeStorage(call string) {
+        let result = EmittedOracle.Evaluate(`
+func Clear[T](out target T) { target = default(T) }
+class Writer {
+    func Clear[T](out target T) { target = default(T) }
+}
+class Sink[T] {
+    init(out target T) { target = default(T) }
+}
+func Run(input object?) bool {
+    var slot object? = input
+    if slot == nil {
+        slot = "unused"
+        return false
+    }
+    if slot !is string { return false }
+    ` + call + `
+    return slot == nil
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("True", result.Output.Trim())
+    }
+
+    @Theory
+    @InlineData("Write(&value)")
+    @InlineData("Write(&{ let marker = 0\nvalue })")
+    @InlineData("Writer().Write(&value)")
+    @InlineData("let sink = Sink(&value)")
+    func OutParameter_UsesDeclaredNullableStorageAfterAnExitingWrite(call string) {
+        let result = EmittedOracle.Evaluate(`
+func Write(out target string?) { target = nil }
+class Writer {
+    func Write(out target string?) { target = nil }
+}
+class Sink {
+    init(out target string?) { target = nil }
+}
+func Run(input string?) bool {
+    var value string? = input
+    if value == nil {
+        value = "unused"
+        return false
+    }
+    ` + call + `
+    return value == nil
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("True", result.Output.Trim())
+    }
+
+    @Fact
+    func OutOverload_PrefersTheDeclaredNullableStorage() {
+        let result = EmittedOracle.Evaluate(`
+func Pick(out target string) string {
+    target = "non-null"
+    return "non-null"
+}
+func Pick(out target string?) string {
+    target = nil
+    return "nullable"
+}
+func Run(input string?) string {
+    var value string? = input
+    if value == nil {
+        value = "unused"
+        return ""
+    }
+    return Pick(&value)
+}
+Console.WriteLine(Run("before"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("nullable", result.Output.Trim())
+    }
+
+    @Theory
     @InlineData("var v string? = \"a\"\nRefS(&v)", "ref")
     @InlineData("var v string? = \"a\"\nInS(&v)", "in")
     @InlineData("var v string = \"a\"\nRefNs(&v)", "ref")
@@ -288,6 +371,11 @@ let k2 = K(&b)
     @Theory
     @InlineData("var x int32? = 41\nInterlocked.Increment(&x)", "location")
     @InlineData("var x int32? = 41\nInt32.TryParse(\"5\", &x)", "result")
+    @InlineData("var a int32? = 41\nvar b int32? = 42\nvar c = true\nInterlocked.Increment(&(c ? a : b))", "location")
+    @InlineData(
+        "var a int32? = 41\nvar b int32? = 42\nvar c = true\nInterlocked.Increment(ref (c ? ref a : ref b))",
+        "location"
+    )
     func ClrCallee_ValueTypeNullableStorage_IsGS0154(body string, parameterName string) {
         // Review finding: an imported `ref int` accepted `&int32?` storage (the
         // address's CLR type was built from the relayed `int32`) and emitted
@@ -297,6 +385,158 @@ let k2 = K(&b)
         Assert.Equal("GS0154", error.Id)
         Assert.Contains("'" + parameterName + "'", error.Message, StringComparison.Ordinal)
         Assert.Contains("Nullable<int32>", error.Message, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData("var x int32? = 1\nlet _ = CtorBox(&x)", "seed")
+    @InlineData("var x int32? = 1\nlet _ = CtorOptBox(&x)", "seed")
+    @InlineData("let _ = CtorBox(out var x int32?, 1)", "result")
+    @InlineData("var a int32? = 1\nvar b int32? = 2\nvar c = true\nlet _ = CtorBox(&(c ? a : b))", "seed")
+    @InlineData("var x int32? = 1\n\"hi\".BumpExt(&x)", "delta")
+    @InlineData("var x int32? = 1\n\"hi\".BumpOptExt(&x)", "delta")
+    @InlineData("var a int32? = 1\nvar b int32? = 2\nvar c = true\n\"hi\".BumpExt(ref (c ? ref a : ref b))", "delta")
+    @InlineData("class D : CtorBox {\n    init(ref x int32?) : base(&x) { }\n}\n0", "seed")
+    @InlineData("class D : CtorOptBox {\n    init(ref x int32?) : base(&x) { }\n}\n0", "seed")
+    func ClrConstructorConditionalRefAndExtension_ValueTypeNullableStorage_IsGS0154(body string, parameterName string) {
+        using let fixture = CSharpFixture(`namespace Issue4464Fixture
+{
+    public class CtorBox
+    {
+        public CtorBox(ref string label) { }
+        public CtorBox(ref int seed) { seed += 1; }
+        public CtorBox(out int result, int tag) { result = tag; }
+    }
+
+    public class CtorOptBox
+    {
+        public CtorOptBox(ref int seed, int tag = 0) { seed += tag + 1; }
+    }
+
+    public static class CtorBoxExtensions
+    {
+        public static void BumpExt(this string receiver, ref long wide) { }
+        public static void BumpExt(this string receiver, ref int delta) { delta += receiver.Length; }
+        public static void BumpOptExt(this string receiver, ref int delta, int tag = 0) { delta += receiver.Length + tag; }
+    }
+}`)
+        let result = EmittedOracle.Evaluate("import Issue4464Fixture\n" + body, []string{fixture.AssemblyPath})
+        let error = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0154", error.Id)
+        Assert.Contains("'" + parameterName + "'", error.Message, StringComparison.Ordinal)
+        Assert.Contains("Nullable<int32>", error.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ClrOverloadResolution_ByValueVsByRefAndRefKindModifiers_SelectsMatchingCandidate() {
+        using let fixture = CSharpFixture(`namespace Issue4418Fixture
+{
+    public class BasePick
+    {
+        public string Mode(in int x) => "in:" + x;
+        public string InOrOut(in int x) => "in:" + x;
+    }
+
+    public class DerivedPick : BasePick
+    {
+        public string Mode(ref int x) { x += 10; return "ref:" + x; }
+        public string Mode(int x) => "val:" + x;
+        public string InOrOut(out int x) { x = 77; return "out:" + x; }
+    }
+
+    public class Overloads
+    {
+        public string Tag;
+
+        public Overloads(int x) { Tag = "ctor-val:" + x; }
+        public Overloads(in int x) { Tag = "ctor-in:" + x; }
+
+        public static string PickIn(int x) => "val:" + x;
+        public static string PickIn(in int x) => "in:" + x;
+
+        public static string PickRef(int x) => "val:" + x;
+        public static string PickRef(ref int x) { x += 1; return "ref:" + x; }
+
+        public static string PickOut(int x) => "val:" + x;
+        public static string PickOut(out int x) { x = 99; return "out:" + x; }
+
+        public string InstIn(int x) => "inst-val:" + x;
+        public string InstIn(in int x) => "inst-in:" + x;
+
+        public string InstRef(int x) => "inst-val:" + x;
+        public string InstRef(ref int x) { x += 2; return "inst-ref:" + x; }
+
+        public static string RefShortOrLong(ref short x) { x += 1; return "ref-short:" + x; }
+        public static string RefShortOrLong(long x) => "long:" + x;
+
+        public static string MultiInVsRef(in int x, long y) => $"in-long:{x}:{y}";
+        public static string MultiInVsRef(ref int x, int y) { x += y; return $"ref-int:{x}:{y}"; }
+    }
+
+    public static class OverloadExtensions
+    {
+        public static string ExtIn(this string s, int x) => s + ":val:" + x;
+        public static string ExtIn(this string s, in int x) => s + ":in:" + x;
+
+        public static string ExtRef(this string s, int x) => s + ":val:" + x;
+        public static string ExtRef(this string s, ref int x) { x += 3; return s + ":ref:" + x; }
+    }
+}`)
+        let result = EmittedOracle.Evaluate(`import System
+import Issue4418Fixture
+
+var v = 3
+let a1 = Overloads.PickIn(v)
+let a2 = Overloads.PickIn(5)
+let a3 = Overloads.PickIn(default)
+let a4 = Overloads.PickIn(in v)
+let b1 = Overloads.PickRef(v)
+let b2 = Overloads.PickRef(5)
+let b3 = Overloads.PickRef(default)
+let b4 = Overloads.PickRef(ref v)
+let c1 = Overloads.PickOut(v)
+let c2 = Overloads.PickOut(5)
+var outSlot = 0
+let c3 = Overloads.PickOut(out outSlot)
+let dp = DerivedPick()
+let d1 = dp.InOrOut(v)
+let d2 = dp.InOrOut(in v)
+let d3 = dp.InOrOut(out var outInl)
+let inst = Overloads(v)
+let instIn = Overloads(in v)
+let e1 = inst.InstIn(v)
+let e2 = inst.InstIn(in v)
+let e3 = inst.InstRef(v)
+let e4 = inst.InstRef(ref v)
+let f1 = dp.Mode(v)
+let f2 = dp.Mode(in v)
+let f3 = dp.Mode(ref v)
+let g1 = "s".ExtIn(v)
+let g2 = "s".ExtIn(in v)
+let g3 = "s".ExtRef(v)
+let g4 = "s".ExtRef(ref v)
+let h1 = Overloads.RefShortOrLong(v)
+let h1c = Overloads.RefShortOrLong(5)
+let h2 = Overloads.MultiInVsRef(v, 1)
+let h3 = Overloads.MultiInVsRef(in v, 1)
+let h4 = Overloads.MultiInVsRef(ref v, 1)
+Console.WriteLine("${a1} ${a2} ${a3} ${a4}")
+Console.WriteLine("${b1} ${b2} ${b3} ${b4}")
+Console.WriteLine("${c1} ${c2} ${c3} ${d1} ${d2} ${d3}:${outInl}")
+Console.WriteLine("${inst.Tag} ${instIn.Tag} ${e1} ${e2} ${e3} ${e4}")
+Console.WriteLine("${f1} ${f2} ${f3} ${g1} ${g2} ${g3} ${g4}")
+Console.WriteLine("${h1} ${h1c} ${h2} ${h3} ${h4}")`, []string{fixture.AssemblyPath})
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(
+            []string{
+                "val:3 val:5 val:0 in:3",
+                "val:3 val:5 val:0 ref:4",
+                "val:4 val:5 out:99 in:4 in:4 out:77:77",
+                "ctor-val:4 ctor-in:4 inst-val:4 inst-in:4 inst-val:4 inst-ref:6",
+                "val:6 in:6 ref:16 s:val:16 s:in:16 s:val:16 s:ref:19",
+                "long:19 long:5 in-long:19:1 in-long:19:1 ref-int:20:1"
+            },
+            result.Output.Trim().Split('\n').Select((l string) -> l.Trim()).ToArray()
+        )
     }
 
     @Fact
@@ -385,6 +625,15 @@ Console.WriteLine("${arr!!.Length} ${Volatile.Read(&o)} $y")
         public static int RT8(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int>> x) => x.Rest.Item1;
         public static int RT9(ref System.Tuple<int, int, int, int, int, int, int, System.Tuple<int, int>> x) => x.Rest.Item2;
         public static T ReadExt<T>(this System.Collections.Generic.List<T> xs, ref T value) { value = xs[0]; return value; }
+        public static string PickRefKind(in int x, int y) => "in:" + (x + y);
+        public static string PickRefKind(ref int x, long y) => "ref:" + (x + y);
+        public static string PickNil(int? x) => "val:" + (x.HasValue ? x.Value.ToString() : "null");
+        public static string PickNil(in int? x) => "in:" + (x.HasValue ? x.Value.ToString() : "null");
+        public static string MG<T>(ref T x) => "ref";
+        public static string MG<T>(long x) => "long:" + x;
+        public static int ExtGeneric<R, T>(this System.Collections.Generic.List<R> s, ref int delta, int tag = 0, T? value = default) => s.Count + delta + tag;
+        public static void Bump<T>(this System.Collections.Generic.List<T> xs, ref T delta) { }
+        public static void Copy<T>(this string s, ref T destination, ref T source) { destination = source; }
     }
     public class Holder<T> {
         public T Value;
@@ -406,11 +655,63 @@ var rt8 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.T
 var rt9 = System.Tuple[int32, int32, int32, int32, int32, int32, int32, System.Tuple[int32, int32]](1, 2, 3, 4, 5, 6, 7, System.Tuple[int32, int32](8, 9))
 var ds = List[D]{D()}
 var d = D()
-Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${S.ReadG[int32](&a)} ${int32(xs.ReadExt[E](&next))} ${S.RTPair(&pairRt)} ${S.RT8(&rt8)} ${S.RT9(&rt9)} ${ds.ReadExt(&d) == ds[0]}")`, []string{
+var rv = 10
+Console.WriteLine("${int32(h.Value)} ${S.Read(&a)} ${S.ReadG[int32](&a)} ${int32(xs.ReadExt[E](&next))} ${S.RTPair(&pairRt)} ${S.RT8(&rt8)} ${S.RT9(&rt9)} ${ds.ReadExt(&d) == ds[0]} ${S.PickRefKind(ref rv, 1)} ${S.MG[int16](5)} ${S.PickNil(nil)}")`, []string{
                 fixture.AssemblyPath
             })
         Assert.Empty(result.Diagnostics)
-        Assert.Equal("2 7 7 2 4 8 9 True", result.Output.Trim())
+        Assert.Equal("2 7 7 2 4 8 9 True ref:11 long:5 val:null", result.Output.Trim())
+
+        let outMismatch = EmittedOracle.Evaluate(`import Storage
+var v = 1
+let _ = Holder[int32](out v)`, []string{fixture.AssemblyPath})
+        let outDiag = Assert.Single(outMismatch.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0235", outDiag.Id)
+        Assert.Contains("parameter 'value'", outDiag.Message, StringComparison.Ordinal)
+
+        let extNullable = EmittedOracle.Evaluate(`import System.Collections.Generic
+import Storage
+var list = List[string]()
+var x int32? = 1
+let _ = list.ExtGeneric(&x, value: 1)`, []string{fixture.AssemblyPath})
+        let extDiag = Assert.Single(extNullable.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0154", extDiag.Id)
+        Assert.Contains("Nullable", extDiag.Message, StringComparison.Ordinal)
+
+        let extInferredNullable = EmittedOracle.Evaluate(`import System.Collections.Generic
+import Storage
+var list = List[int32]()
+var x int32? = 1
+list.Bump(&x)`, []string{fixture.AssemblyPath})
+        let extInferredDiag = Assert.Single(
+            extInferredNullable.Diagnostics,
+            (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error
+        )
+        Assert.Equal("GS0154", extInferredDiag.Id)
+        Assert.Contains("Nullable", extInferredDiag.Message, StringComparison.Ordinal)
+
+        let extInferredFromByRefArg = EmittedOracle.Evaluate(`import Storage
+var x int32? = 1
+var y = 2
+"s".Copy(&x, &y)`, []string{fixture.AssemblyPath})
+        let extFromByRefDiag = Assert.Single(
+            extInferredFromByRefArg.Diagnostics,
+            (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error
+        )
+        Assert.Equal("GS0154", extFromByRefDiag.Id)
+        Assert.Contains("Nullable", extFromByRefDiag.Message, StringComparison.Ordinal)
+
+        let condInMismatch = EmittedOracle.Evaluate(`import System.Threading
+var a = 1
+var b = 2
+var c = true
+let _ = Interlocked.Increment(in (c ? a : b))`)
+        let condDiag = Assert.Single(
+            condInMismatch.Diagnostics,
+            (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error
+        )
+        Assert.Equal("GS0235", condDiag.Id)
+        Assert.Contains("parameter 'location'", condDiag.Message, StringComparison.Ordinal)
     }
 
     shared {

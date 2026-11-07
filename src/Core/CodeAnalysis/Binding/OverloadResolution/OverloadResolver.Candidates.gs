@@ -671,7 +671,10 @@ internal partial class OverloadResolver {
                         .RefKind != RefKind.In ||
                         boundArguments[i]?.Type is ByRefTypeSymbol
                 ) &&
-                    ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is {} byRefStorage &&
+                    ByRefStorageMatching.TryGetStorageType(
+                    boundArguments[i],
+                    cand.Parameters[slot + parameterOffset].RefKind
+                ) is {} byRefStorage &&
                     !TypeSymbol
                     .ContainsTypeParameter(paramType) {
                     let exact = ByRefStorageMatching.IsExactStorageMatch(byRefStorage, paramType)
@@ -1053,7 +1056,8 @@ internal partial class OverloadResolver {
                     return false
                 }
                 if (parameter.RefKind != RefKind.In || hasAddress) && ByRefStorageMatching.TryGetStorageType(
-                    boundArguments[i]
+                    boundArguments[i],
+                    parameter.RefKind
                 ) is {} storageType {
                     let byRefParameterType = if substitution != nil {
                         GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(parameter.Type, substitution)
@@ -1514,7 +1518,11 @@ internal partial class OverloadResolver {
                 continue
             }
             let parameter = candidate.Parameters[i + parameterOffset]
-            inferTypeArguments(parameter.Type, RefCapabilities.GetInferenceType(parameter, argType), substitution)
+            inferTypeArguments(
+                parameter.Type,
+                RefCapabilities.GetInferenceType(parameter, boundArguments[i]),
+                substitution
+            )
         }
         if isVariadic && VariadicCarriers.GetElementType(
             candidate.Parameters[candidate.Parameters.Length - 1].Type

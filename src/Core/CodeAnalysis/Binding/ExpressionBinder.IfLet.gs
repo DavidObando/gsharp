@@ -203,7 +203,14 @@ internal partial class ExpressionBinder {
             )
         }
         TryAdaptConditionalIntegerLiteralArm(&whenTrue, &whenFalse)
-        let resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            whenTrue = UnwrapSynthesizedRefDelegateBranch(whenTrue)
+            whenFalse = UnwrapSynthesizedRefDelegateBranch(whenFalse)
+        }
+        var resultType TypeSymbol? = ComputeConditionalResultType(whenTrue.Type, whenFalse.Type, targetType)
+        if targetType == nil {
+            resultType = MaterializeSynthesizedRefDelegateResultType(resultType, []BoundExpression{whenTrue, whenFalse})
+        }
         if resultType == nil {
             if deferOnFailure {
                 Diagnostics.TruncateTo(diagMark)

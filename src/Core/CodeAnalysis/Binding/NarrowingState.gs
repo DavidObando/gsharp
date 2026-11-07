@@ -413,7 +413,8 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         /// at once. A path that every reachable predecessor holds survives
         /// with the incoming type that every other incoming type converts to,
         /// else with its declared non-null type (cref:JoinTypes). A path that
-        /// some predecessor lacks is dropped. External-callable facts intersect.
+        /// some predecessor lacks is dropped. A nullable widening survives any reachable predecessor.
+        /// External-callable facts intersect.
         /// Unreachable predecessors are skipped. Callers must not fold this
         /// pairwise: the result for `Dog`, `Cat` and `Animal` on `x object?`
         /// is `Animal`, while a binary fold gives `object`.
@@ -433,7 +434,18 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             }
             let first = reachable[0]
             var result = Empty
+            // A widening records possible nil in storage declared non-null, not an additional non-null proof.
+            for predecessor in reachable {
+                for var i = 0; i < predecessor.paths.Length; i++ {
+                    if StatementBinder.IsNullableWidening(predecessor.paths[i], predecessor.types[i]) {
+                        result = result.With(predecessor.paths[i], predecessor.types[i])
+                    }
+                }
+            }
             for var i = 0; i < first.paths.Length; i++ {
+                if result.NarrowedType(first.paths[i]) != nil {
+                    continue
+                }
                 let incomingTypes = List[TypeSymbol](reachable.Count)
                 incomingTypes.Add(first.types[i])
                 var everywhere = true

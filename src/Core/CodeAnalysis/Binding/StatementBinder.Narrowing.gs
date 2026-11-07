@@ -1144,7 +1144,11 @@ internal partial class StatementBinder {
     /// (cref:InvalidateNarrowingsForAssignedVariables) clears it on a
     /// subsequent mutation. Called after invalidation so the fresh narrowing
     /// supersedes the clearing pass for this same statement.
-    private func ApplyAssignmentNarrowing(statement BoundStatement?, persistentFrame NarrowingFrame) {
+    private func ApplyAssignmentNarrowing(
+        statement BoundStatement?,
+        persistentFrame NarrowingFrame,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) {
         var statement = statement
         while statement is BoundBlockStatement labeledBlock &&
             labeledBlock.Syntax is LabeledStatementSyntax &&
@@ -1171,6 +1175,46 @@ internal partial class StatementBinder {
                 )
             )
         }
+        if statement is BoundExpressionStatement expressionStatement &&
+            TryClassifyNestedAssignmentNarrowings(expressionStatement.Expression, aliasesAtEntry) is {} assignments {
+            for entry in assignments {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value)
+            }
+        }
+    }
+
+    private func TryClassifyNestedAssignmentNarrowings(
+        expression BoundExpression,
+        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
+    ) Dictionary[AccessPath, TypeSymbol]? {
+        var value = expression
+        while value is BoundConversionExpression conversion {
+            value = conversion.Expression
+        }
+        if value is BoundAssignmentExpression assignment {
+            value = assignment.Expression
+            while value is BoundConversionExpression conversion {
+                value = conversion.Expression
+            }
+        }
+        if value is not(
+            BoundAssignmentExpression or
+                BoundIndexAssignmentExpression or
+                BoundClrIndexAssignmentExpression or
+                BoundFieldAssignmentExpression or
+                BoundPropertyAssignmentExpression or
+                BoundClrPropertyAssignmentExpression or
+                BoundBlockExpression
+        ) ||
+            ContainsUserLabel(expression) {
+            return nil
+        }
+        // The operand transfer also applies setter effects after the assigned value.
+        var entryAliases IReadOnlyCollection[VariableSymbol] = aliasesAtEntry ?? Array.Empty[VariableSymbol]()
+        if expressionEntryAliases.TryGetValue(expression, out var recordedEntry) {
+            entryAliases = recordedEntry
+        }
+        return TryClassifyConditionNonNullAssignments(expression, entryAliases)
     }
 
     /// Issue #4519 / ADR-0213 section 11: joins the current narrowing state with forward jumps that
@@ -1398,9 +1442,19 @@ internal partial class StatementBinder {
 
     private func CanStatementListCompleteNormally(statements ImmutableArray[BoundStatement]) bool {
         var fallsThrough = true
+        let targets = HashSet[BoundLabel]()
         for statement in statements {
-            fallsThrough = (fallsThrough || HasInternallyReachableFallthrough(statement)) &&
-                CanCompleteNormally(statement)
+            let reachable = fallsThrough ||
+                HasInternallyReachableFallthrough(statement) ||
+                (statement is BoundLabelStatement label && targets.Contains(label.Label))
+            if reachable {
+                if statement is BoundGotoStatement jump {
+                    targets.Add(jump.Label)
+                } else if statement is BoundConditionalGotoStatement conditional {
+                    targets.Add(conditional.Label)
+                }
+            }
+            fallsThrough = reachable && CanCompleteNormally(statement)
         }
         return fallsThrough
     }
@@ -1443,14 +1497,17 @@ internal partial class StatementBinder {
         }
         for frame in binderCtx.NarrowedVariables {
             for entry in frame.ToArray() {
-                if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
-                    entry.Key.Root,
-                    entry.Value
-                ) ||
-                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                    summary
-                    .Mutations
-                    .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
+                if !IsNullableWidening(entry.Key, entry.Value) &&
+                    (
+                    MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
+                        entry.Key.Root,
+                        entry.Value
+                    ) ||
+                        DropsOnMemberMutation(entry.Key, summary.Mutations) ||
+                        summary
+                        .Mutations
+                        .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+                ) {
                     conditionKillJournal?.Add((frame, entry.Key, entry.Value))
                     frame.Remove(entry.Key)
                 }
@@ -1465,14 +1522,17 @@ internal partial class StatementBinder {
 
     private func ApplyFlowSummary(snapshot NarrowingJumpState, summary FinallyFlowSummary) {
         for entry in snapshot.GetNarrowedVariablesSnapshot() {
-            if MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
-                entry.Key.Root,
-                entry.Value
-            ) ||
-                DropsOnMemberMutation(entry.Key, summary.Mutations) ||
-                summary
-                .Mutations
-                .InvalidatesNarrowing(entry.Key.Root, entry.Value) {
+            if !IsNullableWidening(entry.Key, entry.Value) &&
+                (
+                MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key) || summary.Mutations.MayMutateGlobalRoot(
+                    entry.Key.Root,
+                    entry.Value
+                ) ||
+                    DropsOnMemberMutation(entry.Key, summary.Mutations) ||
+                    summary
+                    .Mutations
+                    .InvalidatesNarrowing(entry.Key.Root, entry.Value)
+            ) {
                 snapshot.RemoveNarrowing(entry.Key)
             }
         }
@@ -1502,7 +1562,8 @@ internal partial class StatementBinder {
     private func TryClassifyNonNullAssignment(
         assign BoundAssignmentExpression,
         out variable VariableSymbol?,
-        out underlying TypeSymbol?
+        out underlying TypeSymbol?,
+        includeNonNullableStorage bool = false
     ) bool {
         variable = nil
         underlying = nil
@@ -1512,7 +1573,7 @@ internal partial class StatementBinder {
         let nullable = assign.Variable.Type as NullableTypeSymbol ?? binderCtx.NarrowedVariables.Query(
             AccessPath.ForVariable(assign.Variable)
         ) as NullableTypeSymbol
-        if nullable == nil {
+        if nullable == nil && !includeNonNullableStorage {
             return false
         }
         // Issue #1123 is scoped to reference (and interface) types. Nullable
@@ -1521,7 +1582,7 @@ internal partial class StatementBinder {
         // for a `var`-local read, so a narrowed value-type read produces
         // unverifiable IL. Reference nullability is purely an annotation, so a
         // narrowed reference read needs no special emit.
-        let u = nullable.UnderlyingType
+        let u = nullable?.UnderlyingType ?? assign.Variable.Type
         if !IsReferenceLikeType(u) {
             return false
         }
@@ -1607,7 +1668,12 @@ internal partial class StatementBinder {
             object.ReferenceEquals(targetVar.Variable, path.Root) {
             return AssignmentTypePreservesNarrowing(expr.Type, underlying)
         }
-        return CallDischargesNullableWidening(expr, path.Root, underlying)
+        let assignments = TryClassifyNestedAssignmentNarrowings(expr)
+        return (
+            assignments != nil && assignments.TryGetValue(path, out var assignedType) &&
+                AssignmentTypePreservesNarrowing(assignedType, underlying)
+        ) ||
+            CallDischargesNullableWidening(expr, path.Root, underlying)
     }
 
     private func CallDischargesNullableWidening(
@@ -1783,7 +1849,7 @@ internal partial class StatementBinder {
     }
 
     private func StatementDischargesNullableWidening(
-        statement BoundStatement?,
+        statement BoundNode?,
         path AccessPath,
         widenedType TypeSymbol
     ) bool {
@@ -1798,6 +1864,9 @@ internal partial class StatementBinder {
         }
         if current is BoundExpressionStatement exprStmt {
             return DischargesNullableWidening(exprStmt.Expression, path, widenedType)
+        }
+        if current is BoundExpression expression {
+            return DischargesNullableWidening(expression, path, widenedType)
         }
         if current is BoundIfStatement ifStmt {
             if EndsInUnconditionalExit(ifStmt.ThenStatement) ||
@@ -2058,41 +2127,25 @@ internal partial class StatementBinder {
             case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement, BoundGotoStatement {
                 return false
             }
-            case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
-                if ContainsUserLabel(stmt) {
+            case expressionStatement is BoundExpressionStatement {
+                if !CanCompleteNormally(stmt) {
+                    return false
+                }
+                let hasLabel = ContainsUserLabel(stmt)
+                if hasLabel {
                     state.Clear()
                     aliases.Clear()
-                    ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
-                    return true
                 }
-                // The right-hand side can write other roots, aliases included.
+                let postconditions = if hasLabel {
+                    default(Dictionary[AccessPath, TypeSymbol]?)
+                } else {
+                    TryClassifyConditionNonNullAssignments(expressionStatement.Expression, aliases)
+                }
                 ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
-                if TryClassifyNonNullAssignment(assign, out var local, out var underlying) {
-                    RemoveSharingStorage(
-                        state,
-                        Invariant.Required(
-                            local,
-                            "a successful assignment narrowing has a variable",
-                            expression: "local"
-                        )
-                    )
-                    state[
-                        AccessPath.ForVariable(
-                            Invariant.Required(
-                                local,
-                                "a successful assignment narrowing has a variable",
-                                expression: "local"
-                            )
-                        )
-                    ] = Invariant.Required(
-                        underlying,
-                        "a successful assignment narrowing has an underlying type",
-                        expression: "underlying"
-                    )
-                } else if assign.Variable != nil {
-                    // Any other assignment to a tracked local (nullable value,
-                    // value type, …) drops its narrowing.
-                    RemoveSharingStorage(state, assign.Variable)
+                if postconditions != nil {
+                    for fact in postconditions {
+                        state[fact.Key] = fact.Value
+                    }
                 }
                 return true
             }
@@ -2522,6 +2575,32 @@ internal partial class StatementBinder {
             case assign is BoundAssignmentExpression {
                 CollectConditionNonNullAssignments(assign.Expression, state, aliases, processed, exitAliases)
             }
+            case assign is BoundIndexAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                for index in assign.Indices {
+                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                }
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundClrIndexAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.TargetExpression, state, aliases, processed, exitAliases)
+                for index in assign.Arguments {
+                    CollectConditionNonNullAssignments(index, state, aliases, processed, exitAliases)
+                }
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundFieldAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.ReceiverExpression, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundPropertyAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
+            case assign is BoundClrPropertyAssignmentExpression {
+                CollectConditionNonNullAssignments(assign.Receiver, state, aliases, processed, exitAliases)
+                CollectConditionNonNullAssignments(assign.Value, state, aliases, processed, exitAliases)
+            }
             case tupleLit is BoundTupleLiteralExpression {
                 for elem in tupleLit.Elements {
                     CollectConditionNonNullAssignments(elem, state, aliases, processed, exitAliases)
@@ -2596,11 +2675,9 @@ internal partial class StatementBinder {
         let nextAliases = ApplyExpressionEffects(node, state, aliases, processed, exitAliases)
         aliases.Clear()
         aliases.UnionWith(nextAliases)
-        if node is BoundAssignmentExpression assigned && !(assigned.Variable.Type is NullableTypeSymbol) {
-            let path = AccessPath.ForVariable(assigned.Variable)
-            if DischargesNullableWidening(assigned, path, NullableTypeSymbol.Get(assigned.Variable.Type)) {
-                state[path] = assigned.Variable.Type
-            }
+        if node is BoundAssignmentExpression assigned &&
+            TryClassifyNonNullAssignment(assigned, out var variable, out var type, includeNonNullableStorage: true) {
+            state[AccessPath.ForVariable(variable!!)] = type!!
         } else if node.Syntax is NullCoalescingAssignmentExpressionSyntax &&
             node is BoundBlockExpression{
             Expression: BoundBinaryExpression{
@@ -2630,7 +2707,7 @@ internal partial class StatementBinder {
 
     // ADR-0208 R18 (#5545 shape 5): removes from [`state`](paramref) the facts of an earlier operand that the later
     // operand [`operand`](paramref) can invalidate. A stable member path's members are immutable, so only a write or
-    // unknown write that can replace its root removes it, matching (cref:KillsJoinGain).
+    // unknown write that can replace its root removes it.
     private func ClearOperandFacts(
         operand BoundExpression,
         state Dictionary[AccessPath, TypeSymbol],
@@ -3613,7 +3690,8 @@ internal partial class StatementBinder {
             case clrIndex is BoundClrIndexExpression: !ClrAccessRunsUserCode(clrIndex) &&
                 ExpressionHasNoNarrowingEffects(clrIndex.Target) &&
                 ExpressionsHaveNoNarrowingEffects(clrIndex.Arguments)
-            case index is BoundIndexExpression: ExpressionHasNoNarrowingEffects(index.Target) &&
+            case index is BoundIndexExpression: !NativeMapAccessRunsUserCode(index) &&
+                ExpressionHasNoNarrowingEffects(index.Target) &&
                 ExpressionsHaveNoNarrowingEffects(index.Indices)
             case tupleAccess is BoundTupleElementAccessExpression: ExpressionHasNoNarrowingEffects(tupleAccess.Receiver)
             case asExpr is BoundAsExpression: ExpressionHasNoNarrowingEffects(asExpr.Expression)
@@ -4849,15 +4927,7 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            if node is BoundMapLiteralExpression mapLiteral &&
-                !mapLiteral
-                .Entries
-                .IsDefaultOrEmpty &&
-                mapLiteral
-                .MapType
-                .KeyType != TypeSymbol.String &&
-                !TypeSymbol
-                .IsLegalPointeeType(mapLiteral.MapType.KeyType) {
+            if StatementBinder.NativeMapAccessRunsUserCode(node) {
                 MayMutateMemberPaths = true
                 MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
@@ -6843,14 +6913,7 @@ internal partial class StatementBinder {
     /// arguments); `null` for a by-value-only literal, which
     /// keeps its (cref:FunctionTypeSymbol) natural type.
     private func SynthesizeRefDelegateForLiteral(function FunctionSymbol, functionType FunctionTypeSymbol) TypeSymbol? {
-        if !function.Parameters.Any((p ParameterSymbol) -> p.RefKind != RefKind.None) {
-            return nil
-        }
-        return $scope.GetSynthesizedRefDelegateCache().GetOrCreate(
-            function.Parameters,
-            functionType.ReturnType,
-            $scope.GetCurrentDeclaringPackageName()
-        )
+        return $scope.TryGetSynthesizedRefDelegateForLiteral(function, functionType.ReturnType)
     }
 
     // ADR-0174 D15: `async let name = expr` starts `expr` as a child of the
@@ -7032,6 +7095,10 @@ internal partial class StatementBinder {
                 Diagnostics.ReportNoApplicableOverload(syntax.Location, variableType.ToString())
             }
         } else {
+            var unwrappedInitializer = syntax.Initializer
+            while unwrappedInitializer is ParenthesizedExpressionSyntax parenthesizedInitializer {
+                unwrappedInitializer = parenthesizedInitializer.Expression
+            }
             // ADR-0055 Tier 4: an interpolated-string initializer whose declared
             // type is IFormattable/FormattableString lowers to
             // FormattableStringFactory.Create rather than an eager string.
@@ -7068,6 +7135,9 @@ internal partial class StatementBinder {
                 // it selects the pointer form rather than the default Span<T>.
                 variableType = type
                 convertedInitializer = bindExpressionWithTargetType(syntax.Initializer, type)
+            } else if type != nil && type != TypeSymbol.Error && unwrappedInitializer is TupleLiteralExpressionSyntax {
+                variableType = TupleTypeSymbol.ResolveNilElements(type)
+                convertedInitializer = bindExpressionWithTargetType(syntax.Initializer!!, variableType)
             } else if type != nil &&
                 syntax.Initializer is DefaultExpressionSyntax defaultInit &&
                 defaultInit.TypeClause == nil {
@@ -7122,20 +7192,38 @@ internal partial class StatementBinder {
                             let selfType = type ??
                                 SynthesizeRefDelegateForLiteral(fn, fnType) ??
                                 cast[TypeSymbol](fnType)
-                            preDeclaredSelf = bindLocalVariableWithAccessibility(
+                            let declaredSelf = bindLocalVariableWithAccessibility(
                                 syntax.Identifier,
                                 isReadOnly,
                                 selfType,
                                 accessibility
                             )
+                            if !fn.Parameters.IsDefaultOrEmpty {
+                                let selfNames = ImmutableArray.CreateBuilder[string](fn.Parameters.Length)
+                                for parameter in fn.Parameters {
+                                    selfNames.Add(parameter.Name)
+                                }
+                                declaredSelf.CallableParameterNames = selfNames.MoveToImmutable()
+                            }
+                            preDeclaredSelf = declaredSelf
                         }
                     )
                 } else {
                     initializer = bindExpression(syntax.Initializer!!, false)
                 }
-                variableType = type ?? preDeclaredSelf?.Type ?? TypeSymbol.MaterializeNeverFunctionReturns(
-                    initializer.Type
-                )
+                let materializedInitializerType = TypeSymbol.MaterializeNeverFunctionReturns(initializer.Type)
+                let synthesizedRefDelegateType = if type == nil &&
+                    preDeclaredSelf == nil &&
+                    initializer is BoundFunctionLiteralExpression refLiteral &&
+                    materializedInitializerType is FunctionTypeSymbol materializedFunctionType {
+                    SynthesizeRefDelegateForLiteral(refLiteral.Function, materializedFunctionType)
+                } else {
+                    default(TypeSymbol?)
+                }
+                variableType = type ??
+                    preDeclaredSelf?.Type ??
+                    synthesizedRefDelegateType ??
+                    materializedInitializerType
                 if syntax.TypeClause != nil && (type == nil || type == TypeSymbol.Error) {
                     convertedInitializer = BoundErrorExpression(initializer.Syntax)
                     variableType = TypeSymbol.Error
@@ -7260,7 +7348,7 @@ internal partial class StatementBinder {
         variable!!.HasDefinitelyNonNullValue = isReadOnly &&
             !(variableType is NullableTypeSymbol) &&
             IsDefinitelyNonNullValue(convertedInitializer!!)
-        variable!!.CallableParameterNames = GetCallableParameterNames(convertedInitializer!!)
+        variable!!.CallableParameterNameTree = BuildCallableParameterNameTree(convertedInitializer!!)
         // ADR-0058 / issue #376: propagate `scoped` modifier from syntax to the local symbol,
         // or infer function-local escape scope from the initializer (STE data-flow propagation).
         if variable is LocalVariableSymbol localVar {
@@ -7590,6 +7678,7 @@ internal partial class StatementBinder {
             let tupleType = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(rawTupleType))
             initializer = conversions.BindConversion(syntax.Initializer.Location, initializer, tupleType)
             let (tempVar, elements) = CreateTupleDeconstructionPlan(syntax, tupleType)
+            tempVar.CallableParameterNameTree = BuildCallableParameterNameTree(initializer)
             let statements = ImmutableArray.CreateBuilder[BoundStatement]()
             statements.Add(BoundVariableDeclaration(syntax, tempVar, initializer))
             for var i = 0; i < syntax.Identifiers.Count; i++ {
@@ -7599,6 +7688,7 @@ internal partial class StatementBinder {
                 }
                 let elemType = tupleType.ElementTypes[i]
                 let elemVar = bindLocalVariable(idTok, isReadOnly, elemType)
+                elemVar.CallableParameterNameTree = BuildCallableParameterNameTree(elements[i])
                 statements.Add(BoundVariableDeclaration(syntax, elemVar, elements[i]))
             }
             return BoundBlockStatement(syntax, statements.ToImmutable())
@@ -7763,6 +7853,7 @@ internal partial class StatementBinder {
                 let elemType = tupleType.ElementTypes[i]
                 let elemVar = bindLocalVariable(identifiers[i], true, elemType)
                 let access = BoundTupleElementAccessExpression(nil, elementAccessBase, tupleType, i)
+                elemVar.CallableParameterNameTree = BuildCallableParameterNameTree(access)
                 // LanguageServer fix: carry the real declaring identifier
                 // token as this declaration's Syntax (instead of null) so
                 // SemanticLookup.MatchBoundLocals's exact-reference match
@@ -8396,10 +8487,10 @@ internal partial class StatementBinder {
             }
             substitution = inferred
         }
-        let expectedReceiver = if substitution != nil {
+        let expectedReceiver = if substitution is {} receiverSubstitution {
             Binder.SubstituteType(
                 candidate.Parameters[0].Type,
-                substitution,
+                receiverSubstitution,
                 $scope.References!!.MapClrTypeToReferences
             )
         } else {
@@ -8801,6 +8892,38 @@ internal partial class StatementBinder {
         statements.Add(BoundExpressionStatement(nil, call))
         statements.AddRange(declarations)
         return statements.ToImmutable()
+    }
+
+    private class ReturnCallableParameterNameCollector : BoundTreeWalker {
+        var Found bool
+        var Conflict bool
+        var Result CallableParameterNameNode?
+
+        protected override func VisitReturnStatement(node BoundReturnStatement) {
+            if Conflict {
+                return
+            }
+            if node.Expression is {} returnExpression {
+                if !IsVacuousCallableBranch(returnExpression) {
+                    let tree = BuildCallableParameterNameTree(returnExpression)
+                    if !Found {
+                        Found = true
+                        Result = tree
+                        if Result == nil {
+                            Conflict = true
+                            return
+                        }
+                    } else {
+                        Result = CallableParameterNameNode.Merge(Result, tree)
+                        if Result == nil {
+                            Conflict = true
+                            return
+                        }
+                    }
+                }
+                VisitExpression(returnExpression)
+            }
+        }
     }
 
     shared {
@@ -9510,6 +9633,23 @@ internal partial class StatementBinder {
                 return true
             }
             return atStaticMemberAccess && definition.DeclaresNonLiteralSharedFieldInitializer
+        }
+
+        // Native map hashing and equality run after the key and stored value.
+        // Indexed maps can carry CLR custom comparers, even with primitive keys.
+        private func NativeMapAccessRunsUserCode(node BoundExpression) bool -> switch node {
+            case literal is BoundMapLiteralExpression: !literal
+                .Entries
+                .IsDefaultOrEmpty &&
+                literal
+                .MapType
+                .KeyType != TypeSymbol.String &&
+                !TypeSymbol.IsLegalPointeeType(literal.MapType.KeyType)
+            case read is BoundIndexExpression: StripNullability(read.Target.Type) is MapTypeSymbol
+            case write is BoundIndexAssignmentExpression: StripNullability(
+                write.TargetExpression?.Type ?? write.Target?.Type
+            ) is MapTypeSymbol
+            default: false
         }
 
         /// ADR-0208 R14 (#5215, #5599): the one predicate for a source property accessor. It is true when
@@ -10260,24 +10400,179 @@ internal partial class StatementBinder {
             return expression is BoundFunctionPointerFromMethodExpression || expression is BoundMethodGroupExpression
         }
 
-        private func GetCallableParameterNames(initializer BoundExpression) ImmutableArray[string] {
-            var initializer = initializer
-            while initializer is BoundConversionExpression conversion {
-                initializer = conversion.Expression
-            }
-            let parameters = switch initializer {
-                case literal is BoundFunctionLiteralExpression: literal.Function.Parameters
-                case pointer is BoundFunctionPointerFromMethodExpression: pointer.Method.Parameters
-                default: default(ImmutableArray[ParameterSymbol])
-            }
-            if parameters.IsDefaultOrEmpty {
+        internal func GetCallableParameterNames(initializer BoundExpression) ImmutableArray[string] ->
+        BuildCallableParameterNameTree(initializer)?.Names ?? default(ImmutableArray[string])
+
+        internal func GetTupleElementCallableParameterNames(expression BoundExpression, index int32) ImmutableArray[
+            string
+        ] {
+            let tree = BuildCallableParameterNameTree(expression)
+            if tree == nil || tree.Elements.IsDefaultOrEmpty || index < 0 || index >= tree.Elements.Length {
                 return default(ImmutableArray[string])
             }
-            let names = ImmutableArray.CreateBuilder[string](parameters.Length)
-            for parameter in parameters {
-                names.Add(parameter.Name)
+            return tree.Elements[index]?.Names ?? default(ImmutableArray[string])
+        }
+
+        internal func BuildCallableParameterNameTree(expression BoundExpression) CallableParameterNameNode? {
+            var current = expression
+            while true {
+                if current is BoundConversionExpression conversion {
+                    current = conversion.Expression
+                    continue
+                }
+                if current is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                    current = assertion.Operand
+                    continue
+                }
+                if current is BoundBlockExpression{Expression: {} blockExpression} {
+                    current = blockExpression
+                    continue
+                }
+                break
             }
-            return names.MoveToImmutable()
+            if current is BoundConditionalExpression conditional {
+                return MergeBranchCallableParameterNameTrees(conditional.WhenTrue, conditional.WhenFalse)
+            }
+            if current is BoundSwitchExpression switchExpression {
+                var hasArm = false
+                var merged CallableParameterNameNode? = nil
+                for arm in switchExpression.Arms {
+                    if IsVacuousCallableBranch(arm.Result) {
+                        continue
+                    }
+                    let armTree = BuildCallableParameterNameTree(arm.Result)
+                    if !hasArm {
+                        hasArm = true
+                        merged = armTree
+                        if merged == nil {
+                            return nil
+                        }
+                    } else {
+                        merged = CallableParameterNameNode.Merge(merged, armTree)
+                        if merged == nil {
+                            return nil
+                        }
+                    }
+                }
+                return merged
+            }
+            if current is BoundBinaryExpression{Op: {Kind: BoundBinaryOperatorKind.NullCoalesce}} coalesce {
+                return MergeBranchCallableParameterNameTrees(coalesce.Left, coalesce.Right)
+            }
+            if current is BoundVariableExpression variable {
+                return variable.Variable.CallableParameterNameTree
+            }
+            if current is BoundIndirectCallExpression indirectCall {
+                return BuildCallableParameterNameTree(indirectCall.Target)?.ReturnValue
+            }
+            if current is BoundTupleElementAccessExpression tupleAccess {
+                let parentTree = BuildCallableParameterNameTree(tupleAccess.Receiver)
+                if parentTree == nil ||
+                    parentTree
+                    .Elements
+                    .IsDefaultOrEmpty ||
+                    tupleAccess.Index < 0 ||
+                    tupleAccess.Index >= parentTree
+                    .Elements
+                    .Length {
+                    return nil
+                }
+                return parentTree.Elements[tupleAccess.Index]
+            }
+            if current is BoundTupleLiteralExpression tupleLiteral {
+                var anyElement = false
+                let builder = ImmutableArray.CreateBuilder[CallableParameterNameNode?](tupleLiteral.Elements.Length)
+                for element in tupleLiteral.Elements {
+                    let child = BuildCallableParameterNameTree(element)
+                    anyElement |= child != nil
+                    builder.Add(child)
+                }
+                return if anyElement {
+                    CallableParameterNameNode(default(ImmutableArray[string]), builder.MoveToImmutable())
+                } else {
+                    nil
+                }
+            }
+            if current is BoundFunctionLiteralExpression literal {
+                let parameters = literal.Function.Parameters
+                let names = if parameters.IsDefaultOrEmpty {
+                    default(ImmutableArray[string])
+                } else {
+                    let builder = ImmutableArray.CreateBuilder[string](parameters.Length)
+                    for parameter in parameters {
+                        builder.Add(parameter.Name)
+                    }
+                    builder.MoveToImmutable()
+                }
+                let returnValue = BuildBodyReturnCallableParameterNameTree(literal.Body)
+                if names.IsDefaultOrEmpty && returnValue == nil {
+                    return nil
+                }
+                return CallableParameterNameNode(names, returnValue: returnValue)
+            }
+            if current is BoundFunctionPointerFromMethodExpression pointer {
+                let parameters = pointer.Method.Parameters
+                if parameters.IsDefaultOrEmpty {
+                    return nil
+                }
+                let names = ImmutableArray.CreateBuilder[string](parameters.Length)
+                for parameter in parameters {
+                    names.Add(parameter.Name)
+                }
+                return CallableParameterNameNode(names.MoveToImmutable())
+            }
+            return nil
+        }
+
+        internal func BuildBodyReturnCallableParameterNameTree(body BoundBlockStatement?) CallableParameterNameNode? {
+            if body == nil {
+                return nil
+            }
+            let collector = ReturnCallableParameterNameCollector()
+            collector.Visit(body)
+            return collector.Result
+        }
+
+        private func IsVacuousCallableBranch(branch BoundExpression?) bool {
+            if branch == nil {
+                return true
+            }
+            var current = branch
+            while true {
+                if current is BoundConversionExpression conversion {
+                    current = conversion.Expression
+                    continue
+                }
+                if current is BoundBlockExpression{Expression: {} blockExpression} {
+                    current = blockExpression
+                    continue
+                }
+                break
+            }
+            return object.ReferenceEquals(current.Type, TypeSymbol.Never) ||
+                current.Type == TypeSymbol.Null ||
+                current is BoundLiteralExpression{Value: nil} ||
+                current is BoundDefaultExpression ||
+                current is BoundThrowExpression
+        }
+
+        private func MergeBranchCallableParameterNameTrees(
+            thenBranch BoundExpression?,
+            elseBranch BoundExpression?
+        ) CallableParameterNameNode? {
+            if IsVacuousCallableBranch(thenBranch) {
+                return if IsVacuousCallableBranch(elseBranch) {
+                    nil
+                } else {
+                    BuildCallableParameterNameTree(elseBranch!!)
+                }
+            }
+            if IsVacuousCallableBranch(elseBranch) {
+                return BuildCallableParameterNameTree(thenBranch!!)
+            }
+            let thenTree = BuildCallableParameterNameTree(thenBranch!!)
+            let elseTree = BuildCallableParameterNameTree(elseBranch!!)
+            return CallableParameterNameNode.Merge(thenTree, elseTree)
         }
 
         private func GetDeconstructionMemberType(

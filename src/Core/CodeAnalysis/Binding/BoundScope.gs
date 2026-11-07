@@ -1833,6 +1833,25 @@ partial class BoundScope {
         synthesizedRefDelegateCache = cache
     }
 
+    internal func TryGetSynthesizedRefDelegateForLiteral(
+        function FunctionSymbol,
+        returnType TypeSymbol
+    ) DelegateTypeSymbol? {
+        if !function.Parameters.Any((p ParameterSymbol) -> p.RefKind != RefKind.None) {
+            return nil
+        }
+        let materializedReturn = if returnType == TypeSymbol.Never {
+            TypeSymbol.Void
+        } else {
+            TypeSymbol.MaterializeNeverFunctionReturns(returnType)
+        }
+        return GetSynthesizedRefDelegateCache().GetOrCreate(
+            function.Parameters,
+            materializedReturn,
+            GetCurrentDeclaringPackageName()
+        )
+    }
+
     /// Issue #3501 A2: gets the ambient declaring package name set by
     /// (cref:SetCurrentDeclaringPackage), used to place synthesized
     /// ref-kind delegates in the package whose declaration is being bound.

@@ -1184,9 +1184,7 @@ internal partial class StatementBinder {
         let gotoStatement = BoundGotoStatement(syntax, breakLabel)
         if currentStatementListFallsThrough {
             internallyReachableLoopExits.Add(breakLabel)
-            if topFrame.ContinueLabel != nil {
-                binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState(gotoStatement))
-            }
+            binderCtx.NarrowingFlow.RecordBreak(breakLabel, CaptureJumpState(gotoStatement))
         }
         return gotoStatement
     }
@@ -1741,7 +1739,10 @@ internal partial class StatementBinder {
                     (FilterWritesVariable(filterWrites, key.Root) || MayBeMutatedByUnknownCallable(key))
             ) ||
                 StatementKillsPath(collector, key, dropAllMemberPaths, collector.MayWriteStorageOf(key))
-            if drop {
+            if drop &&
+                (
+                !IsNullableWidening(key, entry.Value) || StatementDischargesNullableWidening(prefix, key, entry.Value)
+            ) {
                 snapshot.RemoveNarrowing(key)
             }
         }
@@ -2169,7 +2170,9 @@ internal partial class StatementBinder {
             // across all return paths and the trailing block expression, if
             // any), and applies a single conversion pass to each return-
             // statement expression once the return type is known.
-
+            if expression != nil {
+                expression = DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(expression, conversions)
+            }
         } else {
             if function!!.Type == TypeSymbol.Void || IsIteratorFunction(syntax) {
                 if expression != nil {

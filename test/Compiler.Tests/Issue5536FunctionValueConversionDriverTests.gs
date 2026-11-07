@@ -535,8 +535,9 @@ class Program {
         output.WriteLine(
             "SequentialRetriedReturns rollback work: R=200=" + work200.ToString() + ", R=800=" + work800.ToString()
         )
-        Assert.Equal(11_596L, work200)
-        Assert.Equal(46_396L, work800)
+        // R2/R4 joins retain additional exit proofs; the fixed rollback workload remains linear.
+        Assert.Equal(11_998L, work200)
+        Assert.Equal(47_998L, work800)
     }
 
     /// Issue #5569 control (review of PR #5564): a literal whose parameter count no candidate's delegate accepts

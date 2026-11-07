@@ -817,8 +817,11 @@ internal shared class ExternalClrOverrideResolver {
         if isAsync && IsClrNonGenericAsyncReturnType(clrReturnType!!, isValueTask) {
             return returnRefKind == RefKind.None && returnType == TypeSymbol.Void
         }
-        if isAsync && !TryUnwrapClrAsyncReturnType(clrReturnType!!, isValueTask, out clrReturnType) {
-            return false
+        if isAsync {
+            if !TryUnwrapClrAsyncReturnType(clrReturnType!!, isValueTask, out var unwrappedReturnType) {
+                return false
+            }
+            clrReturnType = unwrappedReturnType
         }
         if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
             return true

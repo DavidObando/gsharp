@@ -4144,11 +4144,20 @@ internal partial class ExpressionBinder {
         return BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr)
     }
 
-    private func BindTupleLiteralExpression(syntax TupleLiteralExpressionSyntax) BoundExpression {
+    private func BindTupleLiteralExpression(
+        syntax TupleLiteralExpressionSyntax,
+        targetType TypeSymbol? = nil
+    ) BoundExpression {
         // Phase 4.5: bind each element expression, derive the tuple type from
         // their static types, and produce a BoundTupleLiteralExpression.
         // ADR-0172: a `name: expr` element contributes the label to the
         // literal's tuple type; names are metadata over the positional shape.
+        let targetTuple = switch targetType {
+            case directTuple is TupleTypeSymbol: directTuple
+            case NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableTuple}: nullableTuple
+            case PlatformTypeSymbol{UnderlyingType: TupleTypeSymbol platformTuple}: platformTuple
+            default: default(TupleTypeSymbol?)
+        }
         let bound = ImmutableArray.CreateBuilder[BoundExpression](syntax.Elements.Count)
         let elementTypes = ImmutableArray.CreateBuilder[TypeSymbol](syntax.Elements.Count)
         let elementNames = ImmutableArray.CreateBuilder[string?](syntax.Elements.Count)
@@ -4164,10 +4173,47 @@ internal partial class ExpressionBinder {
             } else {
                 elementNames.Add(nil)
             }
+            let elementTargetType = if targetTuple != nil && targetTuple.Arity == syntax.Elements.Count {
+                targetTuple.ElementTypes[i]
+            } else {
+                default(TypeSymbol?)
+            }
             recordDeferredArgumentSnapshot?(e)
-            var be = BindExpression(e)
+            var unwrappedElementSyntax = e
+            while unwrappedElementSyntax is ParenthesizedExpressionSyntax parenthesizedElement {
+                unwrappedElementSyntax = parenthesizedElement.Expression
+            }
+            var be = if elementTargetType != nil &&
+                (
+                unwrappedElementSyntax is TupleLiteralExpressionSyntax ||
+                    (
+                    unwrappedElementSyntax is BlockExpressionSyntax &&
+                        elementTargetType is TupleTypeSymbol or
+                        NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} or
+                        PlatformTypeSymbol{UnderlyingType: TupleTypeSymbol}
+                ) ||
+                    MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _)
+            ) {
+                BindExpression(e, elementTargetType)
+            } else {
+                BindExpression(e)
+            }
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
+            }
+            if be is BoundFunctionLiteralExpression targetedRefLiteral &&
+                elementTargetType != nil &&
+                MemberLookup
+                .TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _) {
+                be = conversions.BindConversion(e.Location, targetedRefLiteral, elementTargetType)
+            } else if be is BoundFunctionLiteralExpression refLiteral && TypeSymbol.MaterializeNeverFunctionReturns(
+                refLiteral.FunctionType
+            ) is FunctionTypeSymbol materializedFunctionType &&
+                $scope.TryGetSynthesizedRefDelegateForLiteral(
+                refLiteral.Function,
+                materializedFunctionType.ReturnType
+            ) is {} refDelegateType {
+                be = conversions.BindConversion(e.Location, be, refDelegateType)
             }
             ApplySubExpressionNarrowingEffects(e, be)
             bound.Add(be)

@@ -12,10 +12,301 @@ import System.Linq
 import System.Reflection
 
 internal shared class DelegateRefKindUtilities {
+    internal func HasNonNoneSourceParameterRefKinds(expression BoundExpression) bool ->
+    TryGetSourceParameterRefKinds(expression, out var refKinds) && refKinds.Any((kind RefKind) -> kind != RefKind.None)
+
+    internal func UnwrapSynthesizedRefDelegateBranch(
+        branch BoundExpression,
+        conversions ConversionClassifier
+    ) BoundExpression {
+        if branch is BoundConversionExpression{
+            Type: DelegateTypeSymbol{Declaration: nil},
+            Expression: BoundFunctionLiteralExpression innerLiteral
+        } {
+            return innerLiteral
+        }
+        if branch is BoundBlockExpression blockExpr {
+            if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                resultLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) && conversions.RewriteCleanupBlockExpression(
+                blockExpr,
+                resultLocal,
+                (initExpr BoundExpression) -> UnwrapSynthesizedRefDelegateBranch(initExpr, conversions)
+            ) is {} unwrappedCleanupBlock {
+                return unwrappedCleanupBlock
+            }
+            let unwrappedTail = UnwrapSynthesizedRefDelegateBranch(blockExpr.Expression, conversions)
+            if !object.ReferenceEquals(unwrappedTail, blockExpr.Expression) {
+                return BoundBlockExpression(blockExpr.Syntax, blockExpr.Statements, unwrappedTail)
+            }
+        }
+        if branch is BoundConditionalExpression condExpr && condExpr.Type.StripToBareShape() is DelegateTypeSymbol{
+            Declaration: nil
+        } synthCondDel {
+            let unwrappedTrue = UnwrapSynthesizedRefDelegateBranch(condExpr.WhenTrue, conversions)
+            let unwrappedFalse = UnwrapSynthesizedRefDelegateBranch(condExpr.WhenFalse, conversions)
+            if (
+                !object.ReferenceEquals(unwrappedTrue, condExpr.WhenTrue) || !object.ReferenceEquals(
+                    unwrappedFalse,
+                    condExpr.WhenFalse
+                )
+            ) &&
+                IsUnwrappedRefDelegateBranch(unwrappedTrue) &&
+                IsUnwrappedRefDelegateBranch(unwrappedFalse) {
+                let fnType = ReplaceBareShape(condExpr.Type, synthCondDel.EquivalentFunctionType)
+                return BoundConditionalExpression(
+                    condExpr.Syntax,
+                    condExpr.Condition,
+                    unwrappedTrue,
+                    unwrappedFalse,
+                    fnType
+                )
+            }
+        }
+        if branch is BoundSwitchExpression switchExpr && switchExpr.Type.StripToBareShape() is DelegateTypeSymbol{
+            Declaration: nil
+        } synthSwitchDel {
+            var anyChanged = false
+            var allUnwrapped = switchExpr.Arms.Length > 0
+            let unwrappedArms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpr.Arms.Length)
+            for arm in switchExpr.Arms {
+                let unwrappedArm = UnwrapSynthesizedRefDelegateBranch(arm.Result, conversions)
+                anyChanged |= !object.ReferenceEquals(unwrappedArm, arm.Result)
+                allUnwrapped &= IsUnwrappedRefDelegateBranch(unwrappedArm)
+                unwrappedArms.Add(BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, arm.Guard, unwrappedArm))
+            }
+            if anyChanged && allUnwrapped {
+                let fnType = ReplaceBareShape(switchExpr.Type, synthSwitchDel.EquivalentFunctionType)
+                return BoundSwitchExpression(
+                    switchExpr.Syntax,
+                    switchExpr.Discriminant,
+                    unwrappedArms.MoveToImmutable(),
+                    fnType
+                )
+            }
+        }
+        return branch
+    }
+
+    private func IsUnwrappedRefDelegateBranch(branch BoundExpression) bool -> branch.Type == TypeSymbol.Never ||
+        branch.Type == TypeSymbol.Null ||
+        branch
+        .Type
+        .StripToBareShape() is FunctionTypeSymbol
+
+    private func ReplaceBareShape(original TypeSymbol, bare TypeSymbol) TypeSymbol -> switch original {
+        case NullableTypeSymbol: NullableTypeSymbol.Get(bare)
+        case PlatformTypeSymbol: PlatformTypeSymbol.Get(bare)
+        default: bare
+    }
+
+    internal func MaterializeSynthesizedRefDelegateResultType(
+        resultType TypeSymbol?,
+        branches IEnumerable[BoundExpression],
+        boundScope BoundScope,
+        allowFirstArmFallback bool = false
+    ) TypeSymbol? {
+        if resultType == nil {
+            return nil
+        }
+        let materialized = TypeSymbol.MaterializeNeverFunctionReturns(resultType)
+        let isNullable = materialized is NullableTypeSymbol
+        let isPlatform = materialized is PlatformTypeSymbol
+        if materialized.StripToBareShape() is not FunctionTypeSymbol resultFnType {
+            return resultType
+        }
+        let literals = List[BoundFunctionLiteralExpression]()
+        for branch in branches {
+            CollectBranchFunctionLiterals(branch, literals)
+        }
+        var hasRefKindParameter = false
+        for lit in literals {
+            if lit.Function.Parameters.Any((p ParameterSymbol) -> p.RefKind != RefKind.None) {
+                hasRefKindParameter = true
+                break
+            }
+        }
+        if !hasRefKindParameter {
+            return resultType
+        }
+        let arity = resultFnType.Arity
+        var firstMatching BoundFunctionLiteralExpression? = nil
+        var allCompatible = true
+        for lit in literals {
+            if lit.Function.Parameters.Length != arity {
+                allCompatible = false
+                break
+            }
+            if firstMatching == nil {
+                firstMatching = lit
+            }
+            for var i = 0; i < arity; i++ {
+                let refKind = firstMatching.Function.Parameters[i].RefKind
+                let litParam = lit.Function.Parameters[i]
+                if litParam.RefKind != refKind {
+                    allCompatible = false
+                    break
+                }
+                if refKind != RefKind.None && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    litParam.Type,
+                    resultFnType.ParameterTypes[i]
+                ) {
+                    allCompatible = false
+                    break
+                }
+            }
+            if !allCompatible {
+                break
+            }
+        }
+        if !allCompatible || firstMatching == nil {
+            if !allowFirstArmFallback {
+                return nil
+            }
+            for lit in literals {
+                if boundScope.TryGetSynthesizedRefDelegateForLiteral(
+                    lit.Function,
+                    resultFnType.ReturnType
+                ) is {} fallbackDelegate {
+                    return if isNullable {
+                        NullableTypeSymbol.Get(fallbackDelegate)
+                    } else if isPlatform {
+                        PlatformTypeSymbol.Get(fallbackDelegate)
+                    } else {
+                        fallbackDelegate
+                    }
+                }
+            }
+            return nil
+        }
+        let synthesizedParams = ImmutableArray.CreateBuilder[ParameterSymbol](arity)
+        for var i = 0; i < arity; i++ {
+            let firstParam = firstMatching.Function.Parameters[i]
+            let paramType = if firstParam.RefKind != RefKind.None {
+                firstParam.Type
+            } else {
+                resultFnType.ParameterTypes[i]
+            }
+            var hasDefault = firstParam.HasExplicitDefaultValue &&
+                TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(firstParam.Type, paramType)
+            if hasDefault {
+                for lit in literals {
+                    let litParam = lit.Function.Parameters[i]
+                    if !litParam.HasExplicitDefaultValue || !object.Equals(
+                        litParam.ExplicitDefaultValue,
+                        firstParam.ExplicitDefaultValue
+                    ) ||
+                        !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(litParam.Type, paramType) {
+                        hasDefault = false
+                        break
+                    }
+                }
+            }
+            let synthesizedParam = ParameterSymbol(firstParam, paramType, firstParam.DeclaringSyntax)
+            if hasDefault {
+                synthesizedParam.SetExplicitDefaultValue(firstParam.ExplicitDefaultValue)
+            }
+            synthesizedParams.Add(synthesizedParam)
+        }
+        let materializedReturn = if resultFnType.ReturnType == TypeSymbol.Never {
+            TypeSymbol.Void
+        } else {
+            TypeSymbol.MaterializeNeverFunctionReturns(resultFnType.ReturnType)
+        }
+        let refDelegateType = boundScope.GetSynthesizedRefDelegateCache().GetOrCreate(
+            synthesizedParams.MoveToImmutable(),
+            materializedReturn,
+            boundScope.GetCurrentDeclaringPackageName()
+        )
+        return if isNullable {
+            NullableTypeSymbol.Get(refDelegateType)
+        } else if isPlatform {
+            PlatformTypeSymbol.Get(refDelegateType)
+        } else {
+            refDelegateType
+        }
+    }
+
+    private func CollectBranchFunctionLiterals(branch BoundExpression?, sink List[BoundFunctionLiteralExpression]) {
+        var current = branch
+        while current != nil {
+            if current is BoundFunctionLiteralExpression refLiteral {
+                sink.Add(refLiteral)
+                return
+            }
+            if current is BoundConversionExpression conv {
+                current = conv.Expression
+                continue
+            }
+            if current is BoundBlockExpression blockExpr {
+                if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                    resultLocal
+                    .Name
+                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    TryFindCleanupBlockResultInitializer(blockExpr.Statements, resultLocal) is {} initExpr {
+                    current = initExpr
+                    continue
+                }
+                current = blockExpr.Expression
+                continue
+            }
+            if current is BoundConditionalExpression condExpr {
+                CollectBranchFunctionLiterals(condExpr.WhenTrue, sink)
+                CollectBranchFunctionLiterals(condExpr.WhenFalse, sink)
+                return
+            }
+            if current is BoundSwitchExpression switchExpr {
+                for arm in switchExpr.Arms {
+                    CollectBranchFunctionLiterals(arm.Result, sink)
+                }
+                return
+            }
+            return
+        }
+    }
+
+    internal func TryFindCleanupBlockResultInitializer(
+        statements ImmutableArray[BoundStatement],
+        resultLocal LocalVariableSymbol
+    ) BoundExpression? {
+        for stmt in statements {
+            if stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultLocal) {
+                return decl.Initializer
+            }
+            if stmt is BoundBlockStatement innerBlock &&
+                TryFindCleanupBlockResultInitializer(innerBlock.Statements, resultLocal) is {} innerFound {
+                return innerFound
+            }
+            if stmt is BoundTryStatement tryStmt &&
+                tryStmt.TryBlock is BoundBlockStatement tryBlock &&
+                TryFindCleanupBlockResultInitializer(tryBlock.Statements, resultLocal) is {} tryFound {
+                return tryFound
+            }
+        }
+        return nil
+    }
+
     internal func TryGetSourceParameterRefKinds(expression BoundExpression, out refKinds ImmutableArray[RefKind]) bool {
         var expression = expression
-        while expression is BoundConversionExpression conversion {
-            expression = conversion.Expression
+        while true {
+            if expression is BoundConversionExpression conversion {
+                expression = conversion.Expression
+                continue
+            }
+            if expression is BoundBlockExpression blockExpr {
+                if blockExpr.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                    resultLocal
+                    .Name
+                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    TryFindCleanupBlockResultInitializer(blockExpr.Statements, resultLocal) is {} initExpr {
+                    expression = initExpr
+                    continue
+                }
+                expression = blockExpr.Expression
+                continue
+            }
+            break
         }
         switch expression {
             case literal is BoundFunctionLiteralExpression {

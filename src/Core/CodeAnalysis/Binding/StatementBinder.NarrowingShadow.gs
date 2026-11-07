@@ -238,7 +238,7 @@ internal partial class StatementBinder {
         }
         var branchIn = flow.Current
         if facts != nil {
-            branchIn = branchIn.WithAll(facts)
+            branchIn = RefineConditionEntry(branchIn, facts)
         }
         if bound == nil {
             flow.Exits.Add(branchIn)
