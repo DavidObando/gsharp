@@ -29,6 +29,8 @@ class Issue5700TypedForEachDeconstructionTests {
     @InlineData("by-reference numeric oblivious", "3,")
     @InlineData("captured widened record", "7,")
     @InlineData("mutating struct", "6,W5,")
+    @InlineData("captured tainted list", "3,")
+    @InlineData("captured tainted list inferred", "3,")
     func ConvertedBindings_MatchCSharpOutput(shape string, expected string) {
         let statement = switch shape {
             case "numeric":
@@ -101,6 +103,26 @@ class Issue5700TypedForEachDeconstructionTests {
              string result = "";
              foreach (var callback in callbacks) result += callback() + ",";
              return result;`
+            case "captured tainted list" or "captured tainted list inferred":
+            (`var items = new List<(string, int)>();
+              Try(out var missing);
+              items.Add((missing, 0));
+              items.Add(("abc", 1));
+              var callbacks = new List<Func<int>>();
+              foreach (TARGET in items) {
+                  if (IsMissing(a)) continue;
+                  callbacks.Add(() => a.Length);
+              }
+              string result = "";
+              foreach (var callback in callbacks) result += callback() + ",";
+              return result;`).Replace(
+                "TARGET",
+                if shape.EndsWith("inferred", StringComparison.Ordinal) {
+                    "var (a, b)"
+                } else {
+                    "(string a, int b)"
+                }
+            )
             case "by-reference conversion" or
                 "by-reference numeric" or
                 "by-reference conversion oblivious" or
@@ -156,7 +178,10 @@ namespace TypedForEach {
             }
         ).Replace(
             "EXTRAMEMBER",
-            if shape.StartsWith("by-reference", StringComparison.Ordinal) {
+            if shape.StartsWith("captured tainted list", StringComparison.Ordinal) {
+                "public static bool Try(out string value) { value = null; return false; } " +
+                    "private static bool IsMissing(string value) => value == null;"
+            } else if shape.StartsWith("by-reference", StringComparison.Ordinal) {
                 (`public static int Read(ref string? s, (int, int)[] pairs) {
                     if (s == null) return 0;
                     foreach ((TYPE value, int other) in pairs) { }
@@ -213,6 +238,13 @@ namespace TypedForEach {
         if shape == "captured widened record" {
             Assert.Contains("let item Node? = itemValue", printed)
             Assert.DoesNotContain("itemValue!!", printed)
+        }
+        if shape == "captured tainted list" {
+            Assert.Contains("let a string? = aValue", printed)
+            Assert.DoesNotContain("aValue!!", printed)
+        }
+        if shape == "captured tainted list inferred" {
+            Assert.Contains("let a = aValue", printed)
         }
     }
 

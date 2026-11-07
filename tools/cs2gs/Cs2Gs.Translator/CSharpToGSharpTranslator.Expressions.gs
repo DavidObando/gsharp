@@ -15494,7 +15494,9 @@ partial class CSharpToGSharpTranslator {
                 case identifier is IdentifierNameSyntax {
                     // Explicit nullable slots use the guard query even when C# has no flow state.
                     let type = switch this.context.GetSymbolInfo(identifier).Symbol {
-                        case local is ILocalSymbol: local.Type
+                        case local is ILocalSymbol when local.DeclaringSyntaxReferences.Any(
+                            (reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax
+                        ): local.Type
                         case parameter is IParameterSymbol: parameter.Type
                         default: default(ITypeSymbol?)
                     }

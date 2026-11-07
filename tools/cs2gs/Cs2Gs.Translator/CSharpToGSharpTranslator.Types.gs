@@ -2029,17 +2029,21 @@ partial class CSharpToGSharpTranslator {
             let local = this.context.GetDeclaredSymbol(single) as ILocalSymbol
             let hasSlot = this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType)
             let loop = single.Ancestors().OfType[ForEachVariableStatementSyntax]().FirstOrDefault()
-            let captured = loop != nil &&
+            let capturedRead = if loop != nil {
                 loop
-                .Statement
-                .DescendantNodesAndSelf()
-                .OfType[IdentifierNameSyntax]()
-                .Any(
-                (read IdentifierNameSyntax) -> FindNestedFunction(read, loop.Statement) != nil && this.BindsTo(
-                    read,
-                    local
+                    .Statement
+                    .DescendantNodesAndSelf()
+                    .OfType[IdentifierNameSyntax]()
+                    .FirstOrDefault(
+                    (read IdentifierNameSyntax) -> FindNestedFunction(read, loop.Statement) != nil && this.BindsTo(
+                        read,
+                        local
+                    )
                 )
-            )
+            } else {
+                default(IdentifierNameSyntax?)
+            }
+            let captured = capturedRead != nil
             if local == nil ||
                 (
                 (!hasSlot || conversion.IsIdentity) &&
@@ -2075,7 +2079,20 @@ partial class CSharpToGSharpTranslator {
                 .state
                 .NullableForEachBindings
                 .Contains(local) ||
-                ((!hasSlot || conversion.IsIdentity) && this.IsTranslatorWidenedDeclaration(local)) {
+                (
+                (!hasSlot || conversion.IsIdentity) &&
+                    (
+                    this.IsTranslatorWidenedDeclaration(local) ||
+                        (
+                        capturedRead != nil && ObliviousNullabilityAnalyzer.IsDeconstructedForEachElementTainted(
+                            this.context.Compilation,
+                            capturedRead,
+                            this.context.SemanticModel,
+                            this.context.SiblingCompilations
+                        )
+                    )
+                )
+            ) {
                 mappedType = MakeNullable(mappedType)
             }
             if captured &&
