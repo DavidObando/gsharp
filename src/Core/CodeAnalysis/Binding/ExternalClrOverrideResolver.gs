@@ -104,6 +104,7 @@ internal shared class ExternalClrOverrideResolver {
                 !ReturnMatches(
                 ClrNullability.GetSignatureType(method.ReturnParameter),
                 returnType,
+                externalBase!!,
                 returnRefKind,
                 typeSubstitutions,
                 method,
@@ -784,9 +785,10 @@ internal shared class ExternalClrOverrideResolver {
     private func ReturnMatches(
         clrReturnType Type?,
         returnType TypeSymbol,
+        containingType TypeSymbol,
         returnRefKind RefKind,
         typeSubstitutions ImmutableArray[TypeArgumentSubstitution],
-        openMethodDefinition MethodInfo? = nil,
+        openMethodDefinition MethodInfo,
         methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
         isAsync bool = false,
         isAsyncVoid bool = false,
@@ -798,8 +800,9 @@ internal shared class ExternalClrOverrideResolver {
             return false
         }
         let clrReturnsByRef = clrReturnType.IsByRef
-        if (returnRefKind != RefKind.None) != clrReturnsByRef ||
-            (openMethodDefinition != nil && RefCapabilities.GetReturnRefKind(openMethodDefinition) != returnRefKind) {
+        if (returnRefKind != RefKind.None) != clrReturnsByRef || RefCapabilities.GetReturnRefKind(
+            openMethodDefinition
+        ) != returnRefKind {
             return false
         }
         if clrReturnsByRef {
@@ -823,10 +826,25 @@ internal shared class ExternalClrOverrideResolver {
             }
             clrReturnType = unwrappedReturnType
         }
-        if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
-            return true
+        var contract = MemberLookup.GetClrMethodReturnTypeSymbol(
+            containingType,
+            openMethodDefinition,
+            methodTypeArguments
+        )
+        if isAsync {
+            if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(contract, out var awaitedContract) {
+                return false
+            }
+            contract = awaitedContract
         }
-        return allowCovariantReturn && returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType)
+        if TypeMatches(clrReturnType, returnType, typeSubstitutions, openMethodDefinition, methodTypeArguments) {
+            return ReturnNullabilityConforms(contract, returnType) &&
+                (returnRefKind != RefKind.Ref || ReturnNullabilityConforms(returnType, contract))
+        }
+        return allowCovariantReturn &&
+            returnRefKind == RefKind.None &&
+            IsCovariantReturn(clrReturnType, returnType) &&
+            ReturnNullabilityConforms(contract, returnType)
     }
 
     private func TryUnwrapClrAsyncReturnType(
@@ -863,6 +881,76 @@ internal shared class ExternalClrOverrideResolver {
             "System.Threading.Tasks.Task"
         }
         return !type.IsGenericType && string.Equals(type.FullName, expectedName, StringComparison.Ordinal)
+    }
+
+    private func ReturnNullabilityConforms(contract TypeSymbol, implementation TypeSymbol) bool {
+        if contract.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+            implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+            return false
+        }
+        let valueShape = GetReturnValueShape(contract)
+        let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out var isValueTask)
+        // Preserve semantic positions while recognizing tuple values through storage and async-result carriers.
+        if !TupleTypeSymbol.TryGetTupleShape(valueShape, out _) && !isTask {
+            return true
+        }
+        let contractPositions = contract.GetElementPositions()
+        if contractPositions.IsDefaultOrEmpty {
+            return true
+        }
+        let implementationPositions = if isTask {
+            GetTaskResultPositions(implementation, isValueTask)
+        } else {
+            implementation.GetElementPositions()
+        }
+        if contractPositions.Length != implementationPositions.Length {
+            return false
+        }
+        for var i = 0; i < contractPositions.Length; i++ {
+            if !ReturnNullabilityConforms(contractPositions[i], implementationPositions[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func GetReturnValueShape(type TypeSymbol) TypeSymbol {
+        var shape = type.StripToBareShape()
+        while shape is ByRefTypeSymbol || NullableLifting.IsAnyValueTypeNullable(shape as NullableTypeSymbol) {
+            shape = TypeSymbol.GetWrappedTypes(shape).Single().StripToBareShape()
+        }
+        return shape
+    }
+
+    private func GetTaskResultPositions(implementation TypeSymbol, isValueTask bool) ImmutableArray[TypeSymbol] {
+        if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+            GetReturnValueShape(implementation),
+            out _,
+            out var implementationIsValueTask
+        ) &&
+            implementationIsValueTask == isValueTask {
+            return implementation.GetElementPositions()
+        }
+        var receiver = implementation
+        while receiver.ReferenceNullability is ReferenceNullabilityKind.Nullable or ReferenceNullabilityKind.Platform {
+            receiver = TypeSymbol.GetWrappedTypes(receiver).Single()
+        }
+        let imported = MemberLookup.GetProjectionReceiverImportedType(receiver)
+        let taskDefinition = if isValueTask {
+            typeof(System.Threading.Tasks.ValueTask[_])
+        } else {
+            typeof(System.Threading.Tasks.Task[_])
+        }
+        return if imported != nil && MemberLookup.TryGetSymbolicDeclaringContext(
+            imported,
+            taskDefinition,
+            out _,
+            out var arguments
+        ) {
+            arguments
+        } else {
+            ImmutableArray[TypeSymbol].Empty
+        }
     }
 
     private func PropertyTypeMatches(
