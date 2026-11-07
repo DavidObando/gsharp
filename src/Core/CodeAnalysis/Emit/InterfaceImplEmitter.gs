@@ -1707,7 +1707,7 @@ internal class InterfaceImplEmitter {
             return
         }
         let closure = ClrInterfaceClosure.Build(structSymbol, this.outer.signatures)
-        for (symbolicIface, concreteIface) in closure.Entries {
+        for (symbolicIface, concreteIface, _) in closure.Entries {
             var openIface Type? = nil
             var symbolicArgs = default(ImmutableArray[TypeSymbol])
             if symbolicIface != nil && !MemberLookup.TryGetSymbolicClrGenericInterface(

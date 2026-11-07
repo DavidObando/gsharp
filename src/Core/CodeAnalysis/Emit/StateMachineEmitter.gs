@@ -528,6 +528,8 @@ internal class StateMachineEmitter {
                         scopeTP.InterfaceConstraint
                     ){
                         HasReferenceTypeConstraint = scopeTP.HasReferenceTypeConstraint,
+                        HasNullableReferenceTypeConstraint = scopeTP.HasNullableReferenceTypeConstraint,
+                        HasNotNullConstraint = scopeTP.HasNotNullConstraint,
                         HasValueTypeConstraint = scopeTP.HasValueTypeConstraint,
                         HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
                         ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,
@@ -1088,6 +1090,8 @@ internal class StateMachineEmitter {
                             scopeTP.InterfaceConstraint
                         ){
                             HasReferenceTypeConstraint = scopeTP.HasReferenceTypeConstraint,
+                            HasNullableReferenceTypeConstraint = scopeTP.HasNullableReferenceTypeConstraint,
+                            HasNotNullConstraint = scopeTP.HasNotNullConstraint,
                             HasValueTypeConstraint = scopeTP.HasValueTypeConstraint,
                             HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
                             ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,

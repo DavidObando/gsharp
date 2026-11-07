@@ -3758,6 +3758,8 @@ partial class Binder {
     ) bool {
         if target.Constraint != source.Constraint ||
             target.HasReferenceTypeConstraint != source.HasReferenceTypeConstraint ||
+            target.HasNullableReferenceTypeConstraint != source.HasNullableReferenceTypeConstraint ||
+            target.HasNotNullConstraint != source.HasNotNullConstraint ||
             target.HasValueTypeConstraint != source.HasValueTypeConstraint ||
             target.HasDefaultConstructorConstraint != source.HasDefaultConstructorConstraint ||
             target.HasUnmanagedConstraint != source.HasUnmanagedConstraint {
@@ -10345,6 +10347,20 @@ partial class Binder {
                 ) {
                     return false
                 }
+                if ClrNullability.HasNotNullConstraint(targetParameters[i]) != ClrNullability.HasNotNullConstraint(
+                    sourceParameters[i]
+                ) {
+                    return false
+                }
+                if (
+                    targetParameters[i].GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint
+                ) != 0 &&
+                    ClrNullability
+                    .GetGenericParameterTypeSymbol(targetParameters[i])
+                    .ReferenceNullability != ClrNullability
+                    .GetGenericParameterTypeSymbol(sourceParameters[i]).ReferenceNullability {
+                    return false
+                }
                 let targetConstraints = targetParameters[i].GetGenericParameterConstraints()
                 let sourceConstraints = sourceParameters[i].GetGenericParameterConstraints()
                 if targetConstraints.Length != sourceConstraints.Length {
@@ -10573,8 +10589,24 @@ partial class Binder {
                     attributes & GenericParameterAttributes.DefaultConstructorConstraint
                 ) != 0
                 target[i].HasUnmanagedConstraint = HasAdapterUnmanagedConstraint(source[i])
-                for constraint in source[i].GetGenericParameterConstraints() {
-                    let mapped = MapAdapterMethodType(constraint, $map)
+                let rawConstraints = source[i].GetGenericParameterConstraints()
+                let parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(source[i]).ReferenceNullability
+                if target[i].HasReferenceTypeConstraint && parameterNullability == ReferenceNullabilityKind.Nullable {
+                    target[i].HasNullableReferenceTypeConstraint = true
+                } else if ClrNullability.HasNotNullConstraint(source[i]) {
+                    target[i].HasNotNullConstraint = true
+                }
+                var annotatedConstraints = ImmutableArray[TypeSymbol].Empty
+                try {
+                    annotatedConstraints = ClrNullability.GetGenericParameterConstraintTypeSymbols(source[i])
+                } catch (Exception) { }
+                for var c = 0; c < rawConstraints.Length; c++ {
+                    let constraint = rawConstraints[c]
+                    let mapped = if c < annotatedConstraints.Length {
+                        MapAdapterMethodTypeWithNullability(constraint, annotatedConstraints[c], $map)
+                    } else {
+                        MapAdapterMethodType(constraint, $map)
+                    }
                     if mapped is TypeParameterSymbol dependent {
                         target[i].TypeParameterBound = dependent
                     } else if constraint.IsInterface {
@@ -12262,8 +12294,22 @@ partial class Binder {
                 failedConstraint = "unmanaged"
                 return false
             }
-            if declared.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(argument) {
-                failedConstraint = "class"
+            if declared.HasReferenceTypeConstraint {
+                if !IsReferenceTypeForConstraint(argument) {
+                    failedConstraint = if declared.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                    return false
+                }
+                if !declared.HasNullableReferenceTypeConstraint && argument.HasNullableReferenceTypeConstraint {
+                    failedConstraint = "class"
+                    return false
+                }
+            }
+            if declared.HasNotNullConstraint && !SatisfiesNotNullConstraint(argument) {
+                failedConstraint = "notnull"
                 return false
             }
             if declared.HasDefaultConstructorConstraint &&
@@ -12475,11 +12521,26 @@ partial class Binder {
                 return typeParameter.Name
             }
             let special = attributes & GenericParameterAttributes.SpecialConstraintMask
+            var parameterNullability = ReferenceNullabilityKind.Platform
+            try {
+                parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(typeParameter).ReferenceNullability
+            } catch (Exception) { }
             if (special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
                 return "struct"
             }
             if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
-                return "class"
+                return if parameterNullability == ReferenceNullabilityKind.Nullable {
+                    "class?"
+                } else {
+                    "class"
+                }
+            }
+            var hasNotNull = false
+            try {
+                hasNotNull = ClrNullability.HasNotNullConstraint(typeParameter)
+            } catch (Exception) { }
+            if hasNotNull {
+                return "notnull"
             }
             if (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 {
                 return "new()"
@@ -13668,9 +13729,26 @@ partial class Binder {
             if tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument) {
                 return false
             }
-            // ADR-0097 / issue #775: enforce the `class` / `struct` / `new()`
-            // flag-style constraints introduced by the G# spelling.
-            if tp.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(typeArgument) {
+            // ADR-0097 / issue #775 / issue #4996: enforce the `class` / `class?` /
+            // `notnull` / `struct` / `new()` flag-style constraints.
+            if tp.HasReferenceTypeConstraint {
+                let candidate = if tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is NullableTypeSymbol nullableArg &&
+                    !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                    nullableArg.UnderlyingType
+                } else {
+                    typeArgument
+                }
+                if !IsReferenceTypeForConstraint(candidate) {
+                    return false
+                }
+                if !tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is TypeParameterSymbol argTp &&
+                    argTp.HasNullableReferenceTypeConstraint {
+                    return false
+                }
+            }
+            if tp.HasNotNullConstraint && !SatisfiesNotNullConstraint(typeArgument) {
                 return false
             }
             if tp.HasValueTypeConstraint && !IsNonNullableValueTypeForConstraint(typeArgument) {
@@ -14174,6 +14252,27 @@ partial class Binder {
             return false
         }
 
+        internal func SatisfiesNotNullConstraint(type TypeSymbol?) bool {
+            if type == nil || object.ReferenceEquals(type, TypeSymbol.Null) {
+                return false
+            }
+            let stripped = PlatformTypeSymbol.StripTopLevel(type)
+            if stripped is NullableTypeSymbol {
+                return false
+            }
+            if stripped is TypeParameterSymbol tp {
+                return AnyParameter(
+                    EnumerateForwardedParameterChain(tp),
+                    (p TypeParameterSymbol) -> p.HasNotNullConstraint ||
+                        (p.HasReferenceTypeConstraint && !p.HasNullableReferenceTypeConstraint) ||
+                        p.HasValueTypeConstraint ||
+                        p.HasUnmanagedConstraint ||
+                        IsReferenceClassConstraint(p.ClassConstraint)
+                )
+            }
+            return true
+        }
+
         /// ADR-0097: returns `true` when [`type`](paramref)
         /// satisfies a `where T : struct` constraint — i.e. it is a
         /// non-nullable value type at the CLR level.
@@ -14241,6 +14340,12 @@ partial class Binder {
         internal func HasDefaultConstructorForConstraint(type TypeSymbol?) bool {
             if type == nil {
                 return false
+            }
+            if type is NullableTypeSymbol nullable {
+                if NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    return false
+                }
+                return HasDefaultConstructorForConstraint(nullable.UnderlyingType)
             }
             if IsNonNullableValueTypeForConstraint(type) {
                 return true
@@ -14722,6 +14827,20 @@ partial class Binder {
                         SatisfiesClrInterfaceConstraint(paramClrIface, constraint, tp) {
                         return true
                     }
+                    if chainParam.InterfaceConstraint is {} paramIface && !object.ReferenceEquals(
+                        paramIface,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramIface, constraint, tp) {
+                        return true
+                    }
+                    if chainParam.ClassConstraint is {} paramClass && !object.ReferenceEquals(
+                        paramClass,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramClass, constraint, tp) {
+                        return true
+                    }
                 }
                 return false
             }
@@ -15029,7 +15148,16 @@ partial class Binder {
                 flags.Add("comparable")
             }
             if tp.HasReferenceTypeConstraint {
-                flags.Add("class")
+                flags.Add(
+                    if tp.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                )
+            }
+            if tp.HasNotNullConstraint {
+                flags.Add("notnull")
             }
             if tp.HasValueTypeConstraint && !tp.HasUnmanagedConstraint {
                 flags.Add("struct")

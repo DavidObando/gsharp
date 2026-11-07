@@ -814,7 +814,8 @@ shared class GSharpFormatter {
             private func IsNullableMarker(token LayoutToken) bool -> token
                 .Token
                 .Kind == SyntaxKind.QuestionToken &&
-                token.Parent is TypeClauseSyntax
+                token.Parent is TypeClauseSyntax or
+                TypeParameterSyntax
 
             // The `?` of `callee?(args)` (null-conditional invocation) and of
             // `int32?(n)` (nullable conversion call). Token kind alone cannot

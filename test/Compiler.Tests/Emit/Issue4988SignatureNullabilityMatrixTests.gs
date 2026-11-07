@@ -170,10 +170,199 @@ open class Issue4988SignatureNullabilityMatrixTests {
             )
             let diagnostics = compilation.GetDiagnostics()
             Assert.DoesNotContain(diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
-            let constraintWarnings = diagnostics.Where((d Diagnostic) -> d.Id == "CS8634").ToArray()
+            let classWarnings = diagnostics.Where((d Diagnostic) -> d.Id == "CS8634").ToArray()
+            Assert.True(
+                classWarnings.Length == 2,
+                "both `Pick[string?]` calls must violate `T class`:\n" + string.Join("\n", diagnostics)
+            )
+            let notNullWarnings = diagnostics.Where((d Diagnostic) -> d.Id == "CS8714").ToArray()
+            Assert.True(
+                notNullWarnings.Length == 2,
+                "both `PickNotNull[string?]` calls must violate `T notnull`:\n" + string.Join("\n", diagnostics)
+            )
+            let constraintWarnings = diagnostics.Where((d Diagnostic) -> d.Id == "CS8631").ToArray()
             Assert.True(
                 constraintWarnings.Length == 2,
-                "both `Pick[string?]` calls must violate `T class`:\n" + string.Join("\n", diagnostics)
+                "both `PickEquatable` calls with non-null `IEquatable<Token>` must violate `T IEquatable[Token?]`:\n" +
+                    string.Join("\n", diagnostics)
+            )
+        } finally {
+            TryDelete(tempDir)
+        }
+    }
+
+    /// Issue #4996: a G# consumer reading a library compiled by either `csc` or
+    /// `gsc` preserves base-type, implemented-interface, generic-constraint,
+    /// and generic-parameter nullability in member lookup and constraint checks.
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func GSharpConsumer_RespectsImportedRelationshipAndConstraintNullability(useCSharpProducer bool) {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4996_consumer_").FullName
+        try {
+            let libraryPath = if useCSharpProducer {
+                CompileCSharp(tempDir, RelationshipContractCSharpSource)
+            } else {
+                CompileGSharp(tempDir, RelationshipContractGSharpSource, "net10.0", List[string](), verify: true)
+            }
+            let valid = CompileConsumer(tempDir, libraryPath, ValidRelationshipConsumerSource)
+            Assert.True(valid.ExitCode == 0, "valid consumer must compile:\n" + valid.Output)
+            Assert.DoesNotContain("GS0536", valid.Output, StringComparison.Ordinal)
+            let consumerOut = Path.Combine(tempDir, "Consumer.dll")
+            let coreDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!!
+            using let mlc = MetadataLoadContext(
+                PathAssemblyResolver(Directory.GetFiles(coreDir, "*.dll").Concat([]string{libraryPath, consumerOut})),
+                "System.Private.CoreLib"
+            )
+            let _ = mlc.LoadFromAssemblyPath(libraryPath)
+            let consumerAssembly = mlc.LoadFromAssemblyPath(consumerOut)
+            for implName in[]string{
+                "Consumer.ConcreteOuterImpl",
+                "Consumer.SymbolicOuterImpl",
+                "Consumer.NonGenericOuterImpl"
+            } {
+                let implType = consumerAssembly.GetType(implName) ??
+                    throw InvalidOperationException("missing $implName")
+                let rawInterfaces = implType.GetInterfaces()
+                let annotatedInterfaces = ClrNullability.GetInterfaceTypeSymbols(implType)
+                var foundInner = false
+                for var i = 0; i < rawInterfaces.Length; i++ {
+                    if rawInterfaces[i].Name == "IInner`1" {
+                        Assert.Equal("IInner[Token?]", Render(annotatedInterfaces[i], rawInterfaces[i]))
+                        foundInner = true
+                    }
+                }
+                Assert.True(foundInner, "expected IInner`1 in InterfaceImpl closure of $implName")
+            }
+            let badBase = CompileConsumer(tempDir, libraryPath, InvalidBaseNullabilityConsumerSource)
+            Assert.True(badBase.ExitCode != 0, "NullableTokenSub.Get() must return Token?:\n" + badBase.Output)
+            let badConstraint = CompileConsumer(tempDir, libraryPath, InvalidConstraintNullabilityConsumerSource)
+            Assert.True(
+                badConstraint.ExitCode != 0,
+                "RequireNullableEquatable must reject IEquatable[Token]:\n" + badConstraint.Output
+            )
+            let badLocalConstraint = CompileConsumer(
+                tempDir,
+                libraryPath,
+                InvalidLocalConstraintNullabilityConsumerSource
+            )
+            Assert.True(
+                badLocalConstraint.ExitCode != 0,
+                "RequireNullableEquatable must reject consumer-local IEquatable[Token]:\n" + badLocalConstraint.Output
+            )
+            let badDependentConstraint = CompileConsumer(
+                tempDir,
+                libraryPath,
+                InvalidDependentConstraintNullabilityConsumerSource
+            )
+            Assert.True(
+                badDependentConstraint.ExitCode != 0,
+                "DependentEquatable must reject IEquatable[Token] when T = Token:\n" + badDependentConstraint.Output
+            )
+            let badNotNullType = CompileConsumer(tempDir, libraryPath, InvalidNotNullTypeConsumerSource)
+            Assert.True(
+                badNotNullType.ExitCode != 0,
+                "NotNullBox[string?] must violate T notnull:\n" + badNotNullType.Output
+            )
+            let badNotNullValueType = CompileConsumer(tempDir, libraryPath, InvalidNotNullValueTypeConsumerSource)
+            Assert.True(
+                badNotNullValueType.ExitCode != 0,
+                "NotNullBox[int32?] must violate T notnull:\n" + badNotNullValueType.Output
+            )
+            let badNotNullMethod = CompileConsumer(tempDir, libraryPath, InvalidNotNullMethodConsumerSource)
+            Assert.True(
+                badNotNullMethod.ExitCode != 0,
+                "TakeNotNull[string?] must violate T notnull:\n" + badNotNullMethod.Output
+            )
+            let badClassType = CompileConsumer(tempDir, libraryPath, InvalidClassTypeConsumerSource)
+            Assert.True(badClassType.ExitCode != 0, "ClassBox[string?] must violate T class:\n" + badClassType.Output)
+            let badClassMethod = CompileConsumer(tempDir, libraryPath, InvalidClassMethodConsumerSource)
+            Assert.True(
+                badClassMethod.ExitCode != 0,
+                "TakeClass[string?] must violate T class:\n" + badClassMethod.Output
+            )
+            let badForwardNotNull = CompileConsumer(tempDir, libraryPath, InvalidForwardNotNullConsumerSource)
+            Assert.True(
+                badForwardNotNull.ExitCode != 0,
+                "unconstrained T must not forward T notnull:\n" + badForwardNotNull.Output
+            )
+            let badForwardClass = CompileConsumer(tempDir, libraryPath, InvalidForwardClassConsumerSource)
+            Assert.True(badForwardClass.ExitCode != 0, "T class? must not forward T class:\n" + badForwardClass.Output)
+            let badAdaptClass = CompileConsumer(tempDir, libraryPath, InvalidAdaptClassConsumerSource)
+            Assert.True(
+                badAdaptClass.ExitCode != 0,
+                "adapt[IAdaptClass] must reject T class? source:\n" + badAdaptClass.Output
+            )
+            let badAdaptNullableClass = CompileConsumer(tempDir, libraryPath, InvalidAdaptNullableClassConsumerSource)
+            Assert.True(
+                badAdaptNullableClass.ExitCode != 0,
+                "adapt[IAdaptNullableClass] must reject T class source:\n" + badAdaptNullableClass.Output
+            )
+            let badAdaptNotNull = CompileConsumer(tempDir, libraryPath, InvalidAdaptNotNullConsumerSource)
+            Assert.True(
+                badAdaptNotNull.ExitCode != 0,
+                "adapt[IAdaptNotNull] must reject unconstrained T source:\n" + badAdaptNotNull.Output
+            )
+            let badOpenGenericLocal = CompileConsumer(
+                tempDir,
+                libraryPath,
+                InvalidOpenGenericLocalConstraintNullabilityConsumerSource
+            )
+            Assert.True(
+                badOpenGenericLocal.ExitCode != 0,
+                "TakeNullableEquatable must reject open-generic LocalGenericNonNullEq[T]:\n" +
+                    badOpenGenericLocal.Output
+            )
+            let badCombinedDisposableNotNull = CompileConsumer(
+                tempDir,
+                libraryPath,
+                InvalidCombinedDisposableNotNullConsumerSource
+            )
+            Assert.True(
+                badCombinedDisposableNotNull.ExitCode != 0,
+                "DisposableNotNullBox[DisposableImpl?] must violate T IDisposable notnull:\n" +
+                    badCombinedDisposableNotNull.Output
+            )
+        } finally {
+            TryDelete(tempDir)
+        }
+    }
+
+    @Fact
+    func TypeParameterSyntax_EnforcesPartialMethodConsistencyAndDictionaryNotNullMetadata() {
+        let dictParams = typeof(Dictionary[_, _]).GetGenericArguments()
+        Assert.True(ClrNullability.HasNotNullConstraint(dictParams[0]))
+        Assert.False(ClrNullability.HasNotNullConstraint(dictParams[1]))
+
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4996_partial_").FullName
+        try {
+            let libraryPath = CompileGSharp(
+                tempDir,
+                RelationshipContractGSharpSource,
+                "net10.0",
+                List[string](),
+                verify: false
+            )
+            let badPartialNotNull = CompileConsumer(tempDir, libraryPath, InvalidPartialNotNullConsumerSource)
+            Assert.True(
+                badPartialNotNull.ExitCode != 0 && badPartialNotNull.Output.Contains(
+                    "GS0611",
+                    StringComparison.Ordinal
+                ),
+                "partial method mismatch on [T] vs [T notnull] must report GS0611:\n" + badPartialNotNull.Output
+            )
+            let badPartialClassQuestion = CompileConsumer(
+                tempDir,
+                libraryPath,
+                InvalidPartialClassQuestionConsumerSource
+            )
+            Assert.True(
+                badPartialClassQuestion.ExitCode != 0 && badPartialClassQuestion.Output.Contains(
+                    "GS0611",
+                    StringComparison.Ordinal
+                ),
+                "partial method mismatch on [T class] vs [T class?] must report GS0611:\n" +
+                    badPartialClassQuestion.Output
             )
         } finally {
             TryDelete(tempDir)
@@ -231,6 +420,8 @@ open class Issue4988SignatureNullabilityMatrixTests {
             g.AppendLine("import System.Threading.Tasks")
             g.AppendLine()
             g.AppendLine("class Token {}")
+            g.AppendLine("open class BaseGeneric[T] {}")
+            g.AppendLine("interface IGeneric[T] {}")
             g.AppendLine()
             g.AppendLine("interface IFace {")
             for var i = 0; i < Shapes.Length; i++ {
@@ -239,9 +430,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 g.AppendLine("    func Dim$i(p $t) $t { return p }")
                 g.AppendLine("    prop Prop$i $t { get; set; }")
                 g.AppendLine("    event Ev$i Action[$t]")
+                g.AppendLine("    func Constrained$i[T IGeneric[$t]](p T) T;")
             }
             g.AppendLine("    func Gen[T](p T) T;")
             g.AppendLine("    func GenClass[T class](p T?) T?;")
+            g.AppendLine("    func GenClassNullable[T class?](p T?) T?;")
+            g.AppendLine("    func GenNotNull[T notnull](p T) T;")
             g.AppendLine("    func GenStruct[T struct](p T?) T?;")
             g.AppendLine("    prop this[key string?] Task[Token?] { get; }")
             g.AppendLine("}")
@@ -271,10 +465,16 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 g.AppendLine("    prop Auto$i $t { get; set; }")
                 g.AppendLine("    event Ev$i Action[$t]")
                 g.AppendLine("    func Method$i(p $t) $t { return p }")
+                g.AppendLine("    func Constrained$i[T IGeneric[$t]](p T) T { return p }")
                 if !IsTaskShape(Shapes[i]) {
                     g.AppendLine("    async func Async$i(p $t) $t { return p }")
                 }
             }
+            g.AppendLine("    func MethodGen[T](p T) T { return p }")
+            g.AppendLine("    func MethodClass[T class](p T?) T? { return p }")
+            g.AppendLine("    func MethodClassNullable[T class?](p T?) T? { return p }")
+            g.AppendLine("    func MethodNotNull[T notnull](p T) T { return p }")
+            g.AppendLine("    func MethodStruct[T struct](p T?) T? { return p }")
             g.AppendLine("    shared {")
             for var i = 0; i < Shapes.Length; i++ {
                 let t = Shapes[i].GSharp
@@ -294,6 +494,10 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 g.AppendLine("class Conv$i {}")
                 g.AppendLine("func operator explicit(value $t) Conv$i { return Conv$i() }")
                 g.AppendLine("func (t Token) Ext$i(p $t) $t { return p }")
+                g.AppendLine("class BaseSub$i : BaseGeneric[$t] {}")
+                g.AppendLine("class IfaceImpl$i : IGeneric[$t] {}")
+                g.AppendLine("interface IfaceSub$i : IGeneric[$t] {}")
+                g.AppendLine("class ConstrainedType$i[T IGeneric[$t]] {}")
                 if includeModernOnlyKinds {
                     g.AppendLine("inline struct Inl$i(V $t)")
                 }
@@ -301,6 +505,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
                     g.AppendLine("data class Rec$i(V $t)")
                 }
             }
+            g.AppendLine()
+            g.AppendLine("class UnconstrainedParam[T] {}")
+            g.AppendLine("class ClassParam[T class] {}")
+            g.AppendLine("class NullableClassParam[T class?] {}")
+            g.AppendLine("class NotNullParam[T notnull] {}")
+            g.AppendLine("class StructParam[T struct] {}")
             g.AppendLine()
             g.AppendLine("partial class Part {")
             g.AppendLine("    partial func Declared(x Token?) Task[Token?];")
@@ -327,6 +537,8 @@ open class Issue4988SignatureNullabilityMatrixTests {
             c.AppendLine("using System.Threading.Tasks;")
             c.AppendLine("namespace Matrix;")
             c.AppendLine("public class Token {}")
+            c.AppendLine("public class BaseGeneric<T> { public Token Anchor = default!; }")
+            c.AppendLine("public interface IGeneric<T> {}")
             c.AppendLine("public interface IFace {")
             for var i = 0; i < Shapes.Length; i++ {
                 let t = Shapes[i].CSharp
@@ -334,9 +546,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 c.AppendLine("    $t Dim$i($t p) { return p; }")
                 c.AppendLine("    $t Prop$i { get; set; }")
                 c.AppendLine("    event Action<$t> Ev$i;")
+                c.AppendLine("    T Constrained$i<T>(T p) where T : IGeneric<$t>;")
             }
             c.AppendLine("    T Gen<T>(T p);")
             c.AppendLine("    T? GenClass<T>(T? p) where T : class;")
+            c.AppendLine("    T? GenClassNullable<T>(T? p) where T : class?;")
+            c.AppendLine("    T GenNotNull<T>(T p) where T : notnull;")
             c.AppendLine("    T? GenStruct<T>(T? p) where T : struct;")
             c.AppendLine("    Task<Token?> this[string? key] { get; }")
             c.AppendLine("}")
@@ -361,12 +576,18 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 c.AppendLine("    public $t Auto$i { get; set; } = default!;")
                 c.AppendLine("    public event Action<$t> Ev$i = default!;")
                 c.AppendLine("    public $t Method$i($t p) { return p; }")
+                c.AppendLine("    public T Constrained$i<T>(T p) where T : IGeneric<$t> { return p; }")
                 if !IsTaskShape(Shapes[i]) {
                     c.AppendLine("    public async Task<$t> Async$i($t p) { await Task.Yield(); return p; }")
                 }
                 c.AppendLine("    public static $t Static$i($t p) { return p; }")
                 c.AppendLine("    public static $t StaticAuto$i { get; set; } = default!;")
             }
+            c.AppendLine("    public T MethodGen<T>(T p) { return p; }")
+            c.AppendLine("    public T? MethodClass<T>(T? p) where T : class { return p; }")
+            c.AppendLine("    public T? MethodClassNullable<T>(T? p) where T : class? { return p; }")
+            c.AppendLine("    public T MethodNotNull<T>(T p) where T : notnull { return p; }")
+            c.AppendLine("    public T? MethodStruct<T>(T? p) where T : struct { return p; }")
             c.AppendLine("}")
             c.AppendLine("public static class Program {")
             for var i = 0; i < Shapes.Length; i++ {
@@ -381,6 +602,16 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 c.AppendLine(
                     "public class Conv$i { public static explicit operator Conv$i($t value) { return new Conv$i(); } }"
                 )
+                c.AppendLine(
+                    "public class BaseSub$i : BaseGeneric<$t> { public Token A = default!; public Token B = default!; }"
+                )
+                c.AppendLine(
+                    "public class IfaceImpl$i : IGeneric<$t> { public Token A = default!; public Token B = default!; }"
+                )
+                c.AppendLine("public interface IfaceSub$i : IGeneric<$t> { Token A { get; } Token B { get; } }")
+                c.AppendLine(
+                    "public class ConstrainedType$i<T> where T : IGeneric<$t> { public Token A = default!; public Token B = default!; }"
+                )
                 if includeModernOnlyKinds {
                     c.AppendLine(
                         "public struct Inl$i { public readonly $t V; public Inl$i($t V) { this.V = V; } " +
@@ -393,6 +624,19 @@ open class Issue4988SignatureNullabilityMatrixTests {
                     c.AppendLine("public record class Rec$i($t V);")
                 }
             }
+            c.AppendLine("public class UnconstrainedParam<T> { public Token A = default!; public Token B = default!; }")
+            c.AppendLine(
+                "public class ClassParam<T> where T : class { public Token A = default!; public Token B = default!; }"
+            )
+            c.AppendLine(
+                "public class NullableClassParam<T> where T : class? { public Token A = default!; public Token B = default!; }"
+            )
+            c.AppendLine(
+                "public class NotNullParam<T> where T : notnull { public Token A = default!; public Token B = default!; }"
+            )
+            c.AppendLine(
+                "public class StructParam<T> where T : struct { public Token A = default!; public Token B = default!; }"
+            )
             c.AppendLine("public partial class Part {")
             c.AppendLine("    public partial Task<Token?> Declared(Token? x);")
             c.AppendLine("}")
@@ -499,6 +743,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
                 Add("*", Issue4988PositionKind.Return, "op_Explicit", -1, "Conv$i", "Conv$i")
                 Add("*", Issue4988PositionKind.Parameter, "op_Explicit", 0, "Conv$i", t)
                 AddMethod("*", "Ext$i", 1, t, t)
+                Add("BaseSub$i", Issue4988PositionKind.BaseType, ".base", -1, nil, "BaseGeneric[$t]")
+                Add("IfaceImpl$i", Issue4988PositionKind.InterfaceImpl, "IGeneric`1", 0, nil, "IGeneric[$t]")
+                Add("IfaceSub$i", Issue4988PositionKind.InterfaceImpl, "IGeneric`1", 0, nil, "IGeneric[$t]")
+                Add("ConstrainedType$i`1", Issue4988PositionKind.GenericParamConstraint, "T", 0, nil, "IGeneric[$t]")
+                Add("IFace", Issue4988PositionKind.GenericParamConstraint, "Constrained$i", 0, nil, "IGeneric[$t]")
+                Add("Impl", Issue4988PositionKind.GenericParamConstraint, "Constrained$i", 0, nil, "IGeneric[$t]")
                 if includeModernOnlyKinds {
                     let inline = "Inl$i"
                     Add(inline, Issue4988PositionKind.Parameter, ".ctor", 0, "V", t)
@@ -519,7 +769,25 @@ open class Issue4988SignatureNullabilityMatrixTests {
             }
             AddMethod("IFace", "Gen", 0, "T", "T")
             AddMethod("IFace", "GenClass", 0, "T?", "T?")
+            AddMethod("IFace", "GenClassNullable", 0, "T?", "T?")
+            AddMethod("IFace", "GenNotNull", 0, "T", "T")
             AddMethod("IFace", "GenStruct", 0, "T?", "T?")
+            AddMethod("Impl", "MethodGen", 0, "T", "T")
+            Add("UnconstrainedParam`1", Issue4988PositionKind.GenericParam, "T", 0, nil, "T?")
+            Add("ClassParam`1", Issue4988PositionKind.GenericParam, "T", 0, nil, "T")
+            Add("NullableClassParam`1", Issue4988PositionKind.GenericParam, "T", 0, nil, "T?")
+            Add("NotNullParam`1", Issue4988PositionKind.GenericParam, "T", 0, nil, "T")
+            Add("StructParam`1", Issue4988PositionKind.GenericParam, "T", 0, nil, "T")
+            Add("IFace", Issue4988PositionKind.GenericParam, "Gen", 0, nil, "T?")
+            Add("IFace", Issue4988PositionKind.GenericParam, "GenClass", 0, nil, "T")
+            Add("IFace", Issue4988PositionKind.GenericParam, "GenClassNullable", 0, nil, "T?")
+            Add("IFace", Issue4988PositionKind.GenericParam, "GenNotNull", 0, nil, "T")
+            Add("IFace", Issue4988PositionKind.GenericParam, "GenStruct", 0, nil, "T")
+            Add("Impl", Issue4988PositionKind.GenericParam, "MethodGen", 0, nil, "T?")
+            Add("Impl", Issue4988PositionKind.GenericParam, "MethodClass", 0, nil, "T")
+            Add("Impl", Issue4988PositionKind.GenericParam, "MethodClassNullable", 0, nil, "T?")
+            Add("Impl", Issue4988PositionKind.GenericParam, "MethodNotNull", 0, nil, "T")
+            Add("Impl", Issue4988PositionKind.GenericParam, "MethodStruct", 0, nil, "T")
             Add("IFace", Issue4988PositionKind.Property, "Item", -1, nil, "Task[Token?]")
             AddMethod("IFace", "get_Item", 0, "Task[Token?]", "string?")
             AddMethod("Part", "Declared", 0, "Task[Token?]", "Token?")
@@ -634,6 +902,74 @@ open class Issue4988SignatureNullabilityMatrixTests {
                         () -> ClrNullability.GetFieldTypeSymbol(field)
                     )
                 }
+                case Issue4988PositionKind.BaseType {
+                    let declaringType = FindType(position.TypeName)
+                    let baseType = declaringType.BaseType ??
+                        throw InvalidOperationException("${position.Key}: base type not found")
+                    return Issue4988ResolvedPosition(
+                        baseType,
+                        declaringType,
+                        declaringType,
+                        () -> ClrNullability.GetBaseTypeSymbol(declaringType) ??
+                            throw InvalidOperationException("${position.Key}: null base symbol"),
+                        () -> ClrNullability.NormalizeRelationshipFlags(
+                            baseType,
+                            ClrNullability.ReadNullableFlags(declaringType, declaringType)
+                        )
+                    )
+                }
+                case Issue4988PositionKind.InterfaceImpl {
+                    let declaringType = FindType(position.TypeName)
+                    let interfaces = declaringType.GetInterfaces()
+                    if uint32(position.Index) >= uint32(interfaces.Length) {
+                        throw InvalidOperationException("${position.Key}: interface index out of range")
+                    }
+                    let iface = interfaces[position.Index]
+                    return Issue4988ResolvedPosition(
+                        iface,
+                        declaringType,
+                        declaringType,
+                        () -> ClrNullability.GetInterfaceTypeSymbols(declaringType)[position.Index],
+                        () -> ClrNullability.NormalizeRelationshipFlags(
+                            iface,
+                            ClrSignatureMetadata.Interfaces(declaringType)[position.Index].Flags
+                        )
+                    )
+                }
+                case Issue4988PositionKind.GenericParamConstraint {
+                    let gp = if position.Member == "T" {
+                        FindType(position.TypeName).GetGenericArguments()[0]
+                    } else {
+                        FindMethod().GetGenericArguments()[0]
+                    }
+                    let constraints = gp.GetGenericParameterConstraints()
+                    if uint32(position.Index) >= uint32(constraints.Length) {
+                        throw InvalidOperationException("${position.Key}: constraint index out of range")
+                    }
+                    let constraint = constraints[position.Index]
+                    let enclosing MemberInfo = gp.DeclaringMethod ?? cast[MemberInfo](gp.DeclaringType!!)
+                    return Issue4988ResolvedPosition(
+                        constraint,
+                        gp,
+                        enclosing,
+                        () -> ClrNullability.GetGenericParameterConstraintTypeSymbols(gp)[position.Index],
+                        () -> ClrSignatureMetadata.Constraints(gp)[position.Index].Flags
+                    )
+                }
+                case Issue4988PositionKind.GenericParam {
+                    let gp = if position.Member == "T" {
+                        FindType(position.TypeName).GetGenericArguments()[position.Index]
+                    } else {
+                        FindMethod().GetGenericArguments()[position.Index]
+                    }
+                    let enclosing MemberInfo = gp.DeclaringMethod ?? cast[MemberInfo](gp.DeclaringType!!)
+                    return Issue4988ResolvedPosition(
+                        gp,
+                        gp,
+                        enclosing,
+                        () -> ClrNullability.GetGenericParameterTypeSymbol(gp)
+                    )
+                }
                 default {
                     let ev = FindType(position.TypeName).GetEvent(position.Member, AllMembers) ??
                         throw InvalidOperationException("${position.Key}: event not found")
@@ -659,7 +995,11 @@ open class Issue4988SignatureNullabilityMatrixTests {
             } else {
                 position.ClrType
             }
-            let flags = ClrNullability.ReadNullableFlags(position.Declaration, position.Enclosing)
+            let flags = if position.ReadFlags is {} readFlags {
+                readFlags()
+            } else {
+                ClrNullability.ReadNullableFlags(position.Declaration, position.Enclosing)
+            }
             return string.Join(",", ClrNullability.ExpandNullableFlags(type, flags, uint8(0)))
         }
 
@@ -799,7 +1139,12 @@ open class Issue4988SignatureNullabilityMatrixTests {
             let srcPath = Path.Combine(directory, "producer.gs")
             let outPath = Path.Combine(directory, "Producer.dll")
             File.WriteAllText(srcPath, source)
-            let args = List[string]{"/out:" + outPath, "/target:library", "/targetframework:" + targetFramework}
+            let args = List[string]{
+                "/out:" + outPath,
+                "/assemblyname:Producer",
+                "/target:library",
+                "/targetframework:" + targetFramework
+            }
             for reference in references {
                 args.Add("/reference:" + reference)
             }
@@ -903,22 +1248,521 @@ open class Issue4988SignatureNullabilityMatrixTests {
 
         private const GenericConstraintSource string = `package Generic
 
+import System
+
+class Token {}
+
+class UnconstrainedBox[T] {}
+
 interface IGen {
+    func PickUnconstrained[T](p T, q string?) T;
     func Pick[T class](p T?, q string?) T?;
+    func PickNullable[T class?](p T?, q string?) T?;
+    func PickNotNull[T notnull](p T, q string?) T;
+    func PickEquatable[T IEquatable[Token?]](p T) T;
 }
 
 class Gen {
+    func PickUnconstrained[T](p T, q string?) T {
+        return p
+    }
     func Pick[T class](p T?, q string?) T? {
+        return p
+    }
+    func PickNullable[T class?](p T?, q string?) T? {
+        return p
+    }
+    func PickNotNull[T notnull](p T, q string?) T {
+        return p
+    }
+    func PickEquatable[T IEquatable[Token?]](p T) T {
         return p
     }
 }
 `
 
         private const GenericConstraintConsumerSource string = `#nullable enable
+using System;
+
+public sealed class NonNullTokenEq : IEquatable<Generic.Token> {
+    public bool Equals(Generic.Token? other) => other != null;
+}
+
+public sealed class NullableTokenEq : IEquatable<Generic.Token?> {
+    public bool Equals(Generic.Token? other) => true;
+}
+
 public static class Use {
     public static void Run(Generic.IGen face, Generic.Gen gen) {
+        _ = new Generic.UnconstrainedBox<string?>();
+        face.PickUnconstrained<string?>(null, null);
+        gen.PickUnconstrained<string?>(null, null);
         face.Pick<string?>(null, null);
         gen.Pick<string?>(null, null);
+        face.PickNullable<string?>(null, null);
+        gen.PickNullable<string?>(null, null);
+        face.PickNotNull<string?>(null, null);
+        gen.PickNotNull<string?>(null, null);
+        face.PickEquatable(new NullableTokenEq());
+        gen.PickEquatable(new NullableTokenEq());
+        face.PickEquatable(new NonNullTokenEq());
+        gen.PickEquatable(new NonNullTokenEq());
+    }
+}
+`
+
+        private const RelationshipContractGSharpSource string = `package RelContract
+
+import System
+
+class Token {}
+
+interface IInner[T] {}
+
+interface IOuter[T] : IInner[Token?] {}
+
+interface INonGenericOuter : IInner[Token?] {}
+
+interface IAdaptClass {
+    func Echo[T class](value T) T;
+}
+
+interface IAdaptNullableClass {
+    func Echo[T class?](value T) T;
+}
+
+interface IAdaptNotNull {
+    func Echo[T notnull](value T) T;
+}
+
+open class BaseBox[T] {
+    private let item T
+    init(item T) {
+        this.item = item
+    }
+    func Get() T {
+        return this.item
+    }
+}
+
+class NullableTokenSub : BaseBox[Token?] {
+    init() : base(nil) {}
+}
+
+class NullableEquatableImpl : IEquatable[Token?] {
+    func Equals(other Token?) bool {
+        return true
+    }
+}
+
+class NonNullEquatableImpl : IEquatable[Token] {
+    func Equals(other Token) bool {
+        return true
+    }
+}
+
+class ConstrainedHolder[T IEquatable[Token?]] {}
+
+open class ClassBox[T class] {}
+
+open class NullableClassBox[T class?] {}
+
+open class NullableClassInitBox[T class? init()] {}
+
+open class NotNullBox[T notnull] {}
+
+open class DisposableNotNullBox[T IDisposable notnull] {}
+
+class DisposableImpl : IDisposable {
+    func Dispose() {}
+}
+
+class ConstraintProbes {
+    shared {
+        func TakeClass[T class](value T?) T? {
+            return value
+        }
+        func TakeNullableClass[T class?](value T?) T? {
+            return value
+        }
+        func TakeNullableClassInit[T class? init()](value T) T {
+            return value
+        }
+        func TakeNotNull[T notnull](value T) T {
+            return value
+        }
+        func TakeDisposableNotNull[T IDisposable notnull](value T) T {
+            return value
+        }
+        func TakeNullableEquatable[T IEquatable[Token?]](value T) T {
+            return value
+        }
+        func DependentEquatable[T class, U IEquatable[T?]](first T, second U) U {
+            return second
+        }
+    }
+}
+`
+
+        private const RelationshipContractCSharpSource string = `#nullable enable
+using System;
+
+namespace RelContract;
+
+public class Token {}
+
+public interface IInner<T> {}
+
+public interface IOuter<T> : IInner<Token?> {}
+
+public interface INonGenericOuter : IInner<Token?> {}
+
+public interface IAdaptClass {
+    T Echo<T>(T value) where T : class;
+}
+
+public interface IAdaptNullableClass {
+    T Echo<T>(T value) where T : class?;
+}
+
+public interface IAdaptNotNull {
+    T Echo<T>(T value) where T : notnull;
+}
+
+public class BaseBox<T> {
+    private readonly T item;
+    public BaseBox(T item) {
+        this.item = item;
+    }
+    public T Get() => this.item;
+}
+
+public class NullableTokenSub : BaseBox<Token?> {
+    public NullableTokenSub() : base(null) {}
+}
+
+public class NullableEquatableImpl : IEquatable<Token?> {
+    public bool Equals(Token? other) => true;
+}
+
+public class NonNullEquatableImpl : IEquatable<Token> {
+    public bool Equals(Token? other) => other != null;
+}
+
+public class ConstrainedHolder<T> where T : IEquatable<Token?> {}
+
+public class ClassBox<T> where T : class {}
+
+public class NullableClassBox<T> where T : class? {}
+
+public class NullableClassInitBox<T> where T : class?, new() {}
+
+public class NotNullBox<T> where T : notnull {}
+
+public class DisposableNotNullBox<T> where T : IDisposable {}
+
+public class DisposableImpl : IDisposable {
+    public void Dispose() {}
+}
+
+public static class ConstraintProbes {
+    public static T? TakeClass<T>(T? value) where T : class => value;
+    public static T? TakeNullableClass<T>(T? value) where T : class? => value;
+    public static T TakeNullableClassInit<T>(T value) where T : class?, new() => value;
+    public static T TakeNotNull<T>(T value) where T : notnull => value;
+    public static T TakeDisposableNotNull<T>(T value) where T : IDisposable => value;
+    public static T TakeNullableEquatable<T>(T value) where T : IEquatable<Token?> => value;
+    public static U DependentEquatable<T, U>(T first, U second) where T : class where U : IEquatable<T?> => second;
+}
+`
+
+        private const ValidRelationshipConsumerSource string = `package Consumer
+
+import RelContract
+import System
+
+class LocalItem {}
+
+class LocalNullableEquatable : IEquatable[Token?] {
+    func Equals(other Token?) bool {
+        return true
+    }
+}
+
+class ConcreteOuterImpl : IOuter[string] {}
+
+class SymbolicOuterImpl : IOuter[LocalItem] {}
+
+class NonGenericOuterImpl : INonGenericOuter {}
+
+class ForwardClass[T class] : ClassBox[T] {}
+
+class ForwardNullableClass[T class?] : NullableClassBox[T] {}
+
+class ForwardNotNull[T notnull] : NotNullBox[T] {}
+
+class SourceClassEcho {
+    func Echo[T class](value T) T {
+        return value
+    }
+}
+
+class SourceNullableClassEcho {
+    func Echo[T class?](value T) T {
+        return value
+    }
+}
+
+class SourceNotNullEcho {
+    func Echo[T notnull](value T) T {
+        return value
+    }
+}
+
+func ReadBase(sub NullableTokenSub) Token {
+    let v = sub.Get()
+    return v!!
+}
+
+func MakeHolder() ConstrainedHolder[NullableEquatableImpl] {
+    return ConstrainedHolder[NullableEquatableImpl]()
+}
+
+func MakeLocalHolder() ConstrainedHolder[LocalNullableEquatable] {
+    let local = LocalNullableEquatable()
+    let _ = ConstraintProbes.TakeNullableEquatable(local)
+    let _ = ConstraintProbes.DependentEquatable[Token, LocalNullableEquatable](Token(), local)
+    return ConstrainedHolder[LocalNullableEquatable]()
+}
+
+func LocalNullableClassInit[T class? init()](x T) T {
+    return x
+}
+
+func UseImportedConstraints() string? {
+    let _ = ClassBox[string]()
+    let _ = NullableClassBox[string?]()
+    let _ = NullableClassInitBox[Token?]()
+    let _ = NotNullBox[string]()
+    let _ = DisposableNotNullBox[DisposableImpl]()
+    let _ = ConstraintProbes.TakeClass[string](nil)
+    let _ = ConstraintProbes.TakeNullableClassInit[Token?](nil)
+    let _ = ConstraintProbes.TakeNotNull[string]("a")
+    let _ = ConstraintProbes.TakeDisposableNotNull[DisposableImpl](DisposableImpl())
+    let _ = LocalNullableClassInit[Token?](nil)
+    let _ = adapt[IAdaptClass](SourceClassEcho())
+    let _ = adapt[IAdaptNullableClass](SourceNullableClassEcho())
+    let _ = adapt[IAdaptNotNull](SourceNotNullEcho())
+    return ConstraintProbes.TakeNullableClass[string?](nil)
+}
+
+func LocalConstraints[TClass class, TNullableClass class?, TNotNull notnull](
+    a TClass,
+    b TNullableClass,
+    c TNotNull
+) TNullableClass {
+    return b
+}
+
+func CallLocalConstraints() string? {
+    return LocalConstraints[string, string?, int32]("a", nil, 1)
+}
+`
+
+        private const InvalidBaseNullabilityConsumerSource string = `package Consumer
+
+import RelContract
+
+func ReadBase(sub NullableTokenSub) Token {
+    return sub.Get()
+}
+`
+
+        private const InvalidConstraintNullabilityConsumerSource string = `package Consumer
+
+import RelContract
+
+func MakeBadHolder() ConstrainedHolder[NonNullEquatableImpl] {
+    return ConstrainedHolder[NonNullEquatableImpl]()
+}
+`
+
+        private const InvalidLocalConstraintNullabilityConsumerSource string = `package Consumer
+
+import RelContract
+import System
+
+class LocalNonNullEquatable : IEquatable[Token] {
+    func Equals(other Token) bool {
+        return true
+    }
+}
+
+func CallBadLocal() LocalNonNullEquatable {
+    return ConstraintProbes.TakeNullableEquatable(LocalNonNullEquatable())
+}
+`
+
+        private const InvalidDependentConstraintNullabilityConsumerSource string = `package Consumer
+
+import RelContract
+
+func CallBadDependent() NonNullEquatableImpl {
+    return ConstraintProbes.DependentEquatable[Token, NonNullEquatableImpl](Token(), NonNullEquatableImpl())
+}
+`
+
+        private const InvalidNotNullTypeConsumerSource string = `package Consumer
+
+import RelContract
+
+func MakeBad() NotNullBox[string?] {
+    return NotNullBox[string?]()
+}
+`
+
+        private const InvalidNotNullValueTypeConsumerSource string = `package Consumer
+
+import RelContract
+
+func MakeBad() NotNullBox[int32?] {
+    return NotNullBox[int32?]()
+}
+`
+
+        private const InvalidNotNullMethodConsumerSource string = `package Consumer
+
+import RelContract
+
+func CallBad(s string?) string? {
+    return ConstraintProbes.TakeNotNull[string?](s)
+}
+`
+
+        private const InvalidClassTypeConsumerSource string = `package Consumer
+
+import RelContract
+
+func MakeBad() ClassBox[string?] {
+    return ClassBox[string?]()
+}
+`
+
+        private const InvalidClassMethodConsumerSource string = `package Consumer
+
+import RelContract
+
+func CallBad() string? {
+    return ConstraintProbes.TakeClass[string?](nil)
+}
+`
+
+        private const InvalidForwardNotNullConsumerSource string = `package Consumer
+
+import RelContract
+
+class BadForward[T] : NotNullBox[T] {}
+`
+
+        private const InvalidForwardClassConsumerSource string = `package Consumer
+
+import RelContract
+
+class BadForward[T class?] : ClassBox[T] {}
+`
+
+        private const InvalidAdaptClassConsumerSource string = `package Consumer
+
+import RelContract
+
+class SourceNullableClassEcho {
+    func Echo[T class?](value T) T {
+        return value
+    }
+}
+
+func Bad() IAdaptClass {
+    return adapt[IAdaptClass](SourceNullableClassEcho())
+}
+`
+
+        private const InvalidAdaptNullableClassConsumerSource string = `package Consumer
+
+import RelContract
+
+class SourceClassEcho {
+    func Echo[T class](value T) T {
+        return value
+    }
+}
+
+func Bad() IAdaptNullableClass {
+    return adapt[IAdaptNullableClass](SourceClassEcho())
+}
+`
+
+        private const InvalidAdaptNotNullConsumerSource string = `package Consumer
+
+import RelContract
+
+class SourceUnconstrainedEcho {
+    func Echo[T](value T) T {
+        return value
+    }
+}
+
+func Bad() IAdaptNotNull {
+    return adapt[IAdaptNotNull](SourceUnconstrainedEcho())
+}
+`
+
+        private const InvalidOpenGenericLocalConstraintNullabilityConsumerSource string = `package Consumer
+
+import RelContract
+import System
+
+class LocalGenericNonNullEq[T] : IEquatable[Token] {
+    func Equals(other Token) bool {
+        return true
+    }
+}
+
+func CallBadGenericLocal[T]() LocalGenericNonNullEq[T] {
+    return ConstraintProbes.TakeNullableEquatable(LocalGenericNonNullEq[T]())
+}
+`
+
+        private const InvalidCombinedDisposableNotNullConsumerSource string = `package Consumer
+
+import RelContract
+
+func MakeBad() DisposableNotNullBox[DisposableImpl?] {
+    return DisposableNotNullBox[DisposableImpl?]()
+}
+`
+
+        private const InvalidPartialNotNullConsumerSource string = `package Consumer
+
+partial class PartMismatch {
+    partial func M[T](x T) T;
+}
+
+partial class PartMismatch {
+    partial func M[T notnull](x T) T {
+        return x
+    }
+}
+`
+
+        private const InvalidPartialClassQuestionConsumerSource string = `package Consumer
+
+partial class PartMismatch {
+    partial func N[T class](x T) T;
+}
+
+partial class PartMismatch {
+    partial func N[T class?](x T) T {
+        return x
     }
 }
 `
@@ -980,7 +1824,11 @@ internal enum Issue4988PositionKind {
     Parameter,
     Property,
     Field,
-    Event
+    Event,
+    BaseType,
+    InterfaceImpl,
+    GenericParamConstraint,
+    GenericParam
 }
 
 /// One signature position to check. A `TypeName` of `*` searches
@@ -1004,5 +1852,6 @@ internal data class Issue4988ResolvedPosition(
     ClrType Type,
     Declaration ICustomAttributeProvider,
     Enclosing MemberInfo,
-    ReadSymbol() -> TypeSymbol
+    ReadSymbol() -> TypeSymbol,
+    ReadFlags(() -> ImmutableArray[uint8])? = nil
 )

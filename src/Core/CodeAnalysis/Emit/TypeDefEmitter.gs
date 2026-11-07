@@ -90,6 +90,7 @@ internal class TypeDefEmitter {
     private let nextParameterHandle() -> ParameterHandle
     private let emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void
     private let emitNullableContextOnType(TypeDefinitionHandle) -> void
+    private let emitNullableAttributeOnType(TypeDefinitionHandle, TypeSymbol?) -> void
     private let emitNullableAttributeOnField(FieldDefinitionHandle, TypeSymbol) -> void
     private let emitMethodNullability(
         MethodDefinitionHandle,
@@ -135,6 +136,7 @@ internal class TypeDefEmitter {
         nextParameterHandle() -> ParameterHandle,
         emitUserAttributes(EntityHandle, Symbol, AttributeTargetKind) -> void,
         emitNullableContextOnType(TypeDefinitionHandle) -> void,
+        emitNullableAttributeOnType(TypeDefinitionHandle, TypeSymbol?) -> void,
         emitNullableAttributeOnField(FieldDefinitionHandle, TypeSymbol) -> void,
         emitMethodNullability(
             MethodDefinitionHandle,
@@ -182,6 +184,8 @@ internal class TypeDefEmitter {
         this.emitUserAttributes = emitUserAttributes ?? throw ArgumentNullException("emitUserAttributes")
         this.emitNullableContextOnType = emitNullableContextOnType ??
             throw ArgumentNullException("emitNullableContextOnType")
+        this.emitNullableAttributeOnType = emitNullableAttributeOnType ??
+            throw ArgumentNullException("emitNullableAttributeOnType")
         this.emitNullableAttributeOnField = emitNullableAttributeOnField ??
             throw ArgumentNullException("emitNullableAttributeOnField")
         this.emitMethodNullability = emitMethodNullability ?? throw ArgumentNullException("emitMethodNullability")
@@ -649,6 +653,7 @@ internal class TypeDefEmitter {
         // Phase 3 of #141: user annotations targeting the type land on this TypeDef.
         this.emitUserAttributes(handle2, structSym, AttributeTargetKind.Type)
         this.emitNullableContextOnType(handle2)
+        this.emitNullableAttributeOnType(handle2, structSym.ImportedBaseType ?? structSym.BaseClass)
     }
 
     /// Emits a nested-private TypeDef for a state-machine type. Same as
@@ -2432,7 +2437,8 @@ internal class TypeDefEmitter {
                         Name: tp.Name,
                         Index: uint16(i),
                         InterfaceConstraintType: tp.ConstraintReferenceType,
-                        HasUnmanagedConstraint: tp.HasUnmanagedConstraint
+                        HasUnmanagedConstraint: tp.HasUnmanagedConstraint,
+                        ParameterSymbol: tp
                     )
                 )
             }
@@ -2449,10 +2455,14 @@ internal class TypeDefEmitter {
         /// `unmanaged`
         /// constraint's modreq-decorated `System.ValueType`
         /// `GenericParamConstraint`. Supplied by the emitter.
+        /// @param emitNullableOnGenericParam Issue #4996: emits `[Nullable]` on a `GenericParam` row.
+        /// @param emitNullableOnConstraint Issue #4996: emits `[Nullable]` on a `GenericParamConstraint` row.
         internal func FlushPendingGenericParameters(
             emitCtx EmitContext,
             resolveConstraintHandle(TypeSymbol) -> EntityHandle,
-            resolveUnmanagedConstraintHandle() -> EntityHandle
+            resolveUnmanagedConstraintHandle() -> EntityHandle,
+            emitNullableOnGenericParam((GenericParameterHandle, TypeParameterSymbol) -> void)? = nil,
+            emitNullableOnConstraint((GenericParameterConstraintHandle, TypeSymbol) -> void)? = nil
         ) {
             let pending = emitCtx.PendingGenericParameters
             if pending.Count == 0 {
@@ -2477,17 +2487,23 @@ internal class TypeDefEmitter {
                     name: metadata.GetOrAddString(row.Name),
                     index: row.Index
                 )
+                if emitNullableOnGenericParam != nil && row.ParameterSymbol is {} paramSym {
+                    emitNullableOnGenericParam(gpHandle, paramSym)
+                }
                 // Issue #943: emit the GenericParamConstraint row for an
                 // interface-constrained parameter so the produced metadata is
                 // verifiable and the `constrained.` dispatch is sound. Rows are
                 // added in ascending GenericParam-handle order (the pending list is
                 // already sorted by owner/index), satisfying the ECMA-335 II.22.21
                 // sort-by-Owner requirement.
-                if row.InterfaceConstraintType != nil {
-                    metadata.AddGenericParameterConstraint(
+                if row.InterfaceConstraintType is {} constraintType {
+                    let constraintHandle = metadata.AddGenericParameterConstraint(
                         gpHandle,
-                        row.PreResolvedConstraintHandle ?? resolveConstraintHandle(row.InterfaceConstraintType)
+                        row.PreResolvedConstraintHandle ?? resolveConstraintHandle(constraintType)
                     )
+                    if emitNullableOnConstraint != nil {
+                        emitNullableOnConstraint(constraintHandle, constraintType)
+                    }
                 }
                 // Issue #1336: emit the `unmanaged` constraint as a
                 // GenericParamConstraint to `System.ValueType` carrying a required

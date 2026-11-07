@@ -1117,6 +1117,7 @@ internal class ReflectionMetadataEmitter {
                 handle,
                 NullableFlagsBuilder.NotAnnotated
             ),
+            this.customAttrEncoder.EmitNullableAttributeOnType,
             this.customAttrEncoder.EmitNullableAttributeOnField,
             this.customAttrEncoder.EmitMethodNullability,
             (paramHandle ParameterHandle, paramType TypeSymbol) -> this
@@ -2434,13 +2435,14 @@ internal class ReflectionMetadataEmitter {
                     // from the constructed shape; the bare TypeDef key only
                     // resolves the open definition.
                     if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
                             this.userTokens.GetUserInterfaceTypeSpec(iface)
                         )
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, iface)
                     } else if this.cache.InterfaceTypeDefs.TryGetValue(iface.Definition ?? iface, out var ifaceHandle) {
                         this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[c], ifaceHandle)
                     }
@@ -2456,45 +2458,49 @@ internal class ReflectionMetadataEmitter {
             // for these rows and for the static-virtual MethodImpls (#4614);
             // the #985 bridge rows below add to the same de-duplicated set.
             let clrClosure = ClrInterfaceClosure.Build(c, this.signatures)
-            for (symbolicIface, concreteIface) in clrClosure.Entries {
+            for (symbolicIface, concreteIface, annotationType) in clrClosure.Entries {
                 if symbolicIface != nil {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetElementTypeToken(symbolicIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 } else if concreteIface != nil {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetTypeHandleForMember(concreteIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 }
             }
-            let EmitClrInterfaceRow = func (clrIface Type) {
-                if clrClosure.TryAddConcrete(clrIface) {
-                    this
+            let EmitClrInterfaceRow = func (clrIface Type, annotationType TypeSymbol?) {
+                if clrClosure.TryAddConcrete(clrIface, annotationType) {
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetTypeHandleForMember(clrIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 }
             }
             let EmitSymbolicInterfaceRow = func (symbolicIface TypeSymbol) {
                 if clrClosure.TryAddSymbolic(symbolicIface) {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetElementTypeToken(symbolicIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, symbolicIface)
                 }
             }
             // Issue #985: a covariant-return interface bridge (e.g. the
@@ -2519,8 +2525,10 @@ internal class ReflectionMetadataEmitter {
                             EmitSymbolicInterfaceRow(declaringOwner)
                             continue
                         }
+                        EmitClrInterfaceRow(declaringIface, declaringOwner)
+                        continue
                     }
-                    EmitClrInterfaceRow(declaringIface)
+                    EmitClrInterfaceRow(declaringIface, nil)
                 }
             }
         }
@@ -2664,13 +2672,14 @@ internal class ReflectionMetadataEmitter {
             if !iface.BaseInterfaces.IsDefaultOrEmpty {
                 for baseIface in iface.BaseInterfaces {
                     if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(baseIface) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(
                             ifaceTypeDef,
                             this.userTokens.GetUserInterfaceTypeSpec(baseIface)
                         )
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, baseIface)
                     } else if this
                         .cache
                         .InterfaceTypeDefs
@@ -2682,17 +2691,19 @@ internal class ReflectionMetadataEmitter {
             if !iface.BaseClrInterfaces.IsDefaultOrEmpty {
                 for clrBase in iface.BaseClrInterfaces {
                     if MemberLookup.TryGetSymbolicClrGenericInterface(clrBase, out _, out _) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(ifaceTypeDef, this.memberRefs.GetElementTypeToken(clrBase))
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, clrBase)
                         continue
                     }
                     if clrBase?.ClrType is Type clrType {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(ifaceTypeDef, this.memberRefs.GetTypeHandleForMember(clrType))
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, clrBase)
                     }
                 }
             }
@@ -4235,7 +4246,9 @@ internal class ReflectionMetadataEmitter {
         TypeDefEmitter.FlushPendingGenericParameters(
             this.emitCtx,
             this.memberRefs.GetElementTypeToken,
-            this.BuildUnmanagedConstraintTypeSpec
+            this.BuildUnmanagedConstraintTypeSpec,
+            this.customAttrEncoder.EmitNullableAttributeOnGenericParam,
+            this.customAttrEncoder.EmitNullableAttributeOnGenericParamConstraint
         )
         let managedResources = this.BuildManagedResources()
         let peHeaderBuilder = PEHeaderBuilder(

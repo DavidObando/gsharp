@@ -1832,6 +1832,7 @@ open partial class Parser {
             if k == SyntaxKind.IdentifierToken ||
                 k == SyntaxKind.ClassKeyword ||
                 k == SyntaxKind.StructKeyword ||
+                k == SyntaxKind.QuestionToken ||
                 k == SyntaxKind
                 .DotToken {
                 // `init` is lexed as an identifier; consume an optional `()` pair
@@ -1973,15 +1974,20 @@ open partial class Parser {
         // in any order. The binder validates illegal combinations (e.g.
         // `class struct`).
         var classKw SyntaxToken? = nil
+        var classQuestionToken SyntaxToken? = nil
         var structKw SyntaxToken? = nil
         var initKw SyntaxToken? = nil
         var initOpenParen SyntaxToken? = nil
         var initCloseParen SyntaxToken? = nil
         var unmanagedKw SyntaxToken? = nil
+        var notNullKw SyntaxToken? = nil
         while true {
             if Current.Kind == SyntaxKind.ClassKeyword {
                 if classKw == nil {
                     classKw = NextToken()
+                    if Current.Kind == SyntaxKind.QuestionToken {
+                        classQuestionToken = NextToken()
+                    }
                 } else {
                     break
                 }
@@ -1995,6 +2001,13 @@ open partial class Parser {
                 // Issue #1336: contextual `unmanaged` constraint keyword.
                 if unmanagedKw == nil {
                     unmanagedKw = NextToken()
+                } else {
+                    break
+                }
+            } else if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "notnull" {
+                // Issue #4996: contextual `notnull` constraint keyword.
+                if notNullKw == nil {
+                    notNullKw = NextToken()
                 } else {
                     break
                 }
@@ -2031,6 +2044,12 @@ open partial class Parser {
         if constraintTypeClause != nil {
             typeParameter.ConstraintType = constraintTypeClause
         }
+        if classQuestionToken != nil {
+            typeParameter.ClassConstraintQuestionToken = classQuestionToken
+        }
+        if notNullKw != nil {
+            typeParameter.NotNullConstraintKeyword = notNullKw
+        }
         return typeParameter
     }
 
@@ -2046,7 +2065,7 @@ open partial class Parser {
             return true
         }
         // Issue #1336: contextual `unmanaged` constraint keyword.
-        if token.Kind == SyntaxKind.IdentifierToken && token.Text == "unmanaged" {
+        if token.Kind == SyntaxKind.IdentifierToken && (token.Text == "unmanaged" || token.Text == "notnull") {
             return true
         }
         if token.Kind == SyntaxKind.IdentifierToken && token.Text == "init" && Peek(

@@ -6288,11 +6288,10 @@ internal class MemberLookup {
             closedMethod MethodInfo?
         ) TypeSymbol? {
             if GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
-                imp.OpenDefinition == nil ||
-                imp
-                .TypeArguments
-                .IsDefaultOrEmpty ||
                 closedMethod == nil ||
+                closedMethod
+                .DeclaringType
+                ?.IsGenericType != true ||
                 !TryGetSymbolicDeclaringContext(
                 imp,
                 closedMethod.DeclaringType,
@@ -6352,11 +6351,10 @@ internal class MemberLookup {
         ) TypeSymbol? {
             if receiverType == nil ||
                 GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
-                imp.OpenDefinition == nil ||
-                imp
-                .TypeArguments
-                .IsDefaultOrEmpty ||
                 closedMethod == nil ||
+                closedMethod
+                .DeclaringType
+                ?.IsGenericType != true ||
                 paramIndex < 0 ||
                 !TryGetSymbolicDeclaringContext(
                 imp,

@@ -298,7 +298,7 @@ internal shared class ClrSignatureMetadata {
         while forwarded.DeclaringType is {} declaring {
             forwarded = declaring
         }
-        using let image = ReferenceResolver.OpenReferencedAssemblyImage(origin, assemblyScope)
+        using let image = OpenReferencedImage(origin, assemblyScope, actual)
         if image == nil {
             return false
         }
@@ -320,6 +320,22 @@ internal shared class ClrSignatureMetadata {
             return HasForwardedIdentity(origin, reader.GetString(target.Name), actual, depth + 1)
         }
         return false
+    }
+
+    private func OpenReferencedImage(origin Assembly, assemblyScope string, actual Type) Stream? {
+        if ReferenceResolver.OpenReferencedAssemblyImage(origin, assemblyScope) is {} stream {
+            return stream
+        }
+        try {
+            let actualLocation = actual.Assembly.Location
+            if !string.IsNullOrEmpty(actualLocation) && Path.GetDirectoryName(actualLocation) is {} dir {
+                let candidate = Path.Combine(dir, assemblyScope + ".dll")
+                if File.Exists(candidate) {
+                    return File.OpenRead(candidate)
+                }
+            }
+        } catch (Exception) { }
+        return nil
     }
 
     private class SignatureMatcher : ISignatureTypeProvider[Func[Type, bool], object] {

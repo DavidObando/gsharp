@@ -135,6 +135,8 @@ internal shared class SynthesizedClosureReifier {
                 }
             ){
                 HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
+                HasNullableReferenceTypeConstraint = src.HasNullableReferenceTypeConstraint,
+                HasNotNullConstraint = src.HasNotNullConstraint,
                 HasValueTypeConstraint = src.HasValueTypeConstraint,
                 HasDefaultConstructorConstraint = src.HasDefaultConstructorConstraint,
                 HasUnmanagedConstraint = src.HasUnmanagedConstraint,
