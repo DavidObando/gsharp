@@ -89,8 +89,8 @@ func main() {
 
     var first = "abc".AsSpan()
     var second = "abc".AsSpan()
-    Console.WriteLine(Unsafe.AreSame(ref first, ref first))
-    Console.WriteLine(Unsafe.AreSame(ref first, ref second))
+    Console.WriteLine(Unsafe.AreSame(in first, in first))
+    Console.WriteLine(Unsafe.AreSame(in first, in second))
     Console.WriteLine(Unsafe.SizeOf[ReadOnlySpan[char]]() > 0)
 
     let length Func[ReadOnlySpan[char], int32] = (s ReadOnlySpan[char]) -> s.Length

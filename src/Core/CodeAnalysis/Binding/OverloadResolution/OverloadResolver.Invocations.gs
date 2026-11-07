@@ -205,7 +205,8 @@ internal partial class OverloadResolver {
                     syntax,
                     boundArguments,
                     out var namedArgs,
-                    out var namedRefKinds
+                    out var namedRefKinds,
+                    variable.CallableParameterNames
                 ) {
                     result = BoundErrorExpression(nil)
                     return true
@@ -455,8 +456,9 @@ internal partial class OverloadResolver {
             if GetLambdaArgumentSyntax(argSyntax) is {} lambdaSyntax &&
                 bindLambdaWithTarget != nil &&
                 IsUntypedArrowLambda(lambdaSyntax) &&
-                functionType.ParameterTypes[i] is FunctionTypeSymbol lambdaTarget {
-                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget)
+                MemberLookup
+                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var lambdaTarget) {
+                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
             }
             convertedBuilder.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
         }
@@ -474,12 +476,23 @@ internal partial class OverloadResolver {
         syntax CallExpressionSyntax,
         boundArguments ImmutableArray[BoundExpression],
         out convertedArgs ImmutableArray[BoundExpression],
-        out argumentRefKinds ImmutableArray[RefKind]
+        out argumentRefKinds ImmutableArray[RefKind],
+        callableParameterNames ImmutableArray[string] = default(ImmutableArray[string])
     ) bool {
         convertedArgs = default(ImmutableArray[BoundExpression])
         argumentRefKinds = default(ImmutableArray[RefKind])
-        let parameters = delegateType.Parameters
-        let parameterNameAt(int32) -> string = (parameterIndex int32) -> parameters[parameterIndex].Name
+        let rawParameters = delegateType.Parameters
+        let useCallableParameterNames = delegateType.Declaration == nil &&
+            !callableParameterNames.IsDefaultOrEmpty &&
+            callableParameterNames.Length == rawParameters.Length
+        let parameters = WithCallableParameterNames(rawParameters, callableParameterNames, useCallableParameterNames)
+        let parameterNameAt(int32) -> string = (parameterIndex int32) -> if useCallableParameterNames {
+            callableParameterNames[parameterIndex]
+        } else if delegateType.Declaration == nil {
+            string.Empty
+        } else {
+            parameters[parameterIndex].Name
+        }
         let parameterIsOptional(int32) -> bool = (parameterIndex int32) -> parameters[
             parameterIndex
         ].HasExplicitDefaultValue
@@ -618,8 +631,9 @@ internal partial class OverloadResolver {
                         if GetLambdaArgumentSyntax(argumentSyntax) is {} inLambdaSyntax &&
                             bindLambdaWithTarget != nil &&
                             IsUntypedArrowLambda(inLambdaSyntax) &&
-                            parameter.Type is FunctionTypeSymbol inLambdaTarget {
-                            argument = bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget)
+                            MemberLookup
+                            .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var inLambdaTarget) {
+                            argument = bindLambdaWithTarget!!(inLambdaSyntax, inLambdaTarget!!)
                         }
                         let implicitIn = conversions.BindImplicitInArgument(
                             argumentLocation,
@@ -654,7 +668,8 @@ internal partial class OverloadResolver {
                         argumentLocation,
                         parameter,
                         address.Operand.Type,
-                        parameter.Type
+                        parameter.Type,
+                        address
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             argumentLocation,
@@ -690,8 +705,9 @@ internal partial class OverloadResolver {
             if GetLambdaArgumentSyntax(argumentSyntax) is {} lambdaSyntax &&
                 bindLambdaWithTarget != nil &&
                 IsUntypedArrowLambda(lambdaSyntax) &&
-                parameter.Type is FunctionTypeSymbol lambdaTarget {
-                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget)
+                MemberLookup
+                .TryGetLambdaTargetFunctionTypeFromSymbol(parameter.Type, out var lambdaTarget) {
+                argument = bindLambdaWithTarget!!(lambdaSyntax, lambdaTarget!!)
             }
             converted.Add(conversions.BindConversion(argumentLocation, argument, parameter.Type))
         }
@@ -709,6 +725,32 @@ internal partial class OverloadResolver {
             default(ImmutableArray[RefKind])
         }
         return true
+    }
+
+    private func WithCallableParameterNames(
+        rawParameters ImmutableArray[ParameterSymbol],
+        callableParameterNames ImmutableArray[string],
+        useCallableParameterNames bool
+    ) ImmutableArray[ParameterSymbol] {
+        if !useCallableParameterNames {
+            return rawParameters
+        }
+        let renamed = ImmutableArray.CreateBuilder[ParameterSymbol](rawParameters.Length)
+        for var i = 0; i < rawParameters.Length; i++ {
+            let raw = rawParameters[i]
+            let customName = callableParameterNames[i]
+            if !string.IsNullOrEmpty(customName) && !string.Equals(customName, raw.Name, StringComparison.Ordinal) {
+                let cloned = ParameterSymbol(raw, raw.Type, raw.DeclaringSyntax, customName)
+                if raw.HasExplicitDefaultValue {
+                    cloned.SetExplicitDefaultValue(raw.ExplicitDefaultValue)
+                }
+                cloned.SetAttributes(raw.Attributes)
+                renamed.Add(cloned)
+            } else {
+                renamed.Add(raw)
+            }
+        }
+        return renamed.MoveToImmutable()
     }
 
     // Issue #4400: the per-argument loops of the user-method and extension
@@ -1120,29 +1162,37 @@ internal partial class OverloadResolver {
             }
             if dispatchCallee.Type is FunctionTypeSymbol fnType {
                 var resolvedFnType = fnType
-                if TypeSymbol.MaterializeNeverFunctionReturns(
-                    resolvedFnType
-                ) is FunctionTypeSymbol materializedFnType &&
-                    !object
-                    .ReferenceEquals(materializedFnType, resolvedFnType) {
-                    dispatchCallee = conversions.BindConversion(calleeLocation, dispatchCallee, materializedFnType)
+                if TypeSymbol.MaterializeNeverFunctionReturns(resolvedFnType) is FunctionTypeSymbol materializedFnType {
                     resolvedFnType = materializedFnType
                 }
                 if TypeSymbol.ContainsNeverType(resolvedFnType) {
                     Diagnostics.ReportExpressionMustHaveValue(calleeLocation)
                     return BoundErrorExpression(nil)
                 }
-                if !TryBindFunctionTypeArguments(
-                    calleeName,
-                    resolvedFnType,
-                    syntax,
-                    boundArguments.ToImmutable(),
-                    GetIndirectCallableParameterNames(dispatchCallee),
-                    out var convertedArgs
-                ) {
-                    return BoundErrorExpression(nil)
+                if dispatchCallee is BoundFunctionLiteralExpression refCalleeLiteral &&
+                    binderCtx
+                    .RootScope
+                    .TryGetSynthesizedRefDelegateForLiteral(
+                    refCalleeLiteral.Function,
+                    resolvedFnType.ReturnType
+                ) is {} refDelegateType {
+                    dispatchCallee = conversions.BindConversion(calleeLocation, dispatchCallee, refDelegateType)
+                } else {
+                    if !object.ReferenceEquals(resolvedFnType, fnType) {
+                        dispatchCallee = conversions.BindConversion(calleeLocation, dispatchCallee, resolvedFnType)
+                    }
+                    if !TryBindFunctionTypeArguments(
+                        calleeName,
+                        resolvedFnType,
+                        syntax,
+                        boundArguments.ToImmutable(),
+                        GetIndirectCallableParameterNames(dispatchCallee),
+                        out var convertedArgs
+                    ) {
+                        return BoundErrorExpression(nil)
+                    }
+                    return BoundIndirectCallExpression(syntax, dispatchCallee, resolvedFnType, convertedArgs)
                 }
-                return BoundIndirectCallExpression(syntax, dispatchCallee, resolvedFnType, convertedArgs)
             }
             if dispatchCallee.Type is DelegateTypeSymbol delegateSym {
                 if !TryBindNamedDelegateArguments(
@@ -1151,7 +1201,8 @@ internal partial class OverloadResolver {
                     syntax,
                     boundArguments.ToImmutable(),
                     out var convertedDelegateArgs,
-                    out var delegateRefKinds
+                    out var delegateRefKinds,
+                    GetIndirectCallableParameterNames(dispatchCallee)
                 ) {
                     return BoundErrorExpression(nil)
                 }
@@ -1335,7 +1386,7 @@ internal partial class OverloadResolver {
                     if permutedArguments[i].Type != nil {
                         inferTypeArguments(
                             extension.Parameters[i + 1].Type,
-                            RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i].Type),
+                            RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i]),
                             substitution
                         )
                     }
@@ -1775,10 +1826,7 @@ internal partial class OverloadResolver {
                     }
                     inferTypeArguments(
                         paramType,
-                        RefCapabilities.GetInferenceType(
-                            method.Parameters[i + parameterOffset],
-                            permutedArguments[i].Type
-                        ),
+                        RefCapabilities.GetInferenceType(method.Parameters[i + parameterOffset], permutedArguments[i]),
                         substitution
                     )
                 }
@@ -2111,19 +2159,8 @@ internal partial class OverloadResolver {
     }
 
     shared {
-        private func GetIndirectCallableParameterNames(callee BoundExpression) ImmutableArray[string] {
-            if callee is BoundVariableExpression variable {
-                return variable.Variable.CallableParameterNames
-            }
-            if callee is BoundFunctionLiteralExpression literal {
-                let names = ImmutableArray.CreateBuilder[string](literal.Function.Parameters.Length)
-                for parameter in literal.Function.Parameters {
-                    names.Add(parameter.Name)
-                }
-                return names.MoveToImmutable()
-            }
-            return default(ImmutableArray[string])
-        }
+        private func GetIndirectCallableParameterNames(callee BoundExpression) ImmutableArray[string] ->
+        StatementBinder.GetCallableParameterNames(callee)
 
         internal func TryBuildReceiverSubstitution(receiverType TypeSymbol) Dictionary[
             TypeParameterSymbol,

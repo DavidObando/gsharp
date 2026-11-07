@@ -57,8 +57,112 @@ abstract class VariableSymbol : Symbol {
     /// initializer was proven non-null from its bound expression.
     internal prop HasDefinitelyNonNullValue bool
 
+    /// Gets or sets the recursive callable parameter-name tree captured from a
+    /// function literal, function-pointer, or (possibly nested) tuple initializer.
+    internal prop CallableParameterNameTree CallableParameterNameNode?
+
     /// Gets or sets callable parameter names captured from a function literal
     /// or function-pointer initializer. Empty when the variable's callable
     /// shape carries types only.
-    internal prop CallableParameterNames ImmutableArray[string]
+    internal prop CallableParameterNames ImmutableArray[string] {
+        get -> CallableParameterNameTree?.Names ?? default(ImmutableArray[string])
+        set {
+            CallableParameterNameTree = if value.IsDefaultOrEmpty {
+                if CallableParameterNameTree is {Elements: var existingElements, ReturnValue: var existingReturn} &&
+                    (!existingElements.IsDefaultOrEmpty || existingReturn != nil) {
+                    CallableParameterNameNode(default(ImmutableArray[string]), existingElements, existingReturn)
+                } else {
+                    nil
+                }
+            } else {
+                CallableParameterNameNode(
+                    value,
+                    CallableParameterNameTree?.Elements ?? default(ImmutableArray[CallableParameterNameNode?]),
+                    CallableParameterNameTree?.ReturnValue
+                )
+            }
+        }
+    }
+}
+
+internal class CallableParameterNameNode {
+    init(
+        names ImmutableArray[string],
+        elements ImmutableArray[CallableParameterNameNode?] = default(ImmutableArray[CallableParameterNameNode?]),
+        returnValue CallableParameterNameNode? = nil
+    ) {
+        Names = names
+        Elements = elements
+        ReturnValue = returnValue
+    }
+
+    prop Names ImmutableArray[string] {
+        get;
+    }
+
+    prop Elements ImmutableArray[CallableParameterNameNode?] {
+        get;
+    }
+
+    prop ReturnValue CallableParameterNameNode? {
+        get;
+    }
+
+    shared {
+        internal func Merge(
+            left CallableParameterNameNode?,
+            right CallableParameterNameNode?
+        ) CallableParameterNameNode? {
+            if object.ReferenceEquals(left, right) {
+                return left
+            }
+            if left == nil || right == nil {
+                return nil
+            }
+            let leftNames = left.Names
+            let rightNames = right.Names
+            var namesMatch = !leftNames.IsDefaultOrEmpty &&
+                !rightNames.IsDefaultOrEmpty &&
+                leftNames.Length == rightNames.Length
+            if namesMatch {
+                for var i = 0; i < leftNames.Length; i++ {
+                    if leftNames[i] != rightNames[i] {
+                        namesMatch = false
+                        break
+                    }
+                }
+            }
+            let mergedNames = if namesMatch {
+                leftNames
+            } else {
+                default(ImmutableArray[string])
+            }
+            let leftElements = left.Elements
+            let rightElements = right.Elements
+            var anyElement = false
+            let mergedElements = if !leftElements.IsDefaultOrEmpty &&
+                !rightElements.IsDefaultOrEmpty &&
+                leftElements.Length == rightElements
+                .Length {
+                let builder = ImmutableArray.CreateBuilder[CallableParameterNameNode?](leftElements.Length)
+                for var i = 0; i < leftElements.Length; i++ {
+                    let mergedChild = Merge(leftElements[i], rightElements[i])
+                    anyElement |= mergedChild != nil
+                    builder.Add(mergedChild)
+                }
+                if anyElement {
+                    builder.MoveToImmutable()
+                } else {
+                    default(ImmutableArray[CallableParameterNameNode?])
+                }
+            } else {
+                default(ImmutableArray[CallableParameterNameNode?])
+            }
+            let mergedReturn = Merge(left.ReturnValue, right.ReturnValue)
+            if mergedNames.IsDefaultOrEmpty && mergedElements.IsDefaultOrEmpty && mergedReturn == nil {
+                return nil
+            }
+            return CallableParameterNameNode(mergedNames, mergedElements, mergedReturn)
+        }
+    }
 }

@@ -290,6 +290,15 @@ internal partial class ExpressionBinder {
                 intersectNarrowingWithSnapshot?(fallthroughNoMatchSnapshot)
             }
         }
+        if targetType == nil {
+            for var i = 0; i < boundArmBuilders.Count; i++ {
+                let currentArm = boundArmBuilders[i]
+                let unwrappedResult = UnwrapSynthesizedRefDelegateBranch(currentArm.Result)
+                if !object.ReferenceEquals(unwrappedResult, currentArm.Result) {
+                    boundArmBuilders[i] = (currentArm.Syntax, currentArm.Pattern, currentArm.Guard, unwrappedResult)
+                }
+            }
+        }
         let armResults = List[BoundExpression](boundArmBuilders.Count)
         for arm in boundArmBuilders {
             armResults.Add(arm.Result)
@@ -307,7 +316,15 @@ internal partial class ExpressionBinder {
         if !hasCatchAll && !ExhaustivenessAnalyzer.IsExhaustiveDiscriminant(switchType) {
             Diagnostics.ReportSwitchExpressionMissingDefault(syntax.SwitchKeyword.Location)
         }
-        let resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)
+        var resultType = ComputeSwitchExpressionResultType(boundArmBuilders, targetType)
+        if targetType == nil {
+            resultType = MaterializeSynthesizedRefDelegateResultType(
+                resultType,
+                armResults,
+                allowFirstArmFallback: true
+            ) ??
+                resultType
+        }
         let diagMark = Diagnostics.Count
         var anyArmFailed = false
         let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](boundArmBuilders.Count)

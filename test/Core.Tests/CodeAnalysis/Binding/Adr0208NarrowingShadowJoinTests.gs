@@ -19,9 +19,7 @@ import Xunit
 /// binder computes the section 9 join beside the current passes and reports
 /// each disagreement with its row of section 16. Each test compiles a probe
 /// of the ADR table as a library and checks the report.
-/// @remarks PR 2, slice 2a and #5301 consume the joins of rows R1, R3, R5 and
-/// R6, so the frames hold those facts and the report is empty for them. Rows R2
-/// and R4 are still reported.
+/// @remarks The production joins consume rows R1 to R6, so these rows report no disagreement.
 open class Adr0208NarrowingShadowJoinTests {
     @Fact
     func ElseExit_IsConsumedByTheFrames_Row1() {
@@ -48,7 +46,7 @@ func Run(c bool) int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"6|s|nil|string|R2"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -77,7 +75,7 @@ func Run(k int32) int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"4|s|nil|string|R4"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -133,9 +131,7 @@ func Run(x Animal?, c bool) string {
 
     @Fact
     func AReadThatChangesMemberSelection_IsReportedAtTheRead() {
-        // Like probe f6, but the exiting branch assigns `x`, so the legacy passes
-        // still kill the fact (row R2) and the shadow join keeps it: the read
-        // selects `Dog.Name`, not `Animal.Name`. The report names the read.
+        // The exiting branch assigns `x`, but the surviving branch keeps `Dog`.
         let lines = Capture(`package T
 open class Animal {
     prop Name string -> "animal"
@@ -151,12 +147,11 @@ func Run(a Animal) string {
     }
     return x.Name
 }`)
-        Assert.Equal([]string{"14|x|Animal|Dog|type-test"}, Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact
     func AReadThatOnlyGainsANilCheck_IsReportedAsNullability() {
-        // The exiting branch assigns `s`, so the legacy passes kill the fact (row R2).
         let lines = Capture(`package T
 func Get() string? { return nil }
 func Run(c bool) int32 {
@@ -168,7 +163,7 @@ func Run(c bool) int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"10|s|string?|string|nullability"}, Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact
@@ -333,8 +328,8 @@ func Run() int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"10|s|nil|string|R1"}, Rows(lines, "J"))
-        Assert.Equal([]string{"15|s|string?|string|nullability"}, Rows(lines, "R"))
+        Assert.Empty(Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact
@@ -419,7 +414,6 @@ func Run(c bool) int32 {
     func AGuardAfterTheDefaultArm_DoesNotRemoveWhatTheDefaultArmWrote() {
         // The default arm assigns `s` after the entry proof. The guard that follows
         // runs first and removes the inherited proof, but the arm re-proves `s`.
-        // The shadow keeps it, so the join gains `s` where the legacy passes lose it (R4).
         let lines = Capture(`package T
 func Get() string? { return "a" }
 func Clear(ref s string?) bool {
@@ -435,10 +429,10 @@ func Run() int32 {
     }
     return s.Length
 }`)
-        Assert.Equal([]string{"10|s|nil|string|R4"}, Rows(lines, "J"))
+        Assert.Empty(Rows(lines, "J"))
         // The guard binds before the default arm, in dispatch order (#5629), so its argument `ref s` reads the entry
-        // proof in both passes; the read after the switch still differs.
-        Assert.Equal([]string{"14|s|string?|string|nullability"}, Rows(lines, "R"))
+        // proof in both passes.
+        Assert.Empty(Rows(lines, "R"))
     }
 
     @Fact
@@ -468,9 +462,7 @@ func C(s string?) int32 {
 
     @Fact
     func AKillInTheExitingBranchDoesNotHideTheFactFromTheNextBranch_Row2() {
-        // The then-branch assigns `t` and returns. Both branches share the
-        // frames, so the else-branch sees `t` killed. The shadow restores the
-        // entry fact for the else-branch, so the join keeps it.
+        // The then-branch's write does not reach the else-branch or the normal exit.
         let report = Join(`package T
 func Get() string? { return nil }
 func Run(c bool) int32 {
@@ -484,15 +476,12 @@ func Run(c bool) int32 {
     }
     return t.Length
 }`)
-        Assert.Equal([]string{"6|t|nil|string|R2"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
     func ANestedJoinFeedsTheOuterJoin() {
-        // The inner `if` proves `t` and `o` on its own (row R1, the else-branch
-        // exits). The frames hold `o`. They do not hold `t`, because the
-        // statement assigns `t` and the legacy passes still own that kill (row
-        // R2, slice 2b), so the report names `t` only.
+        // The inner join contributes both facts to the outer join.
         let report = Join(`package T
 func Run(a int32, o object?) int32 {
     var t string? = nil
@@ -507,7 +496,7 @@ func Run(a int32, o object?) int32 {
     }
     return t.Length
 }`)
-        Assert.Equal([]string{"5|t|nil|string|R1"}, report)
+        Assert.Empty(report)
     }
 
     @Fact
@@ -601,7 +590,7 @@ func Run(c bool, k int32) int32 {
 }`
         let first = Capture(source)
         let second = Capture(source)
-        Assert.NotEmpty(first)
+        Assert.Empty(first)
         Assert.Equal(first, second)
     }
 
@@ -626,7 +615,7 @@ func Run(c bool) int32 {
         } finally {
             NarrowingComparison.EndCapture()
         }
-        Assert.NotEmpty(plain.Diagnostics)
+        Assert.Empty(plain.Diagnostics)
         Assert.Equal(
             plain.Diagnostics.Select((d Diagnostic) -> d.ToString()).ToArray(),
             compared.Diagnostics.Select((d Diagnostic) -> d.ToString()).ToArray()

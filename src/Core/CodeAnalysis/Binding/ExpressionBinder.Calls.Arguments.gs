@@ -739,7 +739,8 @@ internal partial class ExpressionBinder {
                 ce,
                 arguments,
                 out var namedArguments,
-                out var namedRefKinds
+                out var namedRefKinds,
+                StatementBinder.GetCallableParameterNames(memberLoad)
             ) {
                 result = BoundErrorExpression(nil)
                 return true
@@ -1795,7 +1796,13 @@ internal partial class ExpressionBinder {
                     symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall
                 )
                 let refKinds = ComputeArgumentRefKinds(inheritedParameters)
-                overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location)
+                overloads.ValidateRefArguments(
+                    inheritedArguments,
+                    refKinds,
+                    methodName,
+                    ce.Location,
+                    inheritedParameters
+                )
                 let inheritedCallReceiver = inheritedUpdatedReceiver ?? receiver
                 if TryReportByRefLikeInheritedCall(inheritedCallReceiver, best, ce.Location) {
                     result = BoundErrorExpression(nil)
@@ -1867,7 +1874,8 @@ internal partial class ExpressionBinder {
             ce,
             arguments,
             out var convertedArgs,
-            out var argumentRefKinds
+            out var argumentRefKinds,
+            StatementBinder.GetCallableParameterNames(receiver)
         ) {
             return BoundErrorExpression(nil)
         }
@@ -2411,7 +2419,7 @@ internal partial class ExpressionBinder {
             symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall
         )
         let refKinds = ComputeArgumentRefKinds(parameters)
-        overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location)
+        overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location, parameters)
         // ADR-0174 D4: an imported `[Suspending]` extension — the batch surface
         // of D10 is written this way — is completed at the call site like any
         // other suspending call, so the caller sees `R` rather than

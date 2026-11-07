@@ -891,7 +891,8 @@ internal partial class OverloadResolver {
         arguments ImmutableArray[BoundExpression],
         refKinds ImmutableArray[RefKind],
         methodName string,
-        callLocation TextLocation
+        callLocation TextLocation,
+        parameters[]?ParameterInfo = nil
     ) {
         if refKinds.IsDefault || refKinds.Length == 0 {
             return
@@ -900,6 +901,29 @@ internal partial class OverloadResolver {
             let rk = refKinds[i]
             if rk == RefKind.None {
                 continue
+            }
+            if arguments[i].Syntax is RefArgumentExpressionSyntax refArgSyntax {
+                let explicitRefKind = getRefKindFromModifier(refArgSyntax.RefKindModifier)
+                let defersToReadOnlyDiagnostic = explicitRefKind == RefKind.In &&
+                    (rk == RefKind.Ref || rk == RefKind.Out) &&
+                    RefCapabilities.IsReadOnlyStorage(arguments[i])
+                if explicitRefKind != RefKind.None && explicitRefKind != rk && !defersToReadOnlyDiagnostic {
+                    let parameterName = if parameters != nil && i < parameters.Length && !string.IsNullOrEmpty(
+                        parameters[i].Name
+                    ) {
+                        parameters[i].Name!!
+                    } else {
+                        methodName
+                    }
+                    Diagnostics.ReportRefKindMismatch(
+                        refArgSyntax.Location,
+                        i + 1,
+                        parameterName,
+                        refKindToString(rk),
+                        refKindToString(explicitRefKind)
+                    )
+                    continue
+                }
             }
             if rk == RefKind.Ref || rk == RefKind.Out {
                 // ADR-0061: BoundConditionalAddressExpression is also a valid

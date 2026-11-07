@@ -2140,7 +2140,7 @@ internal partial class ExpressionBinder {
                     symbolicMethodTypeArgs: staticTypeArgSymbolsForCall
                 )
                 let refKinds = ComputeArgumentRefKinds(staticParameters)
-                overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location)
+                overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location, staticParameters)
                 // Issue #3868: the narrow #1330 path above declines params-
                 // expanded, defaulted and named-argument shapes, but the
                 // PARENT INSTANTIATION is not optional — a static call on
@@ -3323,7 +3323,13 @@ internal partial class ExpressionBinder {
                             symbolicMethodTypeArgs: instTypeArgSymbolsForCall
                         )
                         let instRefKinds = ComputeArgumentRefKinds(instParameters)
-                        overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location)
+                        overloads.ValidateRefArguments(
+                            instArguments,
+                            instRefKinds,
+                            methodName,
+                            ce.Location,
+                            instParameters
+                        )
                         // receiver: non-null per the reassignment above; the
                         // switch's lambda arguments (recoverTypeArgSymbols, etc.)
                         // make the compiler re-widen it across this case block.
@@ -3420,6 +3426,16 @@ internal partial class ExpressionBinder {
         ) {
             return importedExt!!
         }
+        if TryReportValueNullableByRefArgument(
+            ce,
+            arguments,
+            receiver?.Type?.ClrType,
+            methodName,
+            effectiveReceiverType,
+            typeArgSymbols
+        ) {
+            return BoundErrorExpression(nil)
+        }
         // Issue #343: if all CLR-instance lookups missed and the call uses
         // named arguments, point at the first unknown parameter name (if any)
         // for a more actionable diagnostic than "unable to find function".
@@ -3515,16 +3531,6 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
-        if TryReportValueNullableByRefArgument(
-            ce,
-            arguments,
-            receiver?.Type?.ClrType,
-            methodName,
-            effectiveReceiverType,
-            typeArgSymbols
-        ) {
-            return BoundErrorExpression(nil)
-        }
         if TryReportProtectedClrInstanceMethodCall(
             clrType,
             methodName,
@@ -3557,14 +3563,118 @@ internal partial class ExpressionBinder {
         receiverType TypeSymbol? = nil,
         explicitMethodTypeArguments ImmutableArray[TypeSymbol] = default(ImmutableArray[TypeSymbol])
     ) bool {
-        if declaringType == nil {
+        var hasByRefArgument = false
+        for argument in arguments {
+            if ByRefStorageMatching.TryGetStorageType(argument) != nil {
+                hasByRefArgument = true
+                break
+            }
+        }
+        if !hasByRefArgument {
             return false
         }
-        let methods = declaringType.GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
+        if declaringType != nil {
+            let methods = declaringType.GetMethods(
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance
+            )
+            if TryReportValueNullableByRefArgumentOnCandidates(
+                ce,
+                arguments,
+                methods,
+                methodName,
+                offset: 0,
+                receiverType,
+                explicitMethodTypeArguments
+            ) {
+                return true
+            }
+        }
+        if receiverType == nil {
+            return false
+        }
+        let extensionArgumentCount = if ce.TypeArgumentList == nil {
+            arguments.Length
+        } else {
+            default(int32?)
+        }
+        let extensionArgumentNames = if ce.TypeArgumentList == nil {
+            BuildDeferredArgumentNames(ce, 1)
+        } else {
+            default(IReadOnlyList[string?]?)
+        }
+        let extensionMethods = this
+            .memberLookup
+            .CollectImportedExtensionMethods(methodName)
+            .Where(
+            (method MethodInfo) -> {
+                try {
+                    return ClrOverloadResolution.MayAcceptExtensionReceiver(
+                        method,
+                        receiverType,
+                        extensionArgumentCount,
+                        extensionArgumentNames
+                    )
+                } catch (ex Exception) when ex is ArgumentException ||
+                    ex is InvalidOperationException ||
+                    ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+                    return false
+                }
+            }
         )
+            .ToArray()
+        return extensionMethods.Length > 0 &&
+            TryReportValueNullableByRefArgumentOnCandidates(
+            ce,
+            arguments,
+            extensionMethods,
+            methodName,
+            offset: 1,
+            receiverType,
+            explicitMethodTypeArguments
+        )
+    }
+
+    private func TryReportValueNullableByRefArgumentOnCandidates(
+        ce CallExpressionSyntax,
+        arguments ImmutableArray[BoundExpression],
+        methods IReadOnlyList[MethodInfo],
+        methodName string,
+        offset int32,
+        receiverType TypeSymbol?,
+        explicitMethodTypeArguments ImmutableArray[TypeSymbol]
+    ) bool {
+        let InferCandidateMethodTypeArguments = func (
+            method MethodInfo,
+            parameters[]ParameterInfo,
+            mapping[]int32,
+            probedArgumentIndex int32
+        ) ImmutableArray[TypeSymbol?] {
+            if !method.IsGenericMethodDefinition || !explicitMethodTypeArguments.IsDefaultOrEmpty {
+                return default(ImmutableArray[TypeSymbol?])
+            }
+            let byParameter = [parameters.Length]TypeSymbol?
+            if offset == 1 && parameters.Length > 0 {
+                byParameter[0] = receiverType
+            }
+            for var argIdx = 0; argIdx < arguments.Length && argIdx < mapping.Length; argIdx++ {
+                if argIdx == probedArgumentIndex {
+                    continue
+                }
+                let mappedParam = mapping[argIdx]
+                if mappedParam >= offset && mappedParam < parameters.Length {
+                    byParameter[mappedParam] = if parameters[mappedParam].ParameterType.IsByRef {
+                        ByRefStorageMatching.TryGetStorageType(arguments[argIdx]) ?? arguments[argIdx].Type
+                    } else {
+                        arguments[argIdx].Type
+                    }
+                }
+            }
+            return ImmutableArray.Create(
+                MemberLookup.InferSymbolicMethodTypeArguments(method, ImmutableArray.Create(byParameter))
+            )
+        }
         for var i = 0; i < arguments.Length; i++ {
-            if !(arguments[i] is BoundAddressOfExpression{Operand: {Type: {} storage}}) ||
+            if ByRefStorageMatching.TryGetStorageType(arguments[i]) is not{} storage ||
                 NullableLifting.GetEffectiveClrType(storage) is not{IsValueType: true} storageClr {
                 continue
             }
@@ -3581,16 +3691,30 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 let parameters = method.GetParameters()
-                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
-                if paramIndex < 0 ||
+                if !ClrOverloadResolution.TryMapSourceArgumentsToParameters(parameters, ce, offset, out var mapping) {
+                    continue
+                }
+                let paramIndex = mapping[i]
+                if paramIndex < offset ||
                     paramIndex >= parameters.Length ||
-                    parameters.Length != arguments.Length ||
                     !parameters[paramIndex]
                     .ParameterType
-                    .IsByRef ||
-                    parameters[paramIndex]
-                    .ParameterType
-                    .GetElementType() is not{} element || NullableLifting.IsValueTypeNullableClr(
+                    .IsByRef {
+                    continue
+                }
+                let inferredMethodTypeArgs = InferCandidateMethodTypeArguments(method, parameters, mapping, i)
+                let resolvedPointee = TryResolveSymbolicByRefParameterPointee(
+                    parameters[paramIndex],
+                    receiverType,
+                    explicitMethodTypeArguments: explicitMethodTypeArguments,
+                    inferredMethodTypeArguments: inferredMethodTypeArgs
+                )
+                let element = if resolvedPointee != nil {
+                    NullableLifting.GetEffectiveClrType(resolvedPointee)
+                } else {
+                    parameters[paramIndex].ParameterType.GetElementType()
+                }
+                if element == nil || element.ContainsGenericParameters || NullableLifting.IsValueTypeNullableClr(
                     element
                 ) == storageIsNullable {
                     continue
@@ -3611,7 +3735,7 @@ internal partial class ExpressionBinder {
                 Diagnostics.ReportWrongValueNullableByRefArgument(
                     location,
                     parameters[paramIndex].Name ?? "value",
-                    ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]),
+                    resolvedPointee ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]),
                     storage
                 )
                 return true
@@ -3628,29 +3752,30 @@ internal partial class ExpressionBinder {
                     continue
                 }
                 let parameters = method.GetParameters()
-                let paramIndex = MapSourceArgumentToParameter(parameters, ce, i, offset: 0)
-                if paramIndex < 0 ||
+                if !ClrOverloadResolution.TryMapSourceArgumentsToParameters(parameters, ce, offset, out var mapping) {
+                    continue
+                }
+                let paramIndex = mapping[i]
+                if paramIndex < offset ||
                     paramIndex >= parameters.Length ||
-                    parameters.Length != arguments.Length ||
                     !parameters[paramIndex]
                     .ParameterType
-                    .IsByRef ||
-                    (
-                    parameters[paramIndex]
-                        .ParameterType
-                        .ContainsGenericParameters &&
-                        explicitMethodTypeArguments.IsDefaultOrEmpty
-                ) {
+                    .IsByRef {
+                    continue
+                }
+                let inferredMethodTypeArgs = InferCandidateMethodTypeArguments(method, parameters, mapping, i)
+                let resolvedPointee = TryResolveSymbolicByRefParameterPointee(
+                    parameters[paramIndex],
+                    receiverType,
+                    explicitMethodTypeArguments: explicitMethodTypeArguments,
+                    inferredMethodTypeArguments: inferredMethodTypeArgs
+                )
+                if parameters[paramIndex].ParameterType.ContainsGenericParameters && resolvedPointee == nil {
                     continue
                 }
                 let parameterType = ByRefStorageMatching.PreserveNominalClrPointeeType(
                     parameters[paramIndex].ParameterType,
-                    TryResolveSymbolicByRefParameterPointee(
-                        parameters[paramIndex],
-                        receiverType,
-                        explicitMethodTypeArguments: explicitMethodTypeArguments
-                    ) ??
-                        ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                    resolvedPointee ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
                 )
                 if ByRefStorageMatching.AreSameStorageType(storage, parameterType, out _, out _, out _) {
                     continue

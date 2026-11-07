@@ -928,7 +928,7 @@ internal partial class OverloadResolver {
             }
             var lambdaTarget FunctionTypeSymbol? = paramTypeForArg as FunctionTypeSymbol
             if lambdaTarget == nil && paramTypeForArg != nil {
-                let _ = MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
             }
             if boundArgument == nil && lambdaArgument != nil && lambdaTarget != nil && bindLambdaWithTarget != nil {
                 boundArgument = bindLambdaWithTarget!!(lambdaArgument, lambdaTarget)
@@ -1306,7 +1306,8 @@ internal partial class OverloadResolver {
                         refArgumentLocation,
                         parameter,
                         pointee,
-                        paramType
+                        paramType,
+                        addrCtor
                     )
                 ) {
                     convertedArguments.Add(argument)
@@ -1710,6 +1711,7 @@ internal partial class OverloadResolver {
                     constructor,
                     argumentNames,
                     inferenceArgumentTypes,
+                    inferenceBoundArguments,
                     candidateSubstitution
                 )
                 let candidateUnresolvedTypeParameter TypeParameterSymbol? = tps.FirstOrDefault(
@@ -1863,6 +1865,7 @@ internal partial class OverloadResolver {
         constructor ConstructorSymbol,
         argumentNames ImmutableArray[string],
         argumentTypes IReadOnlyList[TypeSymbol?],
+        boundArguments IReadOnlyList[BoundExpression],
         substitution Dictionary[TypeParameterSymbol, TypeSymbol]
     ) {
         let parameters = constructor.Parameters
@@ -1894,7 +1897,13 @@ internal partial class OverloadResolver {
                 continue
             }
             if argumentTypes[i] is {} argumentType {
-                inferTypeArguments(parameters[parameterIndex].Type, argumentType, substitution)
+                let parameter = parameters[parameterIndex]
+                let inferenceType = if parameter.RefKind == RefKind.Out {
+                    RefCapabilities.GetInferenceType(parameter, boundArguments[i])
+                } else {
+                    argumentType
+                }
+                inferTypeArguments(parameter.Type, inferenceType, substitution)
             }
         }
         if !isVariadic ||
@@ -2296,7 +2305,8 @@ internal partial class OverloadResolver {
                         argLocation,
                         parameter,
                         pointee,
-                        parameter.Type
+                        parameter.Type,
+                        addrInit
                     )
                 ) {
                     convertedArgs.Add(argument)

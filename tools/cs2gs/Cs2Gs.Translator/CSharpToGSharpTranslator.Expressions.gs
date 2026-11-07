@@ -8785,11 +8785,9 @@ partial class CSharpToGSharpTranslator {
             )
         ]()
 
-        /// ADR-0208 (#5650, #5654): gsc binds the `else` branch of an `if` from the state before the `then` branch,
-        /// so a loop, a condition or a statement in the `then` branch does not reach a read in the `else` branch
-        /// unless a jump enters the `else` branch or forms a backward-jump span across the `if`.
-        /// Effects in an earlier `switch` section still reach a later one.
-        private func IsInThenBranchOfElseRead(
+        /// ADR-0208 (#5650, #5654, #5130): sibling branch bodies do not reach each other's reads.
+        /// Switch tests and guards still run before dispatch. Gotos retain the conservative switch rule.
+        private func IsInSiblingBranchOfRead(
             node Microsoft.CodeAnalysis.SyntaxNode,
             use Microsoft.CodeAnalysis.SyntaxNode,
             $scope Microsoft.CodeAnalysis.SyntaxNode
@@ -8836,6 +8834,30 @@ partial class CSharpToGSharpTranslator {
                         .Contains(use.Span) && switchExpr.Arms.Any(
                         (arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax) ->
                         arm.Expression.Span.Contains(node.Span) && !arm.Span.Contains(use.Span)
+                    ) ||
+                        (
+                        ancestor is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .SwitchSectionSyntax section &&
+                            section.Parent is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .SwitchStatementSyntax switchStatement &&
+                            switchStatement
+                            .Span
+                            .Contains(use.Span) && !section.Span.Contains(use.Span) && section.Statements.Any(
+                            (statement Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax) -> statement.Span.Contains(
+                                node.Span
+                            )
+                        ) &&
+                            !this.HasGotoIntoSwitchSection(switchStatement) &&
+                            this
+                            .GetScopeGotoIndex($scope)
+                            .Jumps
+                            .Count == 0
                     )
                 )
             )
@@ -10107,7 +10129,7 @@ partial class CSharpToGSharpTranslator {
                     node
                     .Span
                     .End <= regionScope.SpanStart &&
-                    !this.IsInThenBranchOfElseRead(node, regionScope, scanRoot) &&
+                    !this.IsInSiblingBranchOfRead(node, regionScope, scanRoot) &&
                     (
                     (closureAssigned && this.NodeMayRunEscapedClosure(node)) ||
                         (byRef && (this.NodeRunsStaticTypeInitializer(node) || this.NodeMayWriteReferenceStorage(node)))
@@ -12587,7 +12609,7 @@ partial class CSharpToGSharpTranslator {
                                 .Span
                                 .End <= use.SpanStart &&
                                 (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
-                                !this.IsInThenBranchOfElseRead(node, use, $scope)
+                                !this.IsInSiblingBranchOfRead(node, use, $scope)
                         )
                     } else {
                         node.SpanStart >= narrowingGuard
@@ -12597,7 +12619,7 @@ partial class CSharpToGSharpTranslator {
                             .Span
                             .End <= use.SpanStart &&
                             (RunsSourceCode(node) || WritesReferenceStorage(node)) &&
-                            !this.IsInThenBranchOfElseRead(node, use, $scope)
+                            !this.IsInSiblingBranchOfRead(node, use, $scope)
                     }
                 )
             ) {
@@ -13265,7 +13287,7 @@ partial class CSharpToGSharpTranslator {
                                 node
                                 .Span
                                 .End <= use!!.SpanStart &&
-                                !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                                !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                         )
                     } else {
                         node.SpanStart > start
@@ -13274,7 +13296,7 @@ partial class CSharpToGSharpTranslator {
                             node
                             .Span
                             .End <= use!!.SpanStart &&
-                            !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                            !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                     }
                 ) &&
                     this.SyntaxNodeWritesSymbol(node, symbol)
@@ -13339,7 +13361,7 @@ partial class CSharpToGSharpTranslator {
                             .TryStatementSyntax
                     ) &&
                         !(node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax) &&
-                        !this.IsInThenBranchOfElseRead(node, use!!, $scope)
+                        !this.IsInSiblingBranchOfRead(node, use!!, $scope)
                 ) {
                     return true
                 }

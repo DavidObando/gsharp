@@ -1485,23 +1485,14 @@ internal partial class ExpressionBinder {
             }
             return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
         }
-        if syntax is TupleLiteralExpressionSyntax tupleLiteral && IsNestedLambdaExpression(tupleLiteral) {
-            let boundTuple = if TryGetTargetTupleType(targetType, out var targetTuple) &&
-                targetTuple!!
-                .ElementTypes
-                .Length == tupleLiteral
-                .Elements
-                .Count {
-                BindTupleLiteralExpression(tupleLiteral, targetTuple)
-            } else {
-                BindTupleLiteralExpression(tupleLiteral)
-            }
-            return ConvertTargetTypedValue(syntax, boundTuple, targetType)
-        }
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
         if syntax is BlockExpressionSyntax blockExpression {
             return BindBlockExpressionValue(blockExpression, canBeVoid: false, targetType, preserveEmptyBlock: true)
+        }
+        if syntax is TupleLiteralExpressionSyntax tupleLiteral {
+            let boundTuple = BindTupleLiteralExpression(tupleLiteral, targetType)
+            return ConvertTargetTypedValue(syntax, boundTuple, targetType)
         }
         // Issue #1112: a switch-expression honors the target type (C#-style
         // target-typing) — bind it with the target so the result type can be

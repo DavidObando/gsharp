@@ -400,6 +400,11 @@ func Run(token Token) {
                 "(Maybe(), x)"
             )
             yield Row(
+                "generic-in-scope-mixed-tuple-delegate-return",
+                `func Run[T](seed T) (string, T) -> StrictSink5686.UseMixedTuple(seed, (x) -> (Maybe(), x))`,
+                "(Maybe(), x)"
+            )
+            yield Row(
                 "mixed-object-delegate-and-expression-tree-overload",
                 `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
                 "MaybeThing()",

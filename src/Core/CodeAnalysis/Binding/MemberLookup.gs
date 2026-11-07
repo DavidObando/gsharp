@@ -206,6 +206,15 @@ internal class MemberLookup {
                     }
                     parameterTypes.Add(parameterType)
                     let parameterRefKind = RefCapabilities.GetParameterRefKind(parameters[i])
+                    if boundArguments[i].Syntax is RefArgumentExpressionSyntax refArgSyntax {
+                        let explicitRefKind = Binder.GetRefKindFromModifier(refArgSyntax.RefKindModifier)
+                        if explicitRefKind != RefKind.None &&
+                            explicitRefKind != parameterRefKind &&
+                            !(explicitRefKind == RefKind.Ref && parameterRefKind == RefKind.In) {
+                            candidateApplicable = false
+                            break
+                        }
+                    }
                     if boundArguments[i].Type is ByRefTypeSymbol && ByRefStorageMatching.TryGetStorageType(
                         boundArguments[i]
                     ) is {} storageType {
@@ -296,10 +305,39 @@ internal class MemberLookup {
                 getterMethods.Add(property.GetMethod!!)
             }
         }
+        let byRefClassifier = ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
+            boundArguments,
+            nativeConversions: nil,
+            receiverType: targetType
+        )
         let resolution = ClrOverloadResolution.Resolve[MethodInfo](
             getterMethods,
             argTypes,
-            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments)
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
+            symbolicArgumentConversionClassifier: if byRefClassifier == nil {
+                default(
+                    (
+                        (
+                            int32,
+                            Type,
+                            ParameterInfo,
+                            ImmutableArray[TypeSymbol?]
+                        ) -> ClrOverloadResolution.ImplicitConversionKind?
+                    )?
+                )
+            } else {
+                (
+                    argumentIndex int32,
+                    clrParameterType Type,
+                    parameter ParameterInfo,
+                    inferredMethodTypeArguments ImmutableArray[TypeSymbol?]
+                ) -> {
+                    if !clrParameterType.IsByRef {
+                        return nil
+                    }
+                    return byRefClassifier(argumentIndex, clrParameterType, parameter, inferredMethodTypeArguments)
+                }
+            }
         )
         if resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved {
             return if resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous {

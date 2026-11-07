@@ -86,8 +86,15 @@ internal shared class ByRefStorageMatching {
     /// address — when it is known. An unresolved inline `out var` has
     /// the error type and is not known yet.
     /// @param argument The bound argument.
+    /// @param refKind Out arguments use declared storage, not a narrowed read type.
     /// @returns The storage type, or `null`.
-    func TryGetStorageType(argument BoundExpression?) TypeSymbol? {
+    func TryGetStorageType(argument BoundExpression?, refKind RefKind = RefKind.None) TypeSymbol? {
+        if refKind == RefKind.Out &&
+            argument is BoundAddressOfExpression address &&
+            ExpressionBinder.TryGetAddressedStorageType(address.Operand, out var declaredStorage) &&
+            declaredStorage != TypeSymbol.Error {
+            return declaredStorage
+        }
         let storageType = switch argument {
             case address is BoundAddressOfExpression: address.Operand?.Type
             case conditional is BoundConditionalAddressExpression: conditional.PointeeType
