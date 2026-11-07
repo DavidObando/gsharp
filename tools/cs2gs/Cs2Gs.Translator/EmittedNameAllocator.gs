@@ -33,6 +33,25 @@ internal class EmittedNameAllocator {
         IReadOnlyCollection[string]
     ](SymbolEqualityComparer.Default)
     private let invocationSensitive HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+    private let deconstructionReservedNames Dictionary[IAssemblySymbol, IReadOnlyCollection[string]] =
+    Dictionary[IAssemblySymbol, IReadOnlyCollection[string]](SymbolEqualityComparer.Default)
+
+    func GetDeconstructionReservedNames(method IMethodSymbol) IReadOnlyCollection[string] {
+        lock this.gate {
+            if method.ContainingAssembly is not{} assembly {
+                return Array.Empty[string]()
+            }
+            if !this.deconstructionReservedNames.TryGetValue(assembly, out var names) {
+                names = EnumerateSourceTypes(assembly.GlobalNamespace)
+                    .SelectMany((type INamedTypeSymbol) -> type.GetMembers())
+                    .Select(SourceName)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+                this.deconstructionReservedNames.Add(assembly, names)
+            }
+            return names
+        }
+    }
 
     private init(compilation Compilation) {
         this.compilation = compilation
@@ -71,6 +90,11 @@ internal class EmittedNameAllocator {
             // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
             if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
                 let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
+                for member in contract {
+                    if member is IMethodSymbol method && IsUserRecordDeconstruct(method) {
+                        taken.UnionWith(this.GetDeconstructionReservedNames(method))
+                    }
+                }
                 var renamed = "deconstruct"
                 for var suffix = 2; taken.Contains(renamed); suffix++ {
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -297,7 +321,7 @@ internal class EmittedNameAllocator {
         if method == nil {
             return Array.Empty[string]()
         }
-        method = method.OriginalDefinition
+        method = (method.PartialDefinitionPart ?? method).OriginalDefinition
         if this.methodScopeNames.TryGetValue(method, out var existing) {
             return existing
         }
@@ -308,7 +332,17 @@ internal class EmittedNameAllocator {
         if method.ContainingType is {} containingType {
             names.UnionWith(this.GetVisibleTypeMemberNames(containingType))
         }
-        for reference in method.DeclaringSyntaxReferences {
+        let references = method
+            .DeclaringSyntaxReferences
+            .AsEnumerable()
+            .Concat(
+            method
+                .PartialImplementationPart
+                ?.DeclaringSyntaxReferences
+                .AsEnumerable() ??
+                Enumerable.Empty[SyntaxReference]()
+        )
+        for reference in references {
             let root = reference.GetSyntax()
             let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
             for node in root.DescendantNodesAndSelf() {
@@ -691,7 +725,7 @@ internal class EmittedNameAllocator {
         }
 
         private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
-            case method is IMethodSymbol: cast[ISymbol](method.OriginalDefinition)
+            case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
             case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)
             case type is INamedTypeSymbol: cast[ISymbol](type.OriginalDefinition)

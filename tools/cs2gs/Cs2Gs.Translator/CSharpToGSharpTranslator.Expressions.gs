@@ -6002,6 +6002,9 @@ partial class CSharpToGSharpTranslator {
         /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
         /// properties) except a discard, and calls a `Deconstruct` method.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
+            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) {
+                return true
+            }
             let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
             if element is INamedTypeSymbol{IsTupleType: true} {
                 return false

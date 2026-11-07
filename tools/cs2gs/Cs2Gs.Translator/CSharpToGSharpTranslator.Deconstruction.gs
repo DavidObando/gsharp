@@ -22,11 +22,11 @@ partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         private let recordPatternCaches Dictionary[
             SyntaxNode,
-            List[(Method IMethodSymbol, Flag string, Values string, Type ITypeSymbol)]
-        ] = Dictionary[SyntaxNode, List[(Method IMethodSymbol, Flag string, Values string, Type ITypeSymbol)]]()
+            List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
+        ] = Dictionary[SyntaxNode, List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]]()
 
         private func RecordDeconstructionAdapterName(method IMethodSymbol) string {
-            let original = method.OriginalDefinition
+            let original = (method.PartialDefinitionPart ?? method).OriginalDefinition
             var ordinal = original
                 .ContainingType
                 .GetMembers("Deconstruct")
@@ -41,6 +41,7 @@ partial class CSharpToGSharpTranslator {
                 ),
                 StringComparer.Ordinal
             )
+            taken.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
             for ancestor in hierarchy.Skip(1) {
                 for inherited in ancestor.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
                     if EmittedNameAllocator.IsUserRecordDeconstruct(inherited) {
@@ -48,12 +49,17 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            var name = "deconstructTuple"
+            let stem = if original.Parameters.Length == 1 {
+                "deconstructValue"
+            } else {
+                "deconstructTuple"
+            }
+            var name = stem
             for var suffix = 2; taken.Contains(name) || ordinal > 0; suffix++ {
                 if !taken.Contains(name) {
                     ordinal--
                 }
-                name = "deconstructTuple" + suffix.ToString(CultureInfo.InvariantCulture)
+                name = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
             return name
         }
@@ -64,9 +70,10 @@ partial class CSharpToGSharpTranslator {
                 method.IsStatic ||
                 !method.ReturnsVoid ||
                 method.Arity != 0 ||
+                method.IsPartialDefinition ||
                 method
                 .Parameters
-                .Length < 2 ||
+                .Length < 1 ||
                 method
                 .Parameters
                 .Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.Out) {
@@ -75,7 +82,7 @@ partial class CSharpToGSharpTranslator {
             let statements = List[GStatement]()
             let arguments = List[GExpression]()
             let elements = List[GExpression]()
-            let types = List[GTypeReference]()
+            let types = this.MapRecordDeconstructionParameterTypes(method)
             var receiver GExpression = ThisExpression()
             if method.ContainingType.IsValueType {
                 // C# deconstruction calls a struct receiver copy; an explicit Deconstruct call can mutate the original.
@@ -91,13 +98,12 @@ partial class CSharpToGSharpTranslator {
                     )
                     return nil
                 }
-                let type = this.typeMapper.Map(parameter.Type, this.context, location: nil)
+                let type = types[i]
                 let name = "component" + i.ToString(CultureInfo.InvariantCulture)
                 statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
                 let element = IdentifierExpression(name)
                 arguments.Add(UnaryExpression("&", element))
                 elements.Add(element)
-                types.Add(type!!)
             }
             statements.Add(
                 ExpressionStatement(
@@ -107,17 +113,53 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             )
-            statements.Add(ReturnStatement(TupleLiteralExpression(elements)))
+            statements.Add(
+                ReturnStatement(
+                    if elements.Count == 1 {
+                        elements[0]
+                    } else {
+                        TupleLiteralExpression(elements)
+                    }
+                )
+            )
             return MethodDeclaration(
                 this.RecordDeconstructionAdapterName(method),
                 Array.Empty[Parameter](),
-                TupleTypeReference(types),
+                this.RecordDeconstructionResultType(types),
                 BlockStatement(statements),
                 visibility: MapVisibility(method, this.context, method.DeclaringSyntaxReferences[0].GetSyntax())
             )
         }
 
-        private func ReportUnsupportedRecordExtensionDeconstruction(method IMethodSymbol?) {
+        private func MapRecordDeconstructionParameterTypes(method IMethodSymbol) List[GTypeReference] {
+            let signature = method.PartialImplementationPart ?? method
+            let syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            var parameters = this.MapParameters(signature, syntax?.ParameterList, skipFirst: false)
+            if signature.PartialDefinitionPart != nil {
+                parameters = this.ReconcilePartialMethodParameters(signature, parameters, isDeclaringPart: false)
+            }
+            return parameters.Select((parameter Parameter) -> parameter.Type).ToList()
+        }
+
+        private func RecordDeconstructionResultType(types IReadOnlyList[GTypeReference]) GTypeReference ->
+        if types.Count == 1 {
+            types[0]
+        } else {
+            TupleTypeReference(types)
+        }
+
+        private func HasRenamedNonRecordDeconstructContract(method IMethodSymbol?) bool ->
+        method != nil && method.Name == "Deconstruct" && !EmittedNameAllocator.IsUserRecordDeconstruct(method) &&
+            this.EmittedName(method, method.Name) != method.Name
+
+        private func ReportUnsupportedRecordDeconstruction(method IMethodSymbol?) {
+            if this.HasRenamedNonRecordDeconstructContract(method) {
+                this.context.ReportUnsupported(
+                    method!!.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(),
+                    "deconstruction through a renamed interface or non-record contract needs dispatch-preserving lowering."
+                )
+                return
+            }
             let extension = method?.ReducedFrom ?? method
             if extension != nil && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
                 let receiverType = (
@@ -143,12 +185,12 @@ partial class CSharpToGSharpTranslator {
                         )
                         return
                     }
+                }
+            }
         }
 
         private func RewriteRecordDeconstruction(value GExpression?, method IMethodSymbol?) GExpression? {
-                    this.ReportUnsupportedRecordExtensionDeconstruction(method)
-                }
-            }
+            this.ReportUnsupportedRecordDeconstruction(method)
             if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {
                 return value
             }
@@ -189,10 +231,19 @@ partial class CSharpToGSharpTranslator {
         EmittedNameAllocator.IsUserRecordDeconstruct(info.Method) ||
             (!info.Nested.IsDefaultOrEmpty && info.Nested.Any(this.RecordDeconstructionRunsUserCode))
 
+        private func RecordPatternOutputIsUnused(pattern PatternSyntax) bool -> switch pattern {
+            case _ is DiscardPatternSyntax: true
+            case variable is VarPatternSyntax: variable.Designation is DiscardDesignationSyntax
+            case parentheses is ParenthesizedPatternSyntax: this.RecordPatternOutputIsUnused(parentheses.Pattern)
+            case unary is UnaryPatternSyntax: this.RecordPatternOutputIsUnused(unary.Pattern)
+            case binary is BinaryPatternSyntax: this.RecordPatternOutputIsUnused(binary.Left) &&
+                this.RecordPatternOutputIsUnused(binary.Right)
+            default: false
+        }
+
         private func RecordPatternNeedsDeconstruction(recursive RecursivePatternSyntax) bool ->
         recursive.PositionalPatternClause!!.Subpatterns.Any(
-            (subpattern SubpatternSyntax) -> subpattern.Pattern is not DiscardPatternSyntax &&
-                subpattern.Pattern is not VarPatternSyntax{Designation: DiscardDesignationSyntax}
+            (subpattern SubpatternSyntax) -> !this.RecordPatternOutputIsUnused(subpattern.Pattern)
         )
 
         private func TranslateRecordPositionalPatternTest(
@@ -203,7 +254,15 @@ partial class CSharpToGSharpTranslator {
             let subpatterns = recursive.PositionalPatternClause!!.Subpatterns
             // C# omits a pattern's Deconstruct call when every output is discarded.
             if !this.RecordPatternNeedsDeconstruction(recursive) {
-                return LiteralExpression.Bool(true)
+                var test GExpression = LiteralExpression.Bool(true)
+                for subpattern in subpatterns {
+                    test = BinaryExpression(
+                        test,
+                        "&&",
+                        this.TranslatePatternTest(LiteralExpression.Int("0"), subpattern.Pattern)
+                    )
+                }
+                return test
             }
             let owner = this.RecordPatternDecisionOwner(recursive)
             if owner == nil {
@@ -215,16 +274,19 @@ partial class CSharpToGSharpTranslator {
                 return LiteralExpression.Bool(false)
             }
             let call = this.RewriteRecordDeconstruction(receiver, method)
-            let tupleType = this
-                .context
-                .Compilation
-                .CreateTupleTypeSymbol(
-                method.Parameters.Select((parameter IParameterSymbol) -> parameter.Type).ToImmutableArray()
-            )
+            let outputTypes = this.MapRecordDeconstructionParameterTypes(method)
+            let resultType = this.RecordDeconstructionResultType(outputTypes)
             let BuildTest = func (tuple GExpression) GExpression {
                 var test GExpression = LiteralExpression.Bool(true)
                 for var i = 0; i < subpatterns.Count; i++ {
-                    let member = MemberAccessExpression(tuple, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture))
+                    let member GExpression = if subpatterns.Count == 1 {
+                        tuple
+                    } else {
+                        MemberAccessExpression(tuple, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture))
+                    }
+                    if outputTypes[i].IsNullable {
+                        this.state.GSharpNullablePatternReceivers.Add(member)
+                    }
                     let component = this.TranslatePatternTest(
                         member,
                         subpatterns[i].Pattern,
@@ -238,17 +300,17 @@ partial class CSharpToGSharpTranslator {
             let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
             if owner != nil && declarations != nil {
                 if !this.recordPatternCaches.TryGetValue(owner, out var caches) {
-                    caches = List[(Method IMethodSymbol, Flag string, Values string, Type ITypeSymbol)]()
+                    caches = List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]()
                     this.recordPatternCaches.Add(owner, caches)
                 }
                 var cache = caches.FirstOrDefault(
-                    (entry(Method IMethodSymbol, Flag string, Values string, Type ITypeSymbol)) ->
+                    (entry(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)) ->
                     SymbolEqualityComparer.Default.Equals(entry.Method, method)
                 )
                 if cache.Method == nil {
                     let flag = this.AllocateSynthesizedLocalName("deconstructed", recursive)
                     let values = this.AllocateSynthesizedLocalName("components", recursive)
-                    cache = (method, flag, values, tupleType)
+                    cache = (method, flag, values, resultType)
                     caches.Add(cache)
                     if owner is IsPatternExpressionSyntax {
                         declarations.Add(
@@ -259,13 +321,7 @@ partial class CSharpToGSharpTranslator {
                                 LiteralExpression.Bool(false)
                             )
                         )
-                        declarations.Add(
-                            LocalDeclarationStatement(
-                                BindingKind.Var,
-                                values,
-                                this.typeMapper.Map(tupleType, this.context, location: nil)
-                            )
-                        )
+                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, values, resultType))
                     }
                 }
                 let local = IdentifierExpression(cache.Values)
@@ -296,7 +352,17 @@ partial class CSharpToGSharpTranslator {
                 return LiteralExpression.Bool(false)
             }
             // Store the outputs inside the guarded test so bindings read them without repeating the call.
-            return this.StorePatternMemberOnce(call, tupleType, false, declarations, BuildTest)
+            let symbolType = if method.Parameters.Length == 1 {
+                method.Parameters[0].Type
+            } else {
+                this
+                    .context
+                    .Compilation
+                    .CreateTupleTypeSymbol(
+                    method.Parameters.Select((parameter IParameterSymbol) -> parameter.Type).ToImmutableArray()
+                )
+            }
+            return this.StorePatternMemberOnce(call, symbolType, false, declarations, BuildTest, resultType)
         }
 
         private func RecordPatternDecisionOwner(recursive RecursivePatternSyntax) SyntaxNode? {
@@ -337,13 +403,7 @@ partial class CSharpToGSharpTranslator {
                             LiteralExpression.Bool(false)
                         )
                     )
-                    declarations.Add(
-                        LocalDeclarationStatement(
-                            BindingKind.Var,
-                            cache.Values,
-                            this.typeMapper.Map(cache.Type, this.context, location: nil)
-                        )
-                    )
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, cache.Values, cache.Type))
                 }
             }
             return declarations

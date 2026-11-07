@@ -1741,7 +1741,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
                 if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
-                    this.ReportUnsupportedRecordExtensionDeconstruction(deconstruction.Method)
+                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method)
                     if extractions.Count > 0 || conversions.Count > 0 {
                         let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
                         statements.AddRange(extractions)
@@ -2060,8 +2060,11 @@ partial class CSharpToGSharpTranslator {
                         )
                     }
                     extractions.Add(
-                        TupleDeconstructionStatement(BindingKind.Let, nestedNames,
-                            this.RewriteRecordDeconstruction(IdentifierExpression(carrier), deconstruction.Method))
+                        TupleDeconstructionStatement(
+                            BindingKind.Let,
+                            nestedNames,
+                            this.RewriteRecordDeconstruction(IdentifierExpression(carrier), deconstruction.Method)
+                        )
                     )
                     extractions.AddRange(nestedExtractions)
                 }

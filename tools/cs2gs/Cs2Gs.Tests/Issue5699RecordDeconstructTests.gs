@@ -18,6 +18,240 @@ class Issue5699RecordDeconstructTests {
     @InlineData("record", true)
     @InlineData("record class", true)
     @InlineData("record struct", true)
+    func NullableOutputs_UseEmittedSignatureTypes(kind string, annotated bool) {
+        Verify((`
+CONTEXT
+namespace RecordDeconstruction {
+    public KIND R {
+        public static int Calls;
+        public void Deconstruct(ATTRIBUTE out string text, out int count) { Calls++; text = null; count = 4; }
+    }
+    public KIND Unused {
+        public void Deconstruct(ATTRIBUTE out string text, out int count) { text = null; count = 0; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var (text, count) = r;
+            var pattern = r is R(null, 4);
+            var arm = r switch { R("x", _) => -1, R(null, var n) => n, _ => -2 };
+            r.Deconstruct(out var direct, out var directCount);
+            return $"{text ?? "nil"},{count},{pattern},{arm},{direct ?? "nil"},{directCount},{R.Calls}";
+        }
+    }
+}`).Replace(
+                "KIND",
+                kind
+            ).Replace(
+                "CONTEXT",
+                if annotated {
+                    "#nullable enable"
+                } else {
+                    "#nullable disable"
+                }
+            ).Replace(
+                "ATTRIBUTE",
+                if annotated {
+                    "[System.Diagnostics.CodeAnalysis.AllowNull]"
+                } else {
+                    ""
+                }
+            ), "func deconstructTuple() (string?, int32)")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func GenericNullableOutput_UsesConstructedEmittedSignature(annotated bool) {
+        Verify((`
+CONTEXT
+namespace RecordDeconstruction {
+    public record R<T> where T : class {
+        public void Deconstruct(ATTRIBUTE out T value, out int count) { value = null; count = 4; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R<string>();
+            var (value, count) = r;
+            var pattern = r is R<string>(null, 4);
+            return $"{value ?? "nil"},{count},{pattern}";
+        }
+    }
+}`).Replace(
+                "CONTEXT",
+                if annotated {
+                    "#nullable enable"
+                } else {
+                    "#nullable disable"
+                }
+            )
+                .Replace(
+                "ATTRIBUTE",
+                if annotated {
+                    "[System.Diagnostics.CodeAnalysis.AllowNull]"
+                } else {
+                    ""
+                }
+            ), "func deconstructTuple() (T?, int32)")
+    }
+
+    @Theory
+    @InlineData("record")
+    @InlineData("record class")
+    @InlineData("record struct")
+    func SingleOutputPatterns_UseScalarAdapters(kind string) {
+        Verify((`
+namespace RecordDeconstruction {
+    public KIND R {
+        public static int Calls;
+        public void Deconstruct(out int value) { Calls++; value = 7; }
+    }
+    public KIND S {
+        public void Deconstruct(out string value) { value = null; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var value = r is R(var x) ? x : -1;
+            var arm = r switch { R(0) => -1, R(7) => 7, _ => -2 };
+            r.Deconstruct(out var direct);
+            var nil = new S() is S(null);
+            return $"{value},{arm},{direct},{R.Calls},{nil}";
+        }
+    }
+}`).Replace("KIND", kind))
+    }
+
+    @Fact
+    func PartialDeconstructOverloads_EmitOneAdapterPerImplementedPair() {
+        Verify(`
+namespace RecordDeconstruction {
+    public partial record R {
+        public int X;
+        public int Y;
+        public partial void Deconstruct(out int x, out int y);
+        public partial void Deconstruct(out int x, out int y, out int z);
+    }
+    public partial record R {
+        public partial void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public partial void Deconstruct(out int x, out int y, out int z) { x = Y * 10; y = X; z = X + Y; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R { X = 2, Y = 3 };
+            var (a, b) = r;
+            var (c, d, e) = r;
+            return $"{a},{b},{c},{d},{e}";
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func InheritedDeconstruct_ReservesNamesAgainstUnrelatedDerivedMembers() {
+        Verify(`
+namespace RecordDeconstruction {
+    public delegate void Parts(out int x, out int y);
+    public record Base {
+        public int X;
+        public int Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public record R : Base {
+        public void deconstruct(out int x, out int y) { x = -1; y = -2; }
+        public (int, int) deconstructTuple() => (-3, -4);
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R { X = 2, Y = 3 };
+            var (a, b) = r;
+            r.Deconstruct(out var c, out var d);
+            Parts parts = r.Deconstruct;
+            parts(out var e, out var f);
+            return $"{a},{b},{c},{d},{e},{f}";
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func ParenthesizedAndLogicalDiscards_DoNotInvokeDeconstruct() {
+        Verify(`
+namespace RecordDeconstruction {
+    public record R {
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; throw new System.InvalidOperationException(); }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var parentheses = r is R((_), (_));
+            var conjunction = r is R((_ and _), _);
+            var disjunction = r is R((_ or _), _);
+            return $"{parentheses},{conjunction},{disjunction},{R.Calls}";
+        }
+    }
+}`)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RenamedSourceInterfaceDeconstruction_ReportsDispatchGap(forEach bool) {
+        let body = if forEach {
+            `int x = 0, y = 0;
+            foreach (var (a, b) in new IParts[] { new R { X = 2, Y = 3 } }) { x = a; y = b; }`
+        } else {
+            "IParts parts = new R { X = 2, Y = 3 }; var (x, y) = parts;"
+        }
+        let source = (`
+namespace RecordDeconstruction {
+    public interface IParts { void Deconstruct(out int x, out int y); }
+    public record R : IParts {
+        public int X;
+        public int Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public static class Probe {
+        public static string Run() {
+            BODY
+            return $"{x},{y}";
+        }
+    }
+}`).Replace("BODY", body)
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(
+            project.Compilation.WithAssemblyName("InterfaceBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
+        )
+        Assert.Equal(
+            "30,2",
+            cast[string](
+                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
+                    nil,
+                    nil
+                )
+            )
+        )
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("renamed interface or non-record contract", gap.Message)
+        Assert.Equal(source.IndexOf("void Deconstruct", StringComparison.Ordinal), gap.Location!!.SourceSpan.Start)
+    }
+
+    @Theory
+    @InlineData("record", false)
+    @InlineData("record class", false)
+    @InlineData("record struct", false)
+    @InlineData("record", true)
+    @InlineData("record class", true)
+    @InlineData("record struct", true)
     func BodyRecord_CustomDeconstruct_PreservesAllConsumersAndValueSemantics(kind string, properties bool) {
         let members = if properties {
             "public int X { get; init; } public int Y { get; init; }"
@@ -182,6 +416,7 @@ namespace RecordDeconstruction {
     @Fact
     func NestedForEach_UserRecordOutputs_PreserveSelectedMethodsAndOuterArity() {
         Verify(`
+#nullable enable
 namespace RecordDeconstruction {
     public record R {
         public int X;
@@ -192,13 +427,20 @@ namespace RecordDeconstruction {
         public void Deconstruct(out R child, out int tag) { child = Child; tag = Tag * 10; }
     }
     public static class Probe {
+        public static int WithRef(ref string? text, R r) {
+            if (text == null) return 0;
+            var total = 0;
+            foreach (var ((a, b), c) in new[] { (r, 4) }) total += a + b + c;
+            return text.Length + total;
+        }
         public static string Run() {
             var r = new R { X = 2, Y = 3 };
             var total = 0;
             foreach (var ((a, b), c) in new[] { (r, 4) }) total += a + b + c;
             foreach (var ((a, b), c) in new[] { new Outer(r, 4) }) total += a + b + c;
             foreach (((int a, int b), int c) in new[] { (r, 4) }) total += a + b + c;
-            return total.ToString();
+            string? text = "hi";
+            return total.ToString() + "," + WithRef(ref text, r);
         }
     }
 }`)
@@ -385,7 +627,7 @@ namespace RecordDeconstruction {
     }
 
     shared {
-        private func Verify(source string) {
+        private func Verify(source string, emittedSignature string? = nil) {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
             Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
             using let image = MemoryStream()
@@ -401,6 +643,9 @@ namespace RecordDeconstruction {
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
             Assert.DoesNotContain("func __", printed)
+            if emittedSignature != nil {
+                Assert.Contains(emittedSignature, printed)
+            }
             Assert.DoesNotContain(
                 context.Diagnostics,
                 (diagnostic TranslationDiagnostic) ->

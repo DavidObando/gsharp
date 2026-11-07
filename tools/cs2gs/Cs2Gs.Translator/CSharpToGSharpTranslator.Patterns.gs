@@ -1463,9 +1463,14 @@ partial class CSharpToGSharpTranslator {
             memberType ITypeSymbol,
             gsharpNullable bool,
             declarations List[GStatement],
-            test(GExpression) -> GExpression
+            test(GExpression) -> GExpression,
+            emittedStorageType GTypeReference? = nil
         ) GExpression {
-            var storageType GTypeReference? = this.typeMapper.Map(memberType, this.context, location: nil)
+            var storageType GTypeReference? = emittedStorageType ?? this.typeMapper.Map(
+                memberType,
+                this.context,
+                location: nil
+            )
             if memberType.IsReferenceType || gsharpNullable {
                 storageType = MakeNullable(storageType)
             }
@@ -2732,6 +2737,10 @@ partial class CSharpToGSharpTranslator {
             // matches the pattern, so only its shape is checked here.
             if operation.DeconstructSymbol is not IMethodSymbol deconstruct {
                 failureReason = "no Deconstruct method was bound for '${operation.MatchedType?.Name}'"
+                return nil
+            }
+            if this.HasRenamedNonRecordDeconstructContract(deconstruct) {
+                failureReason = "deconstruction through a renamed interface or non-record contract needs dispatch-preserving lowering"
                 return nil
             }
             if deconstruct.IsExtensionMethod || deconstruct.ReducedFrom != nil {
