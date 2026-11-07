@@ -532,7 +532,13 @@ Translated G#:
 ` + printed
             )
             if rejectRedundantAssertions {
-                Assert.DoesNotContain("GS0536", compile.Output, StringComparison.Ordinal)
+                Assert.True(
+                    !compile.Output.Contains("GS0536", StringComparison.Ordinal),
+                    "gsc must not report redundant assertions. Output:\n" +
+                        compile.Output +
+                        "\nTranslated G#:\n" +
+                        printed
+                )
             }
             let run = ProcessRunner.Run("dotnet", []string{dllPath}, timeout: TimeSpan.FromSeconds(30))
             Assert.False(run.TimedOut, (`Translated program timed out and was killed. Output:

@@ -1699,6 +1699,7 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetDeclaredSymbol(varSingle) is {} varBound {
                         this.state.PatternBindings[varBound] = receiver!!
+                        this.RegisterProjectedPatternBinding(varBound, receiverType)
                         if this
                             .state
                             .StoredPatternCaptures
@@ -1707,7 +1708,7 @@ partial class CSharpToGSharpTranslator {
                             capturedLocal
                             .Type
                             .IsReferenceType &&
-                            this.TryGetVarCaptureStaticNonNull(capturedLocal, out var inputIsNonNull) &&
+                            this.TryGetVarCaptureStaticNonNull(capturedLocal, out var inputIsNonNull, receiverType) &&
                             inputIsNonNull {
                             this
                                 .state
@@ -1726,7 +1727,6 @@ partial class CSharpToGSharpTranslator {
                         if varBound is ILocalSymbol varLocal {
                             this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
                         }
-                        this.RegisterProjectedPatternBinding(varBound, receiverType)
                     } else if varPattern.Designation is ParenthesizedVariableDesignationSyntax {
                         // `var (a, b)` binds the deconstructed elements; G# has no
                         // canonical form for that, so keep the loud gap rather than
@@ -2429,13 +2429,6 @@ partial class CSharpToGSharpTranslator {
                 // descendant bindings AFTER the test, outside the guard that
                 // narrows it, so its reads below the guard assert too.
                 memberReceiver = EnsureNonNullAssertion(receiver)
-            }
-            // The typed form of the same hazard (`Outer(Inner(var a, _))`): a
-            // stored capture's type test narrows it only inside the test
-            // block, but a descendant binding reads it after the test, so
-            // member reads go through the narrowed `(t as Inner)!!`.
-            if recursive.Type != nil && isNestedPatternMember && this.state.StoredPatternCaptures.Contains(receiver!!) {
-                memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
             }
             if recursive.PropertyPatternClause != nil {
                 let sharedPrefixes Dictionary[string, GExpression]? = if recursive.PropertyPatternClause!!

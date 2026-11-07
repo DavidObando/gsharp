@@ -4511,10 +4511,51 @@ partial class CSharpToGSharpTranslator {
         /// a property subpattern `{ P: var c }` at any depth and a conjunction. See
         /// (cref:TryGetVarCaptureInput) for the input.
         /// @returns `false` when cs2gs cannot name the input. The caller then uses its other rules.
-        private func TryGetVarCaptureStaticNonNull(local ILocalSymbol, out isNonNull bool) bool {
+        private func TryGetVarCaptureStaticNonNull(
+            local ILocalSymbol,
+            out isNonNull bool,
+            capturedInputType ITypeSymbol? = nil
+        ) bool {
             isNonNull = false
-            if this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
+            if capturedInputType == nil && this.state.VarCaptureInputNonNull.TryGetValue(local, out var decided) {
                 isNonNull = decided
+                return true
+            }
+            if local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is SingleVariableDesignationSyntax{
+                Parent: Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VarPatternSyntax{
+                    Parent: Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ListPatternSyntax or
+                        Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SlicePatternSyntax
+                }
+            } {
+                let inputType = capturedInputType ??
+                    (
+                    if this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType
+                        .TryGetValue(local, out var projectedType) {
+                        projectedType
+                    } else {
+                        local.Type
+                    }
+                )
+                isNonNull = this.DeclaredValueIsStaticallyNonNull(nil, inputType)
+                this.state.VarCaptureInputNonNull[local] = isNonNull
                 return true
             }
             if this.state.VarCaptureUndecided.Contains(local) || !this.TryGetVarCaptureInput(

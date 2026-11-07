@@ -532,13 +532,18 @@ partial class CSharpToGSharpTranslator {
         ) ITypeSymbol? {
             if receiverType is IArrayTypeSymbol array {
                 return if mappedArrayElementType == nil {
-                    receiverType
+                    array.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                 } else {
                     cast[ITypeSymbol](
                         this
                             .context
                             .Compilation
-                            .CreateArrayTypeSymbol(mappedArrayElementType, array.Rank, array.NullableAnnotation)
+                            .CreateArrayTypeSymbol(
+                            mappedArrayElementType,
+                            array.Rank,
+                            mappedArrayElementType.NullableAnnotation
+                        )
+                            .WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                     )
                 }
             }
