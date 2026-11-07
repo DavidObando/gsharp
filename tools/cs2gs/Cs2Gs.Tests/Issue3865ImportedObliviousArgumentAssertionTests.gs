@@ -49,6 +49,40 @@ import Xunit
 /// consumer that calls it is nullable-ENABLED, mirroring
 /// `<Nullable>enable</Nullable>` on a netstandard2.0 project.
 open class Issue3865ImportedObliviousArgumentAssertionTests {
+    @Theory
+    @InlineData("Run", "method.Invoke(instance, null)")
+    @InlineData("RunTuple", "(method.Invoke(instance, null), 1)")
+    func ImportedObliviousLambdaReturn_ReflectionVoidResult_StaysNullableAndRuns(sink string, result string) {
+        const Library = `
+#nullable disable
+using System;
+namespace Imported {
+    public static class CallbackSink {
+        public static bool Run(Func<object> callback) => callback() == null;
+        public static bool RunTuple(Func<(object Value, int Count)> callback) => callback().Value == null;
+    }
+}`
+        let source = `
+#nullable enable
+using System;
+using Imported;
+namespace Consumer {
+    public class Program {
+        public void Done() { }
+        public static void Main() {
+            var instance = new Program();
+            var method = typeof(Program).GetMethod("Done")!;
+            Console.WriteLine(CallbackSink.__SINK__(() => __RESULT__));
+        }
+    }
+}`.Replace("__SINK__", sink, StringComparison.Ordinal).Replace("__RESULT__", result, StringComparison.Ordinal)
+        let (printed, image) = TranslateAgainstLibraryWithImage(Library, source, OutputKind.ConsoleApplication)
+        let (exit, stdout) = CompileAndRun(printed, image)
+        Assert.True(exit == 0, "Translated callback must not throw:\n" + stdout)
+        Assert.Equal("True", stdout.Trim())
+        Assert.DoesNotContain("Invoke(instance, nil)!!", Compact(printed), StringComparison.Ordinal)
+    }
+
     @Fact
     func ObliviousImportedParameter_NullableArgument_EmitsNoRuntimeAssertion() {
         let printed = TranslateAgainstLibrary(ObliviousLibrarySource, ConsumerSource)
