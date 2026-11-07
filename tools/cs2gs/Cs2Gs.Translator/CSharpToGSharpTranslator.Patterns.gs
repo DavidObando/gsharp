@@ -3750,89 +3750,11 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
-        private func GetDeconstructionAliasValue(designation SingleVariableDesignationSyntax) ExpressionSyntax? {
-            var target SyntaxNode = designation
-            let elementIndices = Stack[int32]()
-            while true {
-                switch target.Parent {
-                    case parenthesized is ParenthesizedVariableDesignationSyntax {
-                        elementIndices.Push(parenthesized.Variables.IndexOf(cast[VariableDesignationSyntax](target)))
-                        target = parenthesized
-                        continue
-                    }
-                    case declaration is DeclarationExpressionSyntax when declaration.Type.IsVar {
-                        target = declaration
-                        continue
-                    }
-                    case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
-                        elementIndices.Push(tuple.Arguments.IndexOf(argument))
-                        target = tuple
-                        continue
-                    }
-                    case assignment is AssignmentExpressionSyntax when assignment.Left == target {
-                        var value ExpressionSyntax? = assignment.Right
-                        for index in elementIndices {
-                            value = StripParentheses(value)
-                            if value is not TupleExpressionSyntax tupleValue ||
-                                index < 0 ||
-                                index >= tupleValue
-                                .Arguments
-                                .Count {
-                                return nil
-                            }
-                            value = tupleValue.Arguments[index].Expression
-                        }
-                        return StripParentheses(value)
-                    }
-                    default {
-                        return nil
-                    }
-                }
-            }
-        }
+        private func GetDeconstructionAliasValue(designation SingleVariableDesignationSyntax) ExpressionSyntax? ->
+        ObliviousNullabilityAnalyzer.GetDeconstructionAliasValue(designation)
 
-        private func GetArrayStorageOwner(symbol ISymbol?, visited HashSet[ISymbol]) ISymbol? {
-            if symbol == nil || ObliviousNullabilityAnalyzer.SymbolValueType(
-                symbol
-            ) is not IArrayTypeSymbol arrayType ||
-                !arrayType
-                .ElementType
-                .IsReferenceType ||
-                !visited.Add(symbol) {
-                return nil
-            }
-            if symbol is not ILocalSymbol local {
-                return if (symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or IMethodSymbol) {
-                    symbol.OriginalDefinition
-                } else {
-                    default(ISymbol?)
-                }
-            }
-            for reference in local.DeclaringSyntaxReferences {
-                let declaration = reference.GetSyntax()
-                if declaration is SingleVariableDesignationSyntax designation && this.GetDeconstructionAliasValue(
-                    designation
-                ) is {} deconstructedValue &&
-                    this
-                    .context
-                    .GetSymbolInfo(deconstructedValue)
-                    .Symbol is {} deconstructedSource {
-                    return this.GetArrayStorageOwner(deconstructedSource, visited) ?? local
-                }
-                if declaration is VariableDeclaratorSyntax{
-                    Initializer: {Value: {} initializer},
-                    Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
-                } &&
-                    this
-                    .context
-                    .GetSymbolInfo(StripParentheses(initializer))
-                    .Symbol is {} source &&
-                    (source is ILocalSymbol or IFieldSymbol or IPropertySymbol or IParameterSymbol) {
-                    return this.GetArrayStorageOwner(source, visited) ?? local
-                }
-            }
-            return local
-        }
+        private func GetArrayStorageOwner(symbol ISymbol?, visited HashSet[ISymbol]) ISymbol? ->
+        ObliviousNullabilityAnalyzer.GetArrayStorageOwner(symbol, this.context.SemanticModel, visited)
 
         private func GetArrayStorageExpressionSymbol(expression ExpressionSyntax) ISymbol? {
             let stripped = StripParentheses(expression)

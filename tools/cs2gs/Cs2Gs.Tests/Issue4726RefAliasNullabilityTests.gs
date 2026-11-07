@@ -270,6 +270,171 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func MixedRefReturnTargets_ShareTheFixedContract(choose bool) {
+        let source = `public static class Obj {
+#nullable enable
+    private static string fixedText = "fixed";
+#nullable disable
+    private static string other = "other";
+    public static ref string Borrow(bool choose) {
+        if (choose) { return ref fixedText; }
+        return ref other;
+    }
+    public static string Run() {
+        ref string alias = ref Borrow(` + (
+            if choose {
+                "true"
+            } else {
+                "false"
+            }
+        ) + `);
+        return alias ?? "fallback";
+    }
+}`
+        AssertParity(
+            source,
+            Translate(source),
+            if choose {
+                "fixed"
+            } else {
+                "other"
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ParameterArrayRefReturn_SharesElementStorage(blockBody bool) {
+        let body = if blockBody {
+            "{ return ref xs[0]; }"
+        } else {
+            "=> ref xs[0];"
+        }
+        let source = `public static class Obj {
+    public static ref string Borrow(string[] xs) ` + body + `
+    public static string Run() {
+        var xs = new[] { "x" };
+        ref string alias = ref Borrow(xs);
+        return alias ?? "fallback";
+    }
+}`
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RecursiveRefArrayParameter_PreservesStorageAndNullableEvidence(nullable bool) {
+        let value = if nullable {
+            "null"
+        } else {
+            "\"x\""
+        }
+        let source = `public static class Obj {
+    private static string[] xs = new string[] { ` + value + ` };
+    public static ref string Pick(ref string value, bool choose) {
+        if (choose) { return ref value; }
+        return ref xs[0];
+    }
+    public static string Read() {
+        ref string alias = ref Pick(ref xs[0], false);
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        if !nullable {
+            Assert.DoesNotContain("string?", printed)
+        }
+        AssertParity(
+            source,
+            printed,
+            if nullable {
+                "null"
+            } else {
+                "x"
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RecursiveArrayWrite_PreservesStorageAndNullableEvidence(nullable bool) {
+        let value = if nullable {
+            "null"
+        } else {
+            "\"x\""
+        }
+        let source = `public static class Obj {
+    public static string Read() {
+        var xs = new string[1];
+        xs[0] = ` + value + `;
+        ref string alias = ref xs[0];
+        xs[0] = alias;
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        if !nullable {
+            Assert.DoesNotContain("string?", printed)
+        }
+        AssertParity(
+            source,
+            printed,
+            if nullable {
+                "null"
+            } else {
+                "x"
+            }
+        )
+    }
+
+    @Fact
+    func ArrayOwnerAliases_ForwardNullToTheScalarReturn() {
+        const source = `public static class Obj {
+    public static string Read() {
+        var xs = new[] { "x" };
+        var ys = xs;
+        ref string first = ref xs[0];
+        ref string second = ref ys[0];
+        first = null;
+        return second;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        AssertParity(source, Translate(source), "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefIndexer_ForwardNullToTheScalarReturn(readOnly bool) {
+        let modifier = if readOnly {
+            "readonly "
+        } else {
+            ""
+        }
+        let source = `public class Holder {
+    public string Text = null;
+    public ref ` + modifier + `string this[int index] => ref Text;
+}
+public static class Obj {
+    public static string Read() {
+        var holder = new Holder();
+        ref ` + modifier + `string alias = ref holder[0];
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        AssertParity(source, Translate(source), "null")
+    }
+
+    @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
     @InlineData("default(string)")

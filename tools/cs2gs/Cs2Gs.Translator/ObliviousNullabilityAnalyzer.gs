@@ -4380,7 +4380,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         CollectOverrideContractEdges(compilation, edges)
         CollectTupleContractEdges(compilation, tupleTainted, tupleContractEdges)
         CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleContractEdges)
-        CollectRefArrayAliasEdges(compilation, edges)
+        CollectRefArrayAliasEdges(compilation, tainted, edges, scalarTupleEdges)
         // A signature component shares one contract, even when only one
         // implementation inherits a fixed non-null metadata position.
         let fixedTupleContracts = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
@@ -4457,7 +4457,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
-    private func CollectRefArrayAliasEdges(compilation Compilation, edges List[(Target ISymbol, Source ISymbol)]) {
+    private func CollectRefArrayAliasEdges(
+        compilation Compilation,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+    ) {
         let aliases = Dictionary[ISymbol, Dictionary[int32, ISymbol]](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
@@ -4477,14 +4482,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if !IsRefStorageSymbol(target) {
                     continue
                 }
-                var receiver = Unwrap(reference.Expression, unwrapSuppressions: true)
-                var depth = 0
-                while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
-                    .Type is IArrayTypeSymbol {
-                    depth++
-                    receiver = Unwrap(access.Expression, unwrapSuppressions: true)
-                }
-                let source = Canonical(model.GetSymbolInfo(receiver).Symbol)
+                let (source, depth) = RefArrayStorage(reference.Expression, model)
                 if depth == 0 || source == nil {
                     continue
                 }
@@ -4501,6 +4499,118 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+                if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                    continue
+                }
+                let (source, depth) = RefArrayStorage(assignment.Left, model)
+                if source != nil && depth > 0 && aliases.TryGetValue(source, out var positions) &&
+                    positions
+                    .TryGetValue(depth, out var alias) {
+                    CollectScalarValueFlow(alias, assignment.Right, model, tainted, edges, scalarTupleEdges)
+                }
+            }
+        }
+    }
+
+    private func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
+        var receiver = Unwrap(expression, unwrapSuppressions: true)
+        var depth = 0
+        while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+            .Type is IArrayTypeSymbol {
+            depth++
+            receiver = Unwrap(access.Expression, unwrapSuppressions: true)
+        }
+        let symbol = model.GetSymbolInfo(receiver).Symbol
+        return (
+            Canonical(GetArrayStorageOwner(symbol, model, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? symbol),
+            depth
+        )
+    }
+
+    internal func GetDeconstructionAliasValue(designation SingleVariableDesignationSyntax) ExpressionSyntax? {
+        var target SyntaxNode = designation
+        let elementIndices = Stack[int32]()
+        while true {
+            switch target.Parent {
+                case parenthesized is ParenthesizedVariableDesignationSyntax {
+                    elementIndices.Push(parenthesized.Variables.IndexOf(cast[VariableDesignationSyntax](target)))
+                    target = parenthesized
+                    continue
+                }
+                case declaration is DeclarationExpressionSyntax when declaration.Type.IsVar {
+                    target = declaration
+                    continue
+                }
+                case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                    elementIndices.Push(tuple.Arguments.IndexOf(argument))
+                    target = tuple
+                    continue
+                }
+                case assignment is AssignmentExpressionSyntax when assignment.Left == target {
+                    var value = assignment.Right
+                    for index in elementIndices {
+                        value = Unwrap(value)
+                        if value is not TupleExpressionSyntax tupleValue ||
+                            index < 0 ||
+                            index >= tupleValue
+                            .Arguments
+                            .Count {
+                            return nil
+                        }
+                        value = tupleValue.Arguments[index].Expression
+                    }
+                    return Unwrap(value)
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+    }
+
+    internal func GetArrayStorageOwner(symbol ISymbol?, model SemanticModel, visited HashSet[ISymbol]) ISymbol? {
+        if symbol == nil ||
+            SymbolValueType(symbol) is not IArrayTypeSymbol arrayType ||
+            !arrayType
+            .ElementType
+            .IsReferenceType ||
+            !visited.Add(symbol) {
+            return nil
+        }
+        if symbol is not ILocalSymbol local {
+            return if symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or IMethodSymbol {
+                symbol.OriginalDefinition
+            } else {
+                default(ISymbol?)
+            }
+        }
+        for reference in local.DeclaringSyntaxReferences {
+            let declaration = reference.GetSyntax()
+            let declarationModel = model.Compilation.GetSemanticModel(declaration.SyntaxTree)
+            if declaration is SingleVariableDesignationSyntax designation &&
+                GetDeconstructionAliasValue(designation) is {} value &&
+                declarationModel
+                .GetSymbolInfo(value).Symbol is {} deconstructedSource {
+                return GetArrayStorageOwner(deconstructedSource, declarationModel, visited) ?? local
+            }
+            if declaration is VariableDeclaratorSyntax{
+                Initializer: {Value: {} initializer},
+                Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
+            } &&
+                declarationModel
+                .GetSymbolInfo(Unwrap(initializer))
+                .Symbol is {} source &&
+                source is ILocalSymbol or
+                IFieldSymbol or
+                IPropertySymbol or
+                IParameterSymbol {
+                return GetArrayStorageOwner(source, declarationModel, visited) ?? local
+            }
+        }
+        return local
     }
 
     private func SeedEfEntityPropertyTaint(compilation Compilation, tainted HashSet[ISymbol]) {
@@ -7504,6 +7614,13 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called && !called.ReturnsVoid {
                     yield Canonical(called)
                 }
+            }
+            case access is ElementAccessExpressionSyntax when
+            $scope != SourceScope.CallsOnly &&
+                $scope != SourceScope.CallsAndNonPropertyDeclarations &&
+                model
+                .GetSymbolInfo(access).Symbol is IPropertySymbol property && IsRefStorageSymbol(property) {
+                yield Canonical(property)
             }
             case IdentifierNameSyntax, MemberAccessExpressionSyntax {
                 if $scope == SourceScope.CallsOnly {

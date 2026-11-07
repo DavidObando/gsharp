@@ -41,6 +41,7 @@ partial class CSharpToGSharpTranslator {
             let Symbol ISymbol
             let Depth int32
             var Parent RefStorageSlot? = nil
+            var EvaluatingArrays bool = false
             let Members List[RefStorageSlot] = List[RefStorageSlot]()
 
             init(symbol ISymbol, depth int32) {
@@ -2438,7 +2439,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func RefStorageIsNullable(slot RefStorageSlot, includeArrays bool) bool {
-            let members = slot.Root().Members
+            let root = slot.Root()
+            let members = root.Members
             // A fixed declaration constrains every name of the same storage.
             for member in members {
                 if member.Depth == 0 && this.RefStorageSlotType(member) is {
@@ -2461,14 +2463,20 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
             }
-            if includeArrays {
-                for member in members {
-                    if member.Depth > 0 && this.IsWidenedArrayElementStorage(
-                        member.Symbol,
-                        string.Join(".", Enumerable.Repeat("0", member.Depth))
-                    ) {
-                        return true
+            if includeArrays && !root.EvaluatingArrays {
+                // A cycle adds no evidence. Keep searching its other array and scalar sources.
+                root.EvaluatingArrays = true
+                try {
+                    for member in members {
+                        if member.Depth > 0 && this.IsWidenedArrayElementStorage(
+                            member.Symbol,
+                            string.Join(".", Enumerable.Repeat("0", member.Depth))
+                        ) {
+                            return true
+                        }
                     }
+                } finally {
+                    root.EvaluatingArrays = false
                 }
             }
             return false
