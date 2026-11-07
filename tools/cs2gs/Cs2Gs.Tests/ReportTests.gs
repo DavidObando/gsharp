@@ -466,6 +466,55 @@ open class ReportTests {
         Assert.Equal(0, Program.DetermineMigrateExitCode(model.Succeeded, reportGenerated: true))
     }
 
+    /// Issue #4868: a run that stopped early (`--translate-only` or `--stop-after`)
+    /// records only the executed stage prefix in `run.json`. Even when
+    /// `AppResult.Unverified` was left `false` (as `--translate-only` does for the
+    /// sharded nightly gate), `ReportModel` and `HtmlReportWriter` must render the
+    /// run and its apps as partial/unverified (`isGreen: false`), never green.
+    @Fact
+    func ReportModel_PartialRunStoppedEarly_IsRenderedAsPartialNotGreen() {
+        let runDir = NewRunDir("partial-translate-only")
+        let run = RunResult{
+            RunId: "2026-03-01T00-00-04Z_partial",
+            Timestamp: "2026-03-01T00:00:04Z",
+            GscVersion: "0.2.0+test",
+            GscPath: "/path/to/gsc.dll",
+            Succeeded: true,
+            Unverified: false,
+            RequestedStages: List[string]{"translate"},
+            Apps: List[AppResult]{
+                AppResult{
+                    AppId: "corpus/L1-Console",
+                    Succeeded: true,
+                    Unverified: false,
+                    Stages: List[StageResult]{StageResult{Stage: "translate", Status: "passed"}}
+                }
+            }
+        }
+        WriteRunJson(runDir, run)
+        let model = ReportModel.FromRunDirectory(runDir)
+        Assert.True(model.Succeeded)
+        Assert.True(model.Partial)
+        Assert.True(model.Unverified)
+        Assert.Equal(1, model.TotalApps)
+        Assert.Equal(0, model.GreenApps)
+        Assert.Equal(1, model.UnverifiedApps)
+        Assert.False(model.IsGreen)
+        let app = Assert.Single(model.Apps)
+        Assert.True(app.Unverified)
+        let html = HtmlReportWriter.Render(model)
+        Assert.DoesNotContain("every app is green", html, StringComparison.Ordinal)
+        Assert.Contains("Run PARTIAL (unverified)", html, StringComparison.Ordinal)
+        Assert.Contains(
+            "Partial run — later stages were skipped; this is NOT a green run.",
+            html,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("class=\"state skip\">unverified</span>", html, StringComparison.Ordinal)
+        let json = JsonSummaryWriter.Serialize(model)
+        Assert.Contains("\"isGreen\": false", json, StringComparison.Ordinal)
+    }
+
     /// `migrate` must not swallow a report-generation failure: when
     /// `GenerateReport` cannot build/write the report (e.g. a corrupt
     /// `run.json`), it surfaces the error on stderr and reports failure

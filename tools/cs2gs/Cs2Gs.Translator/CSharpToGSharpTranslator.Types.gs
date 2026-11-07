@@ -593,7 +593,7 @@ partial class CSharpToGSharpTranslator {
         /// shape and let gsc's own binder validate (and reject with its
         /// precise diagnostic) a callee that does not actually return by ref.
         private func TranslateRefExpression(refExpression RefExpressionSyntax) GExpression? {
-            let operand = refExpression.Expression
+            let operand = UnwrapParenthesesAndSuppressions(refExpression.Expression)!!
             if operand is IdentifierNameSyntax ||
                 operand is ElementAccessExpressionSyntax ||
                 operand is MemberAccessExpressionSyntax ||

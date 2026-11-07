@@ -446,19 +446,17 @@ public static class Obj {
         let document = Assert.Single(loaded.Documents)
         let context = TranslationContext(loaded.Compilation, document.SemanticModel, document.FilePath)
         let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        let unsupported = Assert.Single(
+        Assert.DoesNotContain(
             context.Diagnostics,
             (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
         )
-        Assert.Contains("RefExpression", unsupported.ToString())
         let textType = if readOnly {
             "string"
         } else {
             "string?"
         }
         Assert.Contains("func Rows(choose bool) sequence[(Text $textType, Code int32)]", printed)
-        // Wrapped ref lowering already fails loudly; its diagnostic is unchanged.
-
+        TranslationTestValidation.AssertBinds(printed)
     }
 
     @Fact

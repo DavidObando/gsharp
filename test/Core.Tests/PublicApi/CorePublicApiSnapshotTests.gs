@@ -928,8 +928,17 @@ public class SnapshotFixture
             return quoted.Append('"').ToString()
         }
 
-        internal func LocateRepoRoot() string {
-            var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+        internal func LocateRepoRoot(configuredRoot string? = nil, startDirectory string? = nil) string {
+            let configured string? = configuredRoot ?? Environment.GetEnvironmentVariable(
+                TestSource.SourceRootEnvironmentVariable
+            )
+            if !string.IsNullOrWhiteSpace(configured) {
+                let root = Path.GetFullPath(configured)
+                if File.Exists(Path.Combine(root, "test", "Core.Tests", "Baselines", SnapshotFileName)) {
+                    return root
+                }
+            }
+            var dir DirectoryInfo? = DirectoryInfo(startDirectory ?? AppContext.BaseDirectory)
             while dir != nil {
                 if File.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines", SnapshotFileName)) {
                     return dir.FullName
@@ -937,7 +946,10 @@ public class SnapshotFixture
                 dir = dir.Parent
             }
             throw InvalidOperationException(
-                "no ancestor of " + AppContext.BaseDirectory + " holds test/Core.Tests/Baselines/" + SnapshotFileName
+                "no ancestor of " +
+                    (startDirectory ?? AppContext.BaseDirectory) +
+                    " holds test/Core.Tests/Baselines/" +
+                    SnapshotFileName
             )
         }
     }

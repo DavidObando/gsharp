@@ -10,6 +10,7 @@ import System
 import System.Collections.Generic
 import System.Diagnostics
 import System.IO
+import System.Threading.Tasks
 import Xunit
 
 /// ADR-0151 — end-to-end emit coverage for the value-producing
@@ -247,8 +248,78 @@ Console.WriteLine(Run(nil))`
         Assert.Equal("4${Environment.NewLine}-1${Environment.NewLine}", CompileAndRun(source))
     }
 
+    @Fact
+    func CompileAndRun_TimesOutOnHangingChildProcess() {
+        // Issue #4987: reading stdout/stderr with synchronous ReadToEnd() before
+        // WaitForExit(timeout) prevented the timeout from firing on a hung child.
+        let source = `package Test
+import System.Threading
+
+Thread.Sleep(60_000)`
+        let ex = Assert.ThrowsAny[Exception](
+            func () object? {
+                return CompileAndRun(source, timeoutMilliseconds: 200)
+            }
+        )
+        Assert.Contains("dotnet exec timed out", ex.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func CompileAndRun_TimesOutWhenDescendantKeepsStandardStreamsOpenAfterParentExits() {
+        // Issue #4987 review: when the parent process exits immediately after
+        // starting a descendant that inherits stdout/stderr, WaitForExit succeeds
+        // while ReadToEndAsync remains open. Both stream reads must be bounded by
+        // the same timeout deadline.
+        let pidFile = Path.Combine(Path.GetTempPath(), "gs_adr0151_descendant_" + Guid.NewGuid().ToString("N") + ".pid")
+        let escapedPidFile = pidFile.Replace("\\", "\\\\")
+        let source = `package Test
+import System
+import System.Diagnostics
+import System.IO
+import System.Reflection
+import System.Threading
+
+if Environment.GetEnvironmentVariable("GS_ADR0151_DESCENDANT") == "1" {
+    Thread.Sleep(10_000)
+} else {
+    let dllPath = Assembly.GetExecutingAssembly().Location
+    let psi = ProcessStartInfo("dotnet"){
+        UseShellExecute = false
+    }
+    psi.Environment["GS_ADR0151_DESCENDANT"] = "1"
+    psi.ArgumentList.Add("exec")
+    psi.ArgumentList.Add("--runtimeconfig")
+    psi.ArgumentList.Add(Path.ChangeExtension(dllPath, ".runtimeconfig.json"))
+    psi.ArgumentList.Add(dllPath)
+    using let child = Process.Start(psi)
+    if child != nil {
+        File.WriteAllText("` + escapedPidFile + `", child.Id.ToString())
+    }
+}`
+        try {
+            let ex = Assert.ThrowsAny[Exception](
+                func () object? {
+                    return CompileAndRun(source, timeoutMilliseconds: 300)
+                }
+            )
+            Assert.Contains("dotnet exec timed out", ex.Message, StringComparison.Ordinal)
+        } finally {
+            if File.Exists(pidFile) {
+                if int32.TryParse(File.ReadAllText(pidFile).Trim(), out var childPid) {
+                    try {
+                        using let childProc = Process.GetProcessById(childPid)
+                        childProc.Kill(entireProcessTree: true)
+                    } catch { }
+                }
+                try {
+                    File.Delete(pidFile)
+                } catch { }
+            }
+        }
+    }
+
     shared {
-        private func CompileAndRun(source string) string {
+        internal func CompileAndRun(source string, timeoutMilliseconds int32 = 30_000) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_adr0151_").FullName
             try {
                 let srcPath = Path.Combine(tempDir, "test.gs")
@@ -291,9 +362,28 @@ stderr:
                 psi.ArgumentList.Add(Path.ChangeExtension(outPath, ".runtimeconfig.json"))
                 psi.ArgumentList.Add(outPath)
                 using let proc = Process.Start(psi) ?? throw InvalidOperationException("Failed to start dotnet exec")
-                let stdout = proc.StandardOutput.ReadToEnd()
-                let stderr = proc.StandardError.ReadToEnd()
-                Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out")
+                // Issue #4987: read both streams concurrently and bound both process
+                // exit and stream completion by the same deadline so a hung child or
+                // a descendant inheriting stdout/stderr cannot block the test run.
+                let stopwatch = Stopwatch.StartNew()
+                let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+                let stderrTask = proc.StandardError.ReadToEndAsync()
+                let exited = proc.WaitForExit(timeoutMilliseconds)
+                let remainingMilliseconds = Math.Max(0, timeoutMilliseconds - int32(stopwatch.ElapsedMilliseconds))
+                let streamsCompleted = exited && Task.WaitAll([]Task{stdoutTask, stderrTask}, remainingMilliseconds)
+                if !streamsCompleted {
+                    try {
+                        proc.Kill(entireProcessTree: true)
+                    } catch (InvalidOperationException) {
+                        // The process exited between the timeout and the kill.
+
+                    }
+                    proc.StandardOutput.Close()
+                    proc.StandardError.Close()
+                    Assert.Fail("dotnet exec timed out")
+                }
+                let stdout = stdoutTask.GetAwaiter().GetResult()
+                let stderr = stderrTask.GetAwaiter().GetResult()
                 Assert.True(proc.ExitCode == 0, (`sample exited ` + "${proc.ExitCode}" + `
 stdout:
 ` + "$stdout" + `

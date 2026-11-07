@@ -129,7 +129,19 @@ class ReportModel {
     /// artifacts were missing or the run failed outright.
     @JsonPropertyName("isGreen")
     @JsonPropertyOrder(int32(12))
-    prop IsGreen bool -> this.Succeeded && !this.Unverified && this.MissingArtifactCount == 0 && this.Gaps.Count == 0
+    prop IsGreen bool -> this.Succeeded &&
+        !this.Unverified &&
+        !this.Partial &&
+        this.MissingArtifactCount == 0 &&
+        this
+        .Gaps
+        .Count == 0
+
+    /// Gets or sets a value indicating whether the run stopped before executing
+    /// all canonical stages (for example `--translate-only` or `--stop-after`,
+    /// issue #4868).
+    @JsonIgnore
+    prop Partial bool
 
     /// Gets or sets the absolute run directory the model was built from (i.e.
     /// the directory (cref:AppReport.Artifacts) paths are relative to).
@@ -210,15 +222,18 @@ class ReportModel {
                 }
             }
             // A green app must be verified: succeeded AND not merely skipped
-            // (issue #1831). Unverified apps get their own bucket, never green's.
-            let greenApps = run.Apps.Count((a AppResult) -> a.Succeeded && !a.Unverified)
-            let unverifiedApps = run.Apps.Count((a AppResult) -> a.Unverified)
+            // (issue #1831 / #4868). Unverified apps get their own bucket, never green's.
+            let isPartial = IsPartialRun(run, stageOrder)
+            let greenApps = apps.Count((a AppReport) -> a.Succeeded && !a.Unverified && !isPartial)
+            let unverifiedApps = apps.Count((a AppReport) -> a.Unverified || (a.Succeeded && isPartial))
+            let runUnverified = run.Unverified || (run.Succeeded && (unverifiedApps > 0 || isPartial))
             return ReportModel{
                 RunId: run.RunId,
                 Timestamp: run.Timestamp,
                 GscVersion: run.GscVersion!!,
                 Succeeded: run.Succeeded,
-                Unverified: run.Unverified,
+                Unverified: runUnverified,
+                Partial: isPartial,
                 TotalApps: run.Apps.Count,
                 GreenApps: greenApps,
                 UnverifiedApps: unverifiedApps,
@@ -228,6 +243,15 @@ class ReportModel {
                 MissingArtifactCount: missingArtifactCount,
                 RunDir: Path.GetFullPath(runDir)
             }
+        }
+
+        private func IsPartialRun(run RunResult, stageOrder List[string]) bool {
+            if run.RequestedStages is {Count: > 0} requested {
+                return !stageOrder.All((stage string) -> requested.Contains(stage, StringComparer.Ordinal))
+            }
+            return run.Apps.Any(
+                (app AppResult) -> app.Succeeded && (app.Stages == nil || app.Stages.Count < stageOrder.Count)
+            )
         }
 
         private func CanonicalStageOrder() List[string] {
@@ -259,10 +283,18 @@ class ReportModel {
                     stages.Add(StageResult{Stage: stageName, Status: "skipped", ArtifactCount: 0})
                 }
             }
+            // Issue #4868: an app whose omitted stages were expanded to `skipped`
+            // (such as `--translate-only` or `--stop-after`) is unverified, not green.
+            let unverified = app.Unverified ||
+                (
+                app.Succeeded && stages.Any(
+                    (s StageResult) -> string.Equals(s.Status, "skipped", StringComparison.Ordinal)
+                )
+            )
             return AppReport{
                 AppId: app.AppId,
                 Succeeded: app.Succeeded,
-                Unverified: app.Unverified,
+                Unverified: unverified,
                 FailureCategory: app.FailureCategory,
                 Stages: stages,
                 Artifacts: (app.Artifacts ?? List[string]()).OrderBy((a string) -> a, StringComparer.Ordinal).ToList(),
