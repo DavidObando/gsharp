@@ -2680,11 +2680,18 @@ internal partial class ExpressionBinder {
         keepsNaturalType = false
         let alternatives = List[Type]()
         var isExpressionTreeTarget = false
+        var hasRuntimeDelegateTarget = false
         let AddAlternative = func (slotType Type) {
+            if MemberLookup.TryGetExpressionTreeDelegateType(slotType, out _) {
+                isExpressionTreeTarget = true
+                return
+            }
+            if MemberLookup.TryGetLambdaTargetFunctionType(slotType, out _) {
+                hasRuntimeDelegateTarget = true
+                return
+            }
             // A bare type parameter can take the natural type by inference, if its constraints accept it.
-            if !slotType.IsByRef &&
-                (slotType.IsGenericParameter || !slotType.ContainsGenericParameters) &&
-                !MemberLookup.TryGetLambdaTargetFunctionType(slotType, out _) {
+            if !slotType.IsByRef && (slotType.IsGenericParameter || !slotType.ContainsGenericParameters) {
                 alternatives.Add(slotType)
             }
         }
@@ -2706,21 +2713,22 @@ internal partial class ExpressionBinder {
             }
             if index < parameters.Length {
                 let slotParameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[index])
-                if MemberLookup.TryGetExpressionTreeDelegateType(slotParameterType, out _) {
-                    isExpressionTreeTarget = true
-                }
                 AddAlternative(slotParameterType)
             }
         }
+        let applyTargetConversion = !(isExpressionTreeTarget && hasRuntimeDelegateTarget)
         if alternatives.Count == 0 {
-            return convertToTarget(
-                lambdas.BindLambdaExpression(
-                    lambdaSyntax,
-                    target,
-                    inferReturnTypeFromBody: inferReturnTypeFromBody,
-                    isExpressionTreeTarget: isExpressionTreeTarget
-                )
+            let bound = lambdas.BindLambdaExpression(
+                lambdaSyntax,
+                target,
+                inferReturnTypeFromBody: inferReturnTypeFromBody,
+                isExpressionTreeTarget: isExpressionTreeTarget
             )
+            return if applyTargetConversion {
+                convertToTarget(bound)
+            } else {
+                bound
+            }
         }
         var accepted = false
         let literal = lambdas.BindLambdaExpression(
@@ -2736,7 +2744,7 @@ internal partial class ExpressionBinder {
             isExpressionTreeTarget: isExpressionTreeTarget
         )
         keepsNaturalType = accepted
-        return if accepted {
+        return if accepted || !applyTargetConversion {
             literal
         } else {
             convertToTarget(literal)
@@ -3414,6 +3422,7 @@ internal partial class ExpressionBinder {
             var nominalTargetsAgree = true
             var sawAnyMatchingSlot = false
             for parameters in candidateParameterLists {
+                let last = parameters.Length - 1
                 var paramIndex int32
                 if !string.IsNullOrEmpty(argName) {
                     paramIndex = -1
@@ -3428,12 +3437,40 @@ internal partial class ExpressionBinder {
                     }
                 } else {
                     paramIndex = sourceArgIndex + paramOffset
-                    if paramIndex < 0 || paramIndex >= parameters.Length {
+                    if paramIndex < 0 {
+                        continue
+                    }
+                    if paramIndex >= parameters.Length &&
+                        !(
+                        last >= 0 && ClrOverloadResolution.IsParamsArrayParameter(parameters[last]) &&
+                            !parameters[last]
+                            .ParameterType
+                            .ContainsGenericParameters
+                    ) {
                         continue
                     }
                 }
+                let isExpandedParams = last >= 0 && paramIndex >= last && ClrOverloadResolution.IsParamsArrayParameter(
+                    parameters[last]
+                )
+                let effectiveParamIndex = if isExpandedParams {
+                    last
+                } else {
+                    paramIndex
+                }
                 // Issue #5543: a literal is a plain value, so an `in` slot targets its pointee.
-                let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
+                let rawParameterType = ConversionClassifier.GetPlainValueClrParameterType(
+                    parameters[effectiveParamIndex]
+                )
+                let parameterType = if isExpandedParams && rawParameterType.IsArray {
+                    Invariant.Required(
+                        rawParameterType.GetElementType(),
+                        "a params array has an element type",
+                        expression: "rawParameterType.GetElementType()"
+                    )
+                } else {
+                    rawParameterType
+                }
                 sawAnyMatchingSlot = true
                 if parameterType.ContainsGenericParameters {
                     // Open generic delegate parameters are resolved later, once the
@@ -3459,7 +3496,17 @@ internal partial class ExpressionBinder {
                     return false
                 }
                 // The delegate slot's bare shape: a function literal is never nil.
-                let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let rawParameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[effectiveParamIndex])
+                let parameterElementPositions = if isExpandedParams {
+                    rawParameterTypeSymbol.GetElementPositions()
+                } else {
+                    default(ImmutableArray[TypeSymbol])
+                }
+                let parameterTypeSymbol = if isExpandedParams && !parameterElementPositions.IsDefaultOrEmpty {
+                    parameterElementPositions[0]
+                } else {
+                    rawParameterTypeSymbol
+                }
                 let nominalCandidate = StripTopLevelNullability(parameterTypeSymbol)
                 if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeSymbol, out var candidate) ||
                     candidate == nil {
