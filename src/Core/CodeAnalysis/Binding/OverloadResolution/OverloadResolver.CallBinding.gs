@@ -2344,6 +2344,15 @@ internal partial class OverloadResolver {
                     parameter.RefKind != RefKind.None
                 if isBareAddressOf {
                     argRefKind = parameter.RefKind
+                    if argument is BoundAddressOfExpression{IsUnmanaged: true} unmanagedAddr {
+                        boundArguments[i] = (
+                            argument = BoundAddressOfExpression(
+                                unmanagedAddr.Syntax,
+                                unmanagedAddr.Operand,
+                                unmanaged: false
+                            )
+                        )
+                    }
                 }
                 if argRefKind != parameter.RefKind {
                     if parameter.RefKind == RefKind.In && argRefKind == RefKind.None {

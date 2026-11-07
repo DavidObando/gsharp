@@ -7239,7 +7239,7 @@ unsafe class Holder {
     }
 }
 
-func Touch(ref p string?) {
+unsafe func Touch(ref p string?, unused *void) {
 }
 
 unsafe func Run(choose bool) int32 {
@@ -7253,7 +7253,7 @@ unsafe func Run(choose bool) int32 {
     if choose {
         cb = clear
     }
-    Touch(ref text)
+    Touch(&text, Holder.stored)
     if text != nil {
         cb()
         return text.Length

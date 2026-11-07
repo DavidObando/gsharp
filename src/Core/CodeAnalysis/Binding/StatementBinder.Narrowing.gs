@@ -10831,7 +10831,16 @@ internal partial class StatementBinder {
         }
 
         private func IsTransientByRefCallArgument(addressOf UnaryExpressionSyntax, binderCtx BinderContext?) bool {
-            if addressOf.Parent is not CallExpressionSyntax call {
+            var call CallExpressionSyntax? = nil
+            var argName string? = nil
+            if addressOf.Parent is CallExpressionSyntax directCall {
+                call = directCall
+            } else if addressOf.Parent is NamedArgumentExpressionSyntax namedArg &&
+                namedArg.Parent is CallExpressionSyntax namedCall {
+                call = namedCall
+                argName = namedArg.NameToken.ValueText
+            }
+            if call == nil {
                 return false
             }
             if call.ConversionTypeClause != nil {
@@ -10839,6 +10848,18 @@ internal partial class StatementBinder {
             }
             if call.Identifier.Text == "cast" && call.TypeArgumentList != nil {
                 return false
+            }
+            var argIndex = -1
+            if argName == nil {
+                for var i = 0; i < call.Arguments.Count; i++ {
+                    if object.ReferenceEquals(call.Arguments[i], addressOf) {
+                        argIndex = i
+                        break
+                    }
+                }
+                if argIndex < 0 {
+                    return false
+                }
             }
             let boundScope = binderCtx?.RootScope
             if call.Callee == nil && binderCtx != nil && boundScope != nil && binderCtx.TryLookupSourceType(
@@ -10856,35 +10877,30 @@ internal partial class StatementBinder {
             }
             if call.Callee == nil && boundScope != nil {
                 let fnName = call.Identifier.ValueText
-                if boundScope.TryLookupSymbol(fnName) != nil {
+                if boundScope.TryLookupSymbol(fnName) is VariableSymbol {
                     return false
                 }
-                var foundCandidate = false
+                var foundByRefParam = false
                 for candidate in boundScope.TryLookupFunctions(fnName) {
-                    foundCandidate = true
-                    if FunctionHasPointerParameter(candidate) {
+                    if CandidateParameterIsPointer(candidate, argIndex, argName, ref foundByRefParam) {
                         return false
                     }
                 }
                 if binderCtx?.CurrentContainingType is StructSymbol currentStruct {
                     for method in currentStruct.Methods {
-                        if method.Name == fnName {
-                            foundCandidate = true
-                            if FunctionHasPointerParameter(method) {
-                                return false
-                            }
+                        if method.Name == fnName &&
+                            CandidateParameterIsPointer(method, argIndex, argName, ref foundByRefParam) {
+                            return false
                         }
                     }
                     for staticFn in currentStruct.StaticMethods {
-                        if staticFn.Name == fnName {
-                            foundCandidate = true
-                            if FunctionHasPointerParameter(staticFn) {
-                                return false
-                            }
+                        if staticFn.Name == fnName &&
+                            CandidateParameterIsPointer(staticFn, argIndex, argName, ref foundByRefParam) {
+                            return false
                         }
                     }
                 }
-                return foundCandidate
+                return foundByRefParam
             }
             if call.Callee is AccessorExpressionSyntax accessor &&
                 accessor.LeftPart is NameExpressionSyntax leftName &&
@@ -10901,34 +10917,50 @@ internal partial class StatementBinder {
                 ownerType != nil {
                 if ownerType is StructSymbol ownerStruct {
                     let memberName = accessor.RightPart.GetFirstToken().ValueText
-                    var foundCandidate = false
+                    var foundByRefParam = false
                     for method in ownerStruct.Methods {
-                        if method.Name == memberName {
-                            foundCandidate = true
-                            if FunctionHasPointerParameter(method) {
-                                return false
-                            }
+                        if method.Name == memberName &&
+                            CandidateParameterIsPointer(method, argIndex, argName, ref foundByRefParam) {
+                            return false
                         }
                     }
                     for staticFn in ownerStruct.StaticMethods {
-                        if staticFn.Name == memberName {
-                            foundCandidate = true
-                            if FunctionHasPointerParameter(staticFn) {
-                                return false
-                            }
+                        if staticFn.Name == memberName &&
+                            CandidateParameterIsPointer(staticFn, argIndex, argName, ref foundByRefParam) {
+                            return false
                         }
                     }
-                    return foundCandidate
+                    return foundByRefParam
                 }
             }
             return false
         }
 
-        private func FunctionHasPointerParameter(fn FunctionSymbol) bool {
-            for param in fn.Parameters {
-                if param.Type is PointerTypeSymbol {
-                    return true
+        private func CandidateParameterIsPointer(
+            fn FunctionSymbol,
+            argIndex int32,
+            argName string?,
+            ref foundByRefParam bool
+        ) bool {
+            var param ParameterSymbol? = nil
+            if argName != nil {
+                for p in fn.Parameters {
+                    if p.Name == argName {
+                        param = p
+                        break
+                    }
                 }
+            } else if argIndex >= 0 && argIndex < fn.Parameters.Length {
+                param = fn.Parameters[argIndex]
+            }
+            if param == nil {
+                return false
+            }
+            if param.Type is PointerTypeSymbol {
+                return true
+            }
+            if param.RefKind != RefKind.None {
+                foundByRefParam = true
             }
             return false
         }
