@@ -216,6 +216,33 @@
     <_ExplicitReference Include="$(FrameworkPathOverride)\mscorlib.dll" Condition=" '$(FrameworkPathOverride)' != '' " />
   </ItemGroup>
 
+  <!-- ADR-0082 / ADR-0174 D1 / Issue #5073: remove the bundled net10.0 runtime
+       helper assemblies from @(_ExplicitReference) after the consumer project
+       body has set $(TargetFramework) and opt-out properties whenever the
+       consumer opted out or targets a non-.NETCoreApp framework (such as
+       netstandard2.0), while ensuring .NETCoreApp consumers keep them. -->
+  <ItemGroup Condition=" '$(GsharpNoExtensions)' == 'true' or ($([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '.NETCoreApp') or ('$(TargetFrameworkIdentifier)' != '' and '$(TargetFrameworkIdentifier)' != '.NETCoreApp') ">
+    <_ExplicitReference Remove="$(GsharpExtensionsAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' == 'true' or ($([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '.NETCoreApp') or ('$(TargetFrameworkIdentifier)' != '' and '$(TargetFrameworkIdentifier)' != '.NETCoreApp') ">
+    <_ExplicitReference Remove="$(GsharpChannelsRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoValuesRuntime)' == 'true' or ($([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '.NETCoreApp') or ('$(TargetFrameworkIdentifier)' != '' and '$(TargetFrameworkIdentifier)' != '.NETCoreApp') ">
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoExtensions)' != 'true' and ('$(TargetFrameworkIdentifier)' == '.NETCoreApp' or $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp') and Exists('$(GsharpExtensionsAssemblyFullPath)') ">
+    <_ExplicitReference Remove="$(GsharpExtensionsAssemblyFullPath)" />
+    <_ExplicitReference Include="$(GsharpExtensionsAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and ('$(TargetFrameworkIdentifier)' == '.NETCoreApp' or $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp') and Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') ">
+    <_ExplicitReference Remove="$(GsharpChannelsRuntimeAssemblyFullPath)" />
+    <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoValuesRuntime)' != 'true' and ('$(TargetFrameworkIdentifier)' == '.NETCoreApp' or $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp') and Exists('$(GsharpValuesRuntimeAssemblyFullPath)') ">
+    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
+    <_ExplicitReference Include="$(GsharpValuesRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+
   <!-- Issue #5819: preserve System.Runtime type forwarders and root bundled G#
        runtime helpers when ILLink or NativeAOT prepares trimmed inputs. -->
   <PropertyGroup>

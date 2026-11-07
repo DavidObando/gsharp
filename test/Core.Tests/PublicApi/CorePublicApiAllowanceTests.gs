@@ -243,6 +243,76 @@ data class Pair(A int32)
         )
         Assert.DoesNotContain("Gsharp.Runtime.Values", channelsTests, StringComparison.Ordinal)
         Assert.DoesNotContain("GsharpNoValuesRuntime", channelsTests, StringComparison.Ordinal)
+        // Issue #5073: netstandard2.0 SDK/packaging projects opt out of net10.0
+        // implicit runtime references so ResolveAssemblyReferences emits zero MSB3277 warnings.
+        for netstandardProject in[]string{
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk", "Gsharp.NET.Sdk.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.Templates", "Gsharp.Templates.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk.Compiler", "Gsharp.NET.Sdk.Compiler.gsproj")
+        } {
+            let text = File.ReadAllText(Path.Combine(repoRoot, netstandardProject))
+            Assert.Contains("<GsharpNoExtensions>true</GsharpNoExtensions>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>", text, StringComparison.Ordinal)
+        }
+        let sdkProps = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "build", "Gsharp.NET.Sdk.props")
+        )
+        Assert.Contains("_ExplicitReference", sdkProps, StringComparison.Ordinal)
+        let sdkCoreTargets = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "build", "Gsharp.NET.Core.Sdk.targets")
+        )
+        Assert.Contains(
+            "$([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '.NETCoreApp'",
+            sdkCoreTargets,
+            StringComparison.Ordinal
+        )
+        let sdkPropsPath = Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "Sdk", "Sdk.props")
+        let sdkTargetsPath = Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "Sdk", "Sdk.targets")
+        let fakeExt = Path.Combine(this.directory, "Gsharp.Extensions.dll")
+        let fakeChannels = Path.Combine(this.directory, "Gsharp.Runtime.Channels.dll")
+        let fakeValues = Path.Combine(this.directory, "Gsharp.Runtime.Values.dll")
+        File.WriteAllText(fakeExt, string.Empty)
+        File.WriteAllText(fakeChannels, string.Empty)
+        File.WriteAllText(fakeValues, string.Empty)
+        let EvaluateConsumerExplicitReferences = func (tfm string) string {
+            let consumerPath = Path.Combine(this.directory, "Consumer_$tfm.gsproj")
+            File.WriteAllText(
+                consumerPath,
+                "<Project>\n" +
+                    "  <Import Project=\"$sdkPropsPath\" />\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>$tfm</TargetFramework>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Import Project=\"$sdkTargetsPath\" />\n" +
+                    "</Project>\n"
+            )
+            let startInfo = System.Diagnostics.ProcessStartInfo("dotnet")
+            startInfo.RedirectStandardOutput = true
+            startInfo.RedirectStandardError = true
+            startInfo.UseShellExecute = false
+            startInfo.ArgumentList.Add("msbuild")
+            startInfo.ArgumentList.Add(consumerPath)
+            startInfo.ArgumentList.Add("-nologo")
+            startInfo.ArgumentList.Add("-getItem:_ExplicitReference")
+            startInfo.ArgumentList.Add("-p:GsharpExtensionsAssemblyFullPath=$fakeExt")
+            startInfo.ArgumentList.Add("-p:GsharpChannelsRuntimeAssemblyFullPath=$fakeChannels")
+            startInfo.ArgumentList.Add("-p:GsharpValuesRuntimeAssemblyFullPath=$fakeValues")
+            using let proc = System.Diagnostics.Process.Start(startInfo)!!
+            let stdout = proc.StandardOutput.ReadToEnd()
+            let stderr = proc.StandardError.ReadToEnd()
+            proc.WaitForExit()
+            Assert.True(proc.ExitCode == 0, stderr + stdout)
+            return stdout
+        }
+        let net10Refs = EvaluateConsumerExplicitReferences("net10.0")
+        Assert.Contains("Gsharp.Extensions.dll", net10Refs, StringComparison.Ordinal)
+        Assert.Contains("Gsharp.Runtime.Channels.dll", net10Refs, StringComparison.Ordinal)
+        Assert.Contains("Gsharp.Runtime.Values.dll", net10Refs, StringComparison.Ordinal)
+        let netstandardRefs = EvaluateConsumerExplicitReferences("netstandard2.0")
+        Assert.DoesNotContain("Gsharp.Extensions.dll", netstandardRefs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Gsharp.Runtime.Channels.dll", netstandardRefs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Gsharp.Runtime.Values.dll", netstandardRefs, StringComparison.Ordinal)
     }
 
     private func Compare(golden IReadOnlyList[string], actual IReadOnlyList[string]) GoldenFileComparison {

@@ -3257,11 +3257,9 @@ partial class CSharpToGSharpTranslator {
                 .AncestorsAndSelf()
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax]()
                 .Last()
-            var candidate string
-            do {
-                candidate = "__pattern${this.state.SwitchPatternCounter}"
-                this.state.SwitchPatternCounter++
-            } while usedDesignators!!.Contains(candidate) ||
+            let stem = "pattern"
+            var candidate = stem
+            for var suffix = 2; usedDesignators!!.Contains(candidate) ||
                 rootPattern
                 .DescendantNodesAndSelf()
                 .OfType[SingleVariableDesignationSyntax]()
@@ -3271,7 +3269,14 @@ partial class CSharpToGSharpTranslator {
                     designation.Identifier
                 ) == candidate
             ) ||
-                !this.TryClaimSynthesizedLocalName(candidate, pattern)
+                !this
+                .context
+                .SemanticModel
+                .LookupSymbols(pattern!!.SpanStart, name: candidate)
+                .IsEmpty ||
+                !this.TryClaimSynthesizedLocalName(candidate, pattern); suffix++ {
+                candidate = "${stem}_$suffix"
+            }
             usedDesignators!!.Add(candidate)
             return candidate
         }

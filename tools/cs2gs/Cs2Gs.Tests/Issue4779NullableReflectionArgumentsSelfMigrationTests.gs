@@ -33,24 +33,29 @@ class Issue4779NullableReflectionArgumentsSelfMigrationTests {
     @Fact
     async func ActualClassifierTestUnit_CompilesAndRunsDefensiveContracts() {
         let root = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
-            Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj")
-        )
-        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
-        let document = Assert.Single(
-            project.Documents,
-            (candidate LoadedDocument) -> Path.GetFileName(
-                candidate.FilePath
-            ) == "Issue4770NullableClassifierCoalescingTests.cs"
-        )
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let printed = GSharpPrinter.Print(
-            CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context)
-        )
-        Assert.DoesNotContain(
-            context.Diagnostics,
-            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
-        )
+        let testsProjectPath = Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj")
+        let isGSharpTree = !File.Exists(testsProjectPath)
+        var project LoadedCSharpProject? = nil
+        var document LoadedDocument? = nil
+        var printed = string.Empty
+        if !isGSharpTree {
+            project = await CSharpProjectLoader.LoadProjectAsync(testsProjectPath)
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            document = Assert.Single(
+                project.Documents,
+                (candidate LoadedDocument) -> Path.GetFileName(
+                    candidate.FilePath
+                ) == "Issue4770NullableClassifierCoalescingTests.cs"
+            )
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            printed = GSharpPrinter.Print(
+                CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context)
+            )
+            Assert.DoesNotContain(
+                context.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+        }
         let directory = Path.Combine(
             AppContext.BaseDirectory,
             "pipeline-tests",
@@ -63,143 +68,230 @@ class Issue4779NullableReflectionArgumentsSelfMigrationTests {
         Directory.CreateDirectory(directory)
         try {
             let source = Path.Combine(directory, "Issue4770NullableClassifierCoalescingTests.gs")
-            File.WriteAllText(source, printed)
-            File.Copy(document.FilePath, Path.ChangeExtension(source, ".cs"))
-            let guardDocument = Assert.Single(
-                project.Documents,
-                (candidate LoadedDocument) -> Path.GetFileName(
-                    candidate.FilePath
-                ) == "Issue4779NullableReflectionArgumentsSelfMigrationTests.cs"
-            )
-            let guardContext = TranslationContext(
-                project.Compilation,
-                guardDocument.SemanticModel,
-                guardDocument.FilePath
-            )
             let guardPath = Path.Combine(directory, "Issue4779NullableReflectionArgumentsSelfMigrationTests.gs")
-            File.WriteAllText(
-                guardPath,
-                GSharpPrinter.Print(
-                    CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(guardDocument, guardContext)
+            let helperPath = Path.Combine(directory, "CompilerHelper.gs")
+            let helperPaths = List[string]{helperPath}
+            let image = Path.Combine(directory, "Issue4779.Translated.dll")
+            let nativeProduct = typeof(Issue4770NullableClassifierCoalescingTests).Assembly.Location
+            let native = Path.Combine(directory, AssemblyName.GetAssemblyName(nativeProduct).Name + ".dll")
+            var sourceForHash = source
+            if isGSharpTree {
+                let committedSource = Path.Combine(
+                    root,
+                    "tools",
+                    "cs2gs",
+                    "Cs2Gs.Tests",
+                    "Issue4770NullableClassifierCoalescingTests.gs"
                 )
-            )
-            Assert.DoesNotContain(
-                guardContext.Diagnostics,
-                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
-            )
-            File.Copy(guardDocument.FilePath, Path.ChangeExtension(guardPath, ".cs"))
-            // Internal source helpers accompany the verbatim test unit instead
-            // of relaxing their imported CLR visibility.
-            let helperDocument = Assert.Single(
-                project.Documents,
-                (candidate LoadedDocument) -> Path.GetFileName(
-                    candidate.FilePath
-                ) == "LocalFunctionHoistTranslationTests.cs"
-            )
-            let helper = Assert.Single(
-                helperDocument.SyntaxTree.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax](),
-                (method MethodDeclarationSyntax) -> method.Identifier.ValueText == "FindCompiler"
-            )
-            let helperSource = `using System;
+                let committedGuard = Path.Combine(
+                    root,
+                    "tools",
+                    "cs2gs",
+                    "Cs2Gs.Tests",
+                    "Issue4779NullableReflectionArgumentsSelfMigrationTests.gs"
+                )
+                File.Copy(committedSource, source)
+                File.Copy(committedGuard, guardPath)
+                sourceForHash = committedSource
+                File.WriteAllText(helperPath, `package Cs2Gs.Tests
+
+import System
+import System.IO
+
+class LocalFunctionHoistTranslationTests {
+    shared {
+        internal func FindCompiler() string? {
+            var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while dir != nil {
+                for config in []string{"Release", "Debug"} {
+                    let candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll")
+                    if File.Exists(candidate) {
+                        return candidate
+                    }
+                }
+                dir = dir.Parent
+            }
+            return nil
+        }
+    }
+}
+`)
+                for name in[]string{"CanonicalRootPath.gs", "RepositoryRootMarker.gs"} {
+                    let destinationPath = Path.Combine(directory, name)
+                    File.Copy(Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", name), destinationPath)
+                    helperPaths.Add(destinationPath)
+                }
+                let runnerPath = Path.Combine(directory, "GsharpTestProjectRunner.gs")
+                File.WriteAllText(runnerPath, `package Cs2Gs.Pipeline
+
+import System
+import System.IO
+
+shared class GsharpTestProjectRunner {
+    const SourceRootEnvironmentVariable string = "CS2GS_TEST_SOURCE_ROOT"
+
+    func FindRepoRoot() string? -> ResolveConfiguredSourceRoot() ?? FindRepoRootAbove(AppContext.BaseDirectory)
+
+    private func ResolveConfiguredSourceRoot() string? {
+        let configured = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable)
+        return if string.IsNullOrWhiteSpace(configured) {
+            default(string?)
+        } else {
+            CanonicalRootPath.Resolve(configured)
+        }
+    }
+
+    private func FindRepoRootAbove(startDirectory string) string? {
+        var dir DirectoryInfo? = DirectoryInfo(startDirectory)
+        while dir != nil {
+            if RepositoryRootMarker.IsRoot(dir.FullName) {
+                return CanonicalRootPath.Resolve(dir.FullName)
+            }
+            dir = dir.Parent
+        }
+        return nil
+    }
+}
+`)
+                helperPaths.Add(runnerPath)
+                File.Copy(nativeProduct, native)
+            } else {
+                File.WriteAllText(source, printed)
+                File.Copy(document!!.FilePath, Path.ChangeExtension(source, ".cs"))
+                sourceForHash = document!!.FilePath
+                let guardDocument = Assert.Single(
+                    project!!.Documents,
+                    (candidate LoadedDocument) -> Path.GetFileName(
+                        candidate.FilePath
+                    ) == "Issue4779NullableReflectionArgumentsSelfMigrationTests.cs"
+                )
+                let guardContext = TranslationContext(
+                    project!!.Compilation,
+                    guardDocument.SemanticModel,
+                    guardDocument.FilePath
+                )
+                File.WriteAllText(
+                    guardPath,
+                    GSharpPrinter.Print(
+                        CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(
+                            guardDocument,
+                            guardContext
+                        )
+                    )
+                )
+                Assert.DoesNotContain(
+                    guardContext.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                )
+                File.Copy(guardDocument.FilePath, Path.ChangeExtension(guardPath, ".cs"))
+                // Internal source helpers accompany the verbatim test unit instead
+                // of relaxing their imported CLR visibility.
+                let helperDocument = Assert.Single(
+                    project!!.Documents,
+                    (candidate LoadedDocument) -> Path.GetFileName(
+                        candidate.FilePath
+                    ) == "LocalFunctionHoistTranslationTests.cs"
+                )
+                let helper = Assert.Single(
+                    helperDocument.SyntaxTree.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax](),
+                    (method MethodDeclarationSyntax) -> method.Identifier.ValueText == "FindCompiler"
+                )
+                let helperSource = `using System;
 using System.IO;
 namespace Cs2Gs.Tests;
 public class LocalFunctionHoistTranslationTests
 {` + helper.ToFullString() + "\n}"
-            let helperProject = CSharpProjectLoader.LoadInMemory(
-                [](string, helperSource string){("CompilerHelper.cs", helperSource)}
-            )
-            Assert.True(
-                helperProject.BoundWithoutErrors,
-                string.Join(Environment.NewLine, helperProject.ErrorDiagnostics)
-            )
-            let helperUnit = Assert.Single(helperProject.Documents)
-            let helperContext = TranslationContext(
-                helperProject.Compilation,
-                helperUnit.SemanticModel,
-                helperUnit.FilePath
-            )
-            let helperPath = Path.Combine(directory, "CompilerHelper.gs")
-            File.WriteAllText(
-                helperPath,
-                GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(helperUnit, helperContext))
-            )
-            File.WriteAllText(Path.ChangeExtension(helperPath, ".cs"), helperSource)
-            let pipeline = await SelfMigratedCompilerSource.LoadProjectAsync(
-                Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj")
-            )
-            Assert.True(pipeline.BoundWithoutErrors, string.Join(Environment.NewLine, pipeline.ErrorDiagnostics))
-            let helperPaths = List[string]{helperPath}
-            for name in[]string{"GsharpTestProjectRunner.cs", "CanonicalRootPath.cs", "RepositoryRootMarker.cs"} {
-                var dependency = Assert.Single(
-                    pipeline.Documents,
-                    (candidate LoadedDocument) -> Path.GetFileName(candidate.FilePath) == name
+                let helperProject = CSharpProjectLoader.LoadInMemory(
+                    [](string, helperSource string){("CompilerHelper.cs", helperSource)}
                 )
-                if name == "GsharpTestProjectRunner.cs" {
-                    let originalRoot = dependency.GetRoot()
-                    let originalType = Assert.Single(
-                        originalRoot.DescendantNodes().OfType[ClassDeclarationSyntax](),
-                        (type ClassDeclarationSyntax) -> type.Identifier.ValueText == "GsharpTestProjectRunner"
+                Assert.True(
+                    helperProject.BoundWithoutErrors,
+                    string.Join(Environment.NewLine, helperProject.ErrorDiagnostics)
+                )
+                let helperUnit = Assert.Single(helperProject.Documents)
+                let helperContext = TranslationContext(
+                    helperProject.Compilation,
+                    helperUnit.SemanticModel,
+                    helperUnit.FilePath
+                )
+                File.WriteAllText(
+                    helperPath,
+                    GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(helperUnit, helperContext))
+                )
+                File.WriteAllText(Path.ChangeExtension(helperPath, ".cs"), helperSource)
+                let pipeline = await CSharpProjectLoader.LoadProjectAsync(
+                    Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj")
+                )
+                Assert.True(pipeline.BoundWithoutErrors, string.Join(Environment.NewLine, pipeline.ErrorDiagnostics))
+                for name in[]string{"GsharpTestProjectRunner.cs", "CanonicalRootPath.cs", "RepositoryRootMarker.cs"} {
+                    var dependency = Assert.Single(
+                        pipeline.Documents,
+                        (candidate LoadedDocument) -> Path.GetFileName(candidate.FilePath) == name
                     )
-                    let selectedType = originalType.WithMembers(
-                        SyntaxFactory.List(
-                            originalType.Members.Where(
-                                (member MemberDeclarationSyntax) -> member is MethodDeclarationSyntax method &&
-                                    (
-                                    method
-                                        .Identifier
-                                        .ValueText is "FindRepoRoot" or
-                                        "FindRepoRootAbove" or
-                                        "ResolveConfiguredSourceRoot"
-                                ) ||
-                                    member is FieldDeclarationSyntax field &&
-                                    field
-                                    .Declaration
-                                    .Variables
-                                    .Any(
-                                    (variable VariableDeclaratorSyntax) -> variable
-                                        .Identifier
-                                        .ValueText == "SourceRootEnvironmentVariable"
+                    if name == "GsharpTestProjectRunner.cs" {
+                        let originalRoot = dependency.GetRoot()
+                        let originalType = Assert.Single(
+                            originalRoot.DescendantNodes().OfType[ClassDeclarationSyntax](),
+                            (type ClassDeclarationSyntax) -> type.Identifier.ValueText == "GsharpTestProjectRunner"
+                        )
+                        let selectedType = originalType.WithMembers(
+                            SyntaxFactory.List(
+                                originalType.Members.Where(
+                                    (member MemberDeclarationSyntax) -> member is MethodDeclarationSyntax method &&
+                                        (
+                                        method
+                                            .Identifier
+                                            .ValueText is "FindRepoRoot" or
+                                            "FindRepoRootAbove" or
+                                            "ResolveConfiguredSourceRoot"
+                                    ) ||
+                                        member is FieldDeclarationSyntax field &&
+                                        field
+                                        .Declaration
+                                        .Variables
+                                        .Any(
+                                        (variable VariableDeclaratorSyntax) -> variable
+                                            .Identifier
+                                            .ValueText == "SourceRootEnvironmentVariable"
+                                    )
                                 )
                             )
                         )
-                    )
-                    let tree = CSharpSyntaxTree.Create(
-                        originalRoot.ReplaceNode(originalType, selectedType),
-                        cast[CSharpParseOptions](dependency.SyntaxTree.Options),
+                        let tree = CSharpSyntaxTree.Create(
+                            originalRoot.ReplaceNode(originalType, selectedType),
+                            cast[CSharpParseOptions](dependency.SyntaxTree.Options),
+                            dependency.FilePath
+                        )
+                        let compilation = pipeline.Compilation.ReplaceSyntaxTree(dependency.SyntaxTree, tree)
+                        dependency = LoadedDocument(dependency.FilePath, tree, compilation.GetSemanticModel(tree))
+                    }
+                    let dependencyContext = TranslationContext(
+                        cast[CSharpCompilation](dependency.SemanticModel.Compilation),
+                        dependency.SemanticModel,
                         dependency.FilePath
                     )
-                    let compilation = pipeline.Compilation.ReplaceSyntaxTree(dependency.SyntaxTree, tree)
-                    dependency = LoadedDocument(dependency.FilePath, tree, compilation.GetSemanticModel(tree))
-                }
-                let dependencyContext = TranslationContext(
-                    cast[CSharpCompilation](dependency.SemanticModel.Compilation),
-                    dependency.SemanticModel,
-                    dependency.FilePath
-                )
-                let path = Path.Combine(directory, Path.ChangeExtension(name, ".gs"))
-                File.WriteAllText(
-                    path,
-                    GSharpPrinter.Print(
-                        CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(
-                            dependency,
-                            dependencyContext
+                    let path = Path.Combine(directory, Path.ChangeExtension(name, ".gs"))
+                    File.WriteAllText(
+                        path,
+                        GSharpPrinter.Print(
+                            CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(
+                                dependency,
+                                dependencyContext
+                            )
                         )
                     )
-                )
-                File.WriteAllText(Path.ChangeExtension(path, ".cs"), dependency.GetRoot().ToFullString())
-                helperPaths.Add(path)
-            }
-            let image = Path.Combine(directory, "Issue4779.Translated.dll")
-            let nativeProduct = typeof(Issue4770NullableClassifierCoalescingTests).Assembly.Location
-            let native = Path.Combine(directory, AssemblyName.GetAssemblyName(nativeProduct).Name + ".dll")
-            {
-                using let stream = File.Create(native)
-                let emitted = project
-                    .Compilation
-                    .WithOptions(project.Compilation.Options.WithDeterministic(true))
-                    .Emit(stream)
-                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
-                this.output.WriteLine("Actual project Roslyn native build succeeded: " + native)
+                    File.WriteAllText(Path.ChangeExtension(path, ".cs"), dependency.GetRoot().ToFullString())
+                    helperPaths.Add(path)
+                }
+                {
+                    using let stream = File.Create(native)
+                    let emitted = project!!
+                        .Compilation
+                        .WithOptions(project!!.Compilation.Options.WithDeterministic(true))
+                        .Emit(stream)
+                    Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+                    this.output.WriteLine("Actual project Roslyn native build succeeded: " + native)
+                }
             }
             let productReferences = []string{
                 typeof(CSharpCompilation).Assembly.Location,
@@ -229,7 +321,7 @@ public class LocalFunctionHoistTranslationTests
             arguments.Add(guardPath)
             arguments.AddRange(helperPaths)
             this.output.WriteLine(
-                "Actual source SHA256=" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(document.FilePath)))
+                "Actual source SHA256=" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(sourceForHash)))
             )
             this.output.WriteLine("gsc: dotnet " + string.Join(" ", arguments))
             let compiled = ProcessRunner.Run("dotnet", arguments)

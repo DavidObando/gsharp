@@ -97,7 +97,6 @@
     <_ExplicitReference Include="$(GsharpValuesRuntimeAssemblyFullPath)" />
   </ItemGroup>
 
-
   <!-- ADR-0207: the known ReadyToRun compiler pack, in the shape of KnownCrossgen2Pack in the .NET SDK.
        The PackageDownload is for the host RID only, with an exact version. A host outside the list
        gets no PackageDownload, so restore never asks for a package that does not exist. -->
