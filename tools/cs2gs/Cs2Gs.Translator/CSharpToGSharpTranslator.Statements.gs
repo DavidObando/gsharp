@@ -2167,25 +2167,6 @@ partial class CSharpToGSharpTranslator {
             if cacheKey.Length > 0 && activeCompleted.TryGetValue(cacheKey, out var cachedResult) {
                 return HashSet[int32](cachedResult)
             }
-            let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-            let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
-            if scopedStorageKey.Length > 0 && !nextVisitedStorage.Add(scopedStorageKey) {
-                activeCycleFlags.Add(true)
-                return if this.StorageMayEverReachTarget(
-                    storage,
-                    enclosingExecutable,
-                    anonymousFunction,
-                    localFunction,
-                    HashSet[ISymbol](SymbolEqualityComparer.Default),
-                    HashSet[string](StringComparer.Ordinal),
-                    receiverOverride
-                ) {
-                    HashSet[int32]{0, 1, 2}
-                } else {
-                    HashSet[int32]{0}
-                }
-            }
-            let cycleCountBefore = activeCycleFlags.Count
             var graph ControlFlowGraph?
             try {
                 graph = this.CreateControlFlowGraph(enclosingExecutable)
@@ -2213,8 +2194,33 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
+            let predecessorBlocks = GetPredecessorClosure(useBlock!!)
+            let cycleStorageKey = if predecessorBlocks.Contains(useBlock!!) || scopedStorageKey.Length == 0 {
+                scopedStorageKey
+            } else {
+                "$scopedStorageKey@$usePosition"
+            }
+            let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+            let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
+            if cycleStorageKey.Length > 0 && !nextVisitedStorage.Add(cycleStorageKey) {
+                activeCycleFlags.Add(true)
+                return if this.StorageMayEverReachTarget(
+                    storage,
+                    enclosingExecutable,
+                    anonymousFunction,
+                    localFunction,
+                    HashSet[ISymbol](SymbolEqualityComparer.Default),
+                    HashSet[string](StringComparer.Ordinal),
+                    receiverOverride
+                ) {
+                    HashSet[int32]{0, 1, 2}
+                } else {
+                    HashSet[int32]{0}
+                }
+            }
+            let cycleCountBefore = activeCycleFlags.Count
             let blockCachePosition = if this.CanShareDelegateBlockOutputsAcrossPositions(storage, receiverOverride) {
-                -1
+                -1 - useBlock!!.Ordinal
             } else {
                 usePosition
             }
@@ -2271,7 +2277,7 @@ partial class CSharpToGSharpTranslator {
                 do {
                     changed = false
                     for block in graph!!.Blocks {
-                        if !block.IsReachable {
+                        if !block.IsReachable || !predecessorBlocks.Contains(block) {
                             continue
                         }
                         var states = HashSet[int32]()
@@ -2479,8 +2485,9 @@ partial class CSharpToGSharpTranslator {
             if cacheKey.Length > 0 && activeCompleted.TryGetValue(cacheKey, out var cachedResult) {
                 return HashSet[int32](cachedResult)
             }
+            let cycleLocalKey = "$localStorageKey@$usePosition"
             let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
-            if !nextVisitedStorage.Add(localStorageKey) {
+            if !nextVisitedStorage.Add(cycleLocalKey) {
                 activeCycleFlags.Add(true)
                 return HashSet[int32]{0, 1, 2}
             }
@@ -2546,6 +2553,7 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
+            let predecessorBlocks = GetPredecessorClosure(useBlock!!)
             let entryStates = if callerChain == nil || callerChain.Count == 0 {
                 HashSet[int32]{0}
             } else {
@@ -2574,7 +2582,7 @@ partial class CSharpToGSharpTranslator {
             do {
                 changed = false
                 for block in graph!!.Blocks {
-                    if !block.IsReachable {
+                    if !block.IsReachable || !predecessorBlocks.Contains(block) {
                         continue
                     }
                     var states = HashSet[int32]()
@@ -2712,6 +2720,25 @@ partial class CSharpToGSharpTranslator {
             return reaching
         }
 
+        private func GetPredecessorClosure(targetBlock BasicBlock) HashSet[BasicBlock] {
+            let closure = HashSet[BasicBlock]()
+            let worklist = Queue[BasicBlock]()
+            for predecessor in targetBlock.Predecessors {
+                if closure.Add(predecessor.Source) {
+                    worklist.Enqueue(predecessor.Source)
+                }
+            }
+            while worklist.Count > 0 {
+                let current = worklist.Dequeue()
+                for predecessor in current.Predecessors {
+                    if closure.Add(predecessor.Source) {
+                        worklist.Enqueue(predecessor.Source)
+                    }
+                }
+            }
+            return closure
+        }
+
         private func LocalHasNonDirectWrite(local ILocalSymbol, enclosingExecutable SyntaxNode?) bool {
             let decl = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             if decl is not VariableDeclaratorSyntax {
@@ -2772,7 +2799,7 @@ partial class CSharpToGSharpTranslator {
                     .End <= beforePosition
             )
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
-                .ThenBy((candidate SyntaxNode) -> candidate.SpanStart) {
+                .ThenByDescending((candidate SyntaxNode) -> candidate.SpanStart) {
                 if node is VariableDeclaratorSyntax declarator &&
                     declarator.SyntaxTree == this
                     .context
@@ -2981,16 +3008,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            let searchRoot = enclosingExecutable ?? FindEnclosingExecutable(invocation)
-            if searchRoot == nil {
-                return Array.Empty[SyntaxNode]()
-            }
-            return searchRoot
-                .DescendantNodes()
-                .Where(
-                (node SyntaxNode) -> node is AnonymousFunctionExpressionSyntax || node is LocalFunctionStatementSyntax
-            )
-                .ToList()
+            return Array.Empty[SyntaxNode]()
         }
 
         private func ApplyInvocationLocalDelegateWrites(
@@ -3129,13 +3147,25 @@ partial class CSharpToGSharpTranslator {
             return currentStates
         }
 
-        private func DeclarationMaySuspendAsync(declaration SyntaxNode) bool -> switch declaration {
-            case localFn is LocalFunctionStatementSyntax when localFn.Modifiers.Any(SyntaxKind.AsyncKeyword): true
-            case methodDecl is BaseMethodDeclarationSyntax when methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword): true
-            case anonFn is AnonymousFunctionExpressionSyntax when anonFn.AsyncKeyword.IsKind(
-                SyntaxKind.AsyncKeyword
-            ): true
-            default: declaration.DescendantNodesAndSelf().OfType[AwaitExpressionSyntax]().Any()
+        private func DeclarationMaySuspendAsync(declaration SyntaxNode) bool {
+            let isAsync = switch declaration {
+                case localFn is LocalFunctionStatementSyntax: localFn.Modifiers.Any(SyntaxKind.AsyncKeyword)
+                case methodDecl is BaseMethodDeclarationSyntax: methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword)
+                case anonFn is AnonymousFunctionExpressionSyntax: anonFn.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                default: false
+            }
+            if isAsync {
+                return true
+            }
+            let body SyntaxNode = switch declaration {
+                case LocalFunctionStatementSyntax{Body: {} b}: b
+                case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: e
+                case AnonymousFunctionExpressionSyntax{Body: {} b}: b
+                default: declaration
+            }
+            return EagerExecutionNodes(body).Any(
+                (node SyntaxNode?) -> node is AwaitExpressionSyntax || node is YieldStatementSyntax
+            )
         }
 
         private func IsNonLocalDelegateStorage(expression ExpressionSyntax?) bool {
@@ -3185,7 +3215,7 @@ partial class CSharpToGSharpTranslator {
                     .End <= beforePosition
             )
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
-                .ThenBy((candidate SyntaxNode) -> candidate.SpanStart) {
+                .ThenByDescending((candidate SyntaxNode) -> candidate.SpanStart) {
                 if node is AssignmentExpressionSyntax assignment {
                     var leftReceiverOverride ExpressionSyntax? = nil
                     let matchesStorage = if calleeContext is {} activeCallee {

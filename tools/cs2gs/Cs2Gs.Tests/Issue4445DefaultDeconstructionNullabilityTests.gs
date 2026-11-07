@@ -2151,6 +2151,76 @@ public sealed class Probe<T>
         this.callback = asyncClearedLocal;
         asyncClearLocalPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var iteratorClearFieldPair = (replacement, replacement);
+        void IteratorClearFieldLocal()
+        {
+            var (iteratorClearFieldLeft, _) = iteratorClearFieldPair;
+            Fill(ref iteratorClearFieldLeft, replacement);
+        }
+        System.Collections.Generic.IEnumerable<int> ClearFieldLater()
+        {
+            this.callback = null;
+            yield break;
+        }
+        this.callback = IteratorClearFieldLocal;
+        _ = ClearFieldLater();
+        iteratorClearFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var iteratorClearLocalPair = (replacement, replacement);
+        void IteratorClearLocalFn()
+        {
+            var (iteratorClearLocalLeft, _) = iteratorClearLocalPair;
+            Fill(ref iteratorClearLocalLeft, replacement);
+        }
+        System.Action? iteratorClearedLocal = IteratorClearLocalFn;
+        System.Collections.Generic.IEnumerable<int> ClearLocalLater()
+        {
+            iteratorClearedLocal = null;
+            yield break;
+        }
+        _ = ClearLocalLater();
+        this.callback = iteratorClearedLocal;
+        iteratorClearLocalPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var takeSavedFieldPair = (replacement, replacement);
+        void TakeSavedFieldLocal()
+        {
+            var (takeSavedFieldLeft, _) = takeSavedFieldPair;
+            Fill(ref takeSavedFieldLeft, replacement);
+        }
+        System.Action? TakeSavedField()
+        {
+            this.callback = null;
+            return this.secondCallback;
+        }
+        this.callback = TakeSavedFieldLocal;
+        this.secondCallback = this.callback;
+        this.callback = TakeSavedField();
+        this.secondCallback = null;
+        takeSavedFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var takeSavedLocalPair = (replacement, replacement);
+        void TakeSavedLocalFn()
+        {
+            var (takeSavedLocalLeft, _) = takeSavedLocalPair;
+            Fill(ref takeSavedLocalLeft, replacement);
+        }
+        System.Action? trackedLocal = TakeSavedLocalFn;
+        System.Action? backupLocal = trackedLocal;
+        System.Action? TakeSavedLocalDelegate()
+        {
+            trackedLocal = null;
+            return backupLocal;
+        }
+        trackedLocal = TakeSavedLocalDelegate();
+        backupLocal = null;
+        this.callback = trackedLocal;
+        takeSavedLocalPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 
     private System.Action? Saved => this.secondCallback;
@@ -2260,6 +2330,10 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
         Assert.Matches("\\b(let|var) asyncClearFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) asyncDelegateClearFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) asyncClearLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) iteratorClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) iteratorClearLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) takeSavedFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) takeSavedLocalLeft T\\? =", printed)
 
         let part1 = `#nullable enable
 public sealed partial class SplitProbe<T>
