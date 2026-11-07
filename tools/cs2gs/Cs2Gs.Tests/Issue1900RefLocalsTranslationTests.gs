@@ -320,6 +320,72 @@ namespace Corpus.Issue1900
         Assert.Contains("var ref middle int32 = Middle(data)", GSharpPrinter.Print(unit), StringComparison.Ordinal)
     }
 
+    @Theory
+    @InlineData("(v)")
+    @InlineData("v!")
+    @InlineData("(v!)")
+    func RefLocalAndReturn_WithTransparentWrapperTarget_TranslatesAndBinds(target string) {
+        // Issue #4728: parentheses and postfix nullable suppressions on a ref
+        // target do not change storage identity and must unwrap cleanly.
+        let rendered = Render(`
+namespace Corpus.Issue4728
+{
+    public class Holder
+    {
+        private string field = "a";
+
+        public string Bump()
+        {
+            string v = "x";
+            ref string alias = ref ` + target + `;
+            alias = "y";
+            return v;
+        }
+
+        public ref string Borrow()
+        {
+            return ref (this.field!);
+        }
+    }
+}
+`)
+        Assert.Contains("var ref alias string = v", rendered, StringComparison.Ordinal)
+        Assert.Contains("return ref this.field", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
+    }
+
+    @Fact
+    func UninitializedStructLocal_AssignedFieldWiseBeforeRefArgument_EmitsDefaultInitializer() {
+        // Issue #4709: gsc does not track field-wise definite assignment on structs,
+        // so an uninitialized struct local written through its fields must receive a
+        // default initializer before being passed by ref.
+        let rendered = Render(`
+namespace Corpus.Issue4709
+{
+    public struct S
+    {
+        public int N;
+    }
+
+    public class C
+    {
+        private static int Read(ref S s) => s.N;
+
+        public int Run()
+        {
+            S x;
+            x.N = 1;
+            return Read(ref x);
+        }
+    }
+}
+`)
+        Assert.Contains("var x S = default(S)", rendered, StringComparison.Ordinal)
+        Assert.Contains("x.N = 1", rendered, StringComparison.Ordinal)
+        Assert.Contains("return Read(&x)", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
+    }
+
     shared {
         private func AssertRoundTripParses(rendered string) {
             let result RoundTripResult? = TranslationTestValidation.AssertBinds(rendered)

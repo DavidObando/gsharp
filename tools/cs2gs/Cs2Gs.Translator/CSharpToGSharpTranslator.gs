@@ -578,6 +578,17 @@ partial class CSharpToGSharpTranslator {
                 allImports.Add(ImportDirective(importName))
             }
         }
+        // Issue #4602: pin bare-printed metadata types if a synthesized import
+        // (such as an extension method's namespace) introduced a homonym in the
+        // final import set.
+        for alias in typeMapper.CollectSynthesizedImportHomonymAliases(alreadyImported, context).OrderBy(
+            (pair KeyValuePair[string, string]) -> pair.Key,
+            StringComparer.Ordinal
+        ) {
+            if existingAliases.Add(alias.Key) {
+                allImports.Add(ImportDirective(alias.Value, alias.Key))
+            }
+        }
         // The C# file's header comment (license, copyright) stays at the top
         // of every G# unit translated from it.
         return CompilationUnit(

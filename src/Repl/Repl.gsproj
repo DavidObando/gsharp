@@ -8,6 +8,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <NoWarn>$(NoWarn);CS1591;SA0001;SA1600;SA1601;SA1602;SA1611;SA1615;SA1623;SA1629;SA1633;SA1652;SA1201;SA1202;SA1204;SA1309;SA1502;SA1513;SA1515;SA1516;SA1101;SA1208;SA1413;SA1649</NoWarn>
+    <!-- Issue #4910: ship this checkout's runtime rather than the pinned SDK's implicit copy. -->
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
   </PropertyGroup>
 
   <!-- Ship the interactive REPL as a .NET tool: `dotnet tool install Gsharp.Repl`
@@ -38,7 +41,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <_ExplicitReference Remove="$(GsharpValuesRuntimeAssemblyFullPath)" />
     <ProjectReference Include="@(GsharpCore-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpLanguageServer-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="..\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" ReferenceOutputAssembly="false" />

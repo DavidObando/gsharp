@@ -395,6 +395,13 @@ func F() int32 {
 `}
 
         private func LocateRepoRoot() string {
+            let configured string? = Environment.GetEnvironmentVariable(TestSource.SourceRootEnvironmentVariable)
+            if !string.IsNullOrWhiteSpace(configured) {
+                let root = Path.GetFullPath(configured)
+                if Directory.Exists(Path.Combine(root, "test", "Core.Tests", "Baselines")) {
+                    return root
+                }
+            }
             for var dir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory); dir != nil; dir = dir!!.Parent {
                 if Directory.Exists(Path.Combine(dir.FullName, "test", "Core.Tests", "Baselines")) {
                     return dir.FullName

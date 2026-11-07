@@ -48,11 +48,19 @@ class RunResult {
     @JsonPropertyOrder(int32(5))
     prop Unverified bool
 
+    /// Gets or sets the stage names requested for this run, in execution order
+    /// (issue #4868). `null` in legacy `run.json` files means the full canonical
+    /// stage list.
+    @JsonPropertyName("requestedStages")
+    @JsonPropertyOrder(int32(6))
+    @JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
+    prop RequestedStages List[string]?
+
     /// Gets or sets the per-app results.
     private var _apps List[AppResult] = List[AppResult]()
 
     @JsonPropertyName("apps")
-    @JsonPropertyOrder(int32(6))
+    @JsonPropertyOrder(int32(7))
     prop Apps List[AppResult] {
         get {
             return _apps
