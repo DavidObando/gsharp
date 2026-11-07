@@ -222,6 +222,64 @@ func Nope() Ctx;
         Assert.Contains(scope_.Diagnostics, (d Diagnostic) -> d.Id == "GS0351")
     }
 
+    @Theory
+    @InlineData(`
+package P
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    @FieldOffset(0)
+    let Text string?
+    prop Other string? { get; set; }
+}
+`, "Other")
+    @InlineData(`
+package P
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+struct Box {
+    @FieldOffset(0)
+    var Value int32
+    prop Other int32 { get; set; }
+}
+`, "Other")
+    @InlineData(`
+package P
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    let Missing int32
+}
+`, "Missing")
+    func ExplicitLayout_InstanceAutoPropertyOrUnannotatedClassField_Reports_GS0347(source string, memberName string) {
+        let scope_ = BindSource(source)
+        let diag = Assert.Single(scope_.Diagnostics, (d Diagnostic) -> d.Id == "GS0347")
+        Assert.Contains(memberName, diag.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ExplicitLayout_StaticAutoProperty_And_ComputedProperty_Are_Allowed() {
+        const source = `
+package P
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    @FieldOffset(0)
+    var Value int32
+    prop Doubled int32 -> this.Value * 2
+    shared {
+        prop SharedCount int32 { get; set; }
+    }
+}
+`
+        let scope_ = BindSource(source)
+        Assert.Empty(scope_.Diagnostics)
+    }
+
     shared {
         private func BindSource(source string) BoundGlobalScope {
             let tree = SyntaxTree.Parse(SourceText.From(source))

@@ -1812,18 +1812,34 @@ class StructSymbol : TypeSymbol {
                 var implemented = false
                 for var kk = 0; kk < k && !implemented; kk++ {
                     let derivedCls = levels[kk].Cls
-                    if derivedCls.Methods.IsDefaultOrEmpty {
-                        continue
-                    }
                     let candidateSubst = levels[kk].Subst
-                    for candidate in derivedCls.Methods {
-                        if candidate.IsAbstract {
-                            continue
+                    if !derivedCls.Methods.IsDefaultOrEmpty {
+                        for candidate in derivedCls.Methods {
+                            if candidate.IsAbstract {
+                                continue
+                            }
+                            if AbstractMethodSatisfiedBy(abstractMethod, subst, candidate, candidateSubst) {
+                                implemented = true
+                                break
+                            }
                         }
-                        if AbstractMethodSatisfiedBy(abstractMethod, subst, candidate, candidateSubst) {
-                            implemented = true
-                            break
+                    }
+                    if !implemented &&
+                        derivedCls.DataPrintMembers is {IsOverride: true} synthesizedPrintMembers &&
+                        abstractMethod.Accessibility == synthesizedPrintMembers.Accessibility &&
+                        abstractMethod.ReturnRefKind == synthesizedPrintMembers.ReturnRefKind &&
+                        !abstractMethod.IsAsync &&
+                        !abstractMethod.IsSuspending &&
+                        (
+                        if subst != nil {
+                            SubstituteTypeForConstruction(abstractMethod.Type, subst)
+                        } else {
+                            abstractMethod.Type
                         }
+                    ) == synthesizedPrintMembers.Type &&
+                        AbstractMethodSatisfiedBy(abstractMethod, subst, synthesizedPrintMembers, candidateSubst) {
+                        implemented = true
+                        break
                     }
                 }
                 if !implemented {

@@ -931,6 +931,11 @@ internal partial class MethodBodyEmitter {
                 Conversion.AreSameConstructedStructIdentity(aSelfStruct, bSelfStruct) {
                 return true
             }
+            if a is DelegateTypeSymbol aDelegate &&
+                b is DelegateTypeSymbol bDelegate &&
+                Conversion.AreSameConstructedDelegateIdentity(aDelegate, bDelegate) {
+                return true
+            }
             // Issue #1431: two reference types that resolve to the SAME closed CLR
             // type token are identical at the IL level even when their symbols use
             // different representations of the same type argument (e.g. a lambda

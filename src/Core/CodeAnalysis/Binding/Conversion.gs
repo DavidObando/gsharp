@@ -719,6 +719,11 @@ class Conversion {
                 AreSameConstructedStructIdentity(fromSelfStruct, toSelfStruct) {
                 return Conversion.Identity
             }
+            if from is DelegateTypeSymbol fromDelegate &&
+                to is DelegateTypeSymbol toDelegate &&
+                AreSameConstructedDelegateIdentity(fromDelegate, toDelegate) {
+                return Conversion.Identity
+            }
             // Issue #1018: the bottom (`never`) type of a throw-expression is
             // implicitly convertible to ANY target type — a throw never yields a
             // value, so it satisfies any target without a runtime conversion.
@@ -3019,6 +3024,38 @@ class Conversion {
             return true
         }
 
+        internal func AreSameConstructedDelegateIdentity(from DelegateTypeSymbol?, to DelegateTypeSymbol?) bool {
+            if from == nil || to == nil || !object.ReferenceEquals(from.Definition ?? from, to.Definition ?? to) {
+                return false
+            }
+            let fromArgs = if !from.TypeArguments.IsDefaultOrEmpty {
+                from.TypeArguments
+            } else {
+                (from.Definition ?? from).TypeParameters.CastArray[TypeSymbol]()
+            }
+            let toArgs = if !to.TypeArguments.IsDefaultOrEmpty {
+                to.TypeArguments
+            } else {
+                (to.Definition ?? to).TypeParameters.CastArray[TypeSymbol]()
+            }
+            if fromArgs.IsDefaultOrEmpty && toArgs.IsDefaultOrEmpty {
+                return true
+            }
+            if fromArgs.Length != toArgs.Length {
+                return false
+            }
+            for var i = 0; i < fromArgs.Length; i++ {
+                if fromArgs[i] == toArgs[i] {
+                    continue
+                }
+                let slotConversion = Classify(fromArgs[i], toArgs[i])
+                if !slotConversion.Exists || !slotConversion.IsIdentity {
+                    return false
+                }
+            }
+            return true
+        }
+
         internal func GetEffectiveStructTypeArguments(s StructSymbol) ImmutableArray[TypeSymbol] {
             let def = s.Definition ?? s
             let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(def)
@@ -3085,8 +3122,10 @@ class Conversion {
             return enclosingArgs.AddRange(ownArgs)
         }
 
-        internal func IsClassLikeReferenceType(type TypeSymbol) bool -> type is StructSymbol &&
-            type.IsClass == true ||
+        internal func IsClassLikeReferenceType(type TypeSymbol) bool -> (
+            type is StructSymbol && type.IsClass == true
+        ) ||
+            type is DelegateTypeSymbol ||
             type.ClrType is {IsClass: true}
 
         /// Issue #4011: whether the pair is a `map[K, V]` flowing into one of
@@ -3115,6 +3154,9 @@ class Conversion {
                 // tested interface is neither rejected by a checked cast nor by
                 // smart-cast narrowing.
                 return !userClass.IsOpen && !userClass.IsSealedHierarchy
+            }
+            if type is DelegateTypeSymbol {
+                return true
             }
             return type.ClrType is {IsClass: true, IsSealed: true}
         }
