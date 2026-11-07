@@ -142,6 +142,32 @@ The following Tests are available:
             }
         )
         Assert.True(platformParity.IsMatch)
+        Assert.Equal("netcoreapp3.1", CSharpTestOracle.NormalizeTargetFramework(".NETCoreApp,Version=v3.1"))
+        Assert.Equal("netcoreapp3.1", CSharpTestOracle.InferTargetFrameworkFromPath("/results/netcoreapp3.1.trx"))
+        const legacyCoreListing = `Test run for /custom-out/Own.Tests.dll (.NETCoreApp,Version=v3.1)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /custom-out/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let legacyCoreOracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, legacyCoreListing)
+        Assert.True(legacyCoreOracle.TestsByFramework!!.ContainsKey("netcoreapp3.1"))
+        let legacyCoreParity = TestNameParity.Compare(
+            legacyCoreOracle,
+            []TestCaseOutcome{
+                TestCaseOutcome(
+                    "Own.Tests.A.Cells(cell: 1)",
+                    "Passed",
+                    CSharpTestOracle.InferTargetFrameworkFromPath("/results/netcoreapp3.1.trx")
+                ),
+                TestCaseOutcome(
+                    "Own.Tests.A.Cells(cell: 1)",
+                    "Passed",
+                    CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0.trx")
+                )
+            }
+        )
+        Assert.True(legacyCoreParity.IsMatch)
     }
 
     /// Review finding: an oracle holding an empty name is rejected, not silently shrunk.

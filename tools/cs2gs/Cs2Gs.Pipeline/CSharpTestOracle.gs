@@ -308,7 +308,19 @@ class CSharpTestOracle {
             }
             let text = raw.Trim()
             if text.StartsWith(".NETCoreApp,Version=v", StringComparison.OrdinalIgnoreCase) {
-                return "net" + text.Substring(".NETCoreApp,Version=v".Length).ToLowerInvariant()
+                let version = text.Substring(".NETCoreApp,Version=v".Length).ToLowerInvariant()
+                let dotIndex = version.IndexOf('.')
+                let majorText = if dotIndex >= 0 {
+                    version.Substring(0, dotIndex)
+                } else {
+                    version
+                }
+                let prefix = if int32.TryParse(majorText, out var major) && major >= 5 {
+                    "net"
+                } else {
+                    "netcoreapp"
+                }
+                return prefix + version
             }
             if text.StartsWith(".NETStandard,Version=v", StringComparison.OrdinalIgnoreCase) {
                 return "netstandard" + text.Substring(".NETStandard,Version=v".Length).ToLowerInvariant()
