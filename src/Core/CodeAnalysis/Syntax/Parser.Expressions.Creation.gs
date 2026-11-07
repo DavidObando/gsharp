@@ -977,6 +977,7 @@ open partial class Parser {
     }
 
     private func TryScanTypeClauseCore(ref pos int32, out isComplex bool, pointerAllowed bool) bool {
+        var pointerAllowed = pointerAllowed
         isComplex = false
         // Optional leading bracketed segments: '[' ']' or '[' Number ']' for
         // slice/array shapes. Issue #2830: a jagged shape stacks them
@@ -984,10 +985,13 @@ open partial class Parser {
         // `ParseTypeClause` nesting that issue #1046 introduced. Scanning only
         // one segment made `List[[][]int32]{ … }` fail to be recognised as a
         // generic composite-literal site.
+        // Issue #4944: an array of pointers (`[]*T`) is a legal CLR generic
+        // type argument and cannot be an index expression.
         var openBracketAlreadyConsumed = false
         while openBracketAlreadyConsumed || Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken {
             // An array/slice prefix is unambiguously a type shape (Issue #1323).
             isComplex = true
+            pointerAllowed = true
             if !openBracketAlreadyConsumed {
                 pos++
             }

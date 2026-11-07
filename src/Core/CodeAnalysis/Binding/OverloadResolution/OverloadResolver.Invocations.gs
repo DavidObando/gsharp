@@ -994,7 +994,10 @@ internal partial class OverloadResolver {
         } else {
             callee.Type
         }
-        if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out _) {
+        if !(callableType is FunctionPointerTypeSymbol) && !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+            callableType,
+            out _
+        ) {
             Diagnostics.ReportNotAFunction(calleeLocation, calleeName)
             return BoundErrorExpression(nil)
         }

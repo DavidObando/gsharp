@@ -155,12 +155,6 @@ internal shared class SmartCastStability {
     /// classifier, which has flow-based mutation invalidation), any variable is
     /// accepted. Stable member paths are always subject to their own
     /// stable-root rules regardless of this flag.
-    /// @param referenceNullableOnly When `true` (the `&&`/`||` short-circuit
-    /// classifier), a nullable VALUE type (e.g. `int32?`) is rejected
-    /// because narrowing it to its non-nullable form is not an IL no-op and the
-    /// variable-load path does not emit the required unwrap (issue #1545). When
-    /// `false` (the if-statement classifier), value-type nullables are
-    /// accepted, preserving that path's pre-existing behaviour.
     /// @param target The narrowed access path, when successful.
     /// @param underlying The non-nullable underlying type to narrow to.
     /// @param nonNilWhenTrue `true` for `x != nil` (the target is non-nil when the
@@ -170,7 +164,6 @@ internal shared class SmartCastStability {
     func TryClassifyNilGuardLeaf(
         condition BoundExpression,
         restrictBareVariableToLocalsAndParams bool,
-        referenceNullableOnly bool,
         @NotNullWhen(true) out target AccessPath?,
         @NotNullWhen(true) out underlying TypeSymbol?,
         out nonNilWhenTrue bool
@@ -249,24 +242,6 @@ internal shared class SmartCastStability {
         // reference nullness. String equality is the only CLR-operator shape
         // whose nil comparison is a language-level null guard.
         if be is BoundClrBinaryOperatorExpression && narrowedUnderlying != TypeSymbol.String {
-            target = nil
-            return false
-        }
-        // Issue #1545: narrowing a nullable VALUE type (`int32?` → `int32`)
-        // requires an unwrap the variable-load path does not currently emit, so
-        // the narrowed static type and the `System.Nullable<T>` storage diverge
-        // and the method fails ilverify (a pre-existing latent gap; see the
-        // separately-tracked value-type nil-narrowing emit bug). For a nullable
-        // REFERENCE type the narrowed type and its storage are the same CLR type,
-        // so narrowing is an IL no-op and is safe. The short-circuit
-        // (`&&`/`||`) caller passes `referenceNullableOnly: true` to stay on the
-        // safe side; the statement classifier keeps its pre-existing behaviour.
-        // Issue #1572: a user-declared value-type nullable (struct? / enum?)
-        // has the same storage-vs-narrowed-type divergence, but a null ClrType,
-        // so include the symbol-aware predicate here too.
-        if referenceNullableOnly &&
-            targetType is NullableTypeSymbol nullable &&
-            (NullableLifting.IsValueTypeNullable(nullable) || NullableLifting.IsUserValueTypeNullable(nullable)) {
             target = nil
             return false
         }
