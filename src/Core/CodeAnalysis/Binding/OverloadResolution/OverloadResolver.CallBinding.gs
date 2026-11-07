@@ -1659,7 +1659,8 @@ internal partial class OverloadResolver {
                 syntax,
                 boundArguments.ToImmutable(),
                 out var convertedNamedArgs,
-                out var namedRefKinds
+                out var namedRefKinds,
+                namedDelegateVar.CallableParameterNames
             ) {
                 return BoundErrorExpression(nil)
             }

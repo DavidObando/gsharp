@@ -120,7 +120,8 @@ Console.WriteLine(Api.Gen(12))
 Console.WriteLine(Fwd64(40))
 Console.WriteLine(Api.S(default))
 Console.WriteLine(Api.F((x int32) -> x * 5))
-Console.WriteLine(Api.O(default))
+var oVar = 3
+Console.WriteLine("${Api.O(default)} ${Api.O(oVar)} ${Api.O(5)} ${Api.O(ref oVar)}")
 let log = Log()
 let named = Api.Named(b: log.Mark("B", 2), a: log.Mark("A", 1))
 Console.WriteLine("${named} ${log.Text}")
@@ -156,7 +157,7 @@ Console.WriteLine(Api.F(Twice))`
                     "41",
                     "1",
                     "10",
-                    "value",
+                    "value value value ref",
                     "12 BA",
                     "-1",
                     "3",
@@ -1087,6 +1088,7 @@ func TopG[T](in x T) string -> "${x}"
 
 delegate InF(in value int32) int32;
 var callback InF = (in value int32) -> value * 3
+var naturalIn = (in value int32) -> value + 1
 
 var local = 3
 Console.WriteLine(Top(3))
@@ -1094,7 +1096,7 @@ Console.WriteLine(Top(local))
 Console.WriteLine(TopG(local))
 Console.WriteLine(TopG("s"))
 Console.WriteLine(callback(local))
-Console.WriteLine(callback(4))`, []string{"4", "4", "3", "s", "9", "12"}}
+Console.WriteLine(callback(4) + naturalIn(local) + naturalIn(in local))`, []string{"4", "4", "3", "s", "9", "20"}}
             // Constructors: direct, convenience-init chaining, `: base(...)`; an
             // extension; a struct passing `this` and its own readonly field; a
             // user indexer with `in` parameters (#4421); and a call inside an

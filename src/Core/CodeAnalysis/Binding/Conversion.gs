@@ -1251,7 +1251,11 @@ class Conversion {
                 Invariant.Required(to, "a delegate conversion has a target type", expression: "to"),
                 out var toFnSymbolic
             ) &&
-                IsFunctionShapeAssignable(fnFromSymbolic, toFnSymbolic) {
+                IsFunctionShapeAssignable(
+                fnFromSymbolic,
+                toFnSymbolic,
+                ConversionClassifier.GetMethodGroupTargetRefKinds(to, fnFromSymbolic.Arity, out _)
+            ) {
                 return Conversion.Implicit
             }
             // Issue #295: a GSharp function value (a `func` literal or any
@@ -5399,7 +5403,11 @@ class Conversion {
         /// @param from The source function-type shape.
         /// @param to The target function-type shape.
         /// @returns `true` when the shapes are assignment-compatible.
-        private func IsFunctionShapeAssignable(from FunctionTypeSymbol?, to FunctionTypeSymbol?) bool {
+        private func IsFunctionShapeAssignable(
+            from FunctionTypeSymbol?,
+            to FunctionTypeSymbol?,
+            targetRefKinds ImmutableArray[RefKind] = default(ImmutableArray[RefKind])
+        ) bool {
             if from == nil ||
                 to == nil ||
                 from.Arity != to.Arity ||
@@ -5410,6 +5418,18 @@ class Conversion {
                 return false
             }
             for var i = 0; i < from.Arity; i++ {
+                let isByRefSlot = !targetRefKinds.IsDefaultOrEmpty &&
+                    i < targetRefKinds.Length &&
+                    targetRefKinds[i] != RefKind.None
+                if isByRefSlot {
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        to.ParameterTypes[i],
+                        from.ParameterTypes[i]
+                    ) {
+                        return false
+                    }
+                    continue
+                }
                 // Function parameters are contravariant: every value the target
                 // may supply must be accepted by the source callable. Issue #3505:
                 // the relaxation is restricted to REFERENCE conversions — CLR
@@ -5858,13 +5878,16 @@ class Conversion {
                 return false
             }
             for var i = 0; i < parameters.Length; i++ {
-                if parameters[i].RefKind != RefKind.None {
-                    return false
-                }
                 let fromType TypeSymbol? = fn.ParameterTypes[i]
                 let toType TypeSymbol? = parameters[i].Type
                 if fromType == nil || toType == nil {
                     return false
+                }
+                if parameters[i].RefKind != RefKind.None {
+                    if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromType, toType) {
+                        return false
+                    }
+                    continue
                 }
                 // Parameter types are contravariant in C#; G# v1 mirrors the
                 // existing CLR-typed func→delegate rule, which is name-based

@@ -815,7 +815,7 @@ internal shared class ClrOverloadResolution {
         // only ever considered as a fallback so that a normal-form candidate
         // always beats an expanded-form one (C# §7.5.3.2 better-function-member
         // rule).
-        if applicable.Count == 0 {
+        if !HasCandidateWithoutRefKindMismatch(applicable) {
             for rawCandidate in candidateList {
                 if object.ReferenceEquals(rawCandidate, nil) {
                     continue
@@ -853,11 +853,47 @@ internal shared class ClrOverloadResolution {
         if applicable.Count == 0 {
             return Result[T].NoneApplicable()
         }
+        if HasCandidateWithoutRefKindMismatch(applicable) {
+            let refKindMatched = List[
+                (Method T, Conversions[]ImplicitConversionKind, ParamTypes[]Type, Mapping[]?int32, IsExpanded bool)
+            ](applicable.Count)
+            for candidate in applicable {
+                if !HasRefKindMismatch(candidate.Conversions) {
+                    refKindMatched.Add(candidate)
+                }
+            }
+            if refKindMatched.Count > 0 && refKindMatched.Count < applicable.Count {
+                applicable.Clear()
+                applicable.AddRange(refKindMatched)
+            }
+        }
         if applicable.Count == 1 {
             let only = applicable[0]
             return Result[T].Single(only.Method, BuildMappingArray(only.Mapping, argumentNames), only.IsExpanded)
         }
         return RankApplicable(applicable, argTypes, argumentNames, trailingParameterCountToIgnore)
+    }
+
+    private func HasRefKindMismatch(conversions[]ImplicitConversionKind) bool {
+        for conversion in conversions {
+            if conversion == ImplicitConversionKind.DelegateRefKindMismatch {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasCandidateWithoutRefKindMismatch[T MethodBase](
+        candidates List[
+            (Method T, Conversions[]ImplicitConversionKind, ParamTypes[]Type, Mapping[]?int32, IsExpanded bool)
+        ]
+    ) bool {
+        for candidate in candidates {
+            if !HasRefKindMismatch(candidate.Conversions) {
+                return true
+            }
+        }
+        return false
     }
 
     /// Issue #2347: returns `true` when [`argument`](paramref)
@@ -5830,7 +5866,15 @@ internal shared class ClrOverloadResolution {
                     parameters[paramIndex],
                     resolvedTypeArgSymbols
                 ) is {} symbolicConversion {
-                    conv = symbolicConversion
+                    if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
+                        if conv != ImplicitConversionKind.Identity {
+                            ok = false
+                            break
+                        }
+                        conv = ImplicitConversionKind.DelegateRefKindMismatch
+                    } else {
+                        conv = symbolicConversion
+                    }
                 }
                 // Issue #3989: the CLR comparison just above ranks the ERASED
                 // argument, where an element with no CLR identity is
@@ -5884,6 +5928,11 @@ internal shared class ClrOverloadResolution {
                         IsFormattableStringTarget(paramTypes[i]) {
                         conv = ImplicitConversionKind.InterpolatedStringToFormattable
                     } else if constantNarrowingArgumentCheck != nil &&
+                        (
+                        !paramTypes[i].IsByRef || RefCapabilities.GetParameterRefKind(
+                            parameters[paramIndex]
+                        ) == RefKind.In
+                    ) &&
                         constantNarrowingArgumentCheck(i, paramTypes[i]) {
                         // Issue #1311: a constant integer argument that fits a
                         // narrower / cross-sign integer parameter is implicitly
@@ -5894,6 +5943,11 @@ internal shared class ClrOverloadResolution {
                         // correctly-typed literal before emit.
                         conv = ImplicitConversionKind.ConstantNarrowing
                     } else if structuralProjectionArgumentCheck != nil &&
+                        (
+                        !paramTypes[i].IsByRef || RefCapabilities.GetParameterRefKind(
+                            parameters[paramIndex]
+                        ) == RefKind.In
+                    ) &&
                         structuralProjectionArgumentCheck(i, paramTypes[i]) {
                         // Issue #4006: the same question the #3989 gate above
                         // asks, asked again here because this arm can admit a
@@ -6362,7 +6416,14 @@ internal shared class ClrOverloadResolution {
                 parameters[slot],
                 resolvedTypeArgSymbols
             ) is {} symbolicConversion {
-                conv = symbolicConversion
+                if symbolicConversion == ImplicitConversionKind.DelegateRefKindMismatch {
+                    if conv != ImplicitConversionKind.Identity {
+                        return
+                    }
+                    conv = ImplicitConversionKind.DelegateRefKindMismatch
+                } else {
+                    conv = symbolicConversion
+                }
             }
             // Issue #3989: the same second opinion the normal-form loop takes.
             // A `params object[]` slot is the common shape here, and it is a
@@ -6532,6 +6593,53 @@ internal shared class ClrOverloadResolution {
     /// parameters, producing a per-source-index → parameter-position mapping.
     /// Returns `false` when the candidate is not applicable
     /// (unknown name, duplicate slot, or required slot left unfilled).
+    internal func TryMapSourceArgumentsToParameters(
+        parameters[]ParameterInfo,
+        call CallExpressionSyntax,
+        offset int32,
+        @NotNullWhen(true) out mapping[]?int32
+    ) bool {
+        let argCount = call.Arguments.Count
+        let effectiveParameters = if offset == 0 {
+            parameters
+        } else if parameters.Length >= offset {
+            parameters[offset ..]
+        } else {
+            Array.Empty[ParameterInfo]()
+        }
+        let argumentNames = [argCount]string?
+        for var i = 0; i < argCount; i++ {
+            if call.Arguments[i] is NamedArgumentExpressionSyntax named {
+                argumentNames[i] = named.NameToken.ValueText
+            }
+        }
+        if !TryBuildNamedArgumentMapping(
+            effectiveParameters,
+            argCount,
+            argumentNames,
+            isExpanded: false,
+            out var localMapping
+        ) &&
+            !TryBuildNamedArgumentMapping(
+            effectiveParameters,
+            argCount,
+            argumentNames,
+            isExpanded: true,
+            out localMapping
+        ) {
+            mapping = nil
+            return false
+        }
+        let mapped = localMapping!!
+        if offset > 0 {
+            for var i = 0; i < mapped.Length; i++ {
+                mapped[i] += offset
+            }
+        }
+        mapping = mapped
+        return true
+    }
+
     private func TryBuildNamedArgumentMapping(
         parameters[]ParameterInfo,
         argCount int32,
@@ -7363,7 +7471,8 @@ internal shared class ClrOverloadResolution {
         var hasBetter = false
         for var i = 0; i < count; i++ {
             let source = sources[i]
-            if source?.IsByRef == true || object.ReferenceEquals(source, SymbolicByRefArgumentType) {
+            if (source != nil && source.IsByRef) || object.ReferenceEquals(source, SymbolicByRefArgumentType) ||
+                object.ReferenceEquals(source, InlineOutVarArgumentType) {
                 continue
             }
             let candidateSlot = if candidateMapping != nil && i < candidateMapping.Length {
@@ -7382,17 +7491,24 @@ internal shared class ClrOverloadResolution {
                 otherSlot >= otherParameters.Length {
                 continue
             }
-            let candidateKind = RefCapabilities.GetParameterRefKind(candidateParameters[candidateSlot])
-            let otherKind = RefCapabilities.GetParameterRefKind(otherParameters[otherSlot])
-            if (candidateKind == RefKind.None && otherKind == RefKind.In) ||
-                (candidateKind == RefKind.In && otherKind == RefKind.None) {
-                if candidateKind != RefKind.None {
+            let candidateRank = GetOmittedByRefPassingModeRank(candidateParameters[candidateSlot])
+            let otherRank = GetOmittedByRefPassingModeRank(otherParameters[otherSlot])
+            if candidateRank != otherRank {
+                if candidateRank > otherRank {
                     return false
                 }
                 hasBetter = true
             }
         }
         return hasBetter
+    }
+
+    private func GetOmittedByRefPassingModeRank(
+        parameter ParameterInfo
+    ) int32 -> switch RefCapabilities.GetParameterRefKind(parameter) {
+        case RefKind.None: 0
+        case RefKind.In: 1
+        default: 2
     }
 
     private func CompareConversions(
@@ -7402,6 +7518,10 @@ internal shared class ClrOverloadResolution {
         paramB Type,
         source Type?
     ) int32 {
+        if ka == ImplicitConversionKind.DelegateRefKindMismatch ||
+            kb == ImplicitConversionKind.DelegateRefKindMismatch {
+            return (int32(ka)).CompareTo(int32(kb))
+        }
         // Issue #377 sub-item 4: when one candidate offers a Tier-4
         // interpolated-string→FormattableString/IFormattable conversion and
         // the other offers a plain reference upcast to System.Object, prefer

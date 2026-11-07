@@ -1596,6 +1596,9 @@ internal class LambdaBinder {
         }
         Scope = outerScope
         setCurrentFunction(outerFunction)
+        if placeholder.IsReturnTypeInferred {
+            boundBody = DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(boundBody, conversions)
+        }
         // ADR-0076 / issue #716: infer the lambda's return type from
         // (a) the bound body's trailing-expression type, combined with
         // (b) the types of any `return` statements in the body. For a block-
@@ -1610,7 +1613,8 @@ internal class LambdaBinder {
             } else {
                 targetFunctionType
             },
-            isAsync
+            isAsync,
+            Scope
         )
         if defersReturnConversion {
             // Issue #5569: convert the returns as an eager target bind does. When a return or the trailing value
@@ -1636,9 +1640,9 @@ internal class LambdaBinder {
             // The body fits the target only when the target-typed inference adopts the target return type, which
             // also checks a trailing value that is not a `return`.
             let fitsTarget = !targetDiagnostics.Any((diagnostic Diagnostic) -> diagnostic.IsError) &&
-                InferLambdaReturnType(converted, syntax, targetFunctionType, isAsync) == placeholderReturnType
+                InferLambdaReturnType(converted, syntax, targetFunctionType, isAsync, Scope) == placeholderReturnType
             let naturalReturnType = if !fitsTarget {
-                InferLambdaReturnType(boundBody, syntax, nil, isAsync)
+                InferLambdaReturnType(boundBody, syntax, nil, isAsync, Scope)
             } else {
                 TypeSymbol.Error
             }
@@ -1659,7 +1663,7 @@ internal class LambdaBinder {
             } else {
                 Diagnostics.AddRange(targetDiagnostics)
                 boundBody = converted
-                returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync)
+                returnType = InferLambdaReturnType(boundBody, syntax, targetFunctionType, isAsync, Scope)
             }
         }
         if isAsync && isAsyncIteratorReturnType(returnType) {
@@ -1713,6 +1717,16 @@ internal class LambdaBinder {
             if !object.ReferenceEquals(materializedBodyType, boundBody.Type) {
                 boundBody = conversions.BindConversion(syntax.Body.Location, boundBody, materializedBodyType)
             }
+        }
+        if returnType != TypeSymbol.Void &&
+            returnType != TypeSymbol.Error &&
+            boundBody is BoundBlockExpression{
+            Expression: BoundVariableExpression{Variable: LocalVariableSymbol cleanupResultLocal}
+        } cleanupBlock &&
+            cleanupResultLocal
+            .Name
+            .StartsWith("<blockResult", StringComparison.Ordinal) && cleanupBlock.Type != returnType {
+            boundBody = conversions.BindConversion(syntax.Body.Location, cleanupBlock, returnType)
         }
         if boundBody is BoundBlockExpression blockExpr && syntax.Body is BlockExpressionSyntax {
             // Block body — emit the prefix statements, then either a return-
@@ -1822,12 +1836,20 @@ internal class LambdaBinder {
             let useExactTargetParameterType = !exactTargetParameterSlots.IsDefault &&
                 i < exactTargetParameterSlots.Length &&
                 exactTargetParameterSlots[i]
-            let adapterParameterType = if useExactTargetParameterType {
+            let adapterParameterType = if original.RefKind != RefKind.None {
+                original.Type
+            } else if useExactTargetParameterType {
                 targetSlot
             } else {
                 GetAdapterSlotType(original.Type, targetSlot)
             }
             let adapterParameter = ParameterSymbol(original, adapterParameterType, original.DeclaringSyntax)
+            if original.HasExplicitDefaultValue && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                original.Type,
+                adapterParameterType
+            ) {
+                adapterParameter.SetExplicitDefaultValue(original.ExplicitDefaultValue)
+            }
             adapterParameter.SetAttributes(original.Attributes)
             adapterParameters.Add(adapterParameter)
             let adapterRead = BoundVariableExpression(nil, adapterParameter)
@@ -1866,6 +1888,8 @@ internal class LambdaBinder {
                 if original.RefKind == RefKind.None && nestedCaptures.Contains(original) {
                     nestedSubstitution[original] = convertedLocal
                 }
+            } else if original.RefKind != RefKind.None || object.ReferenceEquals(adapterParameterType, original.Type) {
+                replacementMap[original] = adapterRead
             } else {
                 replacementMap[original] = BoundConversionExpression(nil, original.Type, adapterRead)
             }
@@ -2254,12 +2278,19 @@ internal class LambdaBinder {
                     0
                 }
             )
+            let sourceParameter = function.Parameters[sourceParameterIndex]
             let parameter = ParameterSymbol(
-                function.Parameters[sourceParameterIndex],
+                sourceParameter,
                 functionType.ParameterTypes[i],
                 declaringSyntax: group.Syntax,
                 name: "arg$i"
             )
+            if sourceParameter.HasExplicitDefaultValue && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                sourceParameter.Type,
+                functionType.ParameterTypes[i]
+            ) {
+                parameter.SetExplicitDefaultValue(sourceParameter.ExplicitDefaultValue)
+            }
             adapterParameters.Add(parameter)
             var argument BoundExpression = BoundVariableExpression(nil, parameter)
             if parameter.RefKind != RefKind.None {
@@ -3440,18 +3471,24 @@ internal class LambdaBinder {
     private class ReturnTypeCollector : BoundTreeWalker {
         init() {
             ReturnTypes = List[TypeSymbol]()
+            ReturnExpressions = List[BoundExpression]()
         }
 
         prop ReturnTypes List[TypeSymbol] {
             get;
         }
 
+        prop ReturnExpressions List[BoundExpression] {
+            get;
+        }
+
         protected override func VisitReturnStatement(node BoundReturnStatement) {
-            if node.Expression != nil {
-                ReturnTypes.Add(node.Expression.Type ?? TypeSymbol.Void)
+            if node.Expression is {} returnExpr {
+                ReturnTypes.Add(returnExpr.Type ?? TypeSymbol.Void)
+                ReturnExpressions.Add(returnExpr)
                 // Issue #4965 (ADR-0202): the operand can itself hold a
                 // `return` (`return if c { return a } else { b }`).
-                VisitExpression(node.Expression)
+                VisitExpression(returnExpr)
             } else {
                 ReturnTypes.Add(TypeSymbol.Void)
             }
@@ -3752,6 +3789,36 @@ internal class LambdaBinder {
             )
         }
 
+        // GSA0005: The rebuild is reached only after `indexAssignment.Target == null`
+        // returns, so this is the variable-target form and TargetExpression is
+        // null on this path.
+        /// ```xmldoc
+        /// <inheritdoc />
+        /// ```
+        @SuppressDiagnostic("GSA0005")
+        protected override func RewriteClrIndexAssignmentExpression(
+            node BoundClrIndexAssignmentExpression
+        ) BoundExpression {
+            let rewritten = base.RewriteClrIndexAssignmentExpression(node)
+            if rewritten is not BoundClrIndexAssignmentExpression indexAssignment ||
+                indexAssignment.Target == nil ||
+                !this
+                .substitution
+                .TryGetValue(indexAssignment.Target, out var replacement) {
+                return rewritten
+            }
+            return BoundClrIndexAssignmentExpression(
+                indexAssignment.Syntax,
+                replacement,
+                indexAssignment.Indexer,
+                indexAssignment.Arguments,
+                indexAssignment.Value,
+                indexAssignment.Type,
+                indexAssignment.ConstrainedReceiverTypeParameter,
+                indexAssignment.ConstrainedInterfaceType
+            )
+        }
+
         shared {
             func Rewrite(
                 literal BoundFunctionLiteralExpression,
@@ -3838,6 +3905,41 @@ internal class LambdaBinder {
             }
         }
 
+        protected override func RewriteAssignmentExpression(node BoundAssignmentExpression) BoundExpression {
+            let rewritten = cast[BoundAssignmentExpression](base.RewriteAssignmentExpression(node))
+            return if this.replacementMap.TryGetValue(rewritten.Variable, out var replacement) &&
+                replacement is BoundVariableExpression{Variable: {} replacedVariable} {
+                BoundAssignmentExpression(rewritten.Syntax, replacedVariable, rewritten.Expression)
+            } else {
+                rewritten
+            }
+        }
+
+        @SuppressDiagnostic("GSA0005")
+        protected override func RewriteFieldAssignmentExpression(node BoundFieldAssignmentExpression) BoundExpression {
+            let rewritten = base.RewriteFieldAssignmentExpression(node)
+            if rewritten is not BoundFieldAssignmentExpression fieldAssignment ||
+                fieldAssignment.Receiver == nil ||
+                !this
+                .replacementMap
+                .TryGetValue(fieldAssignment.Receiver, out var replacement) ||
+                !(replacement is BoundVariableExpression{Variable: {} replacedReceiver}) {
+                return rewritten
+            }
+            return BoundFieldAssignmentExpression(
+                fieldAssignment.Syntax,
+                replacedReceiver,
+                Invariant.Required(
+                    fieldAssignment.StructType,
+                    "a variable field assignment has a struct type",
+                    expression: "fieldAssignment.StructType"
+                ),
+                fieldAssignment.Field,
+                fieldAssignment.Value,
+                fieldAssignment.ResultType
+            )
+        }
+
         protected override func RewriteIndexAssignmentExpression(node BoundIndexAssignmentExpression) BoundExpression {
             if node.TargetExpression != nil {
                 return base.RewriteIndexAssignmentExpression(node)
@@ -3851,6 +3953,28 @@ internal class LambdaBinder {
                     rewritten.Indices,
                     rewritten.Value,
                     rewritten.Type
+                )
+            }
+            return rewritten
+        }
+
+        protected override func RewriteClrIndexAssignmentExpression(
+            node BoundClrIndexAssignmentExpression
+        ) BoundExpression {
+            if node.TargetExpression != nil {
+                return base.RewriteClrIndexAssignmentExpression(node)
+            }
+            let rewritten = cast[BoundClrIndexAssignmentExpression](base.RewriteClrIndexAssignmentExpression(node))
+            if rewritten.Target is {} target && this.replacementMap.TryGetValue(target, out var replacement) {
+                return BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    rewritten.Syntax,
+                    replacement,
+                    rewritten.Indexer,
+                    rewritten.Arguments,
+                    rewritten.Value,
+                    rewritten.Type,
+                    rewritten.ConstrainedReceiverTypeParameter,
+                    rewritten.ConstrainedInterfaceType
                 )
             }
             return rewritten
@@ -4664,7 +4788,8 @@ internal class LambdaBinder {
             boundBody BoundExpression,
             syntax LambdaExpressionSyntax,
             targetFunctionType FunctionTypeSymbol?,
-            isAsync bool
+            isAsync bool,
+            boundScope BoundScope
         ) TypeSymbol {
             if boundBody is BoundErrorExpression {
                 return TypeSymbol.Error
@@ -4713,6 +4838,23 @@ internal class LambdaBinder {
                 boundBody
             }
             let trailingIsAssignment = IsAssignmentExpression(trailingExpression)
+            let returnBranches = List[BoundExpression](collector.ReturnExpressions)
+            if !(hasExplicitReturn && trailingIsVoidPlaceholder) &&
+                !(trailingIsAssignment && targetFunctionType == nil) {
+                returnBranches.Add(boundBody)
+            }
+            let MaterializeRefReturn = func (inferred TypeSymbol) TypeSymbol {
+                if inferred == TypeSymbol.Void || inferred == TypeSymbol.Error {
+                    return inferred
+                }
+                return DelegateRefKindUtilities.MaterializeSynthesizedRefDelegateResultType(
+                    inferred,
+                    returnBranches,
+                    boundScope,
+                    allowFirstArmFallback: true
+                ) ??
+                    inferred
+            }
             // Preserve the direct expression-body type before common-type
             // aggregation. This path has one candidate by construction and also
             // remains stable when Core itself is compiled from migrated G#.
@@ -4724,13 +4866,14 @@ internal class LambdaBinder {
             // which adapts to any delegate signature (issue #2716).
             let neverBlockTail = trailingType == TypeSymbol.Never && (syntax.Body is BlockExpressionSyntax || isAsync)
             if targetFunctionType == nil && !hasExplicitReturn && !trailingIsAssignment {
-                return if neverBlockTail {
+                let directResult = if neverBlockTail {
                     TypeSymbol.Void
                 } else if trailingType != TypeSymbol.Null {
                     TupleTypeSymbol.ResolveNilElements(trailingType)
                 } else {
                     trailingType
                 }
+                return MaterializeRefReturn(directResult)
             }
             // Issue #891: a block-body arrow lambda whose body never completes
             // normally — every path throws (or otherwise terminates) without a
@@ -4841,11 +4984,12 @@ internal class LambdaBinder {
                 return TypeSymbol.Void
             }
             let resolvedResult = result ?? TypeSymbol.Error
-            return if resolvedResult != TypeSymbol.Null {
+            let finalResult = if resolvedResult != TypeSymbol.Null {
                 TupleTypeSymbol.ResolveNilElements(resolvedResult)
             } else {
                 resolvedResult
             }
+            return MaterializeRefReturn(finalResult)
         }
 
         // Issue #2152: recognizes every bound-node shape the binder uses to
@@ -4954,8 +5098,13 @@ internal class LambdaBinder {
         // slot instead so the delegate reifies as `Func<UserType, …>` through the
         // TypeSpec path (ADR-0087 §3 R6), matching the reified generic call site.
         private func GetAdapterSlotType(literalSlot TypeSymbol?, targetSlot TypeSymbol) TypeSymbol {
-            if literalSlot != nil && TypeSymbol.ContainsSameCompilationUserType(literalSlot) {
-                return literalSlot
+            if literalSlot != nil {
+                if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(literalSlot, targetSlot) {
+                    return targetSlot
+                }
+                if TypeSymbol.ContainsSameCompilationUserType(literalSlot) {
+                    return literalSlot
+                }
             }
             return GetErasedDelegateSlotType(targetSlot)
         }

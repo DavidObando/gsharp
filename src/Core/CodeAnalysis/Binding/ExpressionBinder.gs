@@ -1461,6 +1461,10 @@ internal partial class ExpressionBinder {
         if syntax is BlockExpressionSyntax blockExpression {
             return BindBlockExpressionValue(blockExpression, canBeVoid: false, targetType, preserveEmptyBlock: true)
         }
+        if syntax is TupleLiteralExpressionSyntax tupleLiteral {
+            let boundTuple = BindTupleLiteralExpression(tupleLiteral, targetType)
+            return ConvertTargetTypedValue(syntax, boundTuple, targetType)
+        }
         // Issue #1112: a switch-expression honors the target type (C#-style
         // target-typing) — bind it with the target so the result type can be
         // the target when every arm is implicitly convertible to it, then run

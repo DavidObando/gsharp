@@ -928,7 +928,7 @@ internal partial class OverloadResolver {
             }
             var lambdaTarget FunctionTypeSymbol? = paramTypeForArg as FunctionTypeSymbol
             if lambdaTarget == nil && paramTypeForArg != nil {
-                let _ = MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramTypeForArg, out lambdaTarget)
             }
             if boundArgument == nil && lambdaArgument != nil && lambdaTarget != nil && bindLambdaWithTarget != nil {
                 boundArgument = bindLambdaWithTarget!!(lambdaArgument, lambdaTarget)

@@ -2169,7 +2169,9 @@ internal partial class StatementBinder {
             // across all return paths and the trailing block expression, if
             // any), and applies a single conversion pass to each return-
             // statement expression once the return type is known.
-
+            if expression != nil {
+                expression = DelegateRefKindUtilities.UnwrapSynthesizedRefDelegateBranch(expression, conversions)
+            }
         } else {
             if function!!.Type == TypeSymbol.Void || IsIteratorFunction(syntax) {
                 if expression != nil {
