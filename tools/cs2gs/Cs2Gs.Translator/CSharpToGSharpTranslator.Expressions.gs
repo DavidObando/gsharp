@@ -4101,7 +4101,7 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Method) &&
-                    !HasExplicitTypeArguments(invocation.Expression) {
+                    !this.InferredMethodTypeArgumentsAreDeclared(invocation, receiverMethod) {
                     return false
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Type) {
@@ -4409,6 +4409,59 @@ partial class CSharpToGSharpTranslator {
                 .TypeArguments
                 .Any((argument ITypeSymbol) -> this.MentionedTypeParameterKind(argument, kind))
             default: false
+        }
+
+        private func InferredMethodTypeArgumentsAreDeclared(
+            invocation InvocationExpressionSyntax,
+            receiverMethod IMethodSymbol
+        ) bool {
+            if HasExplicitTypeArguments(invocation.Expression) {
+                return true
+            }
+            if receiverMethod.TypeArguments.IsDefaultOrEmpty {
+                return false
+            }
+            for typeArg in receiverMethod.TypeArguments {
+                if ContainsTypeParameter(typeArg) ||
+                    typeArg.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return false
+                }
+            }
+            let argumentExpressions = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            if receiverMethod.ReducedFrom != nil &&
+                invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extensionReceiver} {
+                argumentExpressions.Add(extensionReceiver)
+            }
+            for argument in invocation.ArgumentList.Arguments {
+                if argument.Expression != nil {
+                    argumentExpressions.Add(argument.Expression)
+                }
+            }
+            if argumentExpressions.Count == 0 {
+                return false
+            }
+            for argExpr in argumentExpressions {
+                if this.MentionsValueNilableOnlyInEmittedGSharp(argExpr) || this.YieldsValueNilableBeyondItsCSharpType(
+                    argExpr
+                ) {
+                    return false
+                }
+                if Unparenthesize(argExpr) is AnonymousFunctionExpressionSyntax argLambda &&
+                    this.InitializerLambdaReturnsNilableBeyondItsCSharpType(argLambda) {
+                    return false
+                }
+                if this
+                    .context
+                    .GetTypeInfo(argExpr)
+                    .Type is {IsReferenceType: true} &&
+                    !this.GSharpExpressionIsStaticallyNonNull(argExpr) {
+                    return false
+                }
+            }
+            return true
         }
 
         // Issue #5627: whether a written type fixes the G# storage of [`local`](paramref). The declaration's own
@@ -5105,7 +5158,7 @@ partial class CSharpToGSharpTranslator {
                     return true
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Method) &&
-                    !HasExplicitTypeArguments(invocation.Expression) {
+                    !this.InferredMethodTypeArgumentsAreDeclared(invocation, receiverMethod) {
                     return false
                 }
                 if MentionedTypeParameterKind(projectedDeclaredReturn, TypeParameterKind.Type) {
@@ -6598,6 +6651,12 @@ partial class CSharpToGSharpTranslator {
             if !(node!!.Parent is ArgumentSyntax{Parent: {Parent: InvocationExpressionSyntax invocation}} argument) {
                 return false
             }
+            // Issue #4074: observing or filtering the invocation's result says
+            // nothing about an unrelated callback's fixed return contract
+            // (e.g. Func<string>).
+            if !this.IsGenericSelectorResultArgument(argument, lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+                return false
+            }
             var invocationValue Microsoft.CodeAnalysis.SyntaxNode? = invocation
             while (
                 invocationValue!!.Parent is Microsoft
@@ -6614,24 +6673,19 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return true
             }
-            // Issue #4074: filtering the invocation's result says nothing about
-            // an unrelated callback's fixed return contract (e.g. Func<string>).
-            if this.IsGenericSelectorResultArgument(argument, lambda) &&
+            if this.LambdaResultFeedsNullFilteringInvocation(invocation) ||
                 (
-                this.LambdaResultFeedsNullFilteringInvocation(invocation) ||
-                    (
-                    (
-                        invocation.Expression is not GenericNameSyntax and
-                            not(MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) and
-                            not(MemberBindingExpressionSyntax and {Name: GenericNameSyntax})
-                    ) &&
-                        this
-                        .context
-                        .SemanticModel
-                        .GetNullableContext(value!!.SpanStart)
-                        .HasFlag(NullableContext.AnnotationsEnabled) &&
-                        this.ReceiverValueIsObliviouslyReadAnnotatedResult(value)
-                )
+                (
+                    invocation.Expression is not GenericNameSyntax and
+                        not(MemberAccessExpressionSyntax and {Name: GenericNameSyntax}) and
+                        not(MemberBindingExpressionSyntax and {Name: GenericNameSyntax})
+                ) &&
+                    this
+                    .context
+                    .SemanticModel
+                    .GetNullableContext(value!!.SpanStart)
+                    .HasFlag(NullableContext.AnnotationsEnabled) &&
+                    this.ReceiverValueIsObliviouslyReadAnnotatedResult(value)
             ) {
                 return true
             }

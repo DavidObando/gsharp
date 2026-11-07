@@ -4029,7 +4029,7 @@ internal class ConversionClassifier {
             targetFunction == nil {
             return false
         }
-        if sourceFunction.Arity != targetFunction.Arity {
+        if !AreRuntimeDelegateParametersCompatible(literal, sourceFunction, targetFunction) {
             return false
         }
         var sourceReturn = sourceFunction.ReturnType
@@ -4049,6 +4049,54 @@ internal class ConversionClassifier {
             return false
         }
         lambdaSyntax = syntax
+        return true
+    }
+
+    private func AreRuntimeDelegateParametersCompatible(
+        literal BoundFunctionLiteralExpression,
+        sourceFunction FunctionTypeSymbol,
+        targetFunction FunctionTypeSymbol
+    ) bool {
+        if sourceFunction.Arity != targetFunction.Arity {
+            return false
+        }
+        for var i = 0; i < sourceFunction.Arity; i++ {
+            let parameterType = sourceFunction.ParameterTypes[i]
+            let targetParameterType = targetFunction.ParameterTypes[i]
+            if parameterType == TypeSymbol.Error || targetParameterType == TypeSymbol.Error {
+                return false
+            }
+            let refKind = if i < literal.Function.Parameters.Length {
+                literal.Function.Parameters[i].RefKind
+            } else {
+                RefKind.None
+            }
+            let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                targetParameterType,
+                parameterType
+            )
+            let conversion = Conversion.ClassifyNonStructural(targetParameterType, parameterType)
+            let structurallyCompatibleDelegate = parameterType is FunctionTypeSymbol writtenFunctionType &&
+                !(targetParameterType is FunctionTypeSymbol) &&
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                targetParameterType,
+                out var targetDelegateFunctionType
+            ) &&
+                Conversion
+                .ClassifyNonStructural(targetDelegateFunctionType!!, writtenFunctionType).IsImplicit
+            let compatible = runtimeEquivalent ||
+                structurallyCompatibleDelegate ||
+                (
+                refKind == RefKind.None &&
+                    (
+                    conversion.IsImplicit ||
+                        HasUserDefinedImplicitConversionForTypes(targetParameterType, parameterType)
+                )
+            )
+            if !compatible {
+                return false
+            }
+        }
         return true
     }
 

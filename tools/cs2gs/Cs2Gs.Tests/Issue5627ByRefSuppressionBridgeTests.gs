@@ -397,6 +397,7 @@ namespace Demo
         private static Func<Dictionary<string, int>> fixedRead = () => new Dictionary<string, int>();
         static T Id<T>(T value) => value;
         static T Read<T>(Func<T> f) => f();
+        static string? Observe(Func<Dictionary<string, int>> read) => read().Count > 0 ? null : "nonempty";
         static int ConsumeTuple<T>(Func<(Dictionary<string, int>, T)> read) => read().Item1.Count;
         static Dictionary<string, int> ReadWithInput<T>(T x, Func<T, Dictionary<string, int>> f) => f(x);
         static Dictionary<string, int> ReadParams<T>(T x, params Func<T, Dictionary<string, int>>[] fs) => fs[0](x);
@@ -416,12 +417,12 @@ namespace Demo
         static int GenericInputArrayElem<T>(T seed) { var readers = new Func<T, Dictionary<string, int>>[1]; readers[0] = _ => Volatile.Read(ref full!); return readers[0](seed).Count; }
         static int Use() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => Volatile.Read(ref cache!)); }
         static int UseChained() => Wrap(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!));
-        static int UseChainedExplicit() => Wrap<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!));
+        static int UseChainedExplicit() => Wrap<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + Wrap(new Dictionary<string, int> { ["a"] = 1 }).Use(() => Volatile.Read(ref full!)) - 1;
         static int UsePartiallyFixedPair() => MakePair(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref full!)) + MakePair(Volatile.Read(ref cache!)).UseSecond(() => Volatile.Read(ref cache!)) + MakeIntPair(0).UseMap(() => Volatile.Read(ref full!)) + UseParamPair(MakePair(Volatile.Read(ref cache!)));
         static int UseNestedInferred() => WrapInner(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!)) + WrapInner<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + new Maker<string>().UseNestedGeneric(() => Volatile.Read(ref fullInner!));
         static int UseBlock() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => { return Volatile.Read(ref cache!); }); }
         static bool ReadInferred() => Read(() => Volatile.Read(ref cache!)) == null;
-        static int ReadExplicit() => Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count;
+        static int ReadExplicit() { var observed = Observe(() => Volatile.Read(ref full!)); return Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count + (observed == null ? 0 : 1); }
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
         static int ReadExpandedParamsFixedReturn() => ReadParams(1, x => Volatile.Read(ref full!)).Count;
         static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
@@ -483,6 +484,8 @@ namespace Demo
             "Wrap[Dictionary[string, int32]](Volatile.Read(&full)!!).Use(() -> Volatile.Read(&full)!!)",
             printed
         )
+        Assert.Contains("Wrap(Dictionary[string, int32](){[\"a\"]: 1}).Use(() -> Volatile.Read(&full)!!)", printed)
+        Assert.Contains("Observe(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("Read(() -> Volatile.Read(&cache)) == nil", printed)
         Assert.Contains("Read[Dictionary[string, int32]](() -> Volatile.Read(&full)!!).Count", printed)
         Assert.Contains("ReadWithInput(1, (x int32) -> Volatile.Read(&full)!!).Count", printed)

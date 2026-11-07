@@ -255,6 +255,9 @@ func Run(token Token) {
             yield Row("nullable-delegate-arity-mismatch-fallback", `func Run() {
     let f ((int32, int32) -> string)? = (x int32) -> "ok"
 }`, `(x int32) -> "ok"`)
+            yield Row("nullable-delegate-incompatible-param-and-return-fallback", `func Run() {
+    let f ((int32) -> string)? = (s string) -> Maybe()
+}`, `(s string) -> Maybe()`)
             yield Row(
                 "imported-annotated-arg-delegate-nonnull-return",
                 `func Run() string -> StrictSink5686.TakeArg((x) -> Maybe())`,
