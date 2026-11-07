@@ -387,6 +387,22 @@ internal partial class ExpressionBinder {
         }
         let candidates = MemberLookup.CollectSourceInstanceMethods(receiver!!.Type, methodName)
         if candidates.IsDefaultOrEmpty {
+            let receiverStruct = receiver!!.Type as StructSymbol
+            if (receiverStruct != nil || receiver!!.Type is InterfaceSymbol) &&
+                (
+                (
+                    receiverStruct != nil && receiverStruct.GetHierarchy().Any(
+                        (current StructSymbol) -> current.TryGetField(methodName, out _)
+                    )
+                ) ||
+                    (
+                    TypeMemberModel.TryGetPropertyWithOwner(receiver!!.Type, methodName, out var prop, out _) &&
+                        prop != nil &&
+                        prop.HasGetter
+                )
+            ) {
+                deferredIndices.Clear()
+            }
             return
         }
         for idx in deferredIndices.ToArray() {

@@ -3439,7 +3439,11 @@ partial class CSharpToGSharpTranslator {
             }
             let includePromotedLambdaArm = IsBranchArm(value) &&
                 targetSymbol is IMethodSymbol methodTarget &&
-                this.ResultLambda(methodTarget, value) != nil && this.SlotTypeIsDeclared(targetSymbol, value)
+                this.ResultLambda(methodTarget, value) is {} branchLambda && this.SlotTypeIsDeclared(
+                targetSymbol,
+                value
+            ) &&
+                this.LambdaTargetIsTranslatedSourceOrSiblingSlot(branchLambda)
             return this.ForgiveNullableReferenceValue(
                 value,
                 translated,
@@ -3514,7 +3518,7 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             tuplePath List[int32]? = nil
         ) bool -> switch targetSymbol {
-            case namedType is INamedTypeSymbol: !ContainsTypeParameter(namedType)
+            case namedType is INamedTypeSymbol: namedType != nil
             case field is IFieldSymbol: this.MemberSlotIsDeclared(
                 field.OriginalDefinition.Type,
                 field.Type,
@@ -3535,6 +3539,33 @@ partial class CSharpToGSharpTranslator {
                 true
             }
             default: false
+        }
+
+        private func LambdaTargetIsTranslatedSourceOrSiblingSlot(lambda AnonymousFunctionExpressionSyntax) bool {
+            if this.LambdaHasExplicitDelegateCast(lambda) || this.LambdaFeedsDeclaredCollectionElement(lambda) {
+                return true
+            }
+            let sink = this.ResolveValueSink(lambda) ??
+                (
+                if this.FindResultLambda(lambda) is {} enclosingLambda {
+                    this.GetLambdaTargetDelegateType(enclosingLambda)?.DelegateInvokeMethod
+                } else {
+                    default(ISymbol?)
+                }
+            )
+            if sink == nil {
+                return false
+            }
+            if this.IsSourceSymbol(sink) {
+                return true
+            }
+            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            return compilations != nil && compilations.Any(
+                (compilation CSharpCompilation) -> SymbolEqualityComparer.Default.Equals(
+                    compilation.Assembly,
+                    sink.OriginalDefinition.ContainingAssembly
+                )
+            )
         }
 
         private func LambdaResultSlotIsDeclared(
@@ -3670,13 +3701,14 @@ partial class CSharpToGSharpTranslator {
                         node = arm.Parent
                     }
                     case castExpr is CastExpressionSyntax {
+                        let _ = tuplePath
                         if UnwrapExpressionTreeDelegateType(
                             this.context.GetTypeInfo(castExpr.Type).Type
-                        ) is INamedTypeSymbol{DelegateInvokeMethod: {} invoke} &&
-                            !ContainsTypeParameter(
-                            this.EffectiveDeclaredSlotType(invoke.ReturnType, lambda, tuplePath)
-                        ) {
-                            return true
+                        ) is INamedTypeSymbol{DelegateInvokeMethod: {}} {
+                            return !this.IsObliviousCompilation() || this.LambdaBodyReturnsNilableBeyondItsCSharpType(
+                                lambda
+                            ) ||
+                                !this.LambdaResultFlowsToNullableSink(lambda, ignoreExplicitDelegateCast: true)
                         }
                         node = castExpr
                     }
@@ -3694,25 +3726,20 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             tuplePath List[int32]? = nil
         ) bool {
+            let _ = constructedType
             let effectiveDeclared = this.EffectiveDeclaredSlotType(declaredType, value, tuplePath)
-            if !ContainsTypeParameter(effectiveDeclared) {
+            if !ContainsTypeParameter(effectiveDeclared) || value == nil {
                 return true
-            }
-            let effectiveConstructed = this.EffectiveDeclaredSlotType(constructedType, value, tuplePath)
-            if ContainsTypeParameter(effectiveConstructed) {
-                return false
-            }
-            if value == nil {
-                return false
             }
             let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
             OutermostTransparentNode(value, storeNodes: storeNodes)
-            if storeNodes.Count == 0 ||
-                storeNodes[0].Parent is not Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .AssignmentExpressionSyntax assignment {
+            if storeNodes.Count == 0 {
+                return false
+            }
+            if storeNodes[0].Parent is EqualsValueClauseSyntax {
+                return true
+            }
+            if storeNodes[0].Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment {
                 return false
             }
             if assignment.Parent is InitializerExpressionSyntax{Parent: BaseObjectCreationExpressionSyntax creation} {
@@ -3738,10 +3765,7 @@ partial class CSharpToGSharpTranslator {
             tuplePath List[int32]? = nil
         ) bool {
             let converted = this.GetLambdaTargetDelegateType(lambda)
-            if converted?.DelegateInvokeMethod == nil ||
-                ContainsTypeParameter(
-                this.EffectiveDeclaredSlotType(converted!!.DelegateInvokeMethod!!.ReturnType, lambda, tuplePath)
-            ) {
+            if converted?.DelegateInvokeMethod == nil {
                 return false
             }
             let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
@@ -3766,9 +3790,7 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     default(ITypeSymbol?)
                 }
-                return elementReturnSlot != nil &&
-                    !ContainsTypeParameter(elementReturnSlot) &&
-                    this.ReceiverTypeArgumentsAreDeclared(
+                return elementReturnSlot != nil && this.ReceiverTypeArgumentsAreDeclared(
                     elementAccess.Expression,
                     slotType: elementReturnSlot,
                     tuplePath: tuplePath
@@ -3783,15 +3805,16 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetTypeInfo(collection)
                     .Type
-                return collectionType != nil && !ContainsTypeParameter(collectionType)
+                return collectionType != nil
             }
             if outermost?.Parent is not InitializerExpressionSyntax initializer {
                 return false
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
-                return this.ArrayTypeOfInitializer(initializer) is {} arrayType &&
-                    !ContainsTypeParameter(this.EffectiveDeclaredSlotType(arrayType.ElementType, lambda, tuplePath)) &&
-                    this.ArrayInitializerSlotIsDeclared(initializer, tuplePath)
+                return this.ArrayTypeOfInitializer(initializer) != nil && this.ArrayInitializerSlotIsDeclared(
+                    initializer,
+                    tuplePath
+                )
             }
             if initializer.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CollectionInitializerExpression) ||
                 (
@@ -3855,15 +3878,6 @@ partial class CSharpToGSharpTranslator {
             let declaredType = this.EffectiveDeclaredSlotType(rawDeclared, value, tuplePath)
             if !ContainsTypeParameter(declaredType) {
                 return true
-            }
-            let rawConstructed = if expandedParams {
-                GetParamsElementType(parameter) ?? parameter.Type
-            } else {
-                parameter.Type
-            }
-            let constructedType = this.EffectiveDeclaredSlotType(rawConstructed, value, tuplePath)
-            if ContainsTypeParameter(constructedType) {
-                return false
             }
             if MentionedTypeParameterKind(declaredType, TypeParameterKind.Method) &&
                 !ValueFeedsExplicitTypeArguments(value) {
@@ -4287,10 +4301,10 @@ partial class CSharpToGSharpTranslator {
             entries.Add((slotType, pathKey, result))
         }
 
-        private func ReceiverTargetContainsTypeParameter(
-            receiverType ITypeSymbol?,
-            slotType ITypeSymbol?
-        ) bool -> ContainsTypeParameter(this.ProjectSlotThroughReceiverType(slotType, receiverType))
+        private func ReceiverTargetContainsTypeParameter(receiverType ITypeSymbol?, slotType ITypeSymbol?) bool {
+            let _ = slotType
+            return receiverType == nil
+        }
 
         private func ProjectSlotThroughReceiverType(slotType ITypeSymbol?, receiverType ITypeSymbol?) ITypeSymbol? {
             if slotType == nil {
@@ -4431,11 +4445,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             for typeArg in receiverMethod.TypeArguments {
-                if ContainsTypeParameter(typeArg) ||
-                    typeArg.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
+                if typeArg.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                     return false
                 }
             }
@@ -4500,8 +4510,7 @@ partial class CSharpToGSharpTranslator {
                 let isLambdaOrImplicitArray = value is AnonymousFunctionExpressionSyntax ||
                     value is ImplicitArrayCreationExpressionSyntax
                 if !isLambdaOrImplicitArray || varInitializer == nil || varInitializer.Span.Contains(value!!.Span) ||
-                    localInvoke == nil ||
-                    ContainsTypeParameter(localInvoke.ReturnType) {
+                    localInvoke == nil {
                     return false
                 }
                 let effectiveReturnType = GetEffectiveReturnType(
@@ -4520,7 +4529,6 @@ partial class CSharpToGSharpTranslator {
                 if tuplePath != nil && tuplePath.Count > 0 {
                     let tupleElementType = this.GetTupleElementTypeAtPath(effectiveReturnType, tuplePath)
                     if tupleElementType == nil ||
-                        ContainsTypeParameter(tupleElementType) ||
                         tupleElementType.NullableAnnotation == Microsoft
                         .CodeAnalysis
                         .NullableAnnotation
@@ -4752,11 +4760,7 @@ partial class CSharpToGSharpTranslator {
                         node = arm.Parent
                     }
                     case castExpr is CastExpressionSyntax {
-                        if this
-                            .context
-                            .GetTypeInfo(castExpr.Type)
-                            .Type is IArrayTypeSymbol castArray &&
-                            !ContainsTypeParameter(castArray.ElementType) {
+                        if this.context.GetTypeInfo(castExpr.Type).Type is IArrayTypeSymbol {
                             return true
                         }
                         node = castExpr
@@ -5554,13 +5558,7 @@ partial class CSharpToGSharpTranslator {
                 if this.LambdaHasExplicitDelegateCast(lambda) {
                     return false
                 }
-                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprBody {
-                    return this.ExpressionOrTupleYieldsNilableBeyondItsCSharpType(exprBody)
-                }
-                if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax block {
-                    return this.BlockReturnsNilableBeyondItsCSharpType(block)
-                }
-                return false
+                return this.LambdaBodyReturnsNilableBeyondItsCSharpType(lambda)
             }
             if this
                 .context
@@ -5584,6 +5582,16 @@ partial class CSharpToGSharpTranslator {
                 return result
             }
             return this.ExpressionOrTupleYieldsNilableBeyondItsCSharpType(unwrapped)
+        }
+
+        private func LambdaBodyReturnsNilableBeyondItsCSharpType(lambda AnonymousFunctionExpressionSyntax) bool {
+            if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax exprBody {
+                return this.ExpressionOrTupleYieldsNilableBeyondItsCSharpType(exprBody)
+            }
+            if lambda.Body is Microsoft.CodeAnalysis.CSharp.Syntax.BlockSyntax block {
+                return this.BlockReturnsNilableBeyondItsCSharpType(block)
+            }
+            return false
         }
 
         private func BlockReturnsNilableBeyondItsCSharpType(node Microsoft.CodeAnalysis.SyntaxNode) bool {
@@ -5921,11 +5929,6 @@ partial class CSharpToGSharpTranslator {
             // non-null type the program text declares.
             let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbol, value) &&
                 this.YieldsValueNilableBeyondItsCSharpType(value)
-            let nestedDelegateReturnInExpressionTree = targetSymbol is IMethodSymbol methodTarget && this.ResultLambda(
-                methodTarget,
-                value
-            ) is {} resultLambda &&
-                !this.IsExpressionTreeLambda(resultLambda) && this.SlotTypeIsDeclared(targetSymbol, value)
             if translated is NonNullAssertionExpression ||
                 resultAcceptsNil ||
                 IsNullOrSuppressedNull(value) ||
@@ -5935,11 +5938,7 @@ partial class CSharpToGSharpTranslator {
                 targetSymbol.IsConst == true ||
                 targetSymbol is ILocalSymbol &&
                 targetSymbol.IsConst == true ||
-                (
-                this.IsWithinExpressionTreeLambda(value) &&
-                    !emittedNilableValue &&
-                    !nestedDelegateReturnInExpressionTree
-            ) ||
+                (this.IsWithinExpressionTreeLambda(value) && !emittedNilableValue) ||
                 IsInitializerOfInferredLocal(value, targetSymbol) ||
                 this.LambdaResultFeedsNullableObservedInvocation(value) || !this.TargetWillRemainNonNullableReference(
                 targetType,
@@ -6641,7 +6640,7 @@ partial class CSharpToGSharpTranslator {
             if this.FindResultLambda(value) is not{} lambda {
                 return false
             }
-            if this.LambdaHasExplicitDelegateCast(lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+            if this.LambdaHasExplicitDelegateCast(lambda) {
                 return false
             }
             if this.LambdaResultFlowsToNullableSink(lambda) {
@@ -6664,7 +6663,13 @@ partial class CSharpToGSharpTranslator {
             // Issue #4074: observing or filtering the invocation's result says
             // nothing about an unrelated callback's fixed return contract
             // (e.g. Func<string>).
-            if !this.IsGenericSelectorResultArgument(argument, lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+            if !this.IsGenericSelectorResultArgument(argument, lambda) ||
+                (
+                ValueFeedsExplicitTypeArguments(lambda) && !this.TryGetManagedReferenceArrayProjectedMethod(
+                    invocation,
+                    out _
+                )
+            ) {
                 return false
             }
             var invocationValue Microsoft.CodeAnalysis.SyntaxNode? = invocation
@@ -14198,7 +14203,15 @@ partial class CSharpToGSharpTranslator {
                 .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword)
             let targetType ITypeSymbol? = switch target {
                 case method is IMethodSymbol: GetEffectiveReturnType(
-                    method.ReturnType,
+                    if method.MethodKind == MethodKind.AnonymousFunction && this.FindResultLambda(
+                        value
+                    ) is {} enclosingResultLambda &&
+                        this
+                        .GetLambdaTargetDelegateType(enclosingResultLambda)?.DelegateInvokeMethod is {} targetInvoke {
+                        targetInvoke.ReturnType
+                    } else {
+                        method.ReturnType
+                    },
                     method.IsAsync || asyncLambdaBody
                 )
                 case property is IPropertySymbol: property.Type
@@ -15974,13 +15987,17 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func LambdaResultFlowsToNullableSink(lambda AnonymousFunctionExpressionSyntax) bool {
+        private func LambdaResultFlowsToNullableSink(
+            lambda AnonymousFunctionExpressionSyntax,
+            ignoreExplicitDelegateCast bool = false
+        ) bool {
             // Issue #4046: a generic selector has no fixed return contract of
             // its own. When its fluent call chain collapses back to the same
             // scalar type and that final sink is emitted nullable, preserve nil
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
-            if this.LambdaHasExplicitDelegateCast(lambda) || ValueFeedsExplicitTypeArguments(lambda) {
+            if (!ignoreExplicitDelegateCast && this.LambdaHasExplicitDelegateCast(lambda)) ||
+                ValueFeedsExplicitTypeArguments(lambda) {
                 return false
             }
             var current Microsoft.CodeAnalysis.SyntaxNode? = lambda
@@ -16407,7 +16424,12 @@ partial class CSharpToGSharpTranslator {
             .TypeKind == TypeKind.Delegate
 
         private func GetLambdaTargetDelegateType(lambda AnonymousFunctionExpressionSyntax) INamedTypeSymbol? {
-            if this.context.GetTypeInfo(lambda).ConvertedType is not INamedTypeSymbol converted {
+            let convertedType = this.GetProjectedMethodGroupDestinationType(lambda) ??
+                this
+                .context
+                .GetTypeInfo(lambda)
+                .ConvertedType
+            if convertedType is not INamedTypeSymbol converted {
                 return nil
             }
             if converted.TypeKind == TypeKind.Delegate {

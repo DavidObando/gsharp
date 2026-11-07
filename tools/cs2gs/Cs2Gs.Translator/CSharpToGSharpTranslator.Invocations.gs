@@ -4338,6 +4338,25 @@ partial class CSharpToGSharpTranslator {
             }
             if targetSymbol is INamedTypeSymbol delegateTarget && delegateTarget.TypeKind == TypeKind.Delegate {
                 targetType = this.typeMapper.MapNominalDelegate(delegateTarget, this.context, cast.Type.GetLocation())
+                if this.IsObliviousCompilation() &&
+                    Unparenthesize(cast.Expression) is AnonymousFunctionExpressionSyntax castLambda &&
+                    !this.LambdaBodyReturnsNilableBeyondItsCSharpType(castLambda) &&
+                    this.LambdaResultFlowsToNullableSink(castLambda, ignoreExplicitDelegateCast: true) &&
+                    targetType is NamedTypeReference{TypeArguments: {Count: > 0} delegateTypeArgs} namedDelegateRef &&
+                    delegateTarget.DelegateInvokeMethod is {ReturnsVoid: false} delegateInvoke &&
+                    delegateInvoke
+                    .ReturnType
+                    .IsReferenceType &&
+                    !delegateTypeArgs[delegateTypeArgs.Count - 1]
+                    .IsNullable {
+                    let widenedArgs = List[GTypeReference](delegateTypeArgs)
+                    widenedArgs[widenedArgs.Count - 1] = MakeNullable(widenedArgs[widenedArgs.Count - 1])!!
+                    targetType = NamedTypeReference(
+                        namedDelegateRef.Name,
+                        widenedArgs,
+                        namedDelegateRef.ContainingType
+                    ){IsNullable = namedDelegateRef.IsNullable}
+                }
             }
             if StripParentheses(cast.Expression).IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression

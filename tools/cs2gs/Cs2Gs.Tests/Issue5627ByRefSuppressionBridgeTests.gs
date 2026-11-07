@@ -356,6 +356,21 @@ namespace Demo
     {
         public int UseNestedGeneric(Func<Outer<T>.InnerGeneric<int>> read) => read().Tag;
     }
+    public class GenericRefBox<T> where T : class
+    {
+        private T? cache;
+        public Func<T> Read;
+        public GenericRefBox(T seed)
+        {
+            cache = seed;
+            Read = () => Volatile.Read(ref cache!);
+        }
+        public T AssignAndRead()
+        {
+            Read = () => Volatile.Read(ref cache!);
+            return Read();
+        }
+    }
     public struct Token
     {
         public Action? Mutate;
@@ -419,10 +434,10 @@ namespace Demo
         static int UseChained() => Wrap(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!));
         static int UseChainedExplicit() => Wrap<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + Wrap(new Dictionary<string, int>()).Use(() => Volatile.Read(ref full!)) - 2;
         static int UsePartiallyFixedPair() => MakePair(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref full!)) + MakePair(Volatile.Read(ref cache!)).UseSecond(() => Volatile.Read(ref cache!)) + MakeIntPair(0).UseMap(() => Volatile.Read(ref full!)) + UseParamPair(MakePair(Volatile.Read(ref cache!)));
-        static int UseNestedInferred() => WrapInner(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!)) + WrapInner<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + new Maker<string>().UseNestedGeneric(() => Volatile.Read(ref fullInner!));
+        static int UseNestedInferred() => WrapInner(Volatile.Read(ref cache!)).Use(() => Volatile.Read(ref cache!)) + WrapInner<Dictionary<string, int>>(Volatile.Read(ref full!)).Use(() => Volatile.Read(ref full!)) + new Maker<string>().UseNestedGeneric(() => Volatile.Read(ref fullInner!)) + new GenericRefBox<Dictionary<string, int>>(Volatile.Read(ref full!)).AssignAndRead().Count - 1;
         static int UseBlock() { var b = Wrap(Volatile.Read(ref cache!)); return b.Use(() => { return Volatile.Read(ref cache!); }); }
         static bool ReadInferred() => Read(() => Volatile.Read(ref cache!)) == null;
-        static int ReadExplicit() { var observed = Observe(() => Volatile.Read(ref full!)); Dictionary<string, int>? castObserved = Read((Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!))); return Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count + (observed == null ? 0 : 1) + (castObserved == null ? 1 : 0); }
+        static int ReadExplicit() { var observed = Observe(() => Volatile.Read(ref full!)); Dictionary<string, int>? c = Read((Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!))); return Read<Dictionary<string, int>>(() => Volatile.Read(ref full!)).Count + (observed == null ? 0 : 1) + (c == null ? 1 : 0); }
         static int ReadFixedReturnWithInferredInput() => ReadWithInput(1, x => Volatile.Read(ref full!)).Count;
         static int ReadExpandedParamsFixedReturn() => ReadParams(1, x => Volatile.Read(ref full!)).Count;
         static int UseTupleFixedDelegate() => UseTuple((() => Volatile.Read(ref full!), 0));
@@ -527,6 +542,7 @@ namespace Demo
         Assert.Contains("a2 = () -> Volatile.Read(&full)!!", printed)
         Assert.Contains("readTask = () -> Volatile.Read(&fullTask)!!", printed)
         Assert.Contains("UseNestedGeneric(() -> Volatile.Read(&fullInner)!!)", printed)
+        Assert.Contains("Read = () -> Volatile.Read(&cache)!!", printed)
         Assert.Contains("tr2[0] = () -> (Volatile.Read(&full)!!, Volatile.Read(&cache))", printed)
         Assert.Contains("Read(() -> (Volatile.Read(&full), 0))", printed)
         Assert.Contains("readers[0] = () -> Volatile.Read(&full)!!", printed)

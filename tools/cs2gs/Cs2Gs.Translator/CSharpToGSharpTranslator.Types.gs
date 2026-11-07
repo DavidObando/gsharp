@@ -374,7 +374,7 @@ partial class CSharpToGSharpTranslator {
                             expressionBody,
                             targetType,
                             invoke,
-                            includePromotedValue: true
+                            includePromotedValue: this.LambdaTargetIsTranslatedSourceOrSiblingSlot(lambda)
                         )
                     }
                 } finally {
