@@ -1934,7 +1934,16 @@ partial class CSharpToGSharpTranslator {
                 let collected = List[string]()
                 for argument in tuple.Arguments {
                     let declaration = cast[DeclarationExpressionSyntax](argument.Expression)
-                    if !declaration.Type.IsVar || declaration.Designation is ParenthesizedVariableDesignationSyntax {
+                    if declaration.Designation is ParenthesizedVariableDesignationSyntax ||
+                        (
+                        !declaration
+                            .Type
+                            .IsVar &&
+                            (
+                            !this.TryGetDeconstructionSlotInfo(declaration, out var conversion, out _) ||
+                                !conversion.IsIdentity
+                        )
+                    ) {
                         return false
                     }
                     collected.Add(
