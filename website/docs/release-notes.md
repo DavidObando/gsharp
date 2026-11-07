@@ -557,7 +557,7 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 - **cs2gs:** Preserve named-constant `is` tests and nullable numeric conversions. Enum and named constants test their values, not their types. Object and NaN patterns preserve C# value-equality semantics. Fallback patterns capture receiver and member values at their original evaluation points. Numeric comparisons and lifted conversions preserve values instead of using nullable runtime downcasts (#5675, #5676).
 
-- **Nullable list patterns in `cs2gs` guard their inputs and preserve branch narrowing** (Fixes #5684). Lowered list tests use the bound `Length` or `Count` member, reject nil before member and index reads, and avoid redundant assertions in matched branches. Strings and nullable switch inputs use guarded captures instead of unsupported native list patterns. Scrutinee getters and calls execute once. Suffix indices reuse the captured length. Nullable value matches use one mutable copy without changing the original nullable overload type.
+- **Nullable list patterns in `cs2gs` guard their inputs and preserve branch narrowing** (Fixes #5684). Lowered list tests use the bound `Length` or `Count` member, reject nil before member and index reads, and avoid redundant assertions in matched branches. Strings and nullable switch inputs use guarded captures instead of unsupported native list patterns. Scrutinee getters and calls execute once. Suffix indices reuse the captured length. Element bindings capture values before later getters or body writes. Nullable value matches use one mutable copy without changing the original nullable overload type. Null tests against that copy use its known non-null state.
 
 ## 0.5.212 (October 22, 2026)
 

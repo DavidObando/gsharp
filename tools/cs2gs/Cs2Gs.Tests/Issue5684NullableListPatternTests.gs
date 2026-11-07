@@ -241,6 +241,70 @@ namespace Demo
     }
 
     @Fact
+    func NullableValueListCopies_FoldNullTestCombinations() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public struct Buffer
+    {
+        private int reads;
+        public int Count { get { reads++; return 1; } }
+        public int this[int index] => reads;
+    }
+    public static class P
+    {
+        static bool And(Buffer? current) => current is not null and [1];
+        static bool OrLeft(Buffer? current) => current is null or [1];
+        static bool OrRight(Buffer? current) => current is [1] or null;
+        static bool Not(Buffer? current) => current is not (null or [1]);
+        public static string Run() =>
+            And(new Buffer()) + " " + And(null) + " " + OrLeft(new Buffer()) + " " + OrLeft(null) + " " +
+            OrRight(new Buffer()) + " " + OrRight(null) + " " + Not(new Buffer()) + " " + Not(null);
+    }
+}`, "True False True True True True False False")
+    }
+
+    @Fact
+    func ListElementBindings_CaptureBeforeLaterGettersAndBodyWrites() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public sealed class Buffer
+    {
+        private readonly int[] values = { 1, 3 };
+        public int Count => values.Length;
+        public int this[int index] { get { if (index == 1) { values[0] = 2; } return values[index]; } }
+    }
+    public struct MutableBuffer
+    {
+        private int reads;
+        public int Count { get { reads++; return 1; } }
+        public int this[int index] => reads;
+    }
+    public static class P
+    {
+        static int Body(int[]? current) { if (current is [var first]) { current[0] = 2; return first; } return 0; }
+        static int Later(Buffer? current) { if (current is [var first, 3]) { return first; } return 0; }
+        static int Typed(object[]? current) { if (current is [int first]) { current[0] = 2; return first; } return 0; }
+        static int Value(MutableBuffer? current) { if (current is [var first]) { return first; } return 0; }
+        static int Assigned(int[]? current) { if (current is [var first]) { current[0] = 9; first++; return first; } return 0; }
+        static int Text(string[]? current) { if (current is [var first]) { current[0] = "changed"; return first.Length; } return 0; }
+        static string MaybeText(string?[]? current)
+        {
+            if (current is [var first]) { current[0] = "changed"; return first ?? "nil"; }
+            return "missing";
+        }
+        public static string Run() =>
+            Body(new[] { 1 }) + " " + Body(null) + " " + Later(new Buffer()) + " " + Typed(new object[] { 1 }) + " " +
+            Text(new[] { "a" }) + " " + MaybeText(new string?[] { "a" }) + " " + MaybeText(new string?[1]) + " " +
+            Value(new MutableBuffer()) + " " + Value(null) + " " + Assigned(new[] { 1 });
+    }
+}`, "1 0 1 1 1 a nil 1 0 2")
+    }
+
+    @Fact
     func NullableSwitchListArms_PreserveRuntimeMatches() {
         AssertRuns(`
 #nullable enable

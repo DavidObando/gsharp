@@ -4875,7 +4875,7 @@ partial class CSharpToGSharpTranslator {
                     !TryGetPatternNonNullPolarity(isPattern.Pattern, out var whenTrue) ||
                     !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue) ||
                     (
-                    PatternIntroducesBinding(isPattern.Pattern) &&
+                    this.PatternHasWholeValueCapture(isPattern.Pattern) &&
                         PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
                         !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
                 ) ||

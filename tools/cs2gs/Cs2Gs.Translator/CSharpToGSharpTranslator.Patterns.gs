@@ -785,7 +785,11 @@ partial class CSharpToGSharpTranslator {
             !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternRequiresValueEquality(
             isPattern.Pattern
         ) &&
-            !this.PatternRequiresLoweredListTest(isPattern.Pattern) &&
+            !this
+            .PatternRequiresLoweredListTest(
+            isPattern.Pattern,
+            this.ResolveDeclaredReceiverType(this.context.GetTypeInfo(isPattern.Expression).Type, isPattern.Expression)
+        ) &&
             (
             this.RequiresNativePatternNarrowing(isPattern) ||
                 (
@@ -1146,6 +1150,9 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             let gsharpNullable = this.IsGSharpNullablePatternReceiver(receiver)
             let CountReads = func (current PatternSyntax?) int32 {
+                if current != nil && PatternIntroducesBinding(current) {
+                    return 2
+                }
                 switch current {
                     case recursive is RecursivePatternSyntax {
                         if recursive.Designation is SingleVariableDesignationSyntax {
@@ -1557,6 +1564,12 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             }
+            if receiverType != nil &&
+                IsNonNullableValueTypeSymbol(receiverType) &&
+                pattern is ConstantPatternSyntax nilConstant &&
+                this.IsNullPatternValue(nilConstant.Expression) {
+                return LiteralExpression.Bool(false)
+            }
             switch pattern {
                 case paramsNull is ConstantPatternSyntax when paramsNull.Expression.IsKind(
                     SyntaxKind.NullLiteralExpression
@@ -1629,6 +1642,20 @@ partial class CSharpToGSharpTranslator {
                             this.state.PatternBindings[boundSymbol] = NarrowToType(receiver, sharedGsNodeName)
                         } else if this.IsVariableReferenceAnalyzerType(declaration.Type, out _) {
                             this.state.PatternBindings[boundSymbol] = NarrowToType(receiver, "BoundVariableExpression")
+                        } else if receiver is IdentifierExpression &&
+                            receiverSyntax == nil &&
+                            this
+                            .state
+                            .StoredPatternCaptures
+                            .Contains(receiver) &&
+                            this.GetTypeTestNarrowedType(declaration, receiverType) != nil {
+                            this
+                                .state
+                                .PatternBindings[boundSymbol] = ConversionExpression(
+                                this.MapTypeSyntax(declaration.Type),
+                                receiver,
+                                isCheckedReferenceCast: true
+                            )
                         } else {
                             this.state.PatternBindings[boundSymbol] = this.BuildPatternNarrowingReplacement(
                                 receiver,
@@ -1670,6 +1697,30 @@ partial class CSharpToGSharpTranslator {
                         .context
                         .GetDeclaredSymbol(varSingle) is {} varBound {
                         this.state.PatternBindings[varBound] = receiver!!
+                        if this
+                            .state
+                            .StoredPatternCaptures
+                            .Contains(receiver) &&
+                            varBound is ILocalSymbol capturedLocal &&
+                            capturedLocal
+                            .Type
+                            .IsReferenceType &&
+                            this.TryGetVarCaptureStaticNonNull(capturedLocal, out var inputIsNonNull) &&
+                            inputIsNonNull {
+                            this
+                                .state
+                                .PatternBindings[varBound] = ConversionExpression(
+                                this.typeMapper.Map(
+                                    capturedLocal.Type.WithNullableAnnotation(
+                                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                                    ),
+                                    this.context,
+                                    varSingle.GetLocation()
+                                ),
+                                receiver,
+                                isCheckedReferenceCast: true
+                            )
+                        }
                         if varBound is ILocalSymbol varLocal {
                             this.state.LocalHoldsPromotedValueAnswers.Remove(varLocal)
                         }
@@ -1903,12 +1954,14 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func NeedsNullableValueListSnapshot(pattern PatternSyntax, receiverType ITypeSymbol?) bool ->
-        IsNullableValueType(receiverType) &&
-            !PatternIntroducesBinding(pattern) &&
+        IsNullableValueType(receiverType) && !this.PatternHasWholeValueCapture(pattern) &&
             pattern
             .DescendantNodesAndSelf()
             .OfType[ListPatternSyntax]()
             .Any()
+
+        private func PatternHasWholeValueCapture(pattern PatternSyntax) bool ->
+        this.FindMainPatternBinder(pattern) != nil || this.FindMainPatternBinder(pattern, negated: true) != nil
 
         // gsc's native list binder accepts non-null arrays and imported indexables, but not strings or nullable inputs.
         private func PatternRequiresLoweredListTest(
@@ -2057,6 +2110,12 @@ partial class CSharpToGSharpTranslator {
             receiverSyntax ExpressionSyntax? = nil,
             isNestedPatternMember bool = false
         ) GExpression {
+            if receiverType != nil &&
+                IsNonNullableValueTypeSymbol(receiverType) &&
+                inner is ConstantPatternSyntax nilConstant &&
+                this.IsNullPatternValue(nilConstant.Expression) {
+                return LiteralExpression.Bool(true)
+            }
             switch inner {
                 case paramsNull is ConstantPatternSyntax when paramsNull.Expression.IsKind(
                     SyntaxKind.NullLiteralExpression
@@ -2092,6 +2151,9 @@ partial class CSharpToGSharpTranslator {
                     // `x is not { } d` → `x == nil`; the designator `d` is the
                     // non-null view (used on the matched side), bound to `x`.
                     BindPatternDesignation(emptyRecursive.Designation, receiver)
+                    if receiverType != nil && IsNonNullableValueTypeSymbol(receiverType) {
+                        return LiteralExpression.Bool(false)
+                    }
                     return BinaryExpression(receiver, "==", LiteralExpression.Null())
                 }
                 case typePattern is TypePatternSyntax {
