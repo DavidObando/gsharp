@@ -37,12 +37,13 @@ Do not use a new language feature in the PR that adds the feature.
 Wait until `global.json` specifies a release that contains the feature.
 
 Change the compiler version in a different PR.
-Build from a clean clone with that version.
+Build from a clean clone with that version, and make sure that CI (including the `fixpoint` job) passes.
 Record the version in the release notes.
 Do not use a local SDK or an SDK without a release to make a build pass.
 
 See [the bootstrap instructions](docs/self-host-bootstrap.md) for the build stages.
-Stage-2 certification is optional.
+The `fixpoint` CI job checks that stage 2 and stage 3 emit identical `GSharp.Core.dll` and `gsc.dll` images modulo the MVID.
+Full stage-2 certification (`build/selfhost-stage2.py`) is optional.
 It is not a requirement for a PR or a release.
 
 ## Build and format

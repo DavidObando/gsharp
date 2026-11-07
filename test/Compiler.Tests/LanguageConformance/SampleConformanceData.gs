@@ -32,13 +32,11 @@ internal shared class SampleConformanceData {
         .ToArray()
 
     func LocateSamplesDirectory(testAssembly Assembly) string? {
-        var directory DirectoryInfo? = DirectoryInfo(Path.GetDirectoryName(testAssembly.Location)!!)
-        while directory != nil {
-            let candidate = Path.Combine(directory.FullName, "samples")
-            if Directory.Exists(candidate) && RepositoryRootMarker.IsRoot(directory.FullName) {
+        if RepositoryRootMarker.Locate(Path.GetDirectoryName(testAssembly.Location)) is {} root {
+            let candidate = Path.Combine(root, "samples")
+            if Directory.Exists(candidate) {
                 return candidate
             }
-            directory = directory.Parent
         }
         return nil
     }

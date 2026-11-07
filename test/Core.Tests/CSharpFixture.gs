@@ -69,7 +69,11 @@ internal class CSharpFixture : IDisposable {
         []string{AssemblyPath}
     )
 
-    func Dispose() -> Directory.Delete(DirectoryPath, recursive: true)
+    func Dispose() {
+        try {
+            Directory.Delete(DirectoryPath, recursive: true)
+        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
 
     shared {
         private let CachedHostReferences Lazy[ImmutableArray[MetadataReference]] = Lazy[

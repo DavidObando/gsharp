@@ -191,8 +191,14 @@ internal class DefaultInterpolatedStringHandlerShape {
         ) bool {
             shape = nil
             missingMember = nil
-            if !references.TryResolveType(HandlerTypeFullName, out var handlerType) || references.IsHostFallback(
-                handlerType!!
+            if !references.TryResolveType(HandlerTypeFullName, out var handlerType) ||
+                (
+                references.IsHostFallback(handlerType!!) &&
+                    (
+                    !references.TryResolveType("System.Object", out var objectType) || !references.IsHostFallback(
+                        objectType!!
+                    )
+                )
             ) {
                 missingMember = HandlerTypeFullName
                 return false

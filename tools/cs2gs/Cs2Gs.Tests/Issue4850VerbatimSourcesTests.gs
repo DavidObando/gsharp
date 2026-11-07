@@ -227,6 +227,130 @@ class Issue4850VerbatimSourcesTests : IDisposable {
     }
 
     @Fact
+    func ConditionalInclude_IsBothCopiedAndTranslatedByOrphanStep_AndValidated() {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+                "<None Include=\"Cond.cs\" Condition=\"'false' == 'true'\" />" +
+                "</ItemGroup></Project>"
+        )
+        this.Write("a/Cond.cs", "namespace N { public static class Cond { public static int V() => 1; } }")
+        let destination = Path.Combine(Path.GetTempPath(), "cs2gs-4867-out-" + Guid.NewGuid().ToString("N"))
+        try {
+            let files = RepositoryMirror.Prepare(this.root, destination)
+            let failures = RepositoryOrphanSourceTranslator.TranslateMissing(this.root, destination, files)
+            Assert.Empty(failures)
+            Assert.True(File.Exists(Path.Combine(destination, "a", "Cond.cs")))
+            Assert.True(File.Exists(Path.Combine(destination, "a", "Cond.gs")))
+            let additional = []string{"a/a.gsproj", DirectoryInfo(this.root).Name + ".slnx"}.Select(
+                (path string) -> path.Replace('/', Path.DirectorySeparatorChar)
+            )
+                .ToArray()
+            for path in additional {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(destination, path))!!)
+                File.WriteAllText(Path.Combine(destination, path), "<Project />")
+            }
+            RepositoryMirror.ValidateCompleted(this.root, destination, files, additional)
+        } finally {
+            if Directory.Exists(destination) {
+                Directory.Delete(destination, recursive: true)
+            }
+        }
+    }
+
+    @Fact
+    func CrossDocumentRemove_CanonicalImports_NearestDirectoryBuild_AndWildcardImport() {
+        this.Write(
+            "Directory.Build.props",
+            "<Project><ItemGroup><None Include=\"RootOnly.cs\" /></ItemGroup></Project>"
+        )
+        this.Write("a/Directory.Build.props", "<Project><Import Project=\"../shared/*.props\" /></Project>")
+        this.Write(
+            "shared/common.props",
+            "<Project><ItemGroup><None Include=\"Kept.cs\" /><None Include=\"RemovedByProject.cs\" /></ItemGroup></Project>"
+        )
+        this.Write(
+            "other/common.props",
+            "<Project><ItemGroup><None Include=\"WrongSameName.cs\" /></ItemGroup></Project>"
+        )
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><None Remove=\"RemovedByProject.cs\" /></ItemGroup></Project>"
+        )
+        this.Write("a/RootOnly.cs", "class R {}")
+        this.Write("a/Kept.cs", "class K {}")
+        this.Write("a/RemovedByProject.cs", "class X {}")
+        this.Write("a/WrongSameName.cs", "class W {}")
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory())
+        Assert.Equal([]string{"a/Kept.cs"}, verbatim.ToArray())
+    }
+
+    @Fact
+    func UnresolvableExtensionlessWildcard_WarnsWhilePublishDirDoesNot() {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+                "<None Include=\"$$(SomeDir)/**/*\" />" +
+                "<_Payload Include=\"$$(PublishDir)**/*\" />" +
+                "</ItemGroup></Project>"
+        )
+        this.Write("a/X.cs", "class X {}")
+        let warnings = List[string]()
+        let _ = RepositoryVerbatimSources.Compute(this.root, this.Inventory(), warnings)
+        Assert.Contains("$$(SomeDir)/**/*", Assert.Single(warnings), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ConditionalImportOrImportGroup_PropagatesConditionToImportedRemoveAndInclude() {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\">" +
+                "<ItemGroup><None Include=\"Data.cs\" /></ItemGroup>" +
+                "<Import Project=\"../shared/remove.props\" Condition=\"'false' == 'true'\" />" +
+                "<ImportGroup Condition=\"'false' == 'true'\"><Import Project=\"../shared/include.props\" /></ImportGroup>" +
+                "</Project>"
+        )
+        this.Write("shared/remove.props", "<Project><ItemGroup><None Remove=\"Data.cs\" /></ItemGroup></Project>")
+        this.Write("shared/include.props", "<Project><ItemGroup><None Include=\"CondData.cs\" /></ItemGroup></Project>")
+        this.Write("a/Data.cs", "class D {}")
+        this.Write("a/CondData.cs", "class C {}")
+        let inv = this.Inventory()
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, inv)
+        let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(this.root, inv)
+        Assert.Equal(
+            []string{"a/CondData.cs", "a/Data.cs"},
+            verbatim.OrderBy((p string) -> p, StringComparer.Ordinal).ToArray()
+        )
+        Assert.Equal([]string{"a/CondData.cs"}, copyAndTranslate.ToArray())
+    }
+
+    @Fact
+    func RootedImportUnderSourceRoot_ResolvesToSharedProps() {
+        let rootedImport = Path.Combine(this.root, "shared", "common.props")
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><Import Project=\"" + rootedImport + "\" /></Project>"
+        )
+        this.Write("shared/common.props", "<Project><ItemGroup><None Include=\"Data.cs\" /></ItemGroup></Project>")
+        this.Write("a/Data.cs", "class D {}")
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory())
+        Assert.Equal([]string{"a/Data.cs"}, verbatim.ToArray())
+    }
+
+    @Fact
+    func FileBasedDotnetRunHelper_IsVerbatim_WithoutMisclassifyingUnrelatedProgramCs() {
+        this.Write(
+            "build/test-selfhost-stage2.py",
+            "fixture = \"Program.cs\"\n" +
+                "subprocess.run([\"dotnet\", \"run\", str(REPO / \"build\" / \"selfhost\" / \"PeBodyMutations.cs\")])\n"
+        )
+        this.Write("build/selfhost/PeBodyMutations.cs", "class M {}")
+        this.Write("orphan/Program.cs", "class P {}")
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory())
+        Assert.Equal([]string{"build/selfhost/PeBodyMutations.cs"}, verbatim.ToArray())
+    }
+
+    @Fact
     func CompileItemsOfASharedFileImportedByAGsproj_ResolveAgainstTheImporterOrTheFile() {
         this.Write(
             "g/g.gsproj",

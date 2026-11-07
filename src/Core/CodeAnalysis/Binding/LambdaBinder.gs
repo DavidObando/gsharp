@@ -2621,6 +2621,7 @@ internal class LambdaBinder {
         binderCtx.UserGotoBlockRegions.Clear()
         binderCtx.NarrowingFlow.Clear()
         binderCtx.LoopStack.Clear()
+        binderCtx.NonNullByRefVariables.RemoveWhere((v VariableSymbol) -> !v.IsReadOnly)
         this.binderCtx.CurrentFallthroughTarget = nil
         this.binderCtx.CurrentFallthroughAnchor = nil
         this.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax)
@@ -2688,6 +2689,8 @@ internal class LambdaBinder {
         }
         this.binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget
         this.binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor
+        binderCtx.NonNullByRefVariables.Clear()
+        binderCtx.NonNullByRefVariables.UnionWith(saved.NonNullByRefVariables)
         restoreExternalCallableAliases(saved.ExternalCallableAliases)
         // Issue #4285 / ADR-0213: restore the enclosing function's goto/label flag.
         this.binderCtx.FunctionContainsUserGotoOrLabel = saved.FunctionContainsUserGotoOrLabel
@@ -3486,6 +3489,7 @@ internal class LambdaBinder {
             LoopStack = ctx.LoopStack.ToArray()
             FallthroughTarget = ctx.CurrentFallthroughTarget
             FallthroughAnchor = ctx.CurrentFallthroughAnchor
+            NonNullByRefVariables = HashSet[VariableSymbol](ctx.NonNullByRefVariables)
             ExternalCallableAliases = HashSet[VariableSymbol](externalCallableAliases)
             FunctionContainsUserGotoOrLabel = ctx.FunctionContainsUserGotoOrLabel
         }
@@ -3525,6 +3529,10 @@ internal class LambdaBinder {
         }
 
         prop FallthroughAnchor StatementSyntax? {
+            get;
+        }
+
+        prop NonNullByRefVariables HashSet[VariableSymbol] {
             get;
         }
 
