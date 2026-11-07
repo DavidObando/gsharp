@@ -63,6 +63,39 @@ open class TestParityEngineTests {
         let names = results.Select((r TestCaseOutcome) -> r.Name!!).ToArray()
         let sorted = names.OrderBy((n string) -> n, StringComparer.Ordinal).ToArray()
         Assert.Equal(sorted, names)
+
+        let dir = Path.Combine(AppContext.BaseDirectory, "trx-parser-tfm-tests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(dir)
+        let xmlPathTrx = Path.Combine(dir, "results.trx")
+        File.WriteAllText(xmlPathTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" storage="/repo/out/bin/Release/net10.0/Sample.Tests.dll" />
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 2)" outcome="Passed" storage="/repo/out/bin/Release/net10.0/Sample.Tests.dll" />
+  </Results>
+</TestRun>`)
+        let filenameFallbackTrx = Path.Combine(dir, "parity_net9.0.trx")
+        File.WriteAllText(filenameFallbackTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" />
+  </Results>
+</TestRun>`)
+        let parsedNet10 = TrxParser.ParseFile(xmlPathTrx, requireNames: true)
+        Assert.All(parsedNet10, (r TestCaseOutcome) -> Assert.Equal("net10.0", r.TargetFramework))
+        let parsedNet9 = TrxParser.ParseFile(filenameFallbackTrx, requireNames: true)
+        Assert.All(parsedNet9, (r TestCaseOutcome) -> Assert.Equal("net9.0", r.TargetFramework))
+        let multiTfmOracle = CSharpTestOracle.CreateFromListTestsOutput("Sample.Tests", `Test run for /repo/out/bin/Release/net9.0/Sample.Tests.dll (.NETCoreApp,Version=v9.0)
+The following Tests are available:
+    Sample.Tests.A.Cells
+Test run for /repo/out/bin/Release/net10.0/Sample.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Sample.Tests.A.Cells`)
+        let missingNet9Parity = TestNameParity.Compare(multiTfmOracle, parsedNet10)
+        Assert.False(missingNet9Parity.IsMatch)
+        Assert.Equal([]string{"Sample.Tests.A.Cells"}, missingNet9Parity.Missing)
+        let fullParity = TestNameParity.Compare(multiTfmOracle, parsedNet10.Concat(parsedNet9).ToArray())
+        Assert.True(fullParity.IsMatch)
     }
 
     /// Exact-match parity: the G# TRX equals the baseline, so the comparison
