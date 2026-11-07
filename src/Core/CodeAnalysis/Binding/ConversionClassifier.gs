@@ -3892,7 +3892,12 @@ internal class ConversionClassifier {
     /// @param variable The variable to async-dispose.
     /// @param location The diagnostic location.
     /// @returns A (cref:BoundAwaitExpression) wrapping the DisposeAsync call, or `null` on failure.
-    func TryBuildDisposeAsyncCall(variable VariableSymbol, location TextLocation) BoundExpression? {
+    func TryBuildDisposeAsyncCall(
+        variable VariableSymbol,
+        location TextLocation,
+        syntax SyntaxNode? = nil
+    ) BoundExpression? {
+        let awaitSyntax = syntax ?? variable.DeclaringSyntax
         let variableType = Invariant.Required(
             variable.Type,
             "async-disposable variables have a bound type",
@@ -3921,7 +3926,7 @@ internal class ConversionClassifier {
                 ImmutableArray[BoundExpression].Empty,
                 getMethodGroupObservableReturnType(userDisposeAsync!!, userDisposeAsync!!.Type)
             )
-            return BoundAwaitExpression(nil, call, TypeSymbol.Void)
+            return BoundAwaitExpression(awaitSyntax, call, TypeSymbol.Void)
         }
         // CLR-type path: walk self + transitive interfaces for DisposeAsync.
         // Issue #2148: fall back to the nearest imported base's ClrType for a
@@ -3948,7 +3953,7 @@ internal class ConversionClassifier {
             valueTaskType,
             ImmutableArray[BoundExpression].Empty
         )
-        return BoundAwaitExpression(nil, clrCall, TypeSymbol.Void)
+        return BoundAwaitExpression(awaitSyntax, clrCall, TypeSymbol.Void)
     }
 
     /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3 at an

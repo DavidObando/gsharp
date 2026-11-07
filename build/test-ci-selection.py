@@ -333,6 +333,24 @@ class AggregateTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ci.check_results(plan, missing, workflow)
 
+    def test_canceled_or_empty_plan_fails_closed_without_json_decode_error(self):
+        for workflow in ("build", "docs"):
+            with self.assertRaisesRegex(ValueError, "selector was cancelled"):
+                ci.check_results("", {"select": {"result": "cancelled"}}, workflow)
+            with self.assertRaisesRegex(ValueError, "expected success, got 'failure'"):
+                ci.check_results("   ", {"select": {"result": "failure"}}, workflow)
+            with self.assertRaisesRegex(ValueError, "missing selection plan"):
+                ci.check_results("", {"select": {"result": "success"}}, workflow)
+            with self.assertRaisesRegex(ValueError, "invalid selection plan"):
+                ci.check_results("{not-json", {"select": {"result": "success"}}, workflow)
+        env = {**os.environ, "PLAN": "", "NEEDS": json.dumps({"select": {"result": "cancelled"}}),
+               "GITHUB_REPOSITORY": "owner/repo", "GITHUB_RUN_ID": "1"}
+        result = subprocess.run(["python3", str(ROOT / "build/ci-selection.py"), "--check", "build"],
+                                cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("selector was cancelled", result.stderr)
+        self.assertNotIn("JSONDecodeError", result.stderr)
+
 
 class AdvisorySmokeTests(unittest.TestCase):
     """ADR-0218: r2r-compiler-smoke is advisory on a release tag and required everywhere else."""

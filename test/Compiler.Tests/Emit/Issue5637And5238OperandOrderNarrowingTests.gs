@@ -77,6 +77,40 @@ open class Issue5637And5238OperandOrderNarrowingTests {
         }
     }
 
+    @Fact
+    func ImportedExplicitLayoutLetField_InvalidatedByCallInConditionOperand() {
+        using let clrContract = GSharp.Core.Tests.CSharpFixture(`#nullable enable
+using System.Runtime.InteropServices;
+namespace ProbeInterop;
+[StructLayout(LayoutKind.Explicit)]
+public class ClrBox {
+    [FieldOffset(0)]
+    public readonly string? Text;
+    [FieldOffset(0)]
+    public string? Other;
+    public ClrBox(string? t) {
+        Text = t;
+        Other = t;
+    }
+    public bool Clear() {
+        Other = null;
+        return true;
+    }
+}`)
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`package Probe
+import ProbeInterop
+
+func Run(b ClrBox) int32 {
+    if b.Text != nil && b.Clear() {
+        return b.Text.Length
+    }
+    return 0
+}`, "ImportedExplicit5843", executable: false, "/r:" + clrContract.AssemblyPath)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0158", output, StringComparison.Ordinal)
+    }
+
     shared {
         private const RunTimeout int32 = 30000
 
@@ -1849,6 +1883,142 @@ func Run() int32 {
 }
 var g Box? = Box(3)
 Console.WriteLine(Run())`, "GS0158@10:31", "reject", ""}
+            yield[]object{"r93_5843_call_in_short_circuit_and_kills_explicit_layout_let_field_path", `import System
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    @FieldOffset(0)
+    let Text string?
+    @FieldOffset(0)
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+    func Clear() bool {
+        Other = nil
+        return true
+    }
+}
+func Run(b Box) int32 {
+    if b.Text != nil && b.Clear() {
+        return b.Text.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(Box("abc")))`, "GS0158@21:23", "reject", ""}
+            yield[]object{"r94_5843_call_in_short_circuit_or_early_exit_kills_explicit_layout_let_field_path", `import System
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    @FieldOffset(0)
+    let Text string?
+    @FieldOffset(0)
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+    func Clear() bool {
+        Other = nil
+        return true
+    }
+}
+func Run(b Box) int32 {
+    if b.Text == nil || !b.Clear() {
+        return 0
+    }
+    return b.Text.Length
+}
+Console.WriteLine(Run(Box("abc")))`, "GS0158@23:19", "reject", ""}
+            yield[]object{
+                "r95_5843_call_in_condition_kills_chained_member_path_with_explicit_layout_intermediate_link",
+                `import System
+import System.Runtime.InteropServices
+
+class Inner {
+    let Text string?
+    init(t string?) {
+        this.Text = t
+    }
+}
+@StructLayout(LayoutKind.Explicit)
+class Outer {
+    @FieldOffset(0)
+    let Child Inner?
+    @FieldOffset(0)
+    var Other Inner?
+    init(c Inner?) {
+        this.Child = c
+        this.Other = c
+    }
+    func Clear() bool {
+        Other = Inner(nil)
+        return true
+    }
+}
+func Run(o Outer) int32 {
+    if o.Child != nil && o.Child.Text != nil && o.Clear() {
+        return o.Child.Text.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(Outer(Inner("abc"))))`,
+                "GS0158@27:24",
+                "reject",
+                ""
+            }
+            yield[]object{"r96_5843_call_in_condition_keeps_normal_layout_let_field_path", `import System
+
+class Box {
+    let Text string?
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+    func Clear() bool {
+        Other = nil
+        return true
+    }
+}
+func Run(b Box) int32 {
+    if b.Text != nil && b.Clear() {
+        return b.Text.Length
+    }
+    return 0
+}
+Console.WriteLine(Run(Box("abc")))`, "", "run", "3"}
+            yield[]object{
+                "r97_5843_post_call_guard_in_short_circuit_or_early_exit_narrows_explicit_layout_let_field_path",
+                `import System
+import System.Runtime.InteropServices
+
+@StructLayout(LayoutKind.Explicit)
+class Box {
+    @FieldOffset(0)
+    let Text string?
+    @FieldOffset(0)
+    var Other string?
+    init(t string?) {
+        this.Text = t
+        this.Other = t
+    }
+    func Touch() bool -> true
+}
+func Run(b Box) int32 {
+    if !b.Touch() || b.Text == nil {
+        return 0
+    }
+    return b.Text.Length
+}
+Console.WriteLine(Run(Box("abc")))`,
+                "",
+                "run",
+                "3"
+            }
         }
 
         private func RunDotnet(assemblyPath string)(Exit int32, Stdout string, Stderr string) {

@@ -171,6 +171,42 @@ class C : IA, IB {
         Assert.Contains(diagnostics, (d string) -> d.Contains("GS0318"))
     }
 
+    @Fact
+    func WriteIsolatedCsProject_UnderInRepoDirectory_IsolatesFromCheckoutPolicy() {
+        var repoDir DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+        while repoDir != nil && !File.Exists(Path.Combine(repoDir.FullName, "Directory.Build.props")) {
+            repoDir = repoDir.Parent
+        }
+        Assert.NotNull(repoDir)
+        let inRepoScratch = Path.Combine(repoDir!!.FullName, "out", "test-scratch-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(inRepoScratch)
+        try {
+            let csDir = Path.Combine(inRepoScratch, "csref")
+            Directory.CreateDirectory(csDir)
+            // Deliberately omits XML docs, uses mismatching filename/type name, and lacks a trailing newline.
+            File.WriteAllText(
+                Path.Combine(csDir, "Lib.cs"),
+                "namespace Probe; public class UnrelatedName { public int X; }"
+            )
+            WriteIsolatedCsProject(Path.Combine(csDir, "Lib.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Helper</AssemblyName>
+  </PropertyGroup>
+</Project>`)
+            RunDotnet(csDir, "restore")
+            RunDotnet(csDir, "build", "-c", "Release", "--nologo", "--no-restore")
+            let dllPath = Path.Combine(csDir, "bin", "Release", "net10.0", "Helper.dll")
+            Assert.True(File.Exists(dllPath), "Expected fixture-local $dllPath")
+        } finally {
+            try {
+                Directory.Delete(inRepoScratch, recursive: true)
+            } catch { }
+        }
+    }
+
     shared {
         private func CompileLibrary(source string) string {
             let tempDir = Directory.CreateTempSubdirectory("gs_dim_lib_").FullName
@@ -263,7 +299,7 @@ stderr:
                 let csDir = Path.Combine(tempDir, "consumer")
                 Directory.CreateDirectory(csDir)
                 File.WriteAllText(Path.Combine(csDir, "Program.cs"), csource)
-                File.WriteAllText(Path.Combine(csDir, "Consumer.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
+                WriteIsolatedCsProject(Path.Combine(csDir, "Consumer.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -339,6 +375,16 @@ stderr:
 ` + "$stderr")
             )
             return stdout
+        }
+
+        internal func WriteIsolatedCsProject(projectPath string, content string) {
+            let directory = Path.GetDirectoryName(Path.GetFullPath(projectPath))
+            if directory != nil {
+                File.WriteAllText(Path.Combine(directory, "Directory.Build.props"), "<Project />\n")
+                File.WriteAllText(Path.Combine(directory, "Directory.Build.targets"), "<Project />\n")
+                File.WriteAllText(Path.Combine(directory, ".editorconfig"), "root = true\n")
+            }
+            File.WriteAllText(projectPath, content)
         }
 
         private func TryCleanup(dllPath string) {

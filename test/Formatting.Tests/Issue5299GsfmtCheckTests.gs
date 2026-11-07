@@ -105,6 +105,37 @@ class Issue5299GsfmtCheckTests {
         }
     }
 
+    @Fact
+    func Check_AndDiff_AcceptCanonicalCrlfSourceWithLineComment() {
+        let root = Path.Combine(Path.GetTempPath(), "gsfmt-crlf-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        let crlfCanonical = Path.Combine(root, "Canonical.gs")
+        let crlfUnformatted = Path.Combine(root, "Unformatted.gs")
+        try {
+            let canonicalLf = "package FormatterRepro\n\n// ordinary comment\nfunc main() { }\n"
+            File.WriteAllText(crlfCanonical, canonicalLf.Replace("\n", "\r\n", StringComparison.Ordinal))
+            let checkOut = StringWriter()
+            let checkErr = StringWriter()
+            Assert.Equal(0, Program.Run([]string{"--check", crlfCanonical}, checkOut, checkErr))
+            Assert.Equal(string.Empty, checkOut.ToString())
+            Assert.Equal(string.Empty, checkErr.ToString())
+
+            let diffOut = StringWriter()
+            let diffErr = StringWriter()
+            Assert.Equal(0, Program.Run([]string{"--diff", crlfCanonical}, diffOut, diffErr))
+            Assert.Equal(string.Empty, diffOut.ToString())
+            Assert.Equal(string.Empty, diffErr.ToString())
+
+            File.WriteAllText(crlfUnformatted, "package FormatterRepro\r\n\r\n// ordinary comment\r\nfunc main(){}\r\n")
+            let writeOut = StringWriter()
+            let writeErr = StringWriter()
+            Assert.Equal(0, Program.Run([]string{"--write", crlfUnformatted}, writeOut, writeErr))
+            Assert.Equal(canonicalLf, File.ReadAllText(crlfUnformatted))
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     private func FormatCanonical(text string) string {
         let result = GSharpFormatter.Format(SourceText.From(text, "x.gs"))
         return result.Text?.ToString() ?? text

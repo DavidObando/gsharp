@@ -120,6 +120,47 @@ class Foo {
         Assert.NotNull(fooInstance)
     }
 
+    @Fact
+    func DataStructAndInlineStruct_DirectGetHashCodeAndToString_DoNotBoxReceiver() {
+        let source = `package ReceiverBoxing
+import System
+
+public data struct Value(Number float64)
+public inline struct UserId(Code int32)
+
+public shared class Probe {
+    public func HashData(value Value) int32 -> value.GetHashCode()
+    public func FormatData(value Value) string -> value.ToString()
+    public func HashInline(id UserId) int32 -> id.GetHashCode()
+    public func FormatInline(id UserId) string -> id.ToString()
+    public func BoxedHash(value Value) int32 -> object(value).GetHashCode()
+}`
+        let assembly = CompileToAssembly(source)
+        let probe = assembly.GetType("ReceiverBoxing.Probe") ?? throw InvalidOperationException("Missing Probe.")
+        let valueType = assembly.GetType("ReceiverBoxing.Value") ?? throw InvalidOperationException("Missing Value.")
+        let userIdType = assembly.GetType("ReceiverBoxing.UserId") ?? throw InvalidOperationException("Missing UserId.")
+
+        for (methodName, expectedOwner) in[](string, Type){
+            ("HashData", valueType),
+            ("FormatData", valueType),
+            ("HashInline", userIdType),
+            ("FormatInline", userIdType)
+        } {
+            let method = probe.GetMethod(methodName) ?? throw InvalidOperationException("Missing $methodName.")
+            let il = method.GetMethodBody()?.GetILAsByteArray() ?? throw InvalidOperationException("Missing IL.")
+            // Direct value-type call: `ldarga.s 0; call <Owner>::GetHashCode/ToString; ret` (no 0x8C `box`).
+            Assert.Equal([]uint8{0x0F, 0x00, 0x28}, il.Take(3).ToArray())
+            Assert.DoesNotContain(uint8(0x8C), il)
+            let callee = probe.Module.ResolveMethod(BitConverter.ToInt32(il, 3))
+            Assert.Equal(expectedOwner, callee?.DeclaringType)
+        }
+
+        let boxedMethod = probe.GetMethod("BoxedHash") ?? throw InvalidOperationException("Missing BoxedHash.")
+        let boxedIl = boxedMethod.GetMethodBody()?.GetILAsByteArray() ??
+            throw InvalidOperationException("Missing BoxedHash IL.")
+        Assert.Contains(uint8(0x8C), boxedIl)
+    }
+
     shared {
         private func CompileToAssembly(source string) Assembly {
             let tempDir = Directory.CreateTempSubdirectory("gs_datastruct_interop_").FullName
