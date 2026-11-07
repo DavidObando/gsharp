@@ -15058,25 +15058,9 @@ partial class Binder {
             entryPointPackage PackageSymbol,
             synthesizedEntryPoint FunctionSymbol?
         ) FunctionSymbol? {
-            var explicitMain FunctionSymbol? = functions.FirstOrDefault((f FunctionSymbol) -> f.Name == "Main")
-            // Issue #1996: a class-scoped static `Main` (sync or async, any
-            // class — not just `Program`) is also a valid entry-point
-            // candidate. Instance `Main` methods don't qualify (no receiver
-            // exists to construct at startup), so only StaticMethods are
-            // scanned. Package-scope `Main` takes precedence when both exist,
-            // mirroring the pre-existing (silent, first-found) precedence for
-            // multiple package-scope `Main` declarations — this codebase does
-            // not diagnose ambiguous entry points today, so we don't introduce
-            // that check here either.
-            let classMain = if explicitMain == nil && !structs.IsDefaultOrEmpty {
-                structs
-                    .Where((s StructSymbol) -> s.IsClass && !s.StaticMethods.IsDefaultOrEmpty)
-                    .SelectMany((s StructSymbol) -> s.StaticMethods.AsEnumerable())
-                    .FirstOrDefault((m FunctionSymbol) -> m.Name == "Main")
-            } else {
-                default(FunctionSymbol?)
-            }
-            explicitMain ??= classMain
+            let explicitMain = GetEntryPointCandidates(functions, structs).FirstOrDefault(
+                (function FunctionSymbol) -> function.Name == "Main"
+            )
             let hasTopLevel = globalStatements.Length > 0
             if hasTopLevel {
                 // Top-level statements must live in exactly one *package*. Multiple
@@ -15106,10 +15090,7 @@ partial class Binder {
                     }
                 }
                 if explicitMain != nil {
-                    // explicitMain is either a source-declared `Main` function or
-                    // a class-scoped static `Main` method (classMain below) —
-                    // both are real user declarations, never the declaration:null
-                    // synthesized entry point.
+                    // An explicit entry point has a source declaration.
                     binder.Diagnostics.ReportTopLevelStatementsConflictWithMain(
                         Invariant
                             .Required(
@@ -15128,6 +15109,21 @@ partial class Binder {
                 return synthesizedEntryPoint
             }
             return explicitMain
+        }
+
+        /// Gets package functions followed by shared class methods, then shared struct methods.
+        internal func GetEntryPointCandidates(
+            functions ImmutableArray[FunctionSymbol],
+            structs ImmutableArray[StructSymbol]
+        ) IEnumerable[FunctionSymbol] -> if structs.IsDefaultOrEmpty {
+            functions
+        } else {
+            functions.Concat(
+                structs
+                    .Where((symbol StructSymbol) -> !symbol.StaticMethods.IsDefaultOrEmpty)
+                    .OrderByDescending((symbol StructSymbol) -> symbol.IsClass)
+                    .SelectMany((symbol StructSymbol) -> symbol.StaticMethods.AsEnumerable())
+            )
         }
 
         private func ResolveEntryPointPackage(

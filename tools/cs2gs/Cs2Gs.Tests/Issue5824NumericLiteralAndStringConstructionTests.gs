@@ -44,7 +44,11 @@ open class Issue5824NumericLiteralTranslationTests {
             "9223372036854775807L",
             "long.MinValue"
         }
-        let types = []string{"float", "float?", "double", "decimal"}
+        let types = if position == "default" {
+            []string{"float", "float?", "double", "double?"}
+        } else {
+            []string{"float", "float?", "double", "decimal"}
+        }
         for var typeIndex = 0; typeIndex < types.Length; typeIndex++ {
             let type = types[typeIndex]
             let typeTag = typeIndex.ToString()
@@ -151,43 +155,52 @@ public class P
             case "method": "static bool String(IComparable? value) => value is not null;"
             case "matching-method": "static string String(char[] value) => \"method\"; " +
                 "static string String(char value, int count) => \"method\";"
-            case "property": "static int String => 7;"
-            case "field": "static int String = 7;"
+            case "property": "static Func<char[], string> String => chars => \"callable\";"
+            case "field": "static Func<char[], string> String = chars => \"callable\";"
             case "type": "public class String { public static int Value => 7; }"
-            case "reused-alias": "static int Text => 7; static int String = 5;"
-            case "namespace-type": "public class System { } static int String = 5;"
-            case "namespace-alias": "static int String = 5;"
+            case "reused-alias": "static Func<char[], string> Text => chars => \"alias\"; " +
+                "static Func<char[], string> String = chars => \"callable\";"
+            case "namespace-type": "public class System { } static Func<char[], string> String = chars => \"callable\";"
+            case "namespace-alias": "static Func<char[], string> String = chars => \"callable\";"
             default: ""
         }
         let parameters = if shadow == "parameter" {
-            "int String"
+            "Func<char[], string> String"
         } else {
             ""
         }
         let argument = if shadow == "parameter" {
-            "7"
+            "chars => \"callable\""
         } else {
             ""
         }
         let local = switch shadow {
-            case "local": "int String = 7;"
-            case "alias-local": "int String = 5; int SystemString = 7;"
-            case "namespace-local": "int String = 5; int System = 7;"
+            case "local": "Func<char[], string> String = chars => \"callable\";"
+            case "alias-local": "Func<char[], string> String = chars => \"callable\"; " +
+                "Func<char[], string> SystemString = chars => \"alias\";"
+            case "namespace-local": "Func<char[], string> String = chars => \"callable\"; int System = 7;"
             default: ""
         }
         let prefix = switch shadow {
             case "method": "String(new string(new[] { 'k', 'e', 'y' })).ToString()"
             case "matching-method": "String(new[] { 'x' })"
             case "type": "String.Value.ToString()"
-            case "alias-local": "SystemString.ToString()"
+            case "alias-local": "((SystemString))(new[] { 'x' })"
             case "namespace-local": "System.ToString()"
-            case "reused-alias": "Text.ToString()"
-            default: "String.ToString()"
+            case "reused-alias": "Text(new[] { 'x' })"
+            default: "String(new[] { 'x' })"
         }
         let imports = switch shadow {
             case "reused-alias": "using Text = System.String;"
             case "namespace-alias": "using System = ShadowSystem; public class ShadowSystem { }"
             default: ""
+        }
+        let entryPoint = if owner == "struct" {
+            " public static void Main() { global::System.Console.WriteLine(Run(" + argument + ")); } }"
+        } else {
+            " } public class Program { public static void Main() { global::System.Console.WriteLine(P.Run(" +
+                argument +
+                ")); } }"
         }
         let source = "using System; " +
             imports +
@@ -203,10 +216,8 @@ public class P
             prefix +
             " + \":\" + new string(new[] { 'k', 'e', 'y' }) + \":\" + " +
             "new string('!', 3) + \":\" + Make(); } " +
-            "static string Make() => new('?', 2); }" +
-            " public class Program { public static void Main() { global::System.Console.WriteLine(P.Run(" +
-            argument +
-            ")); } }"
+            "static string Make() => new('?', 2);" +
+            entryPoint
         LiteralConstructionRuntimeParity.AssertMatches(source)
     }
 }

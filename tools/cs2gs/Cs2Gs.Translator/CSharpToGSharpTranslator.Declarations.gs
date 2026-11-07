@@ -901,7 +901,7 @@ partial class CSharpToGSharpTranslator {
                         LiteralExpression.Float(this.ToFloatLiteralText(f, isSingle: true))
                 }
                 case m is decimal {
-                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture) + "m")
+                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture))
                 }
                 default {
                     return if IsIntegral(value) {

@@ -1027,13 +1027,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ToFloatLiteralText(value object?, isSingle bool = false) string {
-            // The token's *spelling* can be hex (`0xFF`), binary (`0b1010`),
-            // digit-separated (`1_000`), or suffixed (`30L`); appending ".0" to
-            // that raw text either produces an invalid G# float (`0xFF.0`,
-            // `30L.0`) or silently misses cases that already contain a stray
-            // 'e'/'E' hex digit (`0xAE`). Deriving the text from the token's
-            // already-parsed *value* instead sidesteps spelling entirely: format
-            // Format at the destination precision to avoid double rounding.
+            // The token spelling can be hexadecimal, binary, digit-separated, or suffixed.
+            // Format its parsed value at the destination precision to avoid double rounding.
             let text = if isSingle {
                 Convert.ToSingle(value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture)
             } else {
