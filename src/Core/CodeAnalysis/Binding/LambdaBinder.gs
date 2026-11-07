@@ -1828,8 +1828,7 @@ internal class LambdaBinder {
         ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location)
         let deferredRuntimeReturnValidation = isExpressionTreeTarget ||
             targetFunctionType == nil ||
-            inferReturnTypeFromBody ||
-            keptNaturalType
+            inferReturnTypeFromBody
         let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured){
             DeferredExpressionTreeReturnValidation = deferredRuntimeReturnValidation
         }
