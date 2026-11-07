@@ -1507,7 +1507,19 @@ class CSharpTypeMapper {
                     ", "
                 }
                 parts.Add(InterpolationPart.Literal(prefix + properties[index].Name + " = "))
-                parts.Add(InterpolationPart.Hole(MemberAccessExpression(ThisExpression(), parameters[index].Name)))
+                parts.Add(
+                    InterpolationPart.Hole(
+                        InvocationExpression(
+                            MemberAccessExpression(IdentifierExpression("string"), "Concat"),
+                            []GExpression{
+                                ConversionExpression(
+                                    NamedTypeReference("object"){IsNullable = true},
+                                    MemberAccessExpression(ThisExpression(), parameters[index].Name)
+                                )
+                            }
+                        )
+                    )
+                )
             }
             parts.Add(InterpolationPart.Literal(" }"))
             cast[GExpression](InterpolatedStringExpression(parts))

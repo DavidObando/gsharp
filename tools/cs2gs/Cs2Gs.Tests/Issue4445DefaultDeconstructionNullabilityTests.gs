@@ -1681,12 +1681,62 @@ public sealed class Probe<T>
         twiceSubscribedPair = (default(T), replacement);
         this.Happened?.Invoke();
     }
+
+    private System.Action? secondCallback;
+    private event System.Action? secondHappened;
+    private static void Other() { }
+
+    public void CheckCyclicAliasedAndConditionalStorage(T replacement, bool choose)
+    {
+        var cyclicPair = (replacement, replacement);
+        void CyclicLocal()
+        {
+            var (cyclicFieldLeft, _) = cyclicPair;
+            Fill(ref cyclicFieldLeft, replacement);
+        }
+
+        this.callback = CyclicLocal;
+        this.secondCallback = this.callback;
+        this.callback = this.secondCallback;
+        cyclicPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var copiedMulticastPair = (replacement, replacement);
+        void CopiedMulticastLocal()
+        {
+            var (copiedMulticastLeft, _) = copiedMulticastPair;
+            Fill(ref copiedMulticastLeft, replacement);
+        }
+
+        this.Happened = CopiedMulticastLocal;
+        this.Happened += CopiedMulticastLocal;
+        this.secondHappened = this.Happened;
+        this.Happened = null;
+        this.secondHappened -= CopiedMulticastLocal;
+        copiedMulticastPair = (default(T), replacement);
+        this.secondHappened?.Invoke();
+
+        var conditionalUnsubscribePair = (replacement, replacement);
+        void ConditionalUnsubscribeLocal()
+        {
+            var (conditionalUnsubscribeLeft, _) = conditionalUnsubscribePair;
+            Fill(ref conditionalUnsubscribeLeft, replacement);
+        }
+
+        this.Happened += ConditionalUnsubscribeLocal;
+        this.Happened -= choose ? ConditionalUnsubscribeLocal : Other;
+        conditionalUnsubscribePair = (default(T), replacement);
+        this.Happened?.Invoke();
+    }
 }`
         let printed = Translate(source)
         Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) retainedFieldLeft T\\? =", printed)
         Assert.DoesNotMatch("\\b(let|var) unsubscribedEventLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) twiceSubscribedEventLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) cyclicFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) copiedMulticastLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) conditionalUnsubscribeLeft T\\? =", printed)
     }
 
     shared {

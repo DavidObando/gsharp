@@ -40,7 +40,7 @@ async function expectThemeTokensApplied(
             rootStyle.getPropertyValue(name).trim(),
           ]);
           const stale: string[] = [];
-          for (const selector of ['article', '[role="dialog"]']) {
+          for (const selector of ['article', 'dialog, [role="dialog"]']) {
             const container = document.querySelector(selector);
             if (!container) {
               continue;

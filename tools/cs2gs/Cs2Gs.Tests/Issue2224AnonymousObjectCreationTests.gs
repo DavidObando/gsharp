@@ -174,6 +174,12 @@ using System;
 
 namespace Demo
 {
+    public readonly struct CustomValue : IFormattable
+    {
+        public override string ToString() => "plain";
+        public string ToString(string? format, IFormatProvider? formatProvider) => "formatted";
+    }
+
     public static class C
     {
         public static void Run()
@@ -182,14 +188,15 @@ namespace Demo
             var single = new { X = 1 };
             var multi = new { A = 1, B = "two", Missing = (string?)null };
             var nested = new { Outer = new { Inner = 42 } };
-            Console.WriteLine($"{empty}|{single}|{multi}|{nested}");
+            var formattable = new { V = new CustomValue() };
+            Console.WriteLine($"{empty}|{single}|{multi}|{nested}|{formattable}");
         }
     }
 }`)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Demo.C.Run()",
-            "{ }|{ X = 1 }|{ A = 1, B = two, Missing =  }|{ Outer = { Inner = 42 } }"
+            "{ }|{ X = 1 }|{ A = 1, B = two, Missing =  }|{ Outer = { Inner = 42 } }|{ V = plain }"
         )
     }
 

@@ -2126,8 +2126,8 @@ class PackageCacheTests(unittest.TestCase):
 
     def test_replaced_archive_and_sidecar_differ_from_lock_content_hash(self) -> None:
         signed_package = self.source / "signed.1.0.0.nupkg"
-        with zipfile.ZipFile(signed_package, "w") as archive:
-            archive.writestr("lib/net10.0/example.dll", b"accepted")
+        shutil.copy2(self.package, signed_package)
+        with zipfile.ZipFile(signed_package, "a") as archive:
             archive.writestr(".signature.p7s", b"SIGNATURE-BYTES")
         signed_raw_hash = base64.b64encode(
             hashlib.sha512(signed_package.read_bytes()).digest()).decode()

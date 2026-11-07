@@ -123,6 +123,25 @@ The following Tests are available:
         Assert.Equal(2, fullResult.Matched)
         Assert.Equal(3, fullResult.TheoryRows)
         Assert.Empty(fullResult.Missing)
+        Assert.Null(CSharpTestOracle.NormalizeTargetFramework("net10.0.trx"))
+        Assert.Equal("net10.0", CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0.trx"))
+        Assert.Equal("net10.0-windows", CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0-windows.trx"))
+        const platformListing = `Test run for /repo/out/bin/Release/net10.0/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /repo/out/bin/Release/net10.0-windows/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let platformOracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, platformListing)
+        Assert.Equal(2, platformOracle.TestsByFramework!!.Count)
+        let platformParity = TestNameParity.Compare(
+            platformOracle,
+            []TestCaseOutcome{
+                TestCaseOutcome("Own.Tests.A.Cells(cell: 1)", "Passed", "net10.0"),
+                TestCaseOutcome("Own.Tests.A.Cells(cell: 1)", "Passed", "net10.0-windows")
+            }
+        )
+        Assert.True(platformParity.IsMatch)
     }
 
     /// Review finding: an oracle holding an empty name is rejected, not silently shrunk.
