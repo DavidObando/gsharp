@@ -263,7 +263,7 @@ namespace Probe
     }
 }`
             File.WriteAllText(Path.Combine(csDir, "Probe.cs"), csSource)
-            File.WriteAllText(Path.Combine(csDir, "Probe.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+            DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(Path.Combine(csDir, "Probe.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>

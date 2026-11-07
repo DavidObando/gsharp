@@ -475,7 +475,14 @@ class Lexer {
                 case '\u0000' {
                     done = true
                 }
-                case '\r', '\n' {
+                case '\r' {
+                    if Lookahead == '\n' {
+                        position++
+                    }
+                    position++
+                    done = true
+                }
+                case '\n' {
                     position++
                     done = true
                 }

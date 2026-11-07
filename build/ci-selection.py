@@ -250,6 +250,21 @@ def check_results(plan, needs, workflow, ref="", advisory=frozenset(), legs=lamb
     legs whose conclusion is not success are returned, so the release can name them. A leg that the jobs
     API does not list counts as not passed.
     """
+    if isinstance(plan, str):
+        if not plan.strip():
+            plan = None
+        else:
+            try:
+                plan = json.loads(plan)
+            except json.JSONDecodeError as ex:
+                raise ValueError(f"select: invalid selection plan: {ex}") from ex
+    if not isinstance(plan, dict) or not plan:
+        select_result = needs.get("select", {}).get("result")
+        if select_result == "cancelled":
+            raise ValueError("select: selector was cancelled before producing a plan")
+        if select_result != "success":
+            raise ValueError(f"select: expected success, got {select_result!r} (empty PLAN)")
+        raise ValueError("select: missing selection plan")
     selected = set(plan["docs_jobs" if workflow == "docs" else "jobs"])
     required = selected | {"select"}
     failures = []
@@ -279,7 +294,7 @@ def main():
         ref = os.environ.get("GITHUB_REF", "")
         advisory = frozenset(filter(None, os.environ.get("ADVISORY_JOBS", "").split(",")))
         legs = lambda: smoke_legs(os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"])
-        unverified = check_results(json.loads(os.environ["PLAN"]), json.loads(os.environ["NEEDS"]),
+        unverified = check_results(os.environ.get("PLAN", ""), json.loads(os.environ["NEEDS"]),
                                    args.check, ref, advisory, legs)
         names = " ".join(unverified)
         if os.environ.get("GITHUB_OUTPUT"):

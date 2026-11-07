@@ -189,12 +189,16 @@ shared class AsyncBoundTreeQueries {
     /// nothing else about them changes structurally.
     /// @param expression The bound expression to inspect.
     /// @returns The first await's syntax node, or `null`.
-    func FindFirstAwaitSyntax(expression BoundExpression?) SyntaxNode? {
-        if expression == nil {
+    func FindFirstAwaitSyntax(expression BoundExpression?) SyntaxNode? -> FindFirstAwaitSyntax(
+        cast[BoundNode?](expression)
+    )
+
+    internal func FindFirstAwaitSyntax(node BoundNode?) SyntaxNode? {
+        if node == nil {
             return nil
         }
         let probe = AwaitSyntaxFinder()
-        probe.Visit(expression)
+        probe.Visit(node)
         return probe.Syntax
     }
 

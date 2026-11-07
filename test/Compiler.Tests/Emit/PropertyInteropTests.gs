@@ -327,7 +327,10 @@ stderr:
     </Reference>
   </ItemGroup>
 </Project>`)
-                File.WriteAllText(Path.Combine(csDir, "CsApp.csproj"), csProjContent)
+                DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(
+                    Path.Combine(csDir, "CsApp.csproj"),
+                    csProjContent
+                )
                 File.WriteAllText(Path.Combine(csDir, "Program.cs"), csSource)
                 // Step 3: Build the C# project
                 let buildPsi = ProcessStartInfo("dotnet"){

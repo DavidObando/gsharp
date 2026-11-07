@@ -194,6 +194,30 @@ package Demo
     }
 
     @Fact
+    func Format_DoesNotAddBlankLineAfterLineCommentInCrlfSource() {
+        const crlfInput = "package FormatterRepro\r\n\r\n// ordinary comment\r\nfunc main() {}\r\n"
+        let result = GSharpFormatter.Format(SourceText.From(crlfInput))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("package FormatterRepro\n\n// ordinary comment\nfunc main() { }\n", result.Text!!.ToString())
+
+        const canonicalCrlf = "package FormatterRepro\r\n\r\n// ordinary comment\r\nfunc main() { }\r\n"
+        let canonicalResult = GSharpFormatter.Format(SourceText.From(canonicalCrlf))
+        Assert.Empty(canonicalResult.Diagnostics)
+        Assert.False(canonicalResult.Changed)
+
+        let spanStart = canonicalCrlf.IndexOf("func main", StringComparison.Ordinal)
+        let rangeResult = GSharpFormatter.Format(
+            SourceText.From(canonicalCrlf),
+            TextSpan(spanStart, "func main() { }".Length)
+        )
+        Assert.Empty(rangeResult.Diagnostics)
+        Assert.False(rangeResult.Changed)
+        Assert.Empty(rangeResult.Edits)
+        Assert.Equal(canonicalCrlf, rangeResult.Text!!.ToString())
+        Assert.Equal(ApplyEdits(canonicalCrlf, rangeResult.Edits), rangeResult.Text!!.ToString())
+    }
+
+    @Fact
     func Format_JoinsACStyleForClauseHeaderOntoOneLine() {
         // ADR-0179 regression: the for-clause header's two separator `;`
         // tokens are list separators like `,`, not statement terminators, and

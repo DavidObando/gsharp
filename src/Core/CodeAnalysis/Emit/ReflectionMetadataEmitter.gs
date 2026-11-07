@@ -2202,10 +2202,21 @@ internal class ReflectionMetadataEmitter {
                 )
             }
             if s.IsInline {
+                this.cache.MethodHandles[s.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 1)
+                this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow + 2)
+                this.cache.MethodHandles[s.DataGetHashCode] = MetadataTokens.MethodDefinitionHandle(methodRow + 3)
+                if s.DataToString is {} inlineToString {
+                    this.cache.MethodHandles[inlineToString] = MetadataTokens.MethodDefinitionHandle(methodRow + 4)
+                }
+                this.cache.MethodHandles[s.DataDeconstruct] = MetadataTokens.MethodDefinitionHandle(methodRow + 7)
                 methodRow += 8
             } else if s.IsData {
                 this.cache.MethodHandles[s.DataEqualsSelf] = MetadataTokens.MethodDefinitionHandle(methodRow)
                 this.cache.MethodHandles[s.DataEqualsObject] = MetadataTokens.MethodDefinitionHandle(methodRow + 1)
+                this.cache.MethodHandles[s.DataGetHashCode] = MetadataTokens.MethodDefinitionHandle(methodRow + 2)
+                if s.DataToString is {} structToString {
+                    this.cache.MethodHandles[structToString] = MetadataTokens.MethodDefinitionHandle(methodRow + 3)
+                }
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
                 // rows: Equals(object), Equals(Name), GetHashCode, ToString,
                 // Issue #410 / ADR-0029: data structs synthesize 7 MethodDef
@@ -5240,10 +5251,12 @@ internal class ReflectionMetadataEmitter {
             // Lazy data signatures must use source vectors, not emission-scoped
             // enclosing+own vectors installed by nested generic reification.
             for symbol in program.Structs {
-                if symbol.IsData && symbol.ClrType == nil {
+                if (symbol.IsData || symbol.IsInline) && symbol.ClrType == nil {
                     let _ = symbol.DataEqualsSelf
                     let _ = symbol.DataEqualsBase
                     let _ = symbol.DataEqualsObject
+                    let _ = symbol.DataGetHashCode
+                    let _ = symbol.DataToString
                     let _ = symbol.DataDeconstruct
                     let _ = symbol.DataPrintMembers
                 }

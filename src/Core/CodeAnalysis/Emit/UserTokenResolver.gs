@@ -1134,12 +1134,19 @@ internal class UserTokenResolver {
     internal func ResolveUserInstanceMethodToken(containingType StructSymbol, method FunctionSymbol) EntityHandle {
         var method = method
         if containingType.Definition is {} definition && !object.ReferenceEquals(definition, containingType) &&
-            containingType
-            .IsData {
+            (containingType.IsData || containingType.IsInline) {
             if object.ReferenceEquals(method, containingType.DataEqualsSelf) {
                 method = definition.DataEqualsSelf
             } else if object.ReferenceEquals(method, containingType.DataEqualsObject) {
                 method = definition.DataEqualsObject
+            } else if object.ReferenceEquals(method, containingType.DataGetHashCode) {
+                method = definition.DataGetHashCode
+            } else if object.ReferenceEquals(method, containingType.DataToString) {
+                method = Invariant.Required(
+                    definition.DataToString,
+                    "a constructed ToString slot has a definition",
+                    expression: "definition.DataToString"
+                )
             } else if object.ReferenceEquals(method, containingType.DataEqualsBase) {
                 method = Invariant.Required(
                     definition.DataEqualsBase,
