@@ -1447,21 +1447,17 @@ nesting depth.
 | GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern.  | |
 | GS0418 | Error | A `using` or `await using` statement uses tuple or named deconstruction instead of one variable declaration.  | |
 
-## Defer with by-reference arguments (GS0460)
+## Deferred or concurrent calls with by-reference arguments (GS0460)
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| GS0460 | Error | The operand of a `defer` statement is a call with one or more `ref`, `out`, or `in` arguments.  | |
+| ID | Severity | Description | Fix |
+|----|----------|-------------|-----|
+| GS0460 | Error | The operand of a `defer` or `go` statement is a call with one or more `ref`, `out`, or `in` arguments, including implicit `in`. | Pass values instead, or create and use the reference inside a `go` block. |
 
-`defer` eagerly captures each argument's evaluated value into a fresh readonly
-local ahead of the deferred invocation (issue #1635). A by-reference argument's
-value *is* the address of its target storage, which cannot be spilled into an
-ordinary local without either aliasing an unrelated temp (silently breaking the
-by-ref contract) or requiring verifiable-IL support for spilled managed pointers
-that the emitter does not provide. Rather than mis-defer the call, `defer` on
-such a call is rejected outright. Restructure so the deferred work takes its
-arguments by value, or wrap the by-ref call in a `func` captured by the
-`defer`.
+`defer` and `go` capture argument values before invoking the call (issues #1635 and #5708).
+A by-reference argument carries an address, not a value snapshot.
+A goroutine work item cannot store that managed reference in a field.
+Both statements reject these arguments, including an omitted `in` modifier.
+Pass a value instead, or create and use a local reference inside a `go` block.
 
 ## Non-constant explicit enum member value (GS0467)
 

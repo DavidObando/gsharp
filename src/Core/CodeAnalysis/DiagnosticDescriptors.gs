@@ -1686,10 +1686,10 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "'ref'/'out'/'in' is not a legal modifier on the primary-constructor parameter '{0}'; primary-ctor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Move the constructor to an 'init(...)' body if a by-reference parameter is required."
     )
-    internal let DeferOperandHasByRefArgument DiagnosticDescriptor = DiagnosticDescriptor(
+    internal let CapturedCallHasByRefArgument DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0460",
         DiagnosticSeverity.Error,
-        "'defer' cannot capture a call with 'ref', 'out', or 'in' arguments."
+        "'{0}' cannot capture a call with 'ref', 'out', or 'in' arguments."
     )
     internal let LockTargetMustBeReferenceType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0461",

@@ -45,8 +45,8 @@ internal shared class StructLayoutBinder {
         let isExplicit = metadata?.Layout == LayoutKind.Explicit
         for field in structSymbol.Fields {
             if field.Attributes.IsDefaultOrEmpty {
-                if isExplicit && !structSymbol.IsClass {
-                    // Every field of an Explicit-layout struct must carry
+                if isExplicit {
+                    // Every field of an Explicit-layout struct or class must carry
                     // a @FieldOffset annotation; missing offsets are GS0347.
                     diagnostics.ReportFieldOffsetRequiredOnExplicitLayout(
                         FieldIdentifierLocation(structSymbol, field),
@@ -325,8 +325,47 @@ internal shared class StructLayoutBinder {
                     return fieldSyntax.Identifier.Location
                 }
             }
+            if decl.PrimaryConstructorParameters is {} primaryParams {
+                for paramSyntax in primaryParams {
+                    if paramSyntax.Identifier?.Text == field.Name {
+                        return paramSyntax.Identifier!!.Location
+                    }
+                }
+            }
             return decl.Identifier?.Location ?? default(TextLocation)
         }
         return default(TextLocation)
+    }
+
+    internal func ValidateExplicitLayoutAutoProperties(structSymbol StructSymbol, diagnostics DiagnosticBag) {
+        if structSymbol.LayoutMetadata?.Layout != LayoutKind.Explicit {
+            return
+        }
+        for prop in structSymbol.Properties {
+            if prop.IsStatic || !prop.IsAutoProperty || prop.BackingField == nil || !prop.OwnsBackingField(
+                structSymbol
+            ) {
+                continue
+            }
+            diagnostics.ReportFieldOffsetRequiredOnExplicitLayout(
+                PropertyIdentifierLocation(structSymbol, prop),
+                prop.Name,
+                structSymbol.Name
+            )
+        }
+    }
+
+    private func PropertyIdentifierLocation(structSymbol StructSymbol, prop PropertySymbol) TextLocation {
+        if prop.Declaration is {} propDecl {
+            return propDecl.Identifier.Location
+        }
+        if structSymbol.Declaration?.PrimaryConstructorParameters is {} primaryParams {
+            for paramSyntax in primaryParams {
+                if paramSyntax.Identifier?.Text == prop.Name {
+                    return paramSyntax.Identifier!!.Location
+                }
+            }
+        }
+        return structSymbol.Declaration?.Identifier?.Location ?? default(TextLocation)
     }
 }

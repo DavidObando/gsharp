@@ -9,6 +9,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Tests
 import System
 import Xunit
 
@@ -144,6 +145,148 @@ namespace Demo
         Assert.Contains("await for nameItem", printed)
         Assert.Contains("let (name, score) = nameItem", printed)
         Assert.DoesNotContain("__decon", printed)
+    }
+
+    @Fact
+    func NestedForEachTupleDeconstruction_PreservesOuterArityAndExecutes() {
+        let printed = TranslateUnit(`
+using System;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        private static int Pick(object value) => 7;
+        private static int Pick(string value) => 99;
+
+        public static long Run()
+        {
+            long total = 0;
+            foreach (var (a, (b, c)) in new[] { (1, (2, 3)) })
+            {
+                total += a + b + c;
+            }
+
+            int dTuple = 100;
+            foreach ((var x, (var d, (var e, _))) in new[] { (10, (20, (30, 40))) })
+            {
+                total += x + d + e + dTuple;
+            }
+
+            foreach ((int head, (long widened, int tail)) in new[] { (0, (1, 0)) })
+            {
+                total += head + (widened << 32) + tail;
+            }
+
+            foreach ((int head, (long? nullableWidened, int tail)) in new[] { (0, ((int?)null, 0)), (1, ((int?)2, 3)) })
+            {
+                total += head + ((nullableWidened ?? 0L) << 32) + tail;
+            }
+
+            foreach ((int head, ((long, long) pair, int tail)) in new[] { (0, ((1, 2), 0)) })
+            {
+                total += head + (pair.Item1 << 32) + pair.Item2 + tail;
+            }
+
+            foreach ((int head, ((object, object) objectPair, int tail)) in new[] { (0, (("a", "b"), 0)) })
+            {
+                total += head + Pick(objectPair.Item1) + tail;
+            }
+
+            return total;
+        }
+    }
+}`)
+        Assert.Contains("for (a, bTuple) in [](int32, (int32, int32)){(1, (2, 3))} {", printed)
+        Assert.Contains("let (b, c) = bTuple", printed)
+        Assert.Contains("for (x, dTuple2) in", printed)
+        Assert.Contains("let (d, eTuple) = dTuple2", printed)
+        Assert.Contains("let (e, _) = eTuple", printed)
+        Assert.Contains("let (widenedValue, tail) = widenedTuple", printed)
+        Assert.Contains("let widened int64 = int64(widenedValue)", printed)
+        Assert.Contains("let objectPair (object, object) = objectPairValue", printed)
+        Assert.DoesNotContain("for (a, b, c) in", printed)
+        let result = EmittedOracle.Evaluate(printed + "\nDemo.C.Run()")
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(17179869363L, result.Value)
+    }
+
+    @Fact
+    func NestedForEachTupleDeconstruction_RunsDeconstructionsBeforeLeafConversions() {
+        let printed = TranslateUnit(`
+namespace Demo
+{
+    public sealed class Log
+    {
+        public static int Order;
+    }
+
+    public readonly struct Convertible
+    {
+        public static implicit operator int(Convertible value)
+        {
+            return (Log.Order = (Log.Order * 10) + 2);
+        }
+    }
+
+    public sealed class Pair
+    {
+        public void Deconstruct(out int left, out int right)
+        {
+            Log.Order = (Log.Order * 10) + 1;
+            left = 3;
+            right = 4;
+        }
+    }
+
+    public sealed class C
+    {
+        public static int Run()
+        {
+            Log.Order = 0;
+            foreach ((int first, (var x, var y)) in new[] { (new Convertible(), new Pair()) })
+            {
+                return (Log.Order * 100) + first + x + y;
+            }
+            return 0;
+        }
+    }
+}`)
+        let deconstructIdx = printed.IndexOf("let (x, y) = xTuple", StringComparison.Ordinal)
+        let convertIdx = printed.IndexOf("let first int32 = int32(firstValue)", StringComparison.Ordinal)
+        Assert.True(deconstructIdx >= 0 && convertIdx > deconstructIdx, printed)
+        let result = EmittedOracle.Evaluate(printed + "\nDemo.C.Run()")
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(1219, result.Value)
+    }
+
+    @Fact
+    func AwaitForEachNestedTupleDeconstruction_PreservesOuterArity() {
+        let printed = TranslateUnit(`
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public async Task<int> Sum(IAsyncEnumerable<(int Head, (int Left, int Right))> xs)
+        {
+            int sum = 0;
+            await foreach (var (_, (left, right)) in xs)
+            {
+                sum += left + right;
+            }
+            return sum;
+        }
+    }
+}`)
+        Assert.Contains("await for leftItem in xs {", printed)
+        Assert.Contains("let (_, leftTuple) = leftItem", printed)
+        Assert.Contains("let (left, right) = leftTuple", printed)
+        Assert.DoesNotContain("let (_, left, right)", printed)
     }
 
     shared {

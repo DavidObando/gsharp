@@ -893,7 +893,13 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportSymbolAlreadyDeclared(fieldSyntax.Identifier.Location, fieldName)
                     continue
                 }
-                let fieldType TypeSymbol? = bindTypeClause(fieldSyntax.Type)
+                let fieldType TypeSymbol? = if fieldSyntax.Type is {} declaredFieldType {
+                    bindTypeClause(declaredFieldType)
+                } else if fieldSyntax.IsConst {
+                    TryInferLiteralInitializerType(fieldSyntax.Initializer) ?? TypeSymbol.Error
+                } else {
+                    default(TypeSymbol?)
+                }
                 if fieldType == nil {
                     continue
                 }
@@ -1004,14 +1010,13 @@ internal partial class DeclarationBinder {
                 }
             }
             if pendingConstInitializers.Count > 0 {
-                pendingConstInitializerBindings.Add(
-                    () -> RunInInterfaceStaticScope(
-                        () -> BindDeferredConstInitializers(
-                            pendingConstInitializers,
-                            List[(Field FieldSymbol, Syntax FieldDeclarationSyntax, FieldType TypeSymbol)]()
-                        )
-                    )
+                let batchItems = List[(Field FieldSymbol, Syntax FieldDeclarationSyntax)](
+                    pendingConstInitializers.Count
                 )
+                for (constField, fieldSyntaxNode, _) in pendingConstInitializers {
+                    batchItems.Add((constField, fieldSyntaxNode))
+                }
+                RegisterPendingConstInitializerBatch(batchItems, RunInInterfaceStaticScope)
             }
             if pendingStaticInitializers.Count > 0 {
                 pendingStaticFieldInitializerBindings.Add(

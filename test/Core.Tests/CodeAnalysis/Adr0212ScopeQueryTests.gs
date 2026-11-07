@@ -97,7 +97,7 @@ open class Adr0212ScopeQueryTests {
             .DescendantNodes()
             .OfType[FieldDeclarationSyntax]()
             .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "Label")
-        Assert.Same(TypeSymbol.String, model.GetSymbolInfo(label.Type.Identifier).Symbol)
+        Assert.Same(TypeSymbol.String, model.GetSymbolInfo(label.Type!!.Identifier).Symbol)
     }
 
     @Fact
