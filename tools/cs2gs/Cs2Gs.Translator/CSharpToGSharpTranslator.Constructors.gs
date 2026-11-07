@@ -4644,18 +4644,137 @@ partial class CSharpToGSharpTranslator {
                 !(projectedCollection is INamedTypeSymbol projectedOwner && this.HasProjectedBaseType(projectedOwner)) {
                 return nil
             }
-            if projectedCollection is INamedTypeSymbol projectedNamed {
-                if forEachInfo.GetEnumeratorMethod is {} getEnumerator && this.GetProjectedMember(
-                    projectedNamed,
-                    getEnumerator
-                ) is IMethodSymbol projectedGetEnumerator &&
-                    projectedGetEnumerator.ReturnType is INamedTypeSymbol projectedEnumerator &&
-                    forEachInfo.CurrentProperty is {} current &&
-                    this.GetProjectedMember(projectedEnumerator, current) is IPropertySymbol projectedCurrent {
-                    return projectedCurrent.Type
-                }
+            if projectedCollection is INamedTypeSymbol projectedNamed &&
+                this
+                .TryGetProjectedForEachEnumeratorElementType(
+                projectedNamed,
+                forEachInfo,
+                out var enumeratorElement,
+                out _
+            ) {
+                return enumeratorElement
             }
             return this.GetProjectedEnumerableElementType(projectedCollection, forEach.AwaitKeyword.RawKind != 0)
+        }
+
+        private func TryGetProjectedForEachEnumeratorElementType(
+            projectedNamed INamedTypeSymbol,
+            forEachInfo ForEachStatementInfo,
+            out elementType ITypeSymbol?,
+            out hasConflict bool
+        ) bool {
+            elementType = nil
+            hasConflict = false
+            if forEachInfo.GetEnumeratorMethod is not{} getEnumerator || forEachInfo.CurrentProperty is not{} current {
+                return false
+            }
+            var enumeratorReturnType ITypeSymbol? = nil
+            if this.GetProjectedMember(projectedNamed, getEnumerator) is IMethodSymbol instanceGetEnumerator {
+                enumeratorReturnType = this.SubstituteProjectedContainingTypeParameter(
+                    projectedNamed,
+                    instanceGetEnumerator.OriginalDefinition.ReturnType
+                ) ??
+                    instanceGetEnumerator.ReturnType
+            } else if (
+                getEnumerator.ReducedFrom ??
+                    (
+                    if getEnumerator.IsExtensionMethod {
+                        getEnumerator
+                    } else {
+                        default(IMethodSymbol?)
+                    }
+                )
+            ) is {} reducedFrom &&
+                reducedFrom
+                .Parameters
+                .Length > 0 {
+                let constructedMethod = if getEnumerator.ReducedFrom != nil {
+                    getEnumerator
+                } else {
+                    reducedFrom
+                }
+                var receiverParamType ITypeSymbol = reducedFrom.Parameters[0].Type
+                enumeratorReturnType = reducedFrom.ReturnType
+                if reducedFrom.IsGenericMethod {
+                    let openExtension = reducedFrom.OriginalDefinition
+                    let openReceiverType = openExtension.Parameters[0].Type
+                    let replacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](SymbolEqualityComparer.Default)
+                    for var i = 0;
+                        i < openExtension
+                        .TypeParameters
+                        .Length &&
+                        i < constructedMethod
+                        .TypeArguments
+                        .Length;
+                        i++ {
+                        var effectiveArg = GetEffectiveMethodTypeArgument(constructedMethod, i)
+                        if this.TryGetProjectedTypeArgument(
+                            openReceiverType,
+                            projectedNamed,
+                            openExtension.TypeParameters[i],
+                            this.context.Compilation,
+                            out var inferredTypeArg,
+                            out var conflict
+                        ) {
+                            if conflict {
+                                hasConflict = true
+                                return false
+                            }
+                            if inferredTypeArg != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
+                                effectiveArg,
+                                inferredTypeArg
+                            ) {
+                                if inferredTypeArg.NullableAnnotation == Microsoft
+                                    .CodeAnalysis
+                                    .NullableAnnotation
+                                    .Annotated &&
+                                    NullableTypeArgumentViolatesTranslatedConstraints(openExtension.TypeParameters[i]) {
+                                    hasConflict = true
+                                    return false
+                                }
+                                effectiveArg = inferredTypeArg
+                            }
+                        }
+                        replacements[openExtension.TypeParameters[i]] = effectiveArg
+                    }
+                    receiverParamType = this.SubstituteTypeParameters(openReceiverType, replacements)
+                    enumeratorReturnType = this.SubstituteTypeParameters(openExtension.ReturnType, replacements)
+                }
+                if !this.ProjectionTypeFitsCompositeDestination(projectedNamed, receiverParamType) {
+                    hasConflict = true
+                    return false
+                }
+            }
+            if enumeratorReturnType is INamedTypeSymbol projectedEnumerator && this.GetProjectedMember(
+                projectedEnumerator,
+                current
+            ) is IPropertySymbol projectedCurrent {
+                let rawCurrentType ITypeSymbol? = this.SubstituteProjectedContainingTypeParameter(
+                    projectedEnumerator,
+                    projectedCurrent.OriginalDefinition.Type
+                ) ??
+                    projectedCurrent.Type
+                elementType = this.SubstituteProjectedContainingTypeParameter(projectedNamed, rawCurrentType)
+                return elementType != nil
+            }
+            return false
+        }
+
+        private func GetEffectiveMethodTypeArgument(method IMethodSymbol, index int32) ITypeSymbol {
+            let argument = method.TypeArguments[index]
+            let annotation = if method.TypeArgumentNullableAnnotations[index] == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                argument.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+            } else {
+                method.TypeArgumentNullableAnnotations[index]
+            }
+            return argument.WithNullableAnnotation(annotation)
         }
 
         private func GetProjectedBindingType(
@@ -4719,8 +4838,34 @@ partial class CSharpToGSharpTranslator {
                     annotations.ToImmutable()
                 )
             }
-            if !conversion.IsReference {
+            if !conversion.IsReference && !conversion.IsBoxing {
                 return nil
+            }
+            var resolvedDestination ITypeSymbol = destination
+            if projectedSource is IArrayTypeSymbol sourceArray &&
+                destination is INamedTypeSymbol{
+                TypeKind: TypeKind.Interface,
+                TypeArguments: {Length: 1}
+            } destinationArrayInterface &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(sourceArray.ElementType, destinationArrayInterface.TypeArguments[0]) {
+                resolvedDestination = destinationArrayInterface
+                    .OriginalDefinition
+                    .Construct(sourceArray.ElementType)
+                    .WithNullableAnnotation(destination.NullableAnnotation)
+            } else if UnwrapNamedOrConstrainedClassType(projectedSource) is {} sourceNamed &&
+                UnwrapNamedOrConstrainedClassType(destination) is {} destinationNamed {
+                if this.GetReceiverTypeHierarchy(sourceNamed).FirstOrDefault(
+                    (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(candidate, destinationNamed)
+                ) is {} matchingDestination {
+                    resolvedDestination = matchingDestination.WithNullableAnnotation(destination.NullableAnnotation)
+                } else if CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
+                    destination,
+                    this.context.Compilation
+                ) {
+                    return nil
+                }
             }
             return if projectedSource.NullableAnnotation == Microsoft
                 .CodeAnalysis
@@ -4728,9 +4873,9 @@ partial class CSharpToGSharpTranslator {
                 .Annotated &&
                 this
                 .IsReferenceLikeOrManagedReference(projectedSource) {
-                destination.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                resolvedDestination.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
             } else {
-                destination
+                resolvedDestination
             }
         }
 

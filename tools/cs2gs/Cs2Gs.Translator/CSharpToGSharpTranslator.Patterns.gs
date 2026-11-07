@@ -4380,7 +4380,12 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetTypeInfo(collection)
                 .Type
-            let originalElementType ITypeSymbol? = GetCollectionTargetElementType(target)
+            let originalElementType ITypeSymbol? = if target is INamedTypeSymbol originalNamedTarget &&
+                this.GetCollectionProjectionElementType(collection, originalNamedTarget) is {} originalOpenElement {
+                this.SubstituteProjectedContainingTypeParameter(originalNamedTarget, originalOpenElement)
+            } else {
+                GetCollectionTargetElementType(target)
+            }
             if target is INamedTypeSymbol namedCollectionTarget {
                 target = this.GetManagedReferenceArrayProjectedCollectionType(collection, namedCollectionTarget)
             }
@@ -4409,7 +4414,12 @@ partial class CSharpToGSharpTranslator {
             if collection.Elements.Count == 0 && isConstructibleClassTarget {
                 return BuildConstruction(targetRef, List[GExpression]())
             }
-            let elementTypeSymbol ITypeSymbol? = this.GetProjectedCollectionTargetElementType(target)
+            let elementTypeSymbol ITypeSymbol? = if target is INamedTypeSymbol projectedNamedTarget &&
+                this.GetCollectionProjectionElementType(collection, projectedNamedTarget) is {} projectedOpenElement {
+                this.SubstituteProjectedContainingTypeParameter(projectedNamedTarget, projectedOpenElement)
+            } else {
+                this.GetProjectedCollectionTargetElementType(target)
+            }
             var elementType GTypeReference?
             if target is IArrayTypeSymbol targetArray && this.typeMapper.Map(
                 targetArray,
@@ -4708,19 +4718,24 @@ partial class CSharpToGSharpTranslator {
             if elementType == nil || target == nil {
                 return nil
             }
-            let nullableElement = collection
-                .Elements
-                .OfType[ExpressionElementSyntax]()
-                .Any(
-                (item ExpressionElementSyntax) -> IsNullOrDefaultLiteral(item.Expression) ||
-                    this
-                    .context
-                    .GetTypeInfo(item.Expression)
-                    .Type
-                    ?.NullableAnnotation == Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated
+            let nullableElement = collection.Elements.Any(
+                (element CollectionElementSyntax) -> switch element {
+                    case item is ExpressionElementSyntax: IsNullOrDefaultLiteral(item.Expression) ||
+                        this
+                        .context
+                        .GetTypeInfo(item.Expression)
+                        .Type
+                        ?.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                    case spread is SpreadElementSyntax: this.GetProjectedSpreadElementType(spread)
+                        ?.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated
+                    default: false
+                }
             )
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
@@ -4787,7 +4802,7 @@ partial class CSharpToGSharpTranslator {
             collection CollectionExpressionSyntax,
             target INamedTypeSymbol
         ) INamedTypeSymbol {
-            let originalElementType ITypeSymbol? = GetCollectionTargetElementType(target.OriginalDefinition)
+            let originalElementType ITypeSymbol? = this.GetCollectionProjectionElementType(collection, target)
             if originalElementType == nil {
                 return target
             }
@@ -4799,68 +4814,79 @@ partial class CSharpToGSharpTranslator {
                     case item is ExpressionElementSyntax: this.GetManagedReferenceArrayProjectedArgumentType(
                         item.Expression
                     )
-                    case spread is SpreadElementSyntax: this.GetMappedArrayElementType(spread.Expression) ??
-                        this.GetProjectedEnumerableElementType(
-                        this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)
-                    )
+                    case spread is SpreadElementSyntax: this.GetProjectedSpreadElementType(spread)
                     default: default(ITypeSymbol?)
                 }
                 if projectedElement == nil {
                     continue
                 }
-                for parameter in NamedTypeAndContainingTypes(target).SelectMany(
-                    func (type INamedTypeSymbol) IEnumerable[ITypeParameterSymbol] {
-                        return type.OriginalDefinition.TypeParameters
-                    }
-                ) {
-                    if !TryGetProjectedTypeArgument(
-                        originalElementType,
-                        projectedElement,
-                        parameter,
-                        this.context.Compilation,
-                        out var replacement,
-                        out var conflictingProjection
-                    ) {
-                        continue
-                    }
-                    if conflictingProjection ||
-                        (
-                        replacements.TryGetValue(parameter, out var existing) &&
-                            !SymbolEqualityComparer
-                            .IncludeNullability
-                            .Equals(existing, replacement)
-                    ) {
-                        if this.IsRejectableManagedReferenceProjection(
-                            switch collectionElement {
-                                case item is ExpressionElementSyntax: item.Expression
-                                case spread is SpreadElementSyntax: spread.Expression
-                                default: cast[ExpressionSyntax](collection)
-                            },
+                for currentType in NamedTypeAndContainingTypes(target) {
+                    for var i = 0;
+                        i < currentType
+                        .OriginalDefinition
+                        .TypeParameters
+                        .Length &&
+                        i < currentType
+                        .TypeArguments
+                        .Length;
+                        i++ {
+                        let parameter = currentType.OriginalDefinition.TypeParameters[i]
+                        let targetArgument = GetEffectiveTypeArgument(currentType, i)
+                        if !TryGetProjectedTypeArgument(
+                            originalElementType,
                             projectedElement,
-                            nil
+                            parameter,
+                            this.context.Compilation,
+                            out var replacement,
+                            out var conflictingProjection
                         ) {
-                            this.context.ReportUnsupported(
-                                collection,
-                                "collection expression elements have conflicting managed-reference projections."
-                            )
+                            continue
                         }
-                        return target
+                        if !SymbolEqualityComparer.Default.Equals(replacement, targetArgument) {
+                            continue
+                        }
+                        if conflictingProjection ||
+                            (
+                            replacements.TryGetValue(parameter, out var existing) &&
+                                !SymbolEqualityComparer
+                                .IncludeNullability
+                                .Equals(existing, replacement)
+                        ) {
+                            if this.IsRejectableManagedReferenceProjection(
+                                switch collectionElement {
+                                    case item is ExpressionElementSyntax: item.Expression
+                                    case spread is SpreadElementSyntax: spread.Expression
+                                    default: cast[ExpressionSyntax](collection)
+                                },
+                                projectedElement,
+                                nil
+                            ) {
+                                this.context.ReportUnsupported(
+                                    collection,
+                                    "collection expression elements have conflicting managed-reference projections."
+                                )
+                            }
+                            return target
+                        }
+                        replacements[parameter] = replacement!!
                     }
-                    replacements[parameter] = replacement!!
                 }
             }
             if replacements.Count == 0 {
                 return target
             }
             let projected = ProjectNamedType(target, replacements)
+            if SymbolEqualityComparer.IncludeNullability.Equals(projected, target) {
+                return target
+            }
             if this.ProjectedResultMatchesDestination(collection, projected, out _) {
                 return projected
             }
             if this.ResolveValueSink(collection) is ILocalSymbol local && this.IsLocalDeclarationInitializer(
                 collection,
                 local
-            ) {
-                this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedLocalType[local] = projected
+            ) &&
+                this.InferredLocalAssignmentsMatch(local, collection, projected) {
                 return projected
             }
             if this.IsRejectableManagedReferenceProjection(collection, projected, target) {
@@ -4870,6 +4896,74 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             return target
+        }
+
+        private func GetCollectionProjectionElementType(
+            collection CollectionExpressionSyntax,
+            target INamedTypeSymbol
+        ) ITypeSymbol? {
+            let openTarget = target.OriginalDefinition
+            if (openTarget.TypeKind != TypeKind.Class && openTarget.TypeKind != TypeKind.Struct) ||
+                IsSpanParamsCollectionType(openTarget) ||
+                TryGetCollectionBuilder(openTarget, out _, out _) ||
+                openTarget
+                .GetAttributes().Any(
+                (attribute AttributeData) -> attribute.AttributeClass?.Name == "CollectionBuilderAttribute"
+            ) {
+                return GetCollectionTargetElementType(openTarget)
+            }
+            let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
+            let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
+            let candidates = List[IMethodSymbol]()
+            for var current INamedTypeSymbol? = openTarget; current != nil; current = current!!.BaseType {
+                for add in current.GetMembers("Add").OfType[IMethodSymbol]() {
+                    if !add.IsStatic &&
+                        !add.IsGenericMethod &&
+                        add
+                        .Parameters
+                        .Length == 1 &&
+                        this
+                        .context
+                        .Compilation
+                        .IsSymbolAccessibleWithin(add, within) &&
+                        !candidates
+                        .Any(
+                        (seen IMethodSymbol) -> SymbolEqualityComparer.Default.Equals(
+                            seen.Parameters[0].Type,
+                            add.Parameters[0].Type
+                        )
+                    ) {
+                        candidates.Add(add)
+                    }
+                }
+            }
+            if candidates.Count == 1 {
+                return candidates[0].Parameters[0].Type
+            }
+            return GetCollectionTargetElementType(openTarget)
+        }
+
+        private func GetProjectedSpreadElementType(spread SpreadElementSyntax) ITypeSymbol? {
+            var spreadElement ITypeSymbol? = this.GetMappedArrayElementType(spread.Expression)
+            if spreadElement == nil {
+                let projectedSpread ITypeSymbol? = this.GetManagedReferenceArrayProjectedArgumentType(
+                    spread.Expression
+                ) ??
+                    this.GetProjectedReceiverType(spread.Expression)
+                spreadElement = this.GetProjectedCollectionTargetElementType(projectedSpread)
+            }
+            if spreadElement != nil &&
+                !(spreadElement is IArrayTypeSymbol) &&
+                (
+                this.ArrayExpressionHasNullableElement(spread.Expression) || this.IsNullableArrayElementAccess(
+                    spread.Expression
+                )
+            ) {
+                spreadElement = spreadElement.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            }
+            return spreadElement
         }
 
         // Issue #1896: gsc has its OWN native range-index syntax
@@ -4888,7 +4982,7 @@ partial class CSharpToGSharpTranslator {
         private func GetProjectedCollectionTargetElementType(
             target ITypeSymbol?
         ) ITypeSymbol? -> if IsSpanParamsCollectionType(target) {
-            (cast[INamedTypeSymbol](target)).TypeArguments[0]
+            GetEffectiveTypeArgument(cast[INamedTypeSymbol](target), 0)
         } else {
             this.GetProjectedEnumerableElementType(target)
         }
@@ -4897,7 +4991,7 @@ partial class CSharpToGSharpTranslator {
             if type is INamedTypeSymbol named {
                 for candidate in this.GetReceiverTypeHierarchy(named) {
                     if IsEnumerableContract(candidate, asynchronous) {
-                        return candidate.TypeArguments[0]
+                        return GetEffectiveTypeArgument(candidate, 0)
                     }
                 }
             }
@@ -5286,11 +5380,11 @@ partial class CSharpToGSharpTranslator {
                     }
                     case named is INamedTypeSymbol {
                         if IsEnumerableContract(named, asynchronous) {
-                            return named.TypeArguments[0]
+                            return GetEffectiveTypeArgument(named, 0)
                         }
                         for iface in named.AllInterfaces {
                             if IsEnumerableContract(iface, asynchronous) {
-                                return iface.TypeArguments[0]
+                                return GetEffectiveTypeArgument(iface, 0)
                             }
                         }
                         return nil
