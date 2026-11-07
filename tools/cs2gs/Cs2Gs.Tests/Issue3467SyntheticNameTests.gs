@@ -435,9 +435,14 @@ public class StringBuilder
 {
 }
 
-public partial class C
+public class PrecedingOther
 {
     public string Make() => new System.Text.StringBuilder().Append("x").ToString();
+}
+
+public partial class C(System.Text.StringBuilder builder)
+{
+    public string Make() => builder.Append("x").ToString();
 }`), ("C.Lift.cs", `namespace Demo;
 
 public partial class C
@@ -448,6 +453,17 @@ public partial class C
         static int TextStringBuilder(int n) =>
             n == 0 ? 7 : Other<int>(n - 1);
         static int Other<T>(int n) => TextStringBuilder(n);
+    }
+}`), ("D.Lift.cs", `namespace Demo;
+
+public class D
+{
+    public int Run(int value)
+    {
+        return TextStringBuilder_2(value);
+        static int TextStringBuilder_2(int n) =>
+            n == 0 ? 9 : Other<int>(n - 1);
+        static int Other<T>(int n) => TextStringBuilder_2(n);
     }
 }`)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
@@ -463,18 +479,9 @@ public partial class C
             printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)))
         }
         let combined = string.Join(Environment.NewLine, printed)
-        let helper = if helperDocumentFirst {
-            "TextStringBuilder"
-        } else {
-            "TextStringBuilder_2"
-        }
-        let alias = if helperDocumentFirst {
-            "TextStringBuilder_2"
-        } else {
-            "TextStringBuilder"
-        }
-        Assert.Contains("func $helper(", combined, StringComparison.Ordinal)
-        Assert.Contains("import $alias = System.Text.StringBuilder", combined, StringComparison.Ordinal)
+        Assert.Contains("func TextStringBuilder(", combined, StringComparison.Ordinal)
+        Assert.Contains("func TextStringBuilder_2(", combined, StringComparison.Ordinal)
+        Assert.Contains("import TextStringBuilder_3 = System.Text.StringBuilder", combined, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed.ToArray())
     }
 

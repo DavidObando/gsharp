@@ -101,14 +101,16 @@ def main():
         Path(d, "r", "result-oahu.json").write_text('{"app": "oahu", "status": "gre')
         Path(d, "r", "result-code-exploder.json").write_text("[]")
         Path(d, "r", "result-gsharp-csharp.json").write_text('{"status": "green"}')
+        Path(d, "r", "result-corrupt.json").write_bytes(b"\x80\x81")
         loaded = {r["app"]: r for r in gate.load_results(Path(d, "r"))}
-        assert set(loaded) == {"oahu", "code-exploder", "gsharp-csharp"}, loaded
+        assert set(loaded) == {"oahu", "code-exploder", "gsharp-csharp", "corrupt"}, loaded
         assert all(r["status"] == "red" and r["fingerprint"] == "malformed-result" for r in loaded.values()), loaded
         assert "does not parse" in loaded["oahu"]["summary"] and "not a JSON object" in loaded["code-exploder"]["summary"]
+        assert "does not parse" in loaded["corrupt"]["summary"], loaded["corrupt"]
         summary = Path(d, "summary.md")
         assert gate.main(["--results", str(Path(d, "r")), "--banked", str(Path(d, "b.json")), "--ref", "main",
-                          "--dry-run", "--summary", str(summary), "--expect", "oahu,code-exploder,gsharp-csharp"]) == 1
-        assert summary.read_text().count("| red |") == 3, summary.read_text()
+                          "--dry-run", "--summary", str(summary), "--expect", "oahu,code-exploder,gsharp-csharp,corrupt"]) == 1
+        assert summary.read_text().count("| red |") == 4, summary.read_text()
 
     # A non-string text field (e.g. log_tail: null, which fingerprint() would
     # crash on) makes the result malformed at load time, and reporting it and

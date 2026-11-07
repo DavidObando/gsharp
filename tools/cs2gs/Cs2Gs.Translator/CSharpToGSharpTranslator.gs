@@ -423,6 +423,7 @@ partial class CSharpToGSharpTranslator {
             this.emitGeneratedImplementingParts,
             this.semanticOnlyAbstractTypes
         )
+        visitor.PreallocatePartialAggregates()
         let fileAttributes = if this.includeFileAttributes {
             visitor.MapFileAttributes(
                 root.AttributeLists.Where(
@@ -1625,7 +1626,10 @@ partial class CSharpToGSharpTranslator {
         private func CollectOwnedExtensions(compilation Compilation) OwnedExtensionRegistry {
             let result = OwnedExtensionRegistry(compilation.Assembly)
             let candidates = List[(Receiver INamedTypeSymbol?, Syntax MethodDeclarationSyntax, Method IMethodSymbol)]()
-            for tree in compilation.SyntaxTrees {
+            for tree in compilation.SyntaxTrees.OrderBy(
+                (tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath,
+                StringComparer.Ordinal
+            ) {
                 let model = compilation.GetSemanticModel(tree)
                 for methodDeclaration in tree.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax]() {
                     if model.GetDeclaredSymbol(methodDeclaration) is not IMethodSymbol method ||

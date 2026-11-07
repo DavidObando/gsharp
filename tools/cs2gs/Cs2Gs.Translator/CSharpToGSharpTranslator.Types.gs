@@ -1131,51 +1131,7 @@ partial class CSharpToGSharpTranslator {
         ] {
             let subject GExpression? = this.TranslateExpression(node.Expression)
             let cases = List[SwitchStatementCase]()
-            let sectionByLocalFunction = Dictionary[IMethodSymbol, SwitchSectionSyntax](SymbolEqualityComparer.Default)
-            let declarationByLocalFunction = Dictionary[IMethodSymbol, LocalFunctionStatementSyntax](
-                SymbolEqualityComparer.Default
-            )
-            let orderedBySection = Dictionary[
-                SwitchSectionSyntax,
-                IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]
-            ]()
-            for section in node.Sections {
-                orderedBySection.Add(section, this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span))
-                for localFunction in section.Statements.OfType[LocalFunctionStatementSyntax]() {
-                    using let modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree)
-                    if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol {
-                        sectionByLocalFunction[symbol] = section
-                        declarationByLocalFunction[symbol] = localFunction
-                    }
-                }
-            }
-            this.RegisterRecursiveLocalFunctionLifts(
-                node.Sections.SelectMany(
-                    func (section SwitchSectionSyntax) IEnumerable[
-                        Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
-                    ] {
-                        return section.Statements
-                    }
-                ),
-                (component IReadOnlyCollection[IMethodSymbol]) -> component
-                    .Select((symbol IMethodSymbol) -> sectionByLocalFunction[symbol])
-                    .Distinct()
-                    .Skip(1)
-                    .Any() ||
-                    component
-                    .Any(
-                    (symbol IMethodSymbol) -> this.IsLocalFunctionReferencedFromAnotherSwitchSection(
-                        symbol,
-                        declarationByLocalFunction[symbol]
-                    )
-                ),
-                processOnlyForcedGroups: true
-            )
-            for section in node.Sections {
-                let ordered = orderedBySection[section]
-                this.RegisterCapturingRecursiveLocalFunctions(ordered)
-                this.RegisterRecursiveLocalFunctionLifts(ordered)
-            }
+            let orderedBySection = this.RegisterSwitchLocalFunctionLifts(node)
             // Issue #1884: a `goto case K;` / `goto default;` anywhere in this
             // switch (but not in a nested switch, whose own gotos target its
             // own labels) needs a synthesized label at the top of the arm it

@@ -194,6 +194,53 @@ Console.WriteLine("ok")`
         }
     }
 
+    /// Issue #4798: named property and field arguments on a same-compilation
+    /// custom attribute compile, pass ILVerify, and round-trip through metadata.
+    @Fact
+    func SameCompilationNamedPropertyAndFieldArguments_CompileVerifyAndRoundTrip() {
+        const ProbeSource = `package P
+import System
+
+@AttributeUsage(AttributeTargets.Class | AttributeTargets.Parameter)
+class StampAttribute : Attribute {
+    var Code int32
+    prop Visible bool { get; set; }
+
+    init(label string, code int32) {
+        Code = code
+    }
+}
+
+class Node {
+}
+
+@Stamp("widget", int32(17), Visible = true, Code = int32(42))
+class Widget {
+}
+
+func (@Stamp("receiver", int32(17), Visible = true) node Node) Try() bool -> true
+
+Console.WriteLine("ok")`
+        let tempDir = Directory.CreateTempSubdirectory("gs_4798_named_").FullName
+        try {
+            let libPath = CompileCSharpLibrary(tempDir)
+            let appPath = Path.Combine(tempDir, "P.dll")
+            let log = Compile(tempDir, "App.gs", ProbeSource + "\n", appPath, "/target:exe", "/reference:" + libPath)
+            Assert.Empty(ErrorIds(log))
+            Assert.True(File.Exists(appPath), (`the sample must compile. Log:
+` + "$log"))
+            IlVerifier.Verify(appPath, []string{libPath})
+            Assert.Equal([]string{"StampAttribute"}, EmittedAttributeNames(appPath, libPath, "Widget"))
+            Assert.Equal([]object{"widget", 17}, ConstructorArguments(appPath, libPath, "Widget"))
+            Assert.Equal(
+                [](string, object?, bool){("Visible", true, false), ("Code", 42, true)},
+                NamedMemberArguments(appPath, libPath, "Widget")
+            )
+        } finally {
+            Directory.Delete(tempDir, recursive: true)
+        }
+    }
+
     /// Review feedback on PR #4137: an unprojectable parameter used to be
     /// recorded on ARITY alone, before applicability was settled, so it could
     /// outrank a constructor that projected fine and that the ARGUMENTS simply
@@ -1292,7 +1339,10 @@ class NoteAttribute(Text string) : Attribute {
                     ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true ||
                     candidate
                     .AttributeType
-                    .Name == "NoteAttribute"
+                    .Name == "NoteAttribute" ||
+                    candidate
+                    .AttributeType
+                    .Name == "StampAttribute"
             )
             // Projected to a name WHILE the context is alive: a reflection `Type`
             // read after the load context is disposed throws.
@@ -1304,6 +1354,30 @@ class NoteAttribute(Text string) : Attribute {
                 } else {
                     argument.Value
                 }
+            )
+                .ToArray()
+        }
+
+        private func NamedMemberArguments(assemblyPath string, libPath string, typeName string)[](
+            string,
+            object?,
+            bool
+        ) {
+            let paths = List[string](TrustedPlatformAssemblies()){assemblyPath, libPath}
+            using let context = MetadataLoadContext(PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)))
+            let assembly = context.LoadFromAssemblyPath(assemblyPath)
+            let target = assembly.GetTypes().Single((candidate Type) -> candidate.Name == typeName)
+            let attribute = target.GetCustomAttributesData().Single(
+                (candidate CustomAttributeData) -> candidate.AttributeType.Name == "StampAttribute"
+            )
+            return attribute
+                .NamedArguments
+                .Select(
+                (argument CustomAttributeNamedArgument) -> (
+                    argument.MemberName,
+                    argument.TypedValue.Value,
+                    argument.IsField
+                )
             )
                 .ToArray()
         }
@@ -1441,7 +1515,10 @@ class NoteAttribute(Text string) : Attribute {
                     ?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true ||
                     attribute
                     .AttributeType
-                    .Name == "NoteAttribute"
+                    .Name == "NoteAttribute" ||
+                    attribute
+                    .AttributeType
+                    .Name == "StampAttribute"
             )
                 .Select((attribute CustomAttributeData) -> attribute.AttributeType.Name)
                 .ToArray()
