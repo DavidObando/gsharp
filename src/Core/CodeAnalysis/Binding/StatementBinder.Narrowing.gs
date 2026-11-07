@@ -136,7 +136,8 @@ internal partial class StatementBinder {
         Aliases[]?VariableSymbol,
         JournalEntries[]?(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol),
         AppliedBinaryLeftsCount int32 = 0,
-        FullyAppliedCount int32 = 0
+        FullyAppliedCount int32 = 0,
+        NonNullByRef[]?VariableSymbol = nil
     ) { }
 
     internal func CaptureNarrowingBindSnapshot() NarrowingBindSnapshot {
@@ -155,13 +156,19 @@ internal partial class StatementBinder {
         } else {
             externalCallableAliases.ToArray()
         }
+        let nonNullByRef = if binderCtx.NonNullByRefVariables.Count == 0 {
+            default([]?VariableSymbol)
+        } else {
+            binderCtx.NonNullByRefVariables.ToArray()
+        }
         let journalEntries = conditionKillJournal?.ToArray()
         return NarrowingBindSnapshot(
             frames,
             aliases,
             journalEntries,
             appliedBinaryLeftsLog.Count,
-            fullyAppliedSubExpressionsLog.Count
+            fullyAppliedSubExpressionsLog.Count,
+            nonNullByRef
         )
     }
 
@@ -179,6 +186,10 @@ internal partial class StatementBinder {
         externalCallableAliases.Clear()
         if snapshot.Aliases != nil {
             externalCallableAliases.UnionWith(snapshot.Aliases)
+        }
+        binderCtx.NonNullByRefVariables.Clear()
+        if snapshot.NonNullByRef != nil {
+            binderCtx.NonNullByRefVariables.UnionWith(snapshot.NonNullByRef)
         }
         SyncExpressionCallableAliasesNow()
         if conditionKillJournal is {} journal && snapshot.JournalEntries is {} entries {
@@ -317,6 +328,13 @@ internal partial class StatementBinder {
             }
             SyncExpressionCallableAliasesNow()
         }
+        if binderCtx.NonNullByRefVariables.Count > 0 {
+            if other.NonNullByRef == nil {
+                binderCtx.NonNullByRefVariables.Clear()
+            } else {
+                binderCtx.NonNullByRefVariables.IntersectWith(other.NonNullByRef)
+            }
+        }
     }
 
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
@@ -438,6 +456,34 @@ internal partial class StatementBinder {
     ) {
         left.IntersectWith(right)
         RestoreExternalCallableAliases(left)
+    }
+
+    private func CaptureNonNullByRefVariables() HashSet[VariableSymbol] -> HashSet[VariableSymbol](
+        binderCtx.NonNullByRefVariables
+    )
+
+    private func RestoreNonNullByRefVariables(saved IReadOnlyCollection[VariableSymbol]) {
+        binderCtx.NonNullByRefVariables.Clear()
+        binderCtx.NonNullByRefVariables.UnionWith(saved)
+    }
+
+    private func RestoreJoinedNonNullByRefVariables(
+        left HashSet[VariableSymbol],
+        right IReadOnlyCollection[VariableSymbol],
+        leftCompletes bool = true,
+        rightCompletes bool = true
+    ) {
+        if leftCompletes && rightCompletes {
+            left.IntersectWith(right)
+            RestoreNonNullByRefVariables(left)
+        } else if leftCompletes {
+            RestoreNonNullByRefVariables(left)
+        } else if rightCompletes {
+            RestoreNonNullByRefVariables(right)
+        } else {
+            left.IntersectWith(right)
+            RestoreNonNullByRefVariables(left)
+        }
     }
 
     /// If [`statement`](paramref) is a call expression statement whose
@@ -688,6 +734,11 @@ internal partial class StatementBinder {
                     }
                 }
             }
+            for variable in binderCtx.NonNullByRefVariables {
+                if collector.AssignsRoot(variable) {
+                    anyRootAssigned = true
+                }
+            }
         } else {
             assignedRoots = HashSet[VariableSymbol]()
             for name in assignedNames {
@@ -773,8 +824,19 @@ internal partial class StatementBinder {
         }
         // Issue #4454: invalidate non-null by-ref local facts on any statement that
         // may write a nullable value to the local, while keeping a local passed only
-        // to a non-null `ref T` or `out T` parameter.
-        if binderCtx.NonNullByRefVariables.Count > 0 {
+        // to a non-null `ref T` or `out T` parameter. Compound statements without
+        // user gotos/labels already updated and joined `NonNullByRefVariables` per branch.
+        if binderCtx
+            .NonNullByRefVariables
+            .Count > 0 &&
+            !(
+            filterWrites == nil &&
+                boundStatement is BoundIfStatement or
+                BoundPatternSwitchStatement or
+                BoundTryStatement or
+                BoundBlockStatement &&
+                !ContainsUserGotoOrLabel(boundStatement)
+        ) {
             for variable in binderCtx.NonNullByRefVariables.ToArray() {
                 if boundStatement is BoundExpressionStatement callStmt &&
                     CallPreservesNonNullByRefVariable(callStmt.Expression, variable) &&
@@ -1099,6 +1161,9 @@ internal partial class StatementBinder {
     /// shallow (bounded by nesting depth), so this scan is cheap relative to a
     /// syntax subtree walk.
     private func HasAnyActiveNarrowings() bool {
+        if binderCtx.NonNullByRefVariables.Count > 0 {
+            return true
+        }
         for var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i-- {
             if binderCtx.NarrowedVariables[i].Count > 0 {
                 return true
@@ -5152,9 +5217,12 @@ internal partial class StatementBinder {
         bindRight(BoundExpression, Dictionary[AccessPath, TypeSymbol]?) -> BoundExpression
     )(Left BoundExpression, Right BoundExpression) {
         let aliasesBeforeLeft = CaptureExternalCallableAliases()
+        let nonNullByRefBeforeLeft = CaptureNonNullByRefVariables()
         let boundLeft = bindLeft()
         RestoreExternalCallableAliases(aliasesBeforeLeft)
+        RestoreNonNullByRefVariables(nonNullByRefBeforeLeft)
         ApplyTrailingConditionEffects(leftSyntax, boundLeft)
+        let nonNullByRefAfterLeft = CaptureNonNullByRefVariables()
         let (thenNarrow, elseNarrow, whenTrueAliases, whenFalseAliases) = ComputeConditionNarrowingInOrder(
             boundLeft,
             aliasesBeforeLeft,
@@ -5184,7 +5252,9 @@ internal partial class StatementBinder {
             }
             let boundRight = bindRight(boundLeft, rightFrame)
             RestoreExternalCallableAliases(rightAliases)
+            RestoreNonNullByRefVariables(nonNullByRefAfterLeft)
             ApplyTrailingConditionEffects(rightSyntax, boundRight)
+            let nonNullByRefAfterRight = CaptureNonNullByRefVariables()
             let (_, _, rightWhenTrueAliases, rightWhenFalseAliases) = ComputeConditionNarrowingInOrder(
                 boundRight,
                 rightAliases,
@@ -5196,11 +5266,13 @@ internal partial class StatementBinder {
             )
             let rightExitAliases = JoinAliases(rightWhenTrueAliases, rightWhenFalseAliases)
             RestoreJoinedExternalCallableAliases(skippedAliases, rightExitAliases)
+            RestoreJoinedNonNullByRefVariables(nonNullByRefAfterLeft, nonNullByRefAfterRight)
             completed = true
             return (boundLeft, boundRight)
         } finally {
             if !completed {
                 RestoreExternalCallableAliases(aliasesBeforeLeft)
+                RestoreNonNullByRefVariables(nonNullByRefBeforeLeft)
             }
         }
     }
@@ -5216,6 +5288,7 @@ internal partial class StatementBinder {
         let callableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
         lastConditionWhenTrueAliases = nil
         lastConditionWhenFalseAliases = nil
+        let nonNullByRefEntry = CaptureNonNullByRefVariables()
         let joinEntry = binderCtx.Narrowing
         let outerConditionKills = if !hasElse {
             conditionKillJournal
@@ -5224,6 +5297,7 @@ internal partial class StatementBinder {
         }
         RestoreExternalCallableAliases(callableWhenTrue)
         let whenTrue = bindWhenTrue()
+        let nonNullByRefThenExit = CaptureNonNullByRefVariables()
         let restoredConditionKills = if !hasElse {
             default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
         } else {
@@ -5231,6 +5305,7 @@ internal partial class StatementBinder {
         }
         let callableThenExit = CaptureExternalCallableAliases()
         RestoreExternalCallableAliases(callableWhenFalse)
+        RestoreNonNullByRefVariables(nonNullByRefEntry)
         let whenFalse = bindWhenFalse()
         if restoredConditionKills != nil {
             EndThenBranchConditionKills(restoredConditionKills)
@@ -5240,7 +5315,18 @@ internal partial class StatementBinder {
         } else {
             CaptureExternalCallableAliases()
         }
+        let nonNullByRefElseExit = if !hasElse {
+            nonNullByRefEntry
+        } else {
+            CaptureNonNullByRefVariables()
+        }
         RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+        RestoreJoinedNonNullByRefVariables(
+            nonNullByRefThenExit,
+            nonNullByRefElseExit,
+            whenTrue.Type != TypeSymbol.Never,
+            !hasElse || whenFalse.Type != TypeSymbol.Never
+        )
         return (whenTrue, whenFalse)
     }
 

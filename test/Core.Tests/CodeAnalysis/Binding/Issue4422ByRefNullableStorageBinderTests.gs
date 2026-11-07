@@ -737,6 +737,48 @@ let _ = Interlocked.Increment(in (c ? a : b))`)
         Assert.Contains("parameter 'location'", condDiag.Message, StringComparison.Ordinal)
     }
 
+    @Theory
+    @InlineData(`func Clear(ref s string?) bool { s = nil; return true }
+func Use(ok bool, ref s string) {}
+var s string? = "x"
+Use(Clear(&s), &s)`, "s")
+    @InlineData(`var flag = true
+var s string? = nil
+if flag {
+    OutS(&s)
+} else {
+    let _ = InS(&s)
+}`, "s")
+    @InlineData(`var flag = true
+var s string? = nil
+if flag {
+    OutS(&s)
+}
+let _ = InS(&s)`, "s")
+    func SubExpressionWriteAndConditionalOut_InvalidateOrIsolateNonNullByRefFact(body string, parameterName string) {
+        let result = EmittedOracle.Evaluate(Callees + "\n" + body)
+        let warning = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0612")
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity)
+        Assert.Contains("'" + parameterName + "'", warning.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func BothBranchesAssignNonNullOut_PreservesNonNullByRefFactAfterJoin() {
+        let result = EmittedOracle.Evaluate(Callees + `
+var flag = true
+var s string? = nil
+if flag {
+    OutS(&s)
+} else {
+    OutS(&s)
+}
+let n = InS(&s)
+Console.WriteLine(n)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("1", result.Output.Trim())
+    }
+
     shared {
         private const Callees string = `
 import System.Collections.Generic

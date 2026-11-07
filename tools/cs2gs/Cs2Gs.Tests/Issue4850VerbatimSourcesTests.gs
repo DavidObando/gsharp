@@ -301,12 +301,38 @@ class Issue4850VerbatimSourcesTests : IDisposable {
     }
 
     @Fact
-    func FileBasedDotnetRunHelper_IsVerbatim() {
+    func ConditionalImportOrImportGroup_PropagatesConditionToImportedRemoveAndInclude() {
+        this.Write(
+            "a/a.csproj",
+            "<Project Sdk=\"Microsoft.NET.Sdk\">" +
+                "<ItemGroup><None Include=\"Data.cs\" /></ItemGroup>" +
+                "<Import Project=\"../shared/remove.props\" Condition=\"'false' == 'true'\" />" +
+                "<ImportGroup Condition=\"'false' == 'true'\"><Import Project=\"../shared/include.props\" /></ImportGroup>" +
+                "</Project>"
+        )
+        this.Write("shared/remove.props", "<Project><ItemGroup><None Remove=\"Data.cs\" /></ItemGroup></Project>")
+        this.Write("shared/include.props", "<Project><ItemGroup><None Include=\"CondData.cs\" /></ItemGroup></Project>")
+        this.Write("a/Data.cs", "class D {}")
+        this.Write("a/CondData.cs", "class C {}")
+        let inv = this.Inventory()
+        let verbatim = RepositoryVerbatimSources.Compute(this.root, inv)
+        let copyAndTranslate = RepositoryVerbatimSources.ComputeCopyAndTranslate(this.root, inv)
+        Assert.Equal(
+            []string{"a/CondData.cs", "a/Data.cs"},
+            verbatim.OrderBy((p string) -> p, StringComparer.Ordinal).ToArray()
+        )
+        Assert.Equal([]string{"a/CondData.cs"}, copyAndTranslate.ToArray())
+    }
+
+    @Fact
+    func FileBasedDotnetRunHelper_IsVerbatim_WithoutMisclassifyingUnrelatedProgramCs() {
         this.Write(
             "build/test-selfhost-stage2.py",
-            "subprocess.run([\"dotnet\", \"run\", \"build/selfhost/PeBodyMutations.cs\"])\n"
+            "fixture = \"Program.cs\"\n" +
+                "subprocess.run([\"dotnet\", \"run\", str(REPO / \"build\" / \"selfhost\" / \"PeBodyMutations.cs\")])\n"
         )
         this.Write("build/selfhost/PeBodyMutations.cs", "class M {}")
+        this.Write("orphan/Program.cs", "class P {}")
         let verbatim = RepositoryVerbatimSources.Compute(this.root, this.Inventory())
         Assert.Equal([]string{"build/selfhost/PeBodyMutations.cs"}, verbatim.ToArray())
     }

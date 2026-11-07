@@ -38,6 +38,11 @@ internal shared class RepositoryVerbatimSources {
     ] { }
 
     private let ProjectExtensions[]string = []string{".csproj", ".gsproj", ".props", ".targets"}
+    private let DotnetRunInvocationRegex Regex = Regex(
+        "dotnet(?:\"\\s*,\\s*\"|'\\s*,\\s*'|\\s+)run\\b[^\\r\\n;\\]]*",
+        RegexOptions.CultureInvariant
+    )
+    private let QuotedPathSlashRegex Regex = Regex("(?:\"\\s*/\\s*\"|'\\s*/\\s*')", RegexOptions.CultureInvariant)
 
     /// Computes the `.cs` inventory entries copied verbatim.
     /// @param sourceRoot The repository source root.
@@ -97,8 +102,7 @@ internal shared class RepositoryVerbatimSources {
                     continue
                 }
                 for (normalized, original) in csharpFiles {
-                    let fileName = Path.GetFileName(normalized)
-                    if text.Contains(fileName, StringComparison.Ordinal) {
+                    if IsReferencedByDotnetRun(scriptPath, text, normalized) {
                         verbatim.Add(original)
                         unconditional.Add(original)
                     }
@@ -137,6 +141,7 @@ internal shared class RepositoryVerbatimSources {
                     dirProps.Document,
                     projectDirectory,
                     isGsharp,
+                    false,
                     sharedByPath,
                     visiting,
                     operations,
@@ -150,6 +155,7 @@ internal shared class RepositoryVerbatimSources {
                 projectDocument,
                 projectDirectory,
                 isGsharp,
+                false,
                 sharedByPath,
                 visiting,
                 operations,
@@ -167,6 +173,7 @@ internal shared class RepositoryVerbatimSources {
                     dirTargets.Document,
                     projectDirectory,
                     isGsharp,
+                    false,
                     sharedByPath,
                     visiting,
                     operations,
@@ -215,6 +222,7 @@ internal shared class RepositoryVerbatimSources {
         document XDocument,
         projectDirectory string,
         isGsharp bool,
+        inheritedConditional bool,
         sharedByPath Dictionary[string, (Original string, Document XDocument)],
         visiting HashSet[string],
         operations Dictionary[string, List[ItemOperation]],
@@ -231,6 +239,7 @@ internal shared class RepositoryVerbatimSources {
             for element in document.Root!!.Descendants() {
                 if element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase) {
                     let importAttr string? = element.Attribute(XName?("Project")!!)?.Value
+                    let importConditional = inheritedConditional || IsConditionalOrDynamic(element)
                     for importedPath in ResolveImportedPaths(
                         importAttr,
                         documentDirectory,
@@ -244,6 +253,7 @@ internal shared class RepositoryVerbatimSources {
                                 sharedDoc.Document,
                                 projectDirectory,
                                 isGsharp,
+                                importConditional,
                                 sharedByPath,
                                 visiting,
                                 operations,
@@ -269,7 +279,7 @@ internal shared class RepositoryVerbatimSources {
                 if !operations.TryGetValue(itemName, out var list) {
                     operations[itemName] = (list = List[ItemOperation]())
                 }
-                let conditional = IsConditionalOrDynamic(element)
+                let conditional = inheritedConditional || IsConditionalOrDynamic(element)
                 let remove string? = element.Attribute(XName?("Remove")!!)?.Value
                 if remove != nil && !conditional {
                     list.Add(
@@ -462,6 +472,52 @@ internal shared class RepositoryVerbatimSources {
             ".sh",
             StringComparison.OrdinalIgnoreCase
         )
+    }
+
+    private func IsReferencedByDotnetRun(scriptPath string, scriptText string, normalizedCsPath string) bool {
+        let scriptDirectory = DirectoryOf(scriptPath.Replace('\\', '/'))
+        let scriptRelative = if scriptDirectory.Length > 0 && normalizedCsPath.StartsWith(
+            scriptDirectory + "/",
+            StringComparison.OrdinalIgnoreCase
+        ) {
+            normalizedCsPath.Substring(scriptDirectory.Length + 1)
+        } else {
+            default(string?)
+        }
+        for match_ in DotnetRunInvocationRegex.Matches(scriptText) {
+            let normalizedInvocation = QuotedPathSlashRegex.Replace(match_.Value.Replace('\\', '/'), "/")
+            if ContainsBoundaryPath(normalizedInvocation, normalizedCsPath) ||
+                (
+                scriptRelative != nil && scriptRelative.Contains('/', StringComparison.Ordinal) &&
+                    ContainsBoundaryPath(normalizedInvocation, scriptRelative)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ContainsBoundaryPath(haystack string, needle string) bool {
+        var index = haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase)
+        while index >= 0 {
+            let beforeOk = index == 0 ||
+                haystack[index - 1] == '/' ||
+                haystack[index - 1] == '"' ||
+                haystack[index - 1] == '\'' ||
+                char.IsWhiteSpace(haystack[index - 1])
+            let end = index + needle.Length
+            let afterOk = end == haystack.Length ||
+                haystack[end] == '"' ||
+                haystack[end] == '\'' ||
+                haystack[end] == ',' ||
+                haystack[end] == ')' ||
+                char.IsWhiteSpace(haystack[end])
+            if beforeOk && afterOk {
+                return true
+            }
+            index = haystack.IndexOf(needle, index + 1, StringComparison.OrdinalIgnoreCase)
+        }
+        return false
     }
 
     private func Resolve(projectDirectory string, path string) string? {
