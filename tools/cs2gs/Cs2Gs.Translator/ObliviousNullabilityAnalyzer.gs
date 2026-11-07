@@ -4490,6 +4490,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             ) {
                 TaintTarget(coalesceAssign.Left, model, tainted)
             }
+            case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
+                // Coalescing a local is declaration evidence, including storage shared by ref aliases.
+                if ResolveAssignable(coalesce.Left, model) is ILocalSymbol local {
+                    tainted.Add(local)
+                }
+            }
             case isPattern is IsPatternExpressionSyntax when IsNullConstantPattern(isPattern.Pattern) {
                 TaintTarget(isPattern.Expression, model, tainted)
             }

@@ -118,6 +118,44 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CoalesceOnlyEvidence_PromotesBothSidesOfRefStorage(coalesceReferent bool) {
+        let read = if coalesceReferent {
+            "text"
+        } else {
+            "alias"
+        }
+        let source = `public static class Obj {
+    public static string Run() {
+        string text = "x";
+        ref string alias = ref text;
+        return ` + read + ` ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "x")
+        Assert.Contains("var text string? = \"x\"", printed)
+        Assert.Contains("let ref alias string? = text", printed)
+    }
+
+    @Fact
+    func CoalesceOnlyAliasEvidence_PromotesItsFieldStorage() {
+        const source = `public class Holder { public string Text = "x"; }
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref readonly string alias = ref holder.Text;
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "x")
+        Assert.Contains("var Text string?", printed)
+        Assert.Contains("let ref readonly alias string? = holder.Text", printed)
+    }
+
+    @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
     @InlineData("default(string)")
@@ -129,6 +167,16 @@ public static class Obj {
         IEnumerable<(string Text, int Code)> Missing() {
             yield return choose ? (` + value + `, 1) : ("x", 2);
         }
+        int count = 0;
+        foreach (var row in Missing()) {
+            count++;
+            if (choose) {
+                if (row.Text != null || row.Code != 1) { throw new System.InvalidOperationException("nested tuple"); }
+            } else {
+                if (row.Text != "x" || row.Code != 2) { throw new System.InvalidOperationException("nested tuple"); }
+            }
+        }
+        if (count != 1) { throw new System.InvalidOperationException("nested row count"); }
         if (choose) { yield break; }
         yield return ("keep", 2);
     }
