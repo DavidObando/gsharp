@@ -121,6 +121,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateIdentifierName(identifier IdentifierNameSyntax) GExpression? {
+            if identifier
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                this
+                .context
+                .GetSymbolInfo(identifier)
+                .Symbol is IMethodSymbol{MethodKind: MethodKind.Ordinary} method {
+                this.ReportMetadataRecordDeconstruction(method, identifier)
+                let emitted = this.EmittedName(method, method.Name)
+                if !method.IsStatic && emitted != method.Name {
+                    return MemberAccessExpression(ThisExpression(), emitted)
+                }
+            }
             if this.TryTranslateLiftedLocalFunctionReference(identifier, out var liftedReference) {
                 return liftedReference
             }

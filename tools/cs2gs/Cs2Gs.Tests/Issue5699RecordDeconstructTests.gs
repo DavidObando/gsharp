@@ -14,6 +14,160 @@ import Xunit
 
 class Issue5699RecordDeconstructTests {
     @Theory
+    @InlineData("extension")
+    @InlineData("extension foreach")
+    @InlineData("interface")
+    @InlineData("unqualified")
+    func MetadataContractsAndExtensions_ReportConsumerBridgeGaps(shape string) {
+        const producer = `
+namespace Producer {
+    public interface IParts { void Deconstruct(out int x, out int y); }
+    public record R : IParts {
+        public int X = 2, Y = 3;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`
+        let consumer = if shape == "unqualified" {
+            `
+namespace Consumer {
+    public record Child : Producer.R {
+        public delegate void Parts(out int x, out int y);
+        public Parts Save() => Deconstruct;
+    }
+}`
+        } else {
+            (`
+namespace Consumer {
+    public static class Extensions {
+        public static void Deconstruct(this Producer.R r, out int x, out int y, out int z) {
+            x = 70; y = 80; z = 90;
+        }
+    }
+    public static class Probe {
+        public static void Run() {
+            var r = new Producer.R();
+            STATEMENT
+        }
+    }
+}`).Replace(
+                "STATEMENT",
+                switch shape {
+                    case "extension": "var (x, y, z) = r;"
+                    case "extension foreach": "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
+                    default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y);"
+                }
+            )
+        }
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Producer.cs", producer)},
+            assemblyName: "Producer" + Guid.NewGuid().ToString("N")
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(project.Compilation.Emit(image).Success)
+        let input = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Consumer.cs", consumer)},
+            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(image.ToArray())).ToArray()
+        )
+        Assert.True(input.BoundWithoutErrors, string.Join("\n", input.ErrorDiagnostics))
+        using let oracle = MemoryStream()
+        Assert.True(input.Compilation.Emit(oracle).Success)
+        let document = Assert.Single(input.Documents)
+        let context = TranslationContext(
+            input.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{project.Compilation, input.Compilation}
+        )
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("migrated producer", gap.Message)
+        Assert.Equal("Consumer.cs", gap.Location!!.SourceTree!!.FilePath)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RenamedImplicitThisReferences_CannotBindShadowingDelegates(parameter bool) {
+        Verify((`
+namespace RecordDeconstruction {
+    public record R {
+        public delegate void Parts(out int x, out int y);
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+        public string Work(PARAMETER) {
+            LOCAL
+            Parts selected = Deconstruct;
+            selected(out var x, out var y);
+            Deconstruct(out var a, out var b);
+            return $"{x},{y},{a},{b}";
+        }
+    }
+    public static class Probe {
+        public static void Wrong(out int x, out int y) { x = -3; y = -4; }
+        public static string Run() => new R().Work(ARGUMENT);
+    }
+}`).Replace(
+                "PARAMETER",
+                if parameter {
+                    "Parts deconstruct"
+                } else {
+                    ""
+                }
+            ).Replace(
+                "LOCAL",
+                if parameter {
+                    ""
+                } else {
+                    "Parts deconstruct = Probe.Wrong;"
+                }
+            ).Replace(
+                "ARGUMENT",
+                if parameter {
+                    "Wrong"
+                } else {
+                    ""
+                }
+            ))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CachedPatterns_RetranslateWithStableDistinctScopeNames(duplicated bool) {
+        let record = ("Record.cs", `
+namespace RecordDeconstruction {
+    public record R {
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+    }
+}`)
+        let body = if duplicated {
+            `public static bool Test(R r, int kind) {
+                switch (kind) {
+                    case 0:
+                    case 1 when true: return r is R(0, _) or R(30, _);
+                    default: return false;
+                }
+            }
+            public static string Run() => Test(new R(), 0) + "," + Test(new R(), 1);`
+        } else {
+            `public static bool Test(R r) => r is R(0, _) or R(30, _);
+            public static string Run() => Test(new R()).ToString();`
+        }
+        Verify(
+            [](string, string){
+                record,
+                ("Consumer.cs", "namespace RecordDeconstruction { public static class Probe { " + body + " } }")
+            }
+        )
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func SeparateDocuments_ReuseTheCanonicalAdapterName(consumerFirst bool) {

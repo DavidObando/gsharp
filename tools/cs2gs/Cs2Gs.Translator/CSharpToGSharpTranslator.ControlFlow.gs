@@ -1420,7 +1420,7 @@ partial class CSharpToGSharpTranslator {
             }
             if !this.PatternReceiverCanBeDuplicated(isPattern!!.Expression, receiver) {
                 let spillName = if this.RecordPatternRunsUserCode(isPattern!!.Pattern) {
-                    this.AllocateSynthesizedLocalName("scrutinee", isPattern!!)
+                    this.AllocateRecordScopedLocalName("scrutinee", isPattern!!)
                 } else {
                     this.NewSpillName()
                 }

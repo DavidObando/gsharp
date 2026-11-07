@@ -13,6 +13,8 @@ import SystemObject = System.Object
 internal class LiftedLocalFunctionNameAllocator {
     private let gate object = SystemObject()
     private let assigned Dictionary[ISymbol, string] = Dictionary[ISymbol, string](SymbolEqualityComparer.Default)
+    private let scopedLocalNames Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string] =
+    Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string]()
     private let usedByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
         SymbolEqualityComparer.Default
     )
@@ -67,6 +69,18 @@ internal class LiftedLocalFunctionNameAllocator {
                 localNames.Add(designator)
             }
             return designator
+        }
+    }
+
+    func GetOrAllocateScopedLocalName(site SyntaxNode, ordinal int32, stem string, allocate() -> string) string {
+        lock this.gate {
+            let key = (site, ordinal, stem)
+            if this.scopedLocalNames.TryGetValue(key, out var existing) {
+                return existing
+            }
+            let name = allocate()
+            this.scopedLocalNames.Add(key, name)
+            return name
         }
     }
 

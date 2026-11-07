@@ -887,7 +887,7 @@ partial class CSharpToGSharpTranslator {
                             isPattern.Expression
                         ),
                         captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
-                            this.AllocateSynthesizedLocalName("scrutinee", isPattern)
+                            this.AllocateRecordScopedLocalName("scrutinee", isPattern)
                         } else {
                             nil
                         }
@@ -912,7 +912,7 @@ partial class CSharpToGSharpTranslator {
                             )
                         ),
                         captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
-                            this.AllocateSynthesizedLocalName("scrutinee", isPattern)
+                            this.AllocateRecordScopedLocalName("scrutinee", isPattern)
                         } else {
                             nil
                         }

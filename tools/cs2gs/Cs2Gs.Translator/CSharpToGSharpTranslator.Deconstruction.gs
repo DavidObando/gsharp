@@ -22,6 +22,8 @@ partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
         private let recordDeconstructionAdapterNames Dictionary[IMethodSymbol, string] =
         Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
+        private let recordScopedLocalOrdinals Dictionary[(Site SyntaxNode, Stem string), int32] =
+        Dictionary[(Site SyntaxNode, Stem string), int32]()
         private let recordPatternCaches Dictionary[
             SyntaxNode,
             List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
@@ -80,6 +82,23 @@ partial class CSharpToGSharpTranslator {
             }
             this.recordDeconstructionAdapterNames.Add(original, assignedName)
             return assignedName
+        }
+
+        private func AllocateRecordScopedLocalName(stem string, site SyntaxNode) string {
+            let key = (site, stem)
+            this.recordScopedLocalOrdinals.TryGetValue(key, out var ordinal)
+            this.recordScopedLocalOrdinals[key] = ordinal + 1
+            let name = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).GetOrAllocateScopedLocalName(
+                site,
+                ordinal,
+                stem,
+                () -> this.AllocateSynthesizedLocalName(stem, site)
+            )
+            let body = this.state.CurrentBodyScope ?? site.SyntaxTree.GetRoot()
+            if this.state.SynthesizedLocalOccupiedNamesByBody.TryGetValue(body, out var occupied) {
+                occupied.Add(name)
+            }
+            return name
         }
 
         private func BeginRecordPatternDecision(owner SyntaxNode) {
@@ -280,20 +299,55 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ReportMetadataRecordDeconstruction(method IMethodSymbol?, site SyntaxNode) {
-            if method == nil || method.Name != "Deconstruct" || !method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+            if method == nil || method.Name != "Deconstruct" {
                 return
             }
-            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
-            if compilations != nil &&
-                ObliviousNullabilityAnalyzer
-                .RunSourceDeclarations(method.OriginalDefinition, compilations)
-                .OfType[IMethodSymbol]()
-                .Any(EmittedNameAllocator.IsUserRecordDeconstruct) {
+            var needsBridge = this.MetadataProducerRenamesMethod(method)
+            let extension = method.ReducedFrom ?? method
+            if !needsBridge && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
+                let receiver = (
+                    if method.ReducedFrom != nil {
+                        method.ReceiverType
+                    } else {
+                        extension.Parameters[0].Type
+                    }
+                ) as INamedTypeSymbol
+                if receiver != nil {
+                    needsBridge = ReceiverTypeHierarchy(receiver).SelectMany(
+                        (owner INamedTypeSymbol) -> owner.GetMembers("Deconstruct").OfType[IMethodSymbol]()
+                    )
+                        .Any(this.MetadataProducerRenamesMethod)
+                }
+            }
+            if needsBridge {
                 this.context.ReportUnsupported(
                     site,
                     "metadata consumers of a migrated producer's record Deconstruct need an adapter bridge."
                 )
             }
+        }
+
+        private func MetadataProducerRenamesMethod(method IMethodSymbol) bool {
+            if !method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                return false
+            }
+            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            if compilations == nil {
+                return false
+            }
+            for source in ObliviousNullabilityAnalyzer.RunSourceDeclarations(method.OriginalDefinition, compilations)
+                .OfType[IMethodSymbol]() {
+                let producer = compilations.FirstOrDefault(
+                    (compilation Compilation) -> compilation
+                        .Assembly
+                        .Identity
+                        .Equals(source.ContainingAssembly.Identity)
+                )
+                if producer != nil && EmittedNameAllocator.For(producer).GetName(source) != method.Name {
+                    return true
+                }
+            }
+            return false
         }
 
         private func DeconstructionOutputType(
@@ -440,6 +494,10 @@ partial class CSharpToGSharpTranslator {
             let BuildTest = func (tuple GExpression) GExpression {
                 var test GExpression = LiteralExpression.Bool(true)
                 for var i = 0; i < subpatterns.Count; i++ {
+                    if subpatterns[i].Pattern is DiscardPatternSyntax or
+                        VarPatternSyntax{Designation: DiscardDesignationSyntax} {
+                        continue
+                    }
                     let member GExpression = if subpatterns.Count == 1 {
                         tuple
                     } else {
@@ -469,8 +527,8 @@ partial class CSharpToGSharpTranslator {
                     SymbolEqualityComparer.Default.Equals(entry.Method, method)
                 )
                 if cache.Method == nil {
-                    let flag = this.AllocateSynthesizedLocalName("deconstructed", recursive)
-                    let values = this.AllocateSynthesizedLocalName("components", recursive)
+                    let flag = this.AllocateRecordScopedLocalName("deconstructed", recursive)
+                    let values = this.AllocateRecordScopedLocalName("components", recursive)
                     cache = (method, flag, values, resultType)
                     caches.Add(cache)
                     if owner is IsPatternExpressionSyntax {
@@ -503,7 +561,11 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if !subpatterns.Any((subpattern SubpatternSyntax) -> PatternIntroducesBinding(subpattern.Pattern)) {
-                return this.BindPatternMemberOnce(call, BuildTest)
+                return this.BindPatternMemberOnce(
+                    call,
+                    BuildTest,
+                    this.AllocateRecordScopedLocalName("components", recursive)
+                )
             }
             if declarations == nil {
                 this.context.ReportUnsupported(
@@ -599,7 +661,7 @@ partial class CSharpToGSharpTranslator {
             let designator = if recursive.Designation is SingleVariableDesignationSyntax variable {
                 this.EmittedName(variable, variable.Identifier)!!
             } else {
-                this.AllocateSynthesizedLocalName("record", recursive)
+                this.AllocateRecordScopedLocalName("record", recursive)
             }
             usedDesignators?.Add(designator)
             this.AddTypedSubpatternGuard(
