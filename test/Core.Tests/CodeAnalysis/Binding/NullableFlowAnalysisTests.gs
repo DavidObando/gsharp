@@ -560,6 +560,192 @@ p.Run()
         Assert.Equal(10, result.Value)
     }
 
+    // Issue #5830: a write to the same field through another reference (or an
+    // expression receiver, multi-assignment, or loop back-edge) must invalidate
+    // a [MemberNotNull] or [MemberNotNullWhen] narrowing on the bare field.
+    @Theory
+    @InlineData("this.EnsureInit()\n        other._name = nil")
+    @InlineData("EnsureInit()\n        other._name = nil")
+    @InlineData("this.EnsureInit()\n        GetBox(other)._name = nil")
+    @InlineData("this.EnsureInit()\n        other._name, _ = nil, 0")
+    @InlineData("this.EnsureInit()\n        other.Clear()")
+    func MemberNotNull_AfterHelperCall_FieldInvalidatedByOtherReceiverAssignment(writeStmt string) {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+class Box {
+    var _name string?
+
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+
+    func Clear() {
+        _name = nil
+    }
+
+    func GetBox(b Box) Box -> b
+
+    func Run(other Box) int32 {
+        ` + writeStmt + `
+        return _name.Length
+    }
+}
+
+let b = Box{}
+b.Run(b)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Contains("Length", diagnostic.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func MemberNotNull_AfterHelperCall_UnrelatedFieldWriteOnOtherReceiver_PreservesNarrowing() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+class Box {
+    var _name string?
+    var _count int32
+
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+
+    func Run(other Box) int32 {
+        this.EnsureInit()
+        other._count = 42
+        return _name.Length + other._count
+    }
+}
+
+let b = Box{}
+b.Run(b)
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(47, result.Value)
+    }
+
+    @Fact
+    func MemberNotNullWhen_ThenArm_FieldInvalidatedByOtherReceiverAssignment() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+class Box {
+    var _name string?
+
+    @MemberNotNullWhen(true, "_name")
+    func TryGet() bool {
+        return _name != nil
+    }
+
+    func Run(other Box) int32 {
+        if this.TryGet() {
+            other._name = nil
+            return _name.Length
+        }
+        return 0
+    }
+}
+
+let b = Box{}
+b.Run(b)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+    }
+
+    @Fact
+    func MemberNotNull_OnNonThisReceiver_DoesNotNarrowBareField() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+class Box {
+    var _name string?
+
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+
+    func Run(other Box) int32 {
+        other.EnsureInit()
+        return _name.Length
+    }
+}
+
+let b = Box{}
+b.Run(Box{})
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+    }
+
+    @Fact
+    func MemberNotNull_LoopMultiAssignmentToOtherReceiver_InvalidatesNarrowing() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+class Box {
+    var _name string?
+
+    @MemberNotNull("_name")
+    func EnsureInit() {
+        _name = "hello"
+    }
+
+    func Run(other Box) int32 {
+        this.EnsureInit()
+        var total = 0
+        for var i = 0; i < 2; i++ {
+            total = total + _name.Length
+            other._name, _ = nil, 0
+        }
+        return total
+    }
+}
+
+let b = Box{}
+b.Run(b)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+    }
+
+    @Fact
+    func MemberNotNull_GenericReceiverConstructedOtherWrite_InvalidatesBareFieldNarrowing() {
+        let result = Evaluate(`
+import System.Diagnostics.CodeAnalysis
+
+open class Base {
+    var Value int32 = 5
+}
+
+class Box[T Base] {
+    var Field T?
+
+    @MemberNotNull("Field")
+    func EnsureInit(seed T) {
+        Field = seed
+    }
+
+    func Run(seed T, other Box[Base]) int32 {
+        this.EnsureInit(seed)
+        other.Field = nil
+        return Field.Value
+    }
+}
+
+let b = Box[Base]{}
+b.Run(Base{}, b)
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

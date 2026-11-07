@@ -151,6 +151,12 @@ shared class SymbolDisplay {
             case field is FieldSymbol {
                 AppendField(builder, format, field)
             }
+            case importedFunction is ImportedFunctionSymbol {
+                AppendClrMethod(builder, format, importedFunction.Method, importedFunction.Type)
+            }
+            case importedClass is ImportedClassSymbol {
+                return ToDisplayParts(importedClass.ClassType, format)
+            }
             case import_ is ImportSymbol {
                 AppendImport(builder, import_)
             }
@@ -520,7 +526,12 @@ shared class SymbolDisplay {
         builder.Type(FormatClrTypeName(event.EventHandlerType, format.QualifyNames))
     }
 
-    private func AppendClrMethod(builder PartBuilder, format SymbolDisplayFormat, method MethodInfo) {
+    private func AppendClrMethod(
+        builder PartBuilder,
+        format SymbolDisplayFormat,
+        method MethodInfo,
+        returnTypeOverride TypeSymbol? = nil
+    ) {
         // ADR-0023 parity: a CLR method compiled from `async`/`await` exposes a
         // `Task[R]` (or `ValueTask[R]`) return in metadata, but G# renders async
         // functions as `async func ... R` with the awaited result type. Mirror
@@ -553,6 +564,26 @@ shared class SymbolDisplay {
             builder.Type(FormatClrTypeName(parameters[i].ParameterType, format.QualifyNames))
         }
         builder.Punctuation(")")
+        if returnTypeOverride != nil &&
+            (
+            TypeSymbol.RequiresSymbolicProjection(returnTypeOverride) || TypeSymbol.ContainsSameCompilationUserType(
+                returnTypeOverride
+            )
+        ) {
+            let symbolicReturn = if isAsync && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+                returnTypeOverride,
+                out var awaitedReturn
+            ) {
+                awaitedReturn!!
+            } else {
+                returnTypeOverride
+            }
+            if !IsVoid(symbolicReturn) {
+                builder.Space()
+                builder.Type(FormatType(symbolicReturn))
+            }
+            return
+        }
         let returnType = if isAsync {
             UnwrapTaskReturnType(method.ReturnType)
         } else {
@@ -668,7 +699,7 @@ shared class SymbolDisplay {
                     return "[]?${FormatType(nullableImportedElement)}"
                 }
                 let underlying = FormatType(nullable.UnderlyingType)
-                return if nullable.UnderlyingType is FunctionTypeSymbol {
+                return if nullable.UnderlyingType is FunctionTypeSymbol or FunctionPointerTypeSymbol {
                     "($underlying)?"
                 } else {
                     "$underlying?"

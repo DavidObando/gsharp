@@ -6977,7 +6977,6 @@ public class Probe {
         Assert.Empty(context.Diagnostics)
         Assert.Contains("rest[0]!!.Borrow()", text, StringComparison.Ordinal)
         Assert.Contains("buffer[1..][0]!!.Borrow()", text, StringComparison.Ordinal)
-        Assert.Contains("buffer[..][0]!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
@@ -6985,6 +6984,8 @@ public class Probe {
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
         Assert.Equal(64, result.Value)
+        Assert.Contains("__spill0 = buffer[..][0]", text, StringComparison.Ordinal)
+        Assert.Contains("__spill0!!.Borrow()", text, StringComparison.Ordinal)
     }
 
     @Theory
@@ -8077,6 +8078,525 @@ public class ConsumerProbe {
             StringComparison.Ordinal
         )
         Assert.Contains("open class OutVarFixedDerived : Base[managed[int32]]", text, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func NestedDeconstructedForEachProjectsManagedReferenceTupleLeaves() {
+        const source = `using Gsharp.Values;
+namespace ManagedNestedTupleForEachTranslation;
+public class Probe {
+    public static int Run() {
+        int[] values = { 40 };
+        var pairs = new (int Head, (ManagedRef<int> Reference, int Tail))[1];
+        pairs[0] = (2, (ManagedRef<int>.FromArray(values, 0), 0));
+        foreach (var (head, (reference, _)) in pairs) {
+            return head + reference.Borrow();
+        }
+        return 0;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedNestedTupleForEach.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.Contains("for (head, referenceTuple) in pairs", text, StringComparison.Ordinal)
+        Assert.Contains("let (reference, _) = referenceTuple", text, StringComparison.Ordinal)
+        Assert.Contains("reference!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func ConstructibleCollectionSpreadProjectsThroughAddAndSpanElements() {
+        const source = `using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using Gsharp.Values;
+namespace ManagedArrayConstructibleSpreadProjection;
+public sealed class Bag<T> : IEnumerable<T> {
+    private readonly List<T> items = new();
+    public void Add(T item) => this.items.Add(item);
+    public T First => this.items[0];
+    public IEnumerator<T> GetEnumerator() => this.items.GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+public sealed class TaggedBag<T, TTag> : IEnumerable<TTag> {
+    private readonly List<T> items = new();
+    public void Add(T item) => this.items.Add(item);
+    public T First => this.items[0];
+    public bool HasObjectElement => typeof(T) == typeof(object);
+    public bool HasObjectTag => typeof(TTag) == typeof(object);
+    public IEnumerator<TTag> GetEnumerator() {
+        yield break;
+    }
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+[CollectionBuilder(typeof(BucketBuilder), nameof(BucketBuilder.Create))]
+public readonly struct Bucket<T> : IEnumerable<T> {
+    public readonly T First;
+    public Bucket(T first) => this.First = first;
+    public void Add(long ignored) { }
+    public IEnumerator<T> GetEnumerator() {
+        yield return this.First;
+    }
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+public static class BucketBuilder {
+    public static Bucket<T> Create<T>(ReadOnlySpan<T> items) => new Bucket<T>(items[0]);
+}
+public class Probe {
+    private static ReadOnlySpan<T> AsSpan<T>(T[] items) => items;
+
+    public static int Run() {
+        int[] intValues = { 42 };
+        var source = new ManagedRef<int>[1];
+        Bag<ManagedRef<int>> fromArray = [.. source];
+        var span = AsSpan(source);
+        Bag<ManagedRef<int>> fromSpan = [.. span];
+        TaggedBag<ManagedRef<int>, object> tagged = [source[0]];
+        TaggedBag<object, object> objectBag = [.. source];
+        Bucket<int> intBucket = [.. intValues];
+        return fromArray.First == null
+            && fromSpan.First == null
+            && tagged.First == null
+            && tagged.HasObjectTag
+            && objectBag.First == null
+            && objectBag.HasObjectElement
+            ? intBucket.First
+            : 0;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayConstructibleSpreadProjection.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+        )
+        Assert.True(text.Contains("Bag[managed[int32]?]", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("TaggedBag[managed[int32]?, object]", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("TaggedBag[object, object]", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("BucketBuilder.Create[int32]([]int32{...intValues})", StringComparison.Ordinal), text)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
+
+        const taggedSpreadSource = `using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using Gsharp.Values;
+namespace ManagedArrayConstructibleTaggedSpread;
+public sealed class TaggedBag<T, TTag> : IEnumerable<TTag> {
+    private readonly List<T> items = new();
+    public void Add(T item) => this.items.Add(item);
+    public IEnumerator<TTag> GetEnumerator() {
+        yield break;
+    }
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+[CollectionBuilder(typeof(BucketBuilder), nameof(BucketBuilder.Create))]
+public readonly struct Bucket<T> : IEnumerable<T> {
+    public void Add(long ignored) { }
+    public IEnumerator<T> GetEnumerator() {
+        yield break;
+    }
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+public static class BucketBuilder {
+    public static Bucket<T> Create<T>(ReadOnlySpan<T> items) => default;
+}
+public class Probe {
+    public static void Run() {
+        var source = new ManagedRef<int>[1];
+        TaggedBag<ManagedRef<int>, object> tagged = [.. source];
+        Bucket<ManagedRef<int>> refBucket = [.. source];
+    }
+}`
+        let taggedSpreadProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayConstructibleTaggedSpread.cs", taggedSpreadSource)},
+            references
+        )
+        Assert.True(
+            taggedSpreadProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, taggedSpreadProject.ErrorDiagnostics)
+        )
+        let taggedSpreadDocument = Assert.Single(taggedSpreadProject.Documents)
+        let taggedSpreadContext = TranslationContext(
+            taggedSpreadProject.Compilation,
+            taggedSpreadDocument.SemanticModel,
+            taggedSpreadDocument.FilePath
+        )
+        let taggedSpreadText = GSharpPrinter.Print(
+            CSharpToGSharpTranslator().TranslateDocument(taggedSpreadDocument, taggedSpreadContext)
+        )
+        Assert.DoesNotContain(
+            taggedSpreadContext.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+        )
+        Assert.True(
+            taggedSpreadText.Contains(
+                "let tagged TaggedBag[managed[int32]?, object] = TaggedBag[managed[int32]?, object](){ ...source }",
+                StringComparison.Ordinal
+            ),
+            taggedSpreadText
+        )
+        Assert.True(
+            taggedSpreadText.Contains(
+                "BucketBuilder.Create[managed[int32]?]([]managed[int32]?{...source})",
+                StringComparison.Ordinal
+            ),
+            taggedSpreadText
+        )
+
+        const conflictingAssignmentSource = `using System.Collections;
+using System.Collections.Generic;
+using Gsharp.Values;
+namespace ManagedArrayConstructibleSpreadConflict;
+public sealed class Bag<T> : IEnumerable<T> {
+    private readonly List<T> items = new();
+    public void Add(T item) => this.items.Add(item);
+    public IEnumerator<T> GetEnumerator() => this.items.GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
+}
+public class Probe {
+    public static void Run() {
+        var source = new ManagedRef<int>[1];
+        Bag<ManagedRef<int>> bag = [.. source];
+        bag = new Bag<ManagedRef<int>>();
+    }
+}`
+        let conflictProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayConstructibleSpreadConflict.cs", conflictingAssignmentSource)},
+            references
+        )
+        Assert.True(
+            conflictProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, conflictProject.ErrorDiagnostics)
+        )
+        let conflictDocument = Assert.Single(conflictProject.Documents)
+        let conflictContext = TranslationContext(
+            conflictProject.Compilation,
+            conflictDocument.SemanticModel,
+            conflictDocument.FilePath
+        )
+        CSharpToGSharpTranslator().TranslateDocument(conflictDocument, conflictContext)
+        Assert.Contains(
+            conflictContext.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+        )
+    }
+
+    @Fact
+    func ExtensionGetEnumeratorForEachProjectsManagedReferenceCurrent() {
+        const source = `using System.Collections.Generic;
+using System.Threading.Tasks;
+using Gsharp.Values;
+namespace ManagedArrayExtensionForEach;
+public sealed class Sequence<T> {
+    public readonly T First;
+    public Sequence(T[] items) => this.First = items[0];
+}
+public struct SequenceEnumerator<T> {
+    private readonly T item;
+    private bool moved;
+    public SequenceEnumerator(T item) {
+        this.item = item;
+        this.moved = false;
+    }
+    public T Current => this.item;
+    public bool MoveNext() {
+        if (this.moved) {
+            return false;
+        }
+        this.moved = true;
+        return true;
+    }
+}
+public static class SequenceExtensions {
+    public static SequenceEnumerator<T> GetEnumerator<T>(this Sequence<T> sequence) =>
+        new SequenceEnumerator<T>(sequence.First);
+
+    public static async IAsyncEnumerator<T> GetAsyncEnumerator<T>(this Sequence<T> sequence) {
+        await Task.Yield();
+        yield return sequence.First;
+    }
+}
+public class Probe {
+    private static Sequence<T> Wrap<T>(T[] items) => new Sequence<T>(items);
+
+    public static async Task<int> Run() {
+        int[] values = { 42 };
+        var source = new ManagedRef<int>[1];
+        source[0] = ManagedRef<int>.FromArray(values, 0);
+        int total = 0;
+        foreach (var item in Wrap(source)) {
+            total += item.Borrow();
+        }
+        await foreach (var asyncItem in Wrap(source)) {
+            total += asyncItem.Borrow();
+        }
+        return total;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayExtensionForEach.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+        )
+        Assert.True(text.Contains("item!!.Borrow()", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("asyncItem!!.Borrow()", StringComparison.Ordinal), text)
+    }
+
+    @Fact
+    func SwitchPositionalRecordAndDeconstructBindersProjectManagedReferences() {
+        const source = `#nullable enable
+using Gsharp.Values;
+namespace ManagedArraySwitchPositionalRecordAndDeconstruct;
+public sealed record Holder<T>(T First, int Second);
+public sealed record NullableHolder<T>(T? First, int Second);
+public sealed class PairBox<T> {
+    public T First { get; }
+    public int Second { get; }
+    public PairBox(T[] items, int second) {
+        this.First = items[0];
+        this.Second = second;
+    }
+    public void Deconstruct(out T first, out int second) {
+        first = this.First;
+        second = this.Second;
+    }
+}
+public class Probe {
+    private static Holder<T> Wrap<T>(T first, int second) => new Holder<T>(first, second);
+
+    public static int Run() {
+        int[] values = { 20, 12, 10 };
+        var firstSource = new ManagedRef<int>[1];
+        firstSource[0] = ManagedRef<int>.FromArray(values, 0);
+        var secondSource = new ManagedRef<int>[1];
+        secondSource[0] = ManagedRef<int>.FromArray(values, 1);
+        var holder = Wrap(firstSource[0], 1);
+        var box = new PairBox<ManagedRef<int>>(secondSource, 2);
+        var nullableHolder = new NullableHolder<ManagedRef<int>>(
+            ManagedRef<int>.FromArray(values, 2),
+            3);
+        int fromRecord = holder switch {
+            (var recordItem, _) => recordItem.Borrow(),
+        };
+        int fromDeconstruct = 0;
+        switch (box) {
+            case (var boxItem, _):
+                fromDeconstruct = boxItem.Borrow();
+                break;
+        }
+        int fromNullableSlot = nullableHolder switch {
+            (var nullableItem, _) => nullableItem!.Borrow(),
+        };
+        return fromRecord + fromDeconstruct + fromNullableSlot;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArraySwitchPositionalRecordAndDeconstruct.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.Contains("recordItem!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("boxItem!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("nullableItem!!.Borrow()", text, StringComparison.Ordinal)
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
+    }
+
+    @Fact
+    func ExpressionTreeQueryProviderProjectsRangeVariableElementType() {
+        const source = `using System;
+using System.Linq.Expressions;
+using Gsharp.Values;
+namespace ManagedArrayExpressionTreeQuery;
+public sealed class QuerySource<T, TTag> {
+    private readonly T item;
+    public QuerySource(T[] items) => this.item = items[0];
+    public TResult Select<TResult>(Expression<Func<T, TResult>> selector) =>
+        selector.Compile()(this.item);
+}
+public sealed class TaggedQuery<TTag, T> {
+    public readonly TTag Tag;
+    private readonly T item;
+    public TaggedQuery(TTag tag, T[] items) {
+        this.Tag = tag;
+        this.item = items[0];
+    }
+}
+public static class DelegateQueryExtensions {
+    public static TResult Select<T, TResult>(
+        this Func<int, T> source,
+        Expression<Func<T, TResult>> selector) =>
+        selector.Compile()(source(0));
+
+    public static TResult Select<TTag, T, TResult>(
+        this TaggedQuery<TTag, T> source,
+        Expression<Func<TTag, TResult>> selector) =>
+        selector.Compile()(source.Tag);
+}
+public class Probe {
+    private static int Read(ManagedRef<int> reference) => reference.Borrow();
+    private static Func<int, T> WrapDelegate<T>(T[] items) => index => items[index];
+
+    public static int Run() {
+        int[] values = { 42 };
+        var source = new ManagedRef<int>[1];
+        source[0] = ManagedRef<int>.FromArray(values, 0);
+        var query = new QuerySource<ManagedRef<int>, int>(source);
+        var delegateQuery = WrapDelegate(source);
+        var taggedQuery = new TaggedQuery<int, ManagedRef<int>>(5, source);
+        return (from item in query select Read(item))
+            + (from delegateItem in delegateQuery select Read(delegateItem))
+            + (from tagItem in taggedQuery select tagItem);
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayExpressionTreeQuery.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity != TranslationSeverity.Info
+        )
+        Assert.True(text.Contains("(item managed[int32]?) -> Read(item!!)", StringComparison.Ordinal), text)
+        Assert.True(
+            text.Contains("(delegateItem managed[int32]?) -> Read(delegateItem!!)", StringComparison.Ordinal),
+            text
+        )
+        Assert.True(text.Contains("(tagItem int32) -> tagItem", StringComparison.Ordinal), text)
+    }
+
+    @Fact
+    func ForEachAndQueryReferenceConversionPreservesNestedProjectedHierarchy() {
+        const source = `#nullable enable
+using System.Collections.Generic;
+using System.Linq;
+using Gsharp.Values;
+namespace ManagedArrayReferenceConversionNestedProjection;
+public interface IBox<out T> {
+}
+public interface IValueBox<out T> : IBox<T> {
+    T Value { get; }
+}
+public class BaseBox<T> : IBox<BaseBox<T>>, IValueBox<T> {
+    public T Value { get; }
+    public BaseBox(T[] items) => this.Value = items[0];
+}
+public sealed class Box<T> : BaseBox<T> {
+    public Box(T[] items) : base(items) { }
+}
+public class Probe {
+    private static List<Box<T>> WrapBoxes<T>(T[] items) => new List<Box<T>> { new Box<T>(items) };
+
+    public static int Run() {
+        int[] values = { 20, 22 };
+        var firstSource = new ManagedRef<int>[1];
+        firstSource[0] = ManagedRef<int>.FromArray(values, 0);
+        var secondSource = new ManagedRef<int>[1];
+        secondSource[0] = ManagedRef<int>.FromArray(values, 1);
+        var boxes = WrapBoxes(firstSource);
+        var secondBoxes = WrapBoxes(secondSource);
+        int sum = 0;
+        foreach (IValueBox<ManagedRef<int>> box in boxes) {
+            sum += box.Value.Borrow();
+        }
+        foreach (IBox<ManagedRef<int>> marker in boxes) {
+            sum += marker.GetHashCode() >= int.MinValue ? 0 : 1;
+        }
+        foreach (IBox<object> objBox in boxes) {
+            sum += objBox.GetHashCode() >= int.MinValue ? 0 : 1;
+        }
+        sum += (from BaseBox<ManagedRef<int>> box in secondBoxes
+                select box.Value.Borrow()).Single();
+        return sum;
+    }
+}`
+        let references = List[MetadataReference](
+            CSharpProjectLoader.RuntimeReferences()
+        ){MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location)}
+        let project = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayReferenceConversionNestedProjection.cs", source)},
+            references
+        )
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Empty(context.Diagnostics)
+        Assert.True(text.Contains("for box IValueBox[managed[int32]?] in boxes", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("for marker IBox[managed[int32]?] in boxes", StringComparison.Ordinal), text)
+        Assert.True(text.Contains("for objBox IBox[object] in boxes", StringComparison.Ordinal), text)
+        Assert.True(
+            text.Contains("(box BaseBox[managed[int32]?]) -> box.Value!!.Borrow()", StringComparison.Ordinal),
+            text
+        )
+        let result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Null(result.UnhandledException)
+        Assert.Equal(42, result.Value)
     }
 
     shared {

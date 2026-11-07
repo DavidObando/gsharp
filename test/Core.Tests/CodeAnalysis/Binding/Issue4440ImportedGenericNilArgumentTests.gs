@@ -281,6 +281,34 @@ InSink.Take[string?](nil)`, resolver))
         )
     }
 
+    // Issue #4690: a nullable `T?` expression in a non-nullable collection
+    // initializer (`List[string]{ Branch("x") }`, `Dictionary[string, string]{ "k": Branch("x") }`)
+    // must report GS0155, while `List[string?]{ Branch("x") }` remains accepted.
+    @Theory
+    @InlineData("List[string]{ Branch(\"x\") }")
+    @InlineData("List[string](){ Branch(\"x\") }")
+    @InlineData("HashSet[string]{ Branch(\"x\") }")
+    @InlineData("Dictionary[string, string]{ \"k\": Branch(\"x\") }")
+    @InlineData("Dictionary[string, string]{ Branch(\"k\"): \"v\" }")
+    func Issue4690_NullableElementInNonNullableCollectionInitializer_ReportsGs0155(initializer string) {
+        let source = `import System.Collections.Generic
+func Branch(value string) string? -> if value.Length > 1 { value } else { default(string?) }
+let xs = ` + initializer
+        let diagnostic = Assert.Single(Errors(Compile(source)))
+        Assert.Equal("GS0155", diagnostic.Id)
+        Assert.Equal(3, diagnostic.Location.StartLine + 1)
+        Assert.Contains("string?", diagnostic.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Issue4690_NullableElementInNullableCollectionInitializer_Compiles() {
+        const source = `import System.Collections.Generic
+func Branch(value string) string? -> if value.Length > 1 { value } else { default(string?) }
+let xs = List[string?]{ Branch("x") }
+let dict = Dictionary[string, string?]{ "k": Branch("x") }`
+        Assert.Empty(Errors(Compile(source)))
+    }
+
     shared {
         prop RejectedCases TheoryData[string, int32] -> TheoryData[string, int32]{`import System.Collections.Generic
 let xs = List[string]()

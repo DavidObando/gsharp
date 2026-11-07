@@ -849,17 +849,19 @@ internal class UserTokenResolver {
     internal func GetUserStructFieldRef(containingType StructSymbol, fieldOnContaining FieldSymbol) EntityHandle {
         let def = containingType.Definition ?? containingType
         var defField FieldSymbol? = nil
-        for candidate in def.Fields {
-            // Issue #3689: prefer the exact field instance. Matching by name
-            // alone silently aliases two same-named slots with different
-            // signatures onto the first one's blob (state machines used to
-            // hoist every lowered `for` temp as `<>5__$enum`).
-            if object.ReferenceEquals(candidate, fieldOnContaining) {
-                defField = candidate
-                break
-            }
-            if defField == nil && candidate.Name == fieldOnContaining.Name {
-                defField = candidate
+        if !fieldOnContaining.IsStatic {
+            for candidate in def.Fields {
+                // Issue #3689: prefer the exact field instance. Matching by name
+                // alone silently aliases two same-named slots with different
+                // signatures onto the first one's blob (state machines used to
+                // hoist every lowered `for` temp as `<>5__$enum`).
+                if object.ReferenceEquals(candidate, fieldOnContaining) {
+                    defField = candidate
+                    break
+                }
+                if defField == nil && candidate.Name == fieldOnContaining.Name {
+                    defField = candidate
+                }
             }
         }
         if defField == nil {
@@ -882,13 +884,14 @@ internal class UserTokenResolver {
             using let _ = this.remaps.PushSmRemap(containingType.Definition ?? containingType)
             this.signatures.EncodeTypeSymbol(BlobEncoder(sigBlob).FieldSignature(), defField.Type)
         }
+        let fieldMetadataName = ExplicitInterfaceMetadataNaming.GetBackingFieldMetadataName(def, defField)
         let memberRef = EntityHandle(
             this
                 .emitCtx
                 .MetadataRows
                 .AddMemberReference(
                 parent: parent,
-                name: this.emitCtx.Metadata.GetOrAddString(defField.Name),
+                name: this.emitCtx.Metadata.GetOrAddString(fieldMetadataName),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob)
             )
         )

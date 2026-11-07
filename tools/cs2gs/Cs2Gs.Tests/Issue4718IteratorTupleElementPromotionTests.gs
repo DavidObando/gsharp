@@ -79,7 +79,8 @@ public static class Obj {
     }
     public static void Use() {
         Factory<(string Text, int Code)> local = Missing;
-        Factory<(string Text, int Code)> converted = (Factory<(string Text, int Code)>)local;
+        object value = local;
+        Factory<(string Text, int Code)> converted = (Factory<(string Text, int Code)>)value;
         Produced += Missing;
     }
 }`))
@@ -88,7 +89,7 @@ public static class Obj {
         Assert.Contains("Field Factory[" + tuple + "]", printed)
         Assert.Contains("Produced Factory[" + tuple + "]", printed)
         Assert.Contains("local Factory[" + tuple + "]", printed)
-        Assert.True(printed.Contains("cast[Factory[" + tuple + "]](local)", StringComparison.Ordinal), printed)
+        Assert.True(printed.Contains("cast[Factory[" + tuple + "]](value)", StringComparison.Ordinal), printed)
         TranslationTestValidation.AssertBinds(printed)
     }
 
@@ -276,11 +277,10 @@ public abstract class RowsBase {
         } else {
             "Carrier<(string Text, int Code), (string Keep, int Code)>"
         }
-        // #4729 tracks imported constructors; isolate the contract-shape oracle.
         let printed = Translate((`using Contract4718;
 public sealed class Producer : RowsBase {
     public override ` + "$returnType" + ` Rows() {
-        throw new System.NotImplementedException();
+        return new ` + "$returnType" + `();
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
         let expected = if reordered {
@@ -289,6 +289,7 @@ public sealed class Producer : RowsBase {
             "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
         }
         Assert.Contains("override func Rows() " + expected, printed)
+        Assert.Contains("return " + expected + "()", printed)
         let directory = Path.Combine(".local", "issue4718-import-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {

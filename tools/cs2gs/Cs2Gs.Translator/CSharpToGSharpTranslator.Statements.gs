@@ -174,13 +174,21 @@ partial class CSharpToGSharpTranslator {
                     // `GetTypeInfo(declaration.Type)` reports the bare type and
                     // silently drops the `?`, so a nullable-enabled local would
                     // be rendered non-nullable and later `= nil`/`== nil` fail.
-                    let declaredType ITypeSymbol? = (
-                        this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
-                    )?.Type ??
+                    let declaredLocal ILocalSymbol? = this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
+                    var declaredType ITypeSymbol? = declaredLocal?.Type ??
                         this
                         .context
                         .GetTypeInfo(declaration!!.Type)
                         .Type
+                    if declaredLocal != nil &&
+                        this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType
+                        .TryGetValue(declaredLocal, out var projectedDeclaredLocalType) &&
+                        projectedDeclaredLocalType != nil {
+                        declaredType = projectedDeclaredLocalType
+                    }
                     if !emitType && initializer != nil && declaredType != nil {
                         // Preserve the explicit type only when it differs from the
                         // initializer's natural type (an implicit conversion). When
@@ -3190,7 +3198,7 @@ partial class CSharpToGSharpTranslator {
             let rightConst = this.context.SemanticModel.GetConstantValue(binary.Right).HasValue
             // Prefer the minimal, faithful form: a constant expression is retyped to
             // the other (non-constant) operand's G# type so both operands share a
-            // type (e.g. `channelCount == (2 as uint16?)`). This mirrors C#'s
+            // type (e.g. `channelCount == uint16?(2)`). This mirrors C#'s
             // constant-expression narrowing conversions (C# §10.2.11), which are
             // defined ONLY between integral types (int/long constants narrowing to
             // a smaller/differently-signed integral type) — never between a
@@ -3306,23 +3314,26 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[IsPatternExpressionSyntax]() {
-                if !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) &&
-                    !this.PatternReceiverTranslatesToTrivialOperand(isPattern.Expression) &&
-                    !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)) {
+                if PatternIntroducesBinding(isPattern.Pattern) &&
+                    !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) &&
+                    !this.PatternReceiverCanBeDuplicated(isPattern.Expression) &&
+                    !(
+                    PatternUsesNativeVariableSyntax(isPattern.Pattern) && this.ConditionUsesNativePatternVariables(
+                        GetConditionRoot(isPattern)
+                    )
+                ) {
                     return true
                 }
             }
             return false
         }
 
-        private func PatternReceiverTranslatesToTrivialOperand(expression ExpressionSyntax) bool {
-            if !IsTrivialPatternReceiver(expression) {
+        private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
+            if !this.IsSmartCastableScrutinee(expression) || !IsTrivialPatternReceiver(expression) {
                 return false
             }
-            // A bare identifier may become a member access through pattern-binding
-            // substitution or implicit static qualification. Classify the emitted
-            // shape so its spill stays behind earlier short-circuit guards.
-            return IsTrivialOperand(this.TranslateExpression(Unparenthesize(expression))!!)
+            // Both the spill emitter and its short-circuit scope detector use this decision.
+            return IsTrivialOperand(translated ?? this.TranslateExpression(expression)!!)
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not
@@ -4282,13 +4293,10 @@ partial class CSharpToGSharpTranslator {
             return (whenTrue, whenFalse)
         }
 
-        // non-nullable value type target (e.g. `uint8`, `int32`) G# rejects
-        // `(expr as T)` with GS0270 ("the 'as' operator requires the target type to
-        // be a reference type or a nullable value type"); the canonical G# form is
-        // the width-bearing conversion-call `T(expr)`. Only a reference type or a
-        // nullable value type target (where `as` is valid) keeps the `as` form.
+        // Value targets need conversion calls, including lifted numeric conversions to `T?` (#5676).
+        // `as T?` tests the boxed source type instead of converting its value.
         private func CoerceOperandTo(expression GExpression?, targetType ITypeSymbol?, location Location) GExpression {
-            if IsNonNullableValueType(targetType) {
+            if targetType?.IsValueType == true {
                 let conversionTarget GTypeReference? = this.typeMapper.Map(targetType, this.context, location)
                 return ConversionExpression(conversionTarget, expression)
             }

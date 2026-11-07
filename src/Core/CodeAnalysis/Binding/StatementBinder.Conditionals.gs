@@ -1306,7 +1306,6 @@ internal partial class StatementBinder {
         if !SmartCastStability.TryClassifyNilGuardLeaf(
             condition,
             restrictBareVariableToLocalsAndParams: forShortCircuitOperand,
-            referenceNullableOnly: false,
             out var target,
             out var underlying,
             out var nonNilWhenTrue

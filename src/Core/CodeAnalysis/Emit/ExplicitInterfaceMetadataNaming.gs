@@ -48,12 +48,40 @@ internal shared class ExplicitInterfaceMetadataNaming {
                 "${sourceInterface.PackageName}.$qualifiedInterfaceName.$memberName"
             }
         }
-        let interfaceName string? = if target is ImportedTypeSymbol imported && imported.OpenDefinition != nil {
-            imported.OpenDefinition.FullName
+        let interfaceName string? = if target is ImportedTypeSymbol imported &&
+            !imported
+            .TypeArguments
+            .IsDefaultOrEmpty {
+            FormatTypeArgument(imported)
+        } else if target is ImportedTypeSymbol importedOpen && importedOpen.OpenDefinition != nil {
+            importedOpen.OpenDefinition.FullName
         } else {
             target.ClrType?.FullName
         }
         return "${interfaceName ?? target.Name}.$memberName"
+    }
+
+    internal func GetBackingFieldMetadataName(structSym StructSymbol, field FieldSymbol) string {
+        let def = structSym.Definition ?? structSym
+        for prop in def.StaticProperties {
+            if object.ReferenceEquals(prop.BackingField, field) {
+                return if prop.HasExplicitInterfaceClause && prop.ExplicitInterfaceClauseTarget != nil {
+                    "<" + GetMetadataName(prop.Name, prop.ExplicitInterfaceClauseTarget!!) + ">k__BackingField"
+                } else {
+                    "<${prop.Name}>k__BackingField"
+                }
+            }
+        }
+        for ev in def.StaticEvents {
+            if object.ReferenceEquals(ev.BackingField, field) {
+                return if ev.HasExplicitInterfaceClause && ev.ExplicitInterfaceClauseTarget != nil {
+                    GetMetadataName(ev.Name, ev.ExplicitInterfaceClauseTarget!!)
+                } else {
+                    field.Name
+                }
+            }
+        }
+        return field.Name
     }
 
     private func FormatSourceInterfaceName(sourceInterface InterfaceSymbol) string -> FormatUserAggregateName(

@@ -756,6 +756,7 @@ shared class AsyncExceptionHandlerRewriter {
                 // the try body, and stashed into the pending-return-value local
                 // BEFORE the finally runs; the actual transfer happens after.
                 EnsureFinallyTail()
+                let tailLabel = finallyTailLabel
                 let stmts = ImmutableArray.CreateBuilder[BoundStatement]()
                 // Held in a local as well as the field: the dispatch arm below
                 // needs it, and `returnValueLocal != null` is exactly
@@ -787,7 +788,7 @@ shared class AsyncExceptionHandlerRewriter {
                     dispatchArms.Add(AsyncExceptionHandlerRewriter.Rewriter.DispatchArm(ReturnDiscriminator, resume))
                 }
                 stmts.Add(AssignBranch(ReturnDiscriminator))
-                stmts.Add(BoundGotoStatement(nil, finallyTailLabel))
+                stmts.Add(BoundGotoStatement(nil, tailLabel))
                 return BoundBlockStatement(nil, stmts.ToImmutable())
             }
 
@@ -797,12 +798,13 @@ shared class AsyncExceptionHandlerRewriter {
                     return node
                 }
                 EnsureFinallyTail()
+                let tailLabel = finallyTailLabel
                 let discriminator = GetGotoDiscriminator(node.Label)
                 return BoundBlockStatement(
                     nil,
                     ImmutableArray.Create[BoundStatement](
                         AssignBranch(discriminator),
-                        BoundGotoStatement(nil, finallyTailLabel)
+                        BoundGotoStatement(nil, tailLabel)
                     )
                 )
             }
@@ -812,6 +814,7 @@ shared class AsyncExceptionHandlerRewriter {
                     return node
                 }
                 EnsureFinallyTail()
+                let tailLabel = finallyTailLabel
                 let discriminator = GetGotoDiscriminator(node.Label)
                 // if (cond == JumpIfTrue) { pendingBranch = d; goto finallyTail; }
                 // Re-emit the condition once, jumping past the capture when the
@@ -823,7 +826,7 @@ shared class AsyncExceptionHandlerRewriter {
                     ImmutableArray.Create[BoundStatement](
                         BoundConditionalGotoStatement(nil, skipLabel, node.Condition, jumpIfTrue: !node.JumpIfTrue),
                         AssignBranch(discriminator),
-                        BoundGotoStatement(nil, finallyTailLabel),
+                        BoundGotoStatement(nil, tailLabel),
                         BoundLabelStatement(nil, skipLabel)
                     )
                 )

@@ -4547,7 +4547,7 @@ partial class FieldDeclarationSyntax {
             builder.Add(Identifier)
         }
         if IsPresent(Type) {
-            builder.Add(Type)
+            builder.Add(Type!!)
         }
         if IsPresent(EqualsToken) {
             builder.Add(EqualsToken!!)
@@ -4599,7 +4599,7 @@ partial class FieldDeclarationSyntax {
         }
         let node4 = Type
         if IsPresent(node4) {
-            let start4 = node4.Span.Start
+            let start4 = node4!!.Span.Start
             if start4 < last {
                 return false
             }
@@ -4699,7 +4699,7 @@ partial class FieldDeclarationSyntax {
             let child4 = Type
             if IsPresent(child4) {
                 if remaining == 0 {
-                    return child4
+                    return child4!!
                 }
                 remaining--
             }

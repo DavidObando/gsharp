@@ -266,10 +266,8 @@ public class C
     }
 
     @Fact
-    func ObjectTypedMemberConstantPattern_KeepsTheIsForm() {
-        // `token.Value is true` over `object?` has no `==` in G# (GS0129, the
-        // OverloadResolver.Candidates self-migration blocker); the constant
-        // pattern binds over object natively, so the `is` form stays.
+    func ObjectTypedMemberConstantPattern_UsesValueEquality() {
+        // An object constant test needs boxed value equality, not a cross-type `==`.
         let printed = Translate(`#nullable enable
 public class Token
 {
@@ -281,7 +279,7 @@ public class C
     public static bool IsLiteralTrue(object condition) =>
         condition is Token { Value: true };
 }`)
-        Assert.Contains("is true", printed, StringComparison.Ordinal)
+        Assert.Contains("object.Equals(true,", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("== true", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }

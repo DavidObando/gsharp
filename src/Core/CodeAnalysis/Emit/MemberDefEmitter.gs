@@ -872,7 +872,23 @@ internal class MemberDefEmitter {
                 .Metadata
                 .AddProperty(
                 attributes: PropertyAttributes.None,
-                name: this.emitCtx.Metadata.GetOrAddString(prop.Name),
+                name: this
+                    .emitCtx
+                    .Metadata
+                    .GetOrAddString(
+                    if prop.HasExplicitInterfaceClause {
+                        ExplicitInterfaceMetadataNaming.GetMetadataName(
+                            prop.Name,
+                            Invariant.Required(
+                                prop.ExplicitInterfaceClauseTarget,
+                                "an explicit property implementation has a target",
+                                expression: "prop.ExplicitInterfaceClauseTarget"
+                            )
+                        )
+                    } else {
+                        prop.Name
+                    }
+                ),
                 signature: this.emitCtx.Metadata.GetOrAddBlob(propertySignature)
             )
             if firstPropDef.IsNil {
@@ -917,9 +933,25 @@ internal class MemberDefEmitter {
             (r ReturnTypeEncoder) -> this.EncodePropertyType(r, prop),
             (_ ParametersEncoder) -> { }
         )
-        let methodAttrs = AccessibilityMap.ToMethodVisibility(
-            prop.GetterAccessibility
+        let methodAttrs = (
+            if prop.HasExplicitInterfaceClause {
+                MethodAttributes.Private
+            } else {
+                AccessibilityMap.ToMethodVisibility(prop.GetterAccessibility)
+            }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let getterName = if prop.HasExplicitInterfaceClause {
+            "get_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                prop.Name,
+                Invariant.Required(
+                    prop.ExplicitInterfaceClauseTarget,
+                    "an explicit property implementation has a target",
+                    expression: "prop.ExplicitInterfaceClauseTarget"
+                )
+            )
+        } else {
+            "get_${prop.Name}"
+        }
         let accessorRows = this.AddAccessorRows(prop.Type, prop, ImmutableArray[ParameterSymbol].Empty)
         let accessor = this
             .emitCtx
@@ -927,7 +959,7 @@ internal class MemberDefEmitter {
             .AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("get_${prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
@@ -948,9 +980,25 @@ internal class MemberDefEmitter {
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), prop.Type)
         )
-        let methodAttrs = AccessibilityMap.ToMethodVisibility(
-            prop.SetterAccessibility
+        let methodAttrs = (
+            if prop.HasExplicitInterfaceClause {
+                MethodAttributes.Private
+            } else {
+                AccessibilityMap.ToMethodVisibility(prop.SetterAccessibility)
+            }
         ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let setterName = if prop.HasExplicitInterfaceClause {
+            "set_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                prop.Name,
+                Invariant.Required(
+                    prop.ExplicitInterfaceClauseTarget,
+                    "an explicit property implementation has a target",
+                    expression: "prop.ExplicitInterfaceClauseTarget"
+                )
+            )
+        } else {
+            "set_${prop.Name}"
+        }
         let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.SetterParameters(prop))
         let accessor = this
             .emitCtx
@@ -958,7 +1006,7 @@ internal class MemberDefEmitter {
             .AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("set_${prop.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(setterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
@@ -998,7 +1046,23 @@ internal class MemberDefEmitter {
                 .Metadata
                 .AddEvent(
                 attributes: EventAttributes.None,
-                name: this.emitCtx.Metadata.GetOrAddString(ev.Name),
+                name: this
+                    .emitCtx
+                    .Metadata
+                    .GetOrAddString(
+                    if ev.HasExplicitInterfaceClause {
+                        ExplicitInterfaceMetadataNaming.GetMetadataName(
+                            ev.Name,
+                            Invariant.Required(
+                                ev.ExplicitInterfaceClauseTarget,
+                                "an explicit event implementation has a target",
+                                expression: "ev.ExplicitInterfaceClauseTarget"
+                            )
+                        )
+                    } else {
+                        ev.Name
+                    }
+                ),
                 type: eventTypeHandle
             )
             // Issue #2129: emit user @annotations as CustomAttribute rows on
@@ -1062,7 +1126,25 @@ internal class MemberDefEmitter {
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
         )
-        let methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let methodAttrs = (
+            if ev.HasExplicitInterfaceClause {
+                MethodAttributes.Private
+            } else {
+                MethodAttributes.Public
+            }
+        ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let addName = if ev.HasExplicitInterfaceClause {
+            "add_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                ev.Name,
+                Invariant.Required(
+                    ev.ExplicitInterfaceClauseTarget,
+                    "an explicit event implementation has a target",
+                    expression: "ev.ExplicitInterfaceClauseTarget"
+                )
+            )
+        } else {
+            "add_${ev.Name}"
+        }
         let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
         let accessor = this
             .emitCtx
@@ -1070,7 +1152,7 @@ internal class MemberDefEmitter {
             .AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("add_${ev.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(addName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First
@@ -1117,7 +1199,25 @@ internal class MemberDefEmitter {
             (r ReturnTypeEncoder) -> r.Void(),
             (ps ParametersEncoder) -> this.encodeTypeSymbol(ps.AddParameter().Type(), ev.Type)
         )
-        let methodAttrs = MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let methodAttrs = (
+            if ev.HasExplicitInterfaceClause {
+                MethodAttributes.Private
+            } else {
+                MethodAttributes.Public
+            }
+        ) | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static
+        let removeName = if ev.HasExplicitInterfaceClause {
+            "remove_" + ExplicitInterfaceMetadataNaming.GetMetadataName(
+                ev.Name,
+                Invariant.Required(
+                    ev.ExplicitInterfaceClauseTarget,
+                    "an explicit event implementation has a target",
+                    expression: "ev.ExplicitInterfaceClauseTarget"
+                )
+            )
+        } else {
+            "remove_${ev.Name}"
+        }
         let accessorRows = this.AddAccessorRows(TypeSymbol.Void, nil, this.EventAccessorParameters(ev))
         let accessor = this
             .emitCtx
@@ -1125,7 +1225,7 @@ internal class MemberDefEmitter {
             .AddMethodDefinition(
             attributes: methodAttrs,
             implAttributes: MethodImplAttributes.IL | MethodImplAttributes.Managed,
-            name: this.emitCtx.Metadata.GetOrAddString("remove_${ev.Name}"),
+            name: this.emitCtx.Metadata.GetOrAddString(removeName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
             parameterList: accessorRows.First

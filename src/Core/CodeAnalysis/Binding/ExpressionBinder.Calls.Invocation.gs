@@ -445,6 +445,7 @@ internal partial class ExpressionBinder {
         classSymbol ImportedClassSymbol,
         staticFn ImportedFunctionSymbol,
         arguments ImmutableArray[BoundExpression],
+        symbolicMethodTypeArgs ImmutableArray[TypeSymbol?],
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
@@ -464,11 +465,29 @@ internal partial class ExpressionBinder {
         }
         let openDef = symbolicReceiver!!.OpenDefinition
         let symbolicArgs = symbolicReceiver!!.TypeArguments
+        let effectiveMethodTypeArgs = MemberLookup.MergeSymbolicAndClosedMethodTypeArgs(
+            staticFn.Method,
+            symbolicMethodTypeArgs
+        )
+        if !ClrOverloadResolution.SatisfiesMethodConstraintsWithReceiver(
+            openDef,
+            symbolicArgs,
+            staticFn.Method,
+            effectiveMethodTypeArgs
+        ) {
+            return false
+        }
         let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](arguments.Length)
         for var i = 0; i < arguments.Length; i++ {
             let argument = arguments[i]
             let openParamType = openParameters[i].ParameterType
-            let symbolicParamType = MemberLookup.GetClrOpenParameterTypeSymbol(openParameters[i], openDef, symbolicArgs)
+            let symbolicParamType = MemberLookup.GetClrOpenParameterTypeSymbol(
+                openParameters[i],
+                openDef,
+                symbolicArgs,
+                openMethod,
+                effectiveMethodTypeArgs
+            )
             // Nominal identity remains on the explicit symbolicDelegateParam
             // conversion below; only the mapped Invoke shape is needed here.
             if LambdaBinder.TryGetFunctionLiteral(argument, out var functionLiteral) &&
@@ -556,7 +575,12 @@ internal partial class ExpressionBinder {
                 )
             )
         }
-        let symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod!!, openDef, symbolicArgs)
+        let symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+            openMethod!!,
+            openDef,
+            symbolicArgs,
+            effectiveMethodTypeArgs
+        )
         let overriddenFn = ImportedFunctionSymbol(
             staticFn.Name,
             classSymbol,
@@ -574,7 +598,7 @@ internal partial class ExpressionBinder {
                 overriddenFn,
                 convertedArgs.MoveToImmutable(),
                 refKinds,
-                typeArgumentSymbols: default(ImmutableArray[TypeSymbol?]),
+                typeArgumentSymbols: symbolicMethodTypeArgs,
                 staticContainerType: symbolicReceiver
             )
         )
@@ -1969,31 +1993,6 @@ internal partial class ExpressionBinder {
                     classSymbol.SymbolicReceiver ?? receiver?.Type,
                     typeArgSymbols
                 )
-                // Issue #1330: when the receiver is a generic type constructed
-                // over an in-scope generic type parameter (`Comparer[TResult]`),
-                // bind the static call symbolically — substituting the receiver's
-                // symbolic arguments through the resolved method's parameter and
-                // return types — so a delegate parameter surfaces as
-                // `Comparison[TResult]` (the lambda flows through as an identity
-                // adapter hosted in the enclosing generic context rather than a
-                // type-erased `<object>` adapter referencing an out-of-scope
-                // type parameter), the call's result type is the symbolic
-                // `Comparer[TResult]`, and the emitter parents the call at the
-                // constructed `Comparer<!TResult>` TypeSpec. Yields verifiable IL
-                // exactly as the concrete-argument receiver does.
-                if classSymbol.SymbolicReceiver != nil &&
-                    argumentNames.IsDefault &&
-                    !staticIsExpanded &&
-                    staticMapping.IsDefault &&
-                    TryBindSymbolicImportedStaticCall(
-                    ce,
-                    classSymbol,
-                    staticFn!!,
-                    arguments,
-                    out var symbolicStaticCall
-                ) {
-                    return symbolicStaticCall!!
-                }
                 // Recover symbolic generic arguments before params expansion so
                 // the synthesized array uses the real element type rather than
                 // a live-reflection constraint placeholder.
@@ -2045,6 +2044,26 @@ internal partial class ExpressionBinder {
                     staticSymbolicTypeArgs
                 } else {
                     AsNullableElements(typeArgSymbols)
+                }
+                // Issue #1330 / #4627: when the receiver is a generic type constructed
+                // over an in-scope generic type parameter or source type (`Comparer[TResult]`,
+                // `ImmutableArray[TypeSymbol]`), bind the static call symbolically —
+                // substituting both the receiver's symbolic arguments and any inferred
+                // or explicit method type arguments through the resolved method's
+                // parameter and return types.
+                if classSymbol.SymbolicReceiver != nil &&
+                    argumentNames.IsDefault &&
+                    !staticIsExpanded &&
+                    staticMapping.IsDefault &&
+                    TryBindSymbolicImportedStaticCall(
+                    ce,
+                    classSymbol,
+                    staticFn!!,
+                    arguments,
+                    staticTypeArgSymbolsForCall,
+                    out var symbolicStaticCall
+                ) {
+                    return symbolicStaticCall!!
                 }
                 let staticParameters = staticFn!!.Method.GetParameters()
                 let staticDownstreamMapping = if staticIsExpanded {
@@ -2454,6 +2473,20 @@ internal partial class ExpressionBinder {
             // user-type receivers (struct/class/interface). Issue #1188:
             // extension functions overload, so select the best matching
             // overload across all (receiver, name) candidates.
+            if receiver != nil &&
+                receiver.Type is NullableTypeSymbol symbolicNullableReceiver &&
+                NullableLifting.RequiresSymbolicNullableGetValue(symbolicNullableReceiver) &&
+                TryBindSymbolicNullableInstanceCall(
+                receiver,
+                symbolicNullableReceiver,
+                methodName,
+                arguments,
+                ce,
+                argumentNames,
+                out var symbolicNullableCall
+            ) {
+                return symbolicNullableCall!!
+            }
             if TryBindExtensionFunctionOverload(
                 receiver,
                 methodName,
@@ -3930,6 +3963,69 @@ internal partial class ExpressionBinder {
         } finally {
             Diagnostics.TruncateTo(diagnosticMark)
         }
+    }
+
+    private func TryBindSymbolicNullableInstanceCall(
+        receiver BoundExpression,
+        nullableReceiver NullableTypeSymbol,
+        methodName string,
+        arguments ImmutableArray[BoundExpression],
+        ce CallExpressionSyntax,
+        argumentNames ImmutableArray[string],
+        @NotNullWhen(true) out result BoundExpression?
+    ) bool {
+        result = nil
+        if methodName != "GetValueOrDefault" || ce.TypeArgumentList != nil {
+            return false
+        }
+        if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
+            openNullable == nil {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
+            result = BoundErrorExpression(nil)
+            return true
+        }
+        var openMethod MethodInfo? = nil
+        for candidate in openNullable.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
+            if candidate.Name == "GetValueOrDefault" && candidate.GetParameters().Length == arguments.Length {
+                openMethod = candidate
+                break
+            }
+        }
+        if openMethod == nil {
+            return false
+        }
+        let underlying = nullableReceiver.UnderlyingType
+        if arguments.Length == 0 {
+            result = BoundImportedInstanceCallExpression(
+                ce,
+                receiver,
+                openMethod,
+                underlying,
+                ImmutableArray[BoundExpression].Empty
+            )
+            return true
+        }
+        let parameterName = openMethod.GetParameters()[0].Name ?? "defaultValue"
+        if !argumentNames.IsDefault && !string.IsNullOrEmpty(argumentNames[0]) && argumentNames[0] != parameterName {
+            return false
+        }
+        if ce.Arguments[0] is RefArgumentExpressionSyntax {
+            return false
+        }
+        let diagnosticMark = Diagnostics.Count
+        let convertedArgument = conversions.BindConversion(ce.Arguments[0].Location, arguments[0], underlying)
+        if Diagnostics.Count != diagnosticMark {
+            Diagnostics.TruncateTo(diagnosticMark)
+            return false
+        }
+        result = BoundImportedInstanceCallExpression(
+            ce,
+            receiver,
+            openMethod,
+            underlying,
+            ImmutableArray.Create(convertedArgument)
+        )
+        return true
     }
 
     shared {

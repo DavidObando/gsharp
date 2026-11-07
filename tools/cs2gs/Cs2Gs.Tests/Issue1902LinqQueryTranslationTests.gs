@@ -340,6 +340,47 @@ namespace Corpus.Issue4525
         AssertRoundTripParses(rendered)
     }
 
+    @Fact
+    func InitialFromClause_UsesBoundExpressionTreeQuerySelectorParameterType() {
+        let rendered = Render(`using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq.Expressions;
+
+namespace Corpus.Issue4581
+{
+    public sealed class Query : IEnumerable<int>
+    {
+        public Result<TResult> Select<TResult>(Expression<Func<long, TResult>> selector) => new();
+
+        public IEnumerator<int> GetEnumerator()
+        {
+            yield return 0;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public sealed class Result<T>
+    {
+    }
+
+    public class Holder
+    {
+        public Result<long> Run(Query source)
+        {
+            return from item in source
+                   select item;
+        }
+    }
+}`)
+        Assert.Contains("source.Select((item int64) -> item)", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(
+            rendered,
+            "G# cannot yet infer type arguments from a lambda converted to Expression<Func<...>>."
+        )
+    }
+
     shared {
         private func AssertRoundTripParses(rendered string, roundTripOnlyReason string? = nil) {
             let result RoundTripResult? = if roundTripOnlyReason == nil {

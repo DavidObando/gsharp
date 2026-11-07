@@ -273,7 +273,7 @@ partial class CSharpToGSharpTranslator {
         /// and instance members). Identity for unmapped members — the
         /// round-trip binder is the loud backstop when the identity name does
         /// not exist on the G# type.
-        private func MapAnalyzerMemberName(member MemberAccessExpressionSyntax, memberName string?) string? {
+        private func MapAnalyzerMemberName(member ExpressionSyntax, memberName string?) string? {
             let symbol ISymbol? = this.context.GetSymbolInfo(member).Symbol
             let containingType INamedTypeSymbol? = symbol?.ContainingType
             let containingName string? = RoslynTypeMetadataName(containingType)

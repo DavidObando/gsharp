@@ -2071,12 +2071,19 @@ internal class ConversionClassifier {
                         methodTypeArguments[openSlot.GenericParameterPosition] is PlatformTypeSymbol platformSlot {
                         substituted = platformSlot
                     }
-                    // Issue #4440: even a fully CLR-backed receiver needs the
+                    // Issue #4440 / #4690: even a fully CLR-backed receiver needs the
                     // shared receiver/method projection here. Reflection
                     // exposes List<string>.Add as an oblivious string
                     // parameter, while the open slot substituted with the
                     // receiver's T is the declared non-null string argument.
-                    if i >= receiverArgCount && method != nil && TypeSymbol.ContainsNullLiteralType(argument.Type) &&
+                    if i >= receiverArgCount &&
+                        method != nil &&
+                        (
+                        TypeSymbol.ContainsNullLiteralType(argument.Type) ||
+                            (
+                            argument.Type is NullableTypeSymbol && ExpressionBinder.IsSynthesizedCollectionAddCall(call)
+                        )
+                    ) &&
                         MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
                         receiverType,
                         method,

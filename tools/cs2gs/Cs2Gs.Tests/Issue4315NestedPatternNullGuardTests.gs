@@ -203,7 +203,8 @@ public static class C
     }
 }`)
         // A range slice is never nil, so it takes no guard in either spelling.
-        Assert.DoesNotContain("[..]", printed.Replace("h.Flat[..].Length", ""), StringComparison.Ordinal)
+        Assert.Matches(`(?s)h\.Flat is var (?<capture>__spill\d+).*?\k<capture>\[\.\.\]\.Length > 0`, printed)
+        Assert.DoesNotMatch(`\[\.\.\]\s*!=\s*nil`, printed)
         Assert.Equal("True,1,True,1,True,True,True,False,False", Normalize(CompileAndRun(printed, "C.Run()")))
     }
 
@@ -330,7 +331,7 @@ public static class C
 
     private func AssertGuarded(printed string) {
         Assert.Contains("p.Address != nil", printed, StringComparison.Ordinal)
-        Assert.Contains("l.Start != nil", printed, StringComparison.Ordinal)
+        Assert.Matches(`l\.Start is var (?<capture>__spill\d+)\s*&&\s*\(?\k<capture> != nil`, printed)
     }
 
     private func Normalize(output string) string {

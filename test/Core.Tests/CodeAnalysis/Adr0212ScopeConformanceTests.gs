@@ -66,7 +66,7 @@ open class Adr0212ScopeConformanceTests {
                 .First(
                 (f FieldDeclarationSyntax) -> f.Identifier.Text == fieldName && f.Type?.Identifier?.Text == "Color"
             )
-            Assert.IsType[EnumSymbol](model.GetSymbolInfo(field.Type.Identifier).Symbol)
+            Assert.IsType[EnumSymbol](model.GetSymbolInfo(field.Type!!.Identifier).Symbol)
         }
     }
 
@@ -245,13 +245,13 @@ open class Adr0212ScopeConformanceTests {
             .DescendantNodes()
             .OfType[FieldDeclarationSyntax]()
             .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "K")
-        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(field.Type.Identifier).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(field.Type!!.Identifier).Symbol)
         let sharedField = tree
             .Root
             .DescendantNodes()
             .OfType[FieldDeclarationSyntax]()
             .Single((f FieldDeclarationSyntax) -> f.Identifier.Text == "W")
-        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(sharedField.Type.Identifier).Symbol)
+        Assert.Same(TypeSymbol.Int32, model.GetSymbolInfo(sharedField.Type!!.Identifier).Symbol)
     }
 
     @Fact

@@ -95,51 +95,57 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 case recursive is RecursivePatternSyntax {
-                    if recursive.Designation is SingleVariableDesignationSyntax designation {
-                        var designationType ITypeSymbol? = receiverType
-                        if recursive.Type != nil &&
-                            receiverType is INamedTypeSymbol projectedReceiver &&
-                            this
-                            .context
-                            .GetTypeInfo(recursive.Type)
-                            .Type is INamedTypeSymbol narrowedType {
-                            designationType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
-                                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
-                                    candidate.OriginalDefinition,
-                                    narrowedType.OriginalDefinition
-                                )
-                            ) ??
+                    var effectiveReceiverType ITypeSymbol? = receiverType
+                    if recursive.Type != nil &&
+                        receiverType is INamedTypeSymbol projectedReceiver &&
+                        this
+                        .context
+                        .GetTypeInfo(recursive.Type)
+                        .Type is INamedTypeSymbol narrowedType {
+                        effectiveReceiverType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
+                            (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                candidate,
                                 narrowedType
-                        }
+                            )
+                        ) ??
+                            narrowedType
+                    }
+                    if recursive.Designation is SingleVariableDesignationSyntax designation {
                         this.RegisterProjectedPatternBinding(
                             this.context.GetDeclaredSymbol(designation),
-                            designationType
+                            effectiveReceiverType
                         )
                     }
                     if recursive.PropertyPatternClause != nil {
                         for subpattern in recursive.PropertyPatternClause!!.Subpatterns {
                             let memberType ITypeSymbol? = if subpattern.NameColon != nil {
-                                this.GetProjectedPatternMemberType(receiverType, subpattern.NameColon!!.Name)
+                                this.GetProjectedPatternMemberType(effectiveReceiverType, subpattern.NameColon!!.Name)
                             } else {
                                 this.GetProjectedPatternMemberPathType(
-                                    receiverType,
+                                    effectiveReceiverType,
                                     subpattern.ExpressionColon?.Expression
                                 )
                             }
                             this.RegisterProjectedNativePatternBindings(subpattern.Pattern, memberType)
                         }
                     }
-                    if recursive.PositionalPatternClause != nil &&
-                        receiverType is INamedTypeSymbol{IsTupleType: true} tuple &&
-                        recursive.PositionalPatternClause!!
-                        .Subpatterns
-                        .Count == tuple
-                        .TupleElements
-                        .Length {
-                        for var i = 0; i < recursive.PositionalPatternClause!!.Subpatterns.Count; i++ {
+                    if recursive.PositionalPatternClause != nil {
+                        let subs = recursive.PositionalPatternClause!!.Subpatterns
+                        let positional PositionalSlots? = this.TryGetPositionalMembers(
+                            recursive,
+                            subs.Count,
+                            out var positionalFailure
+                        )
+                        for var i = 0; i < subs.Count; i++ {
                             this.RegisterProjectedNativePatternBindings(
-                                recursive.PositionalPatternClause!!.Subpatterns[i].Pattern,
-                                GetEffectiveTupleElementType(tuple, i)
+                                subs[i].Pattern,
+                                this.GetProjectedPositionalSubpatternType(
+                                    recursive,
+                                    i,
+                                    positional,
+                                    positionalFailure,
+                                    effectiveReceiverType
+                                )
                             )
                         }
                     }
@@ -213,23 +219,23 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 case recursive is RecursivePatternSyntax {
-                    if recursive.Designation == targetDesignation {
-                        var designationType ITypeSymbol? = receiverType
-                        if recursive.Type != nil &&
-                            receiverType is INamedTypeSymbol projectedReceiver &&
-                            this
-                            .context
-                            .GetTypeInfo(recursive.Type)
-                            .Type is INamedTypeSymbol narrowedType {
-                            designationType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
-                                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
-                                    candidate.OriginalDefinition,
-                                    narrowedType.OriginalDefinition
-                                )
-                            ) ??
+                    var effectiveReceiverType ITypeSymbol? = receiverType
+                    if recursive.Type != nil &&
+                        receiverType is INamedTypeSymbol projectedReceiver &&
+                        this
+                        .context
+                        .GetTypeInfo(recursive.Type)
+                        .Type is INamedTypeSymbol narrowedType {
+                        effectiveReceiverType = this.GetReceiverTypeHierarchy(projectedReceiver).FirstOrDefault(
+                            (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                candidate,
                                 narrowedType
-                        }
-                        return designationType
+                            )
+                        ) ??
+                            narrowedType
+                    }
+                    if recursive.Designation == targetDesignation {
+                        return effectiveReceiverType
                     }
                     if recursive.PropertyPatternClause != nil {
                         for subpattern in recursive.PropertyPatternClause!!.Subpatterns {
@@ -237,10 +243,10 @@ partial class CSharpToGSharpTranslator {
                                 continue
                             }
                             let memberType ITypeSymbol? = if subpattern.NameColon != nil {
-                                this.GetProjectedPatternMemberType(receiverType, subpattern.NameColon!!.Name)
+                                this.GetProjectedPatternMemberType(effectiveReceiverType, subpattern.NameColon!!.Name)
                             } else {
                                 this.GetProjectedPatternMemberPathType(
-                                    receiverType,
+                                    effectiveReceiverType,
                                     subpattern.ExpressionColon?.Expression
                                 )
                             }
@@ -251,24 +257,27 @@ partial class CSharpToGSharpTranslator {
                             )
                         }
                     }
-                    if recursive.PositionalPatternClause != nil &&
-                        receiverType is INamedTypeSymbol{IsTupleType: true} tuple &&
-                        recursive.PositionalPatternClause!!
-                        .Subpatterns
-                        .Count == tuple
-                        .TupleElements
-                        .Length {
-                        for var i = 0; i < recursive.PositionalPatternClause!!.Subpatterns.Count; i++ {
-                            if !recursive.PositionalPatternClause!!
-                                .Subpatterns[i]
-                                .Span
-                                .Contains(targetDesignation.Span) {
+                    if recursive.PositionalPatternClause != nil {
+                        let subs = recursive.PositionalPatternClause!!.Subpatterns
+                        let positional PositionalSlots? = this.TryGetPositionalMembers(
+                            recursive,
+                            subs.Count,
+                            out var positionalFailure
+                        )
+                        for var i = 0; i < subs.Count; i++ {
+                            if !subs[i].Span.Contains(targetDesignation.Span) {
                                 continue
                             }
                             return this.FindProjectedPatternBindingType(
-                                recursive.PositionalPatternClause!!.Subpatterns[i].Pattern,
+                                subs[i].Pattern,
                                 targetDesignation,
-                                GetEffectiveTupleElementType(tuple, i)
+                                this.GetProjectedPositionalSubpatternType(
+                                    recursive,
+                                    i,
+                                    positional,
+                                    positionalFailure,
+                                    effectiveReceiverType
+                                )
                             )
                         }
                     }
@@ -546,6 +555,46 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func GetProjectedPositionalSubpatternType(
+            recursive RecursivePatternSyntax,
+            index int32,
+            positional PositionalSlots?,
+            positionalFailure string?,
+            receiverType ITypeSymbol?
+        ) ITypeSymbol? {
+            if receiverType is INamedTypeSymbol{IsTupleType: true} tuple && index < tuple.TupleElements.Length {
+                return GetEffectiveTupleElementType(tuple, index)
+            }
+            let subs = recursive.PositionalPatternClause!!.Subpatterns
+            if index < subs.Count && this.TryResolvePositionalSlot(
+                subs[index],
+                index,
+                positional,
+                positionalFailure,
+                receiverType,
+                out _,
+                out var memberSymbol,
+                out _
+            ) &&
+                memberSymbol != nil {
+                return this.GetProjectedPatternMemberType(receiverType, memberSymbol)
+            }
+            if receiverType is INamedTypeSymbol projectedReceiver &&
+                (
+                this.context.SemanticModel.GetOperation(recursive) as IRecursivePatternOperation
+            )?.DeconstructSymbol is IMethodSymbol deconstruct &&
+                this.GetProjectedMember(projectedReceiver, deconstruct) is IMethodSymbol projectedDeconstruct &&
+                index < projectedDeconstruct
+                .Parameters
+                .Length {
+                return this.SubstituteProjectedContainingTypeParameter(
+                    projectedReceiver,
+                    projectedDeconstruct.Parameters[index].Type
+                )
+            }
+            return nil
+        }
+
         private func GetProjectedPatternMemberPathType(receiverType ITypeSymbol?, path ExpressionSyntax?) ITypeSymbol? {
             return switch path {
                 case name is SimpleNameSyntax: this.GetProjectedPatternMemberType(receiverType, name)
@@ -577,11 +626,16 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
-            return if receiverType is INamedTypeSymbol ownerNamed {
-                this.SubstituteProjectedContainingTypeParameter(ownerNamed, rawType)
-            } else {
-                rawType
+            if receiverType is INamedTypeSymbol ownerNamed {
+                let openRawType ITypeSymbol? = switch member?.OriginalDefinition {
+                    case openField is IFieldSymbol: openField.Type
+                    case openProperty is IPropertySymbol: openProperty.Type
+                    case openMethod is IMethodSymbol: openMethod.ReturnType
+                    default: rawType
+                }
+                return this.SubstituteProjectedContainingTypeParameter(ownerNamed, openRawType ?? rawType)
             }
+            return rawType
         }
 
         /// True when [`condition`](paramref) contains at least one binding
@@ -793,8 +847,8 @@ partial class CSharpToGSharpTranslator {
 
         /// The narrowed type of the lowered test of [`pattern`](paramref) (cref:TranslatePatternTest) where it is
         /// [`whenTrue`](paramref), or `nil`. The lowering emits `== nil` for `null`, an `is` type test for a type,
-        /// and `&&`, `||` and `!` for `and`, `or` and `not`. It emits an equality for any other constant, which
-        /// does not narrow, except on an `object` input, where it keeps the `is` test. gsc classifies the nil guards
+        /// and `&&`, `||` and `!` for `and`, `or` and `not`. Other constants use equality or `object.Equals`,
+        /// neither of which narrows the input. gsc classifies the nil guards
         /// and the type tests of the condition separately and merges them with the type test winning
         /// (ClassifyIfConditionNarrowing).
         private func GetGSharpPatternNarrowedType(
@@ -857,11 +911,7 @@ partial class CSharpToGSharpTranslator {
                 if IsNullLiteral(constant.Expression) {
                     return (nil, nil, nil, underlyingType)
                 }
-                return if underlyingType?.SpecialType == SpecialType.System_Object {
-                    (underlyingType, nil, nil, nil)
-                } else {
-                    (nil, nil, nil, nil)
-                }
+                return (nil, nil, nil, nil)
             }
             return (this.GetTypeTestNarrowedType(pattern, inputType), nil, nil, nil)
         }
@@ -1002,7 +1052,13 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             switch pattern {
-                case ConstantPatternSyntax, RelationalPatternSyntax, DiscardPatternSyntax, TypePatternSyntax {
+                case constant is ConstantPatternSyntax {
+                    return !this.ConstantPatternUsesValueEquality(
+                        this.GetPatternComparisonReceiverType(constant),
+                        constant.Expression
+                    )
+                }
+                case RelationalPatternSyntax, DiscardPatternSyntax, TypePatternSyntax {
                     return true
                 }
                 case declaration is DeclarationPatternSyntax {
