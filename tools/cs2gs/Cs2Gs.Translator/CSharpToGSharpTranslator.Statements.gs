@@ -379,6 +379,15 @@ partial class CSharpToGSharpTranslator {
                         includePromotedValue: type != nil
                     )
                 }
+                // Issue #4709: gsc does not track field-by-field definite assignment of
+                // structs, so an uninitialized struct local that is written through its
+                // fields needs an explicit default initializer to satisfy `ref` uses.
+                if initializer == nil && type != nil && this.context.GetDeclaredSymbol(
+                    declarator
+                ) is ILocalSymbol uninitializedStructLocal &&
+                    this.RequiresStructFieldWiseDefaultInitializer(uninitializedStructLocal) {
+                    initializer = DefaultValueExpression(type)
+                }
                 // Issue #5561: record whether the emitted storage accepts nil.
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol storageLocal &&
                     (type != nil || initializer != nil) {
@@ -2976,7 +2985,7 @@ partial class CSharpToGSharpTranslator {
             return this
                 .GetReachingLocalValues(alias, expression!!.SpanStart, reachingVisited)
                 .OfType[RefExpressionSyntax]()
-                .Select((target RefExpressionSyntax) -> target.Expression)
+                .Select((target RefExpressionSyntax) -> UnwrapParenthesesAndSuppressions(target.Expression)!!)
                 .ToList()
         }
 
@@ -3041,7 +3050,9 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let name string? = this.EmittedName(localSymbol, declarator.Identifier.ValueText)
-                let initializer GExpression? = if declarator.Initializer?.Value is RefExpressionSyntax refInit {
+                let initializer GExpression? = if UnwrapParenthesesAndSuppressions(
+                    declarator.Initializer?.Value
+                ) is RefExpressionSyntax refInit {
                     this.TranslateRefExpression(refInit)
                 } else {
                     default(GExpression?)

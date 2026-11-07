@@ -44,21 +44,13 @@ open class LspServerInitializedDispatchTests {
             server.TestAfterWorkspaceDiscovery = () -> discovered.TrySetResult(true)
             let (clientStream, serverStream) = FullDuplexStream.CreatePair()
             using let serverRpc = JsonRpc(
-                HeaderDelimitedMessageHandler(
-                    serverStream,
-                    serverStream,
-                    SystemTextJsonFormatter{JsonSerializerOptions: LspJson.Options}
-                )
+                HeaderDelimitedMessageHandler(serverStream, serverStream, LspJson.CreateFormatter())
             )
             serverRpc.AddLocalRpcTarget(server, JsonRpcTargetOptions{DisposeOnDisconnect: false})
             server.Attach(serverRpc)
             serverRpc.StartListening()
             using let clientRpc = JsonRpc(
-                HeaderDelimitedMessageHandler(
-                    clientStream,
-                    clientStream,
-                    SystemTextJsonFormatter{JsonSerializerOptions: LspJson.Options}
-                )
+                HeaderDelimitedMessageHandler(clientStream, clientStream, LspJson.CreateFormatter())
             )
             clientRpc.StartListening()
             using let initializeParams = JsonDocument.Parse(initializeJson)
@@ -97,21 +89,13 @@ open class LspServerInitializedDispatchTests {
             let server = LspServer(DocumentContentService(), workspace)
             let (clientStream, serverStream) = FullDuplexStream.CreatePair()
             using let serverRpc = JsonRpc(
-                HeaderDelimitedMessageHandler(
-                    serverStream,
-                    serverStream,
-                    SystemTextJsonFormatter{JsonSerializerOptions: LspJson.Options}
-                )
+                HeaderDelimitedMessageHandler(serverStream, serverStream, LspJson.CreateFormatter())
             )
             serverRpc.AddLocalRpcTarget(server, JsonRpcTargetOptions{DisposeOnDisconnect: false})
             server.Attach(serverRpc)
             serverRpc.StartListening()
             using let clientRpc = JsonRpc(
-                HeaderDelimitedMessageHandler(
-                    clientStream,
-                    clientStream,
-                    SystemTextJsonFormatter{JsonSerializerOptions: LspJson.Options}
-                )
+                HeaderDelimitedMessageHandler(clientStream, clientStream, LspJson.CreateFormatter())
             )
             clientRpc.StartListening()
             // Full handshake exactly as a real client performs it: an "initialize" request whose
@@ -129,6 +113,76 @@ open class LspServerInitializedDispatchTests {
         } finally {
             Directory.Delete(rootDir, recursive: true)
         }
+    }
+
+    @Theory
+    @InlineData("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}")
+    @InlineData("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":null}")
+    async func Shutdown_OverRpc_RepliesWithNullResult_WithOrWithoutNullParams(shutdownRequest string) {
+        let server = LspServer(DocumentContentService(), WorkspaceState())
+        let (clientStream, serverStream) = FullDuplexStream.CreatePair()
+        using let serverRpc = JsonRpc(
+            HeaderDelimitedMessageHandler(serverStream, serverStream, LspJson.CreateFormatter())
+        )
+        serverRpc.AddLocalRpcTarget(server, JsonRpcTargetOptions{DisposeOnDisconnect: false})
+        server.Attach(serverRpc)
+        serverRpc.StartListening()
+
+        let WriteFrameAsync = async func (payload string) {
+            let body = System.Text.Encoding.UTF8.GetBytes(payload)
+            let header = System.Text.Encoding.ASCII.GetBytes("Content-Length: ${body.Length}\r\n\r\n")
+            await clientStream.WriteAsync(header, 0, header.Length)
+            await clientStream.WriteAsync(body, 0, body.Length)
+            await clientStream.FlushAsync()
+        }
+        let ReadFrameAsync = async func () string {
+            let headerBytes = System.Collections.Generic.List[uint8]()
+            let one = [1]uint8
+            while true {
+                let n = await clientStream.ReadAsync(one, 0, 1)
+                Assert.True(n == 1, "Unexpected EOF while reading LSP response header.")
+                headerBytes.Add(one[0])
+                let count = headerBytes.Count
+                if count >= 4 &&
+                    headerBytes[count - 4] == uint8('\r') &&
+                    headerBytes[count - 3] == uint8('\n') &&
+                    headerBytes[count - 2] == uint8('\r') &&
+                    headerBytes[count - 1] == uint8('\n') {
+                    break
+                }
+            }
+            let headerText = System.Text.Encoding.ASCII.GetString(headerBytes.ToArray())
+            var contentLength = 0
+            for line in headerText.Split([]string{"\r\n"}, StringSplitOptions.RemoveEmptyEntries) {
+                if line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase) {
+                    contentLength = int32.Parse(line.Substring("Content-Length:".Length).Trim())
+                }
+            }
+            Assert.True(contentLength > 0)
+            let body = [contentLength]uint8
+            var offset = 0
+            while offset < contentLength {
+                let read = await clientStream.ReadAsync(body, offset, contentLength - offset)
+                Assert.True(read > 0, "Unexpected EOF while reading LSP response body.")
+                offset += read
+            }
+            return System.Text.Encoding.UTF8.GetString(body)
+        }
+
+        await WriteFrameAsync(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}"
+        )
+        let initReply = await ReadFrameAsync().WaitAsync(TimeSpan.FromSeconds(5))
+        Assert.Contains("\"id\":1", initReply, StringComparison.Ordinal)
+
+        await WriteFrameAsync(shutdownRequest)
+        let shutdownReply = await ReadFrameAsync().WaitAsync(TimeSpan.FromSeconds(5))
+        using let doc = JsonDocument.Parse(shutdownReply)
+        Assert.Equal(2, doc.RootElement.GetProperty("id").GetInt32())
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("result").ValueKind)
+
+        await WriteFrameAsync("{\"jsonrpc\":\"2.0\",\"method\":\"exit\",\"params\":null}")
+        await server.WaitForExit.WaitAsync(TimeSpan.FromSeconds(5))
     }
 
     shared {

@@ -296,8 +296,19 @@ class HolderOWNER_GENERIC {
             owner.Properties.Single((p PropertySymbol) -> p.Name == "Value").BackingField,
             Assert.IsType[BoundFieldAccessExpression](selected.Arguments[0]).Field
         )
-        Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
-        Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        if generic {
+            let resolved = Assert.IsType[FunctionSymbol](BoundSemantics.GetSymbol(compilation, token))
+            Assert.Same(expected.Declaration, resolved.Declaration)
+            Assert.Same(
+                TypeSymbol.Int32,
+                Assert.Single(Assert.IsType[StructSymbol](resolved.StaticOwnerType).TypeArguments)
+            )
+            let lookupResolved = Assert.IsType[FunctionSymbol](SemanticLookup.ResolveSymbol(compilation, token))
+            Assert.Same(expected.Declaration, lookupResolved.Declaration)
+        } else {
+            Assert.Same(expected, BoundSemantics.GetSymbol(compilation, token))
+            Assert.Same(expected, SemanticLookup.ResolveSymbol(compilation, token))
+        }
         Assert.Same(
             TypeSymbol.String,
             BoundSemantics.GetExpressionType(compilation, Assert.IsType[CallExpressionSyntax](token.Parent))
@@ -1696,6 +1707,393 @@ func Run() {
             )
         )
         Assert.Equal(LanguageServerTestHelpers.PositionOf(OverloadSource, "M()", 0).Line, location.Range.Start.Line)
+    }
+
+    @Fact
+    func Issue4997_OverloadedDeclarations_ResolveToTheirOwnSymbol() {
+        const source = `package Repro
+
+interface ILookup {
+    func M() int32;
+    func M(x int32) string;
+    prop this[index int32] string { get; }
+    prop this[key string] int32 { get; }
+}
+
+class Table {
+    func M() int32 -> 1
+    func M(x int32) string -> "x"
+    prop this[index int32] string { get -> "a" }
+    prop this[key string] int32 { get -> 2 }
+}
+
+func Use(t Table) int32 {
+    return t.M() + t["k"]
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+
+        let firstIfaceMethod = Assert.IsAssignableFrom[FunctionSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "M() int32;", 0))
+        )
+        let secondIfaceMethod = Assert.IsAssignableFrom[FunctionSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "M(x int32) string;", 0))
+        )
+        Assert.Empty(firstIfaceMethod.Parameters)
+        Assert.Single(secondIfaceMethod.Parameters)
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.IsAssignableFrom[ParameterSymbol](
+                SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "x int32) string;", 0))
+            )
+                .Type
+        )
+
+        let firstClassMethod = Assert.IsAssignableFrom[FunctionSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "M() int32 ->", 0))
+        )
+        let secondClassMethod = Assert.IsAssignableFrom[FunctionSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "M(x int32) string ->", 0))
+        )
+        Assert.Empty(firstClassMethod.Parameters)
+        Assert.Single(secondClassMethod.Parameters)
+        Assert.Contains(
+            "func (Table) M() int32",
+            HoverText(content, source, "M() int32 ->", 0),
+            StringComparison.Ordinal
+        )
+        Assert.Contains(
+            "func (Table) M(x int32) string",
+            HoverText(content, source, "M(x int32) string ->", 0),
+            StringComparison.Ordinal
+        )
+
+        let firstMethodRefs = SemanticLookup.FindReferences(compilation, firstClassMethod).ToList()
+        Assert.Equal(2, firstMethodRefs.Count)
+        let secondMethodRefs = SemanticLookup.FindReferences(compilation, secondClassMethod).ToList()
+        Assert.Single(secondMethodRefs)
+
+        let intIndexerParam = Assert.IsAssignableFrom[ParameterSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "index int32] string { get ->", 0))
+        )
+        let stringIndexerParam = Assert.IsAssignableFrom[ParameterSymbol](
+            SemanticLookup.ResolveSymbol(compilation, TokenAt(content, source, "key string] int32 { get ->", 0))
+        )
+        Assert.Equal(TypeSymbol.Int32, intIndexerParam.Type)
+        Assert.Equal(TypeSymbol.String, stringIndexerParam.Type)
+    }
+
+    @Fact
+    func Issue4997_DuplicateInterfaceParameters_MapSurvivingParameterWithoutThrowing() {
+        const source = `package Repro
+
+interface I {
+    func M(x int32, x int32);
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = Compilation(content.SyntaxTree)
+        Assert.NotEmpty(compilation.GlobalScope.Diagnostics)
+
+        let firstParamToken = TokenAt(content, source, "x int32", 0)
+        let resolvedParam = Assert.IsAssignableFrom[ParameterSymbol](
+            SemanticLookup.ResolveSymbol(compilation, firstParamToken)
+        )
+        Assert.Equal("x", resolvedParam.Name)
+        Assert.Equal(TypeSymbol.Int32, resolvedParam.Type)
+        Assert.Contains("x int32", HoverText(content, source, "x int32", 0), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Issue4997_BodyOnlyEdit_RepointsInterfacePropertiesIndexerParametersAndEvents() {
+        const beforeSource = `package Repro
+import System
+
+func Lead() int32 {
+    return 1
+}
+
+interface IStore {
+    prop Name string { get; }
+    prop this[key int32] string { get; }
+    event Changed EventHandler?
+}
+`
+        const afterSource = `package Repro
+import System
+
+func Lead() int32 {
+    let a = 1
+    let b = 2
+    return a + b
+}
+
+interface IStore {
+    prop Name string { get; }
+    prop this[key int32] string { get; }
+    event Changed EventHandler?
+}
+`
+        let beforeContent = LanguageServerTestHelpers.Content(beforeSource)
+        let beforeCompilation = ServerCompilation.Create(beforeContent.SyntaxTree)
+        let _ = beforeCompilation.GetDiagnostics()
+
+        let afterContent = LanguageServerTestHelpers.Content(afterSource)
+        let afterCompilation = beforeCompilation.ReplaceSyntaxTree(beforeContent.SyntaxTree, afterContent.SyntaxTree)
+        let _ = afterCompilation.GetDiagnostics()
+
+        let nameToken = TokenAt(afterContent, afterSource, "Name string", 0)
+        let nameProp = Assert.IsAssignableFrom[PropertySymbol](
+            SemanticLookup.ResolveSymbol(afterCompilation, nameToken)
+        )
+        Assert.Equal("Name", nameProp.Name)
+        Assert.Same(afterContent.SyntaxTree, nameProp.Declaration!!.SyntaxTree)
+
+        let keyToken = TokenAt(afterContent, afterSource, "key int32", 0)
+        let keyParam = Assert.IsAssignableFrom[ParameterSymbol](
+            SemanticLookup.ResolveSymbol(afterCompilation, keyToken)
+        )
+        Assert.Equal("key", keyParam.Name)
+
+        let evtToken = TokenAt(afterContent, afterSource, "Changed EventHandler?", 0)
+        let evtSymbol = Assert.IsAssignableFrom[EventSymbol](SemanticLookup.ResolveSymbol(afterCompilation, evtToken))
+        Assert.Equal("Changed", evtSymbol.Name)
+        Assert.Same(afterContent.SyntaxTree, evtSymbol.Declaration!!.SyntaxTree)
+    }
+
+    @Fact
+    func Issue5002_BodyOnlyEdit_RefreshesMaterializedConstructedInterfaceMethods() {
+        const beforeSource = `package Repro
+
+func Lead() int32 {
+    return 1
+}
+
+interface IBox[T any] {
+    func ReadBox() T;
+}
+
+func Run(box IBox[int32]) int32 {
+    return box.ReadBox()
+}
+`
+        const afterSource = `package Repro
+
+func Lead() int32 {
+    let a = 1
+    let b = 2
+    return a + b
+}
+
+interface IBox[T any] {
+    func ReadBox() T;
+}
+
+func Run(box IBox[int32]) int32 {
+    return box.ReadBox()
+}
+`
+        let beforeContent = LanguageServerTestHelpers.Content(beforeSource)
+        let beforeCompilation = ServerCompilation.Create(beforeContent.SyntaxTree)
+        let _ = beforeCompilation.GetDiagnostics()
+        let beforeHover = HoverText(beforeContent, beforeSource, "ReadBox()", 1)
+        Assert.Contains("func (IBox[int32]) ReadBox() int32", beforeHover, StringComparison.Ordinal)
+
+        let afterContent = LanguageServerTestHelpers.Content(afterSource)
+        let afterCompilation = beforeCompilation.ReplaceSyntaxTree(beforeContent.SyntaxTree, afterContent.SyntaxTree)
+        let _ = afterCompilation.GetDiagnostics()
+
+        let afterModel = afterCompilation.GetSemanticModel(afterContent.SyntaxTree)
+        let readBoxUseToken = TokenAt(afterContent, afterSource, "ReadBox()", 1)
+        let readBoxSymbol = Assert.IsAssignableFrom[FunctionSymbol](afterModel.GetSymbolInfo(readBoxUseToken).Symbol)
+        Assert.NotNull(readBoxSymbol.ReceiverType)
+        Assert.NotNull(readBoxSymbol.ThisParameter)
+        Assert.Same(afterContent.SyntaxTree, readBoxSymbol.Declaration!!.SyntaxTree)
+    }
+
+    @Fact
+    func Issue5002_ConstructedGenericMethodCall_ShowsSubstitutedSignatureAndPreservesReferences() {
+        const source = `package Repro
+import System
+
+class TagAttribute : Attribute {
+    init() {}
+}
+
+interface IBox[T any] {
+    func ReadBox() T;
+    func DefaultValue() int32 {
+        return 1
+    }
+}
+
+open class Holder[T any](value T) : IBox[T] {
+    @Tag
+    func Get() T -> value
+    func ReadBox() T -> value
+    open func Echo(input T) T -> input
+    func Count() int32 -> 1
+    shared {
+        func SharedTotal() int32 -> 1
+        func SharedEcho(value T) T -> value
+    }
+}
+
+class IntHolder : Holder[int32] {
+    init() : base(42) {}
+    override func Echo(input int32) int32 -> base.Echo(input) + base[IBox[int32]].DefaultValue()
+}
+
+class DefaultOnlyBox : IBox[int32] {
+    func ReadBox() int32 -> 0
+}
+
+struct StructHolder[T any] {
+    var Value T
+    func ReadSize() int32 -> 1
+    @System.Diagnostics.CodeAnalysis.UnscopedRef
+    func Slot() ref T {
+        return ref this.Value
+    }
+}
+
+func Run() int32 {
+    let h = Holder(42)
+    let box IBox[int32] = h
+    var sh = StructHolder[int32]{Value: 10}
+    return h.Get() + h.Echo(1) + h.Count() + Holder[int32].SharedTotal() + Holder[int32].SharedEcho(3) + IntHolder().Echo(2) + sh.ReadSize() + sh.Slot() + box.ReadBox() + DefaultOnlyBox().DefaultValue()
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let compilation = ServerCompilation.Create(content.SyntaxTree)
+        Assert.Empty(compilation.GlobalScope.Diagnostics)
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+
+        let getHover = HoverText(content, source, "Get()", 1)
+        Assert.Contains("func (Holder[int32]) Get() int32", getHover, StringComparison.Ordinal)
+        Assert.DoesNotContain("Holder[T]", getHover, StringComparison.Ordinal)
+
+        let echoHover = HoverText(content, source, "Echo(1)", 0)
+        Assert.Contains("func (Holder[int32]) Echo(input int32) int32", echoHover, StringComparison.Ordinal)
+        Assert.DoesNotContain("Holder[T]", echoHover, StringComparison.Ordinal)
+
+        let countHover = HoverText(content, source, "Count()", 1)
+        Assert.Contains("func (Holder[int32]) Count() int32", countHover, StringComparison.Ordinal)
+        Assert.DoesNotContain("Holder[T]", countHover, StringComparison.Ordinal)
+
+        let model = compilation.GetSemanticModel(content.SyntaxTree)
+        let getUseToken = TokenAt(content, source, "Get()", 1)
+        let getSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(getUseToken).Symbol)
+        Assert.Equal(TypeSymbol.Int32, getSymbol.Type)
+        Assert.Equal(TypeSymbol.Int32, Assert.Single(Assert.IsType[StructSymbol](getSymbol.ReceiverType).TypeArguments))
+        Assert.Same(getSymbol.ReceiverType, getSymbol.ContainingType)
+        Assert.Single(getSymbol.GetAttributes())
+
+        let countUseToken = TokenAt(content, source, "Count()", 1)
+        let countSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(countUseToken).Symbol)
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.Single(Assert.IsType[StructSymbol](countSymbol.ReceiverType).TypeArguments)
+        )
+        Assert.Same(countSymbol.ReceiverType, countSymbol.ContainingType)
+
+        let structCountUseToken = TokenAt(content, source, "ReadSize()", 1)
+        let structCountSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(structCountUseToken).Symbol)
+        Assert.True(structCountSymbol.ThisParameter!!.IsScoped)
+        Assert.False(structCountSymbol.ThisParameter!!.IsUnscopedRefReceiver)
+
+        let structSlotUseToken = TokenAt(content, source, "Slot()", 1)
+        let structSlotSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(structSlotUseToken).Symbol)
+        Assert.False(structSlotSymbol.ThisParameter!!.IsScoped)
+        Assert.True(structSlotSymbol.ThisParameter!!.IsUnscopedRefReceiver)
+
+        let sharedCountUseToken = TokenAt(content, source, "SharedTotal()", 1)
+        let sharedCountSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(sharedCountUseToken).Symbol)
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.Single(Assert.IsType[StructSymbol](sharedCountSymbol.StaticOwnerType).TypeArguments)
+        )
+        Assert.Same(sharedCountSymbol.StaticOwnerType, sharedCountSymbol.ContainingType)
+
+        let sharedEchoUseToken = TokenAt(content, source, "SharedEcho(3)", 0)
+        let sharedEchoSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(sharedEchoUseToken).Symbol)
+        let sharedEchoGroupMember = Assert.IsAssignableFrom[FunctionSymbol](
+            Assert.Single(model.GetMemberGroup(sharedEchoUseToken))
+        )
+        Assert.Same(sharedEchoSymbol, sharedEchoGroupMember)
+        Assert.Equal(TypeSymbol.Int32, sharedEchoGroupMember.Type)
+        Assert.Equal(TypeSymbol.Int32, Assert.Single(sharedEchoGroupMember.Parameters).Type)
+
+        let baseEchoToken = TokenAt(content, source, "Echo(input)", 0)
+        let baseEchoTokenSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(baseEchoToken).Symbol)
+        let baseEchoCallNode = Assert.IsType[CallExpressionSyntax](baseEchoToken.Parent)
+        let baseEchoBaseCallNode = Assert.IsType[BaseClassCallExpressionSyntax](baseEchoCallNode.Parent)
+        let baseEchoBaseCallSymbol = Assert.IsAssignableFrom[FunctionSymbol](
+            model.GetSymbolInfo(baseEchoBaseCallNode).Symbol
+        )
+        let baseEchoCallSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(baseEchoCallNode).Symbol)
+        Assert.Same(baseEchoTokenSymbol, baseEchoBaseCallSymbol)
+        Assert.Same(baseEchoTokenSymbol, baseEchoCallSymbol)
+        Assert.Equal(TypeSymbol.Int32, baseEchoCallSymbol.Type)
+        Assert.Equal(TypeSymbol.Int32, Assert.Single(baseEchoCallSymbol.Parameters).Type)
+
+        let defaultCountHover = HoverText(content, source, "DefaultValue()", 1)
+        Assert.Contains("func (IBox[int32]) DefaultValue() int32", defaultCountHover, StringComparison.Ordinal)
+        let defaultCountUseToken = TokenAt(content, source, "DefaultValue()", 1)
+        let defaultCountSymbol = Assert.IsAssignableFrom[FunctionSymbol](
+            model.GetSymbolInfo(defaultCountUseToken).Symbol
+        )
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.Single(Assert.IsType[InterfaceSymbol](defaultCountSymbol.ReceiverType).TypeArguments)
+        )
+        Assert.Same(defaultCountSymbol.ReceiverType, defaultCountSymbol.ContainingType)
+        Assert.NotNull(defaultCountSymbol.ThisParameter)
+
+        let boxGetHover = HoverText(content, source, "ReadBox()", 3)
+        Assert.Contains("func (IBox[int32]) ReadBox() int32", boxGetHover, StringComparison.Ordinal)
+        let boxGetUseToken = TokenAt(content, source, "ReadBox()", 3)
+        let boxGetSymbol = Assert.IsAssignableFrom[FunctionSymbol](model.GetSymbolInfo(boxGetUseToken).Symbol)
+        Assert.Equal(TypeSymbol.Int32, boxGetSymbol.Type)
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.Single(Assert.IsType[InterfaceSymbol](boxGetSymbol.ReceiverType).TypeArguments)
+        )
+        Assert.Same(boxGetSymbol.ReceiverType, boxGetSymbol.ContainingType)
+        Assert.NotNull(boxGetSymbol.ThisParameter)
+
+        let concreteDefaultHover = HoverText(content, source, "DefaultValue()", 2)
+        Assert.Contains("func (IBox[int32]) DefaultValue() int32", concreteDefaultHover, StringComparison.Ordinal)
+        let concreteDefaultToken = TokenAt(content, source, "DefaultValue()", 2)
+        let concreteDefaultSymbol = Assert.IsAssignableFrom[FunctionSymbol](
+            model.GetSymbolInfo(concreteDefaultToken).Symbol
+        )
+        Assert.Equal(
+            TypeSymbol.Int32,
+            Assert.Single(Assert.IsType[InterfaceSymbol](concreteDefaultSymbol.ReceiverType).TypeArguments)
+        )
+        Assert.Same(concreteDefaultSymbol.ReceiverType, concreteDefaultSymbol.ContainingType)
+        Assert.NotNull(concreteDefaultSymbol.ThisParameter)
+
+        let getDeclToken = TokenAt(content, source, "Get() T", 0)
+        let getDeclSymbol = Assert.IsAssignableFrom[FunctionSymbol](
+            SemanticLookup.ResolveSymbol(compilation, getDeclToken)
+        )
+        Assert.Same(getDeclSymbol.Declaration, getSymbol.Declaration)
+
+        let uri = Assert.IsType[DocumentUri](DocumentUri.From("file:///issue5002.gs"))
+        let defLocation = Assert.IsType[Location](
+            DefinitionComputer.ComputeDefinition(uri, content, LanguageServerTestHelpers.PositionOf(source, "Get()", 1))
+        )
+        Assert.Equal(LanguageServerTestHelpers.PositionOf(source, "Get() T", 0).Line, defLocation.Range.Start.Line)
+
+        let refsFromDecl = SemanticLookup.FindReferences(compilation, getDeclSymbol).ToList()
+        Assert.Contains(refsFromDecl, (t SyntaxToken) -> t.Span.Start == getUseToken.Span.Start)
+        let refsFromUse = SemanticLookup.FindReferences(compilation, getSymbol).ToList()
+        Assert.Contains(refsFromUse, (t SyntaxToken) -> t.Span.Start == getDeclToken.Span.Start)
     }
 
     @Fact

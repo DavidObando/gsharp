@@ -179,7 +179,9 @@ shared class HtmlReportWriter {
             "FAILED"
         } else {
             (
-                if model.Unverified {
+                if model.Partial {
+                    "PARTIAL (unverified)"
+                } else if model.Unverified {
                     "PASSED (unverified)"
                 } else {
                     "PASSED"
@@ -190,7 +192,7 @@ shared class HtmlReportWriter {
             "bad"
         } else {
             (
-                if model.Unverified {
+                if model.Partial || model.Unverified {
                     "skip"
                 } else {
                     "ok"
@@ -303,6 +305,16 @@ shared class HtmlReportWriter {
                     .Append(model.MissingArtifactCount.ToString(CultureInfo.InvariantCulture))
                     .Append(" triage artifact(s) referenced by this run could not be read. ")
                     .Append("This is NOT a green run; re-run triage or inspect the run directory.</p>")
+                    .Append(Newline)
+            } else if model.Succeeded && model.Partial {
+                sb
+                    .Append("<p class=\"empty\">Partial run — later stages were skipped; ")
+                    .Append("this is NOT a green run.</p>")
+                    .Append(Newline)
+            } else if model.Succeeded && model.Unverified {
+                sb
+                    .Append("<p class=\"empty\">Run PASSED (unverified) — some stages were skipped; ")
+                    .Append("this is NOT a green run.</p>")
                     .Append(Newline)
             } else {
                 sb

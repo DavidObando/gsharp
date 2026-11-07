@@ -6976,7 +6976,8 @@ public class Probe {
         let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
         Assert.Contains("rest[0]!!.Borrow()", text, StringComparison.Ordinal)
-        Assert.Contains("buffer[1..][0]!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("__spill0 = buffer[1..]", text, StringComparison.Ordinal)
+        Assert.Contains("__spill0[0]!!.Borrow()", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             []string{typeof(Gsharp.Values.ManagedRef[_]).Assembly.Location}
@@ -6984,8 +6985,9 @@ public class Probe {
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
         Assert.Equal(64, result.Value)
-        Assert.Contains("__spill0 = buffer[..][0]", text, StringComparison.Ordinal)
-        Assert.Contains("__spill0!!.Borrow()", text, StringComparison.Ordinal)
+        Assert.Contains("__spill1 = buffer[..]", text, StringComparison.Ordinal)
+        Assert.Contains("__spill2 = __spill1[0]", text, StringComparison.Ordinal)
+        Assert.Contains("__spill2!!.Borrow()", text, StringComparison.Ordinal)
     }
 
     @Theory

@@ -9,6 +9,7 @@
          when both carry the same assembly version the SDK's (older, C#-built) copy silently
          wins in the output directory, masking the in-tree build under test. -->
     <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
   </PropertyGroup>
 
   <ItemGroup>

@@ -4183,6 +4183,13 @@ internal partial class ExpressionBinder {
             while unwrappedElementSyntax is ParenthesizedExpressionSyntax parenthesizedElement {
                 unwrappedElementSyntax = parenthesizedElement.Expression
             }
+            let targetElementLambda = elementTargetType != nil &&
+                (
+                IsNestedLambdaExpression(e) || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    elementTargetType,
+                    out _
+                )
+            )
             var be = if elementTargetType != nil &&
                 (
                 unwrappedElementSyntax is TupleLiteralExpressionSyntax ||
@@ -4192,7 +4199,7 @@ internal partial class ExpressionBinder {
                         NullableTypeSymbol{UnderlyingType: TupleTypeSymbol} or
                         PlatformTypeSymbol{UnderlyingType: TupleTypeSymbol}
                 ) ||
-                    MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _)
+                    targetElementLambda
             ) {
                 BindExpression(e, elementTargetType)
             } else {
@@ -4201,7 +4208,8 @@ internal partial class ExpressionBinder {
             if be.Type == TypeSymbol.Error {
                 return BoundErrorExpression(nil)
             }
-            if be is BoundFunctionLiteralExpression targetedRefLiteral &&
+            if !targetElementLambda &&
+                be is BoundFunctionLiteralExpression targetedRefLiteral &&
                 elementTargetType != nil &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(elementTargetType, out _) {

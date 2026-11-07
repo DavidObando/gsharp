@@ -117,6 +117,7 @@ class Issue4853StopAfterTests : IDisposable {
             TriageSerialization.Options
         )
         let app = Assert.Single(result!!.Apps)
+        Assert.Equal([]string{"translate"}, result!!.RequestedStages)
         Assert.Equal([]string{"translate"}, app.Stages.Select((stage StageResult) -> stage.Stage).ToArray())
         Assert.True(app.Succeeded)
         Assert.True(app.Unverified)

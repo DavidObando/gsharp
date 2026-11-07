@@ -643,6 +643,24 @@ internal class BinderContext {
         return false
     }
 
+    internal func ContainsOutOfScopeTypeParameter(type TypeSymbol?, currentFunction FunctionSymbol?) bool {
+        if type == nil || !TypeSymbol.ContainsTypeParameter(type) {
+            return false
+        }
+        let currentContainingType TypeSymbol? = CurrentContainingType ??
+            currentFunction?.ReceiverType ??
+            currentFunction?.StaticOwnerType ??
+            currentFunction?.LexicalEnclosingType
+        let referenced = List[TypeParameterSymbol]()
+        TypeSymbol.CollectReferencedTypeParameters(type, referenced, nil)
+        for tp in referenced {
+            if !IsTypeParameterInScope(tp, currentContainingType) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func IsTypeParameterInScope(typeParameter TypeParameterSymbol, containingType TypeSymbol?) bool {
         if CurrentTypeParameters != nil && CurrentTypeParameters!!.TryGetValue(typeParameter.Name, out var inScopeTp) &&
             object.ReferenceEquals(inScopeTp, typeParameter) {

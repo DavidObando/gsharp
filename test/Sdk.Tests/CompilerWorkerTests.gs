@@ -892,7 +892,7 @@ open class CompilerWorkerTests : IDisposable {
             xml.Append(
                 "<BuildTask GsharpCompilerFullPath=\"$compiler\" OutputPath=\".\" OutputName=\"Budget\" " +
                     "TempOutputPath=\".\" TargetFramework=\"net10.0\" BasePath=\"$basePath\" OutputType=\"Exe\" " +
-                    "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"./$label.rsp\" " +
+                    "Compile=\"@(Sources)\" References=\"@(Refs)\" ResponseFilePath=\"$label.rsp\" " +
                     "UseSharedCompilation=\"$shared\" WorkerGrant=\"7\" MaxWorkers=\"$workers\" " +
                     "WorkerMemoryBudgetMiB=\"$memory\" Deterministic=\"true\" DebugType=\"portable\" RefAssembly=\"Budget.ref.dll\"/>"
             )

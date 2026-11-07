@@ -74,6 +74,32 @@ class CiTestMatrixTests(unittest.TestCase):
                 ("Cs2Gs.Tests.Future.Control", "remainder")):
             self.assertEqual(owner(name), "cs2gs-" + band)
 
+    def test_verify_partition_passes_arm64_platform_to_vstest_on_arm64_hosts(self):
+        from unittest import mock
+
+        with mock.patch.object(partition.platform, "machine", return_value="arm64"):
+            self.assertEqual(partition.default_platform(), "ARM64")
+        with mock.patch.object(partition.platform, "machine", return_value="aarch64"):
+            self.assertEqual(partition.default_platform(), "ARM64")
+        with mock.patch.object(partition.platform, "machine", return_value="x86_64"):
+            self.assertIsNone(partition.default_platform())
+
+        recorded_commands = []
+
+        def fake_run(cmd, **_kwargs):
+            recorded_commands.append(cmd)
+            target_arg = next(a for a in cmd if a.startswith("--ListTestsTargetPath:"))
+            Path(target_arg.split(":", 1)[1]).write_text("Sample.Test1\n", encoding="utf-8")
+
+        with mock.patch.object(partition.subprocess, "run", side_effect=fake_run):
+            tests_arm = partition.list_tests(Path("Sample.Tests.dll"), "ARM64")
+            tests_x64 = partition.list_tests(Path("Sample.Tests.dll"), None)
+
+        self.assertEqual(tests_arm, ["Sample.Test1"])
+        self.assertEqual(tests_x64, ["Sample.Test1"])
+        self.assertIn("/Platform:ARM64", recorded_commands[0])
+        self.assertFalse(any(a.startswith("/Platform:") for a in recorded_commands[1]))
+
 
 if __name__ == "__main__":
     unittest.main()

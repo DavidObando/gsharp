@@ -124,6 +124,44 @@ Run()`, "RefOwnerStorageConsumer4980", true, "/r:" + contract)
     }
 
     @Theory
+    @InlineData("owner.ReadOnly.Value ??= \"v\"", "GS0127", "ReadOnly")
+    @InlineData("let _ = (owner.ReadOnly.Value ??= \"v\")", "GS0127", "ReadOnly")
+    @InlineData("Owner.StaticReadOnly.Value ??= \"v\"", "GS0127", "StaticReadOnly")
+    @InlineData("let _ = (Owner.StaticReadOnly.Value ??= \"v\")", "GS0127", "StaticReadOnly")
+    @InlineData("frozen.Cell.Value ??= \"v\"", "GS0127", "frozen")
+    @InlineData("let _ = (frozen.Cell.Value ??= \"v\")", "GS0127", "frozen")
+    @InlineData("owner.Copy.Value ??= \"v\"", "GS0499", "Value")
+    @InlineData("let _ = (owner.Copy.Value ??= \"v\")", "GS0499", "Value")
+    func Issue5022_ReadOnlyOrValueCopyClrReceiver_ReportsMemberNameNotSyntaxTreeDump(
+        statement string,
+        expectedDiagnostic string,
+        expectedName string
+    ) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contract = fixture.CompileCSharp(`#nullable enable
+namespace ReadonlyReceiver5022;
+public struct Cell { public string? Value { get; set; } }
+public sealed class Owner {
+    public readonly Cell ReadOnly;
+    public static readonly Cell StaticReadOnly;
+    public Cell Copy => default;
+}`, "ReadonlyReceiver5022")
+        let source = `package Consumer
+import ReadonlyReceiver5022
+struct Holder { var Cell Cell }
+func Test(in frozen Holder) {
+    var owner = Owner()
+    STATEMENT
+}
+`.Replace("STATEMENT", statement)
+        let (code, output) = fixture.TryCompile(source, "ReadonlyReceiverConsumer5022", false, "/r:" + contract)
+        Assert.NotEqual(0, code)
+        Assert.Contains(expectedDiagnostic, output, StringComparison.Ordinal)
+        Assert.Contains("'" + expectedName + "'", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("└──", output, StringComparison.Ordinal)
+    }
+
+    @Theory
     @InlineData(false, 0)
     @InlineData(true, 0)
     @InlineData(false, 1)
@@ -1070,10 +1108,14 @@ func main() {
     var t string? = "text"
     t ??= throw Exception("missing")
     Console.WriteLine(t.Length)
+
+    var e string? = "expr"
+    let _ = (e ??= throw Exception("missing"))
+    Console.WriteLine(e.Length)
 }
 
 main()`
-        Assert.Equal("4${Environment.NewLine}", CompileAndRun(source))
+        Assert.Equal("4${Environment.NewLine}4${Environment.NewLine}", CompileAndRun(source))
     }
 
     /// Review of #4980 / issue #5000: in value position the right side runs

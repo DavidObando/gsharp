@@ -1379,6 +1379,10 @@ internal partial class OverloadResolver {
                         argument = parenthesized.Expression
                         continue
                     }
+                    case checkedExpression is CheckedExpressionSyntax {
+                        argument = checkedExpression.Expression
+                        continue
+                    }
                     default {
                         return argument
                     }

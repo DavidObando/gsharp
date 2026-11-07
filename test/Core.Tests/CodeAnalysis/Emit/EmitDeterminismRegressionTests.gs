@@ -161,6 +161,13 @@ open class EmitDeterminismRegressionTests {
         }
 
         private func LocateRepoRoot() string? {
+            let configured string? = Environment.GetEnvironmentVariable(TestSource.SourceRootEnvironmentVariable)
+            if !string.IsNullOrWhiteSpace(configured) {
+                let root = Path.GetFullPath(configured)
+                if RepositoryRootMarker.IsRoot(root) {
+                    return root
+                }
+            }
             var dir DirectoryInfo? = DirectoryInfo(
                 Path.GetDirectoryName(typeof(EmitDeterminismRegressionTests).Assembly.Location)!!
             )

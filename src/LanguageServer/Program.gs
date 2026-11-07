@@ -182,7 +182,7 @@ open class Program {
             let documentContentService = DocumentContentService()
             let workspaceState = WorkspaceState()
             let target = LspServer(documentContentService, workspaceState, logger)
-            let formatter = SystemTextJsonFormatter{JsonSerializerOptions: LspJson.Options}
+            let formatter = LspJson.CreateFormatter()
             let handler = HeaderDelimitedMessageHandler(sending, receiving, formatter)
             let rpc = JsonRpc(handler)
             rpc.AddLocalRpcTarget(target, JsonRpcTargetOptions{DisposeOnDisconnect: false})

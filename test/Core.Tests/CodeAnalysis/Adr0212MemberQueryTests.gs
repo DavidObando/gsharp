@@ -282,6 +282,17 @@ class UnfinishedDog : Animal {
             []string{"Put(int32)", "Put(string)", "Put(int32, int32)", "Put(string, int32)"},
             dual.Select((s Symbol) -> Describe(cast[FunctionSymbol](s))).ToList()
         )
+        let dualStringCall = CallAt("PDualBoxedString")
+        let dualStringModel = ModelOf(dualStringCall)
+        let dualStringSelected = Assert.IsType[FunctionSymbol](
+            dualStringModel.GetSymbolInfo(dualStringCall.Identifier).Symbol
+        )
+        Assert.Equal("Put(string)", Describe(dualStringSelected))
+        Assert.Same(dualStringSelected, dualStringModel.GetSymbolInfo(dualStringCall).Symbol)
+        Assert.Equal(
+            TypeSymbol.String,
+            Assert.Single(Assert.IsType[InterfaceSymbol](dualStringSelected.ReceiverType).TypeArguments)
+        )
         let dualAccess = cast[AccessorExpressionSyntax](CallAt("PDualConstraint").Parent!!)
         let dualModel = ModelOf(dualAccess)
         let dualTypeParam = dualModel.GetReceiverTypeInfo(dualAccess.LeftPart).Type!!
@@ -880,6 +891,7 @@ func UseAll(c Cat, r IRead, b IBoxed[int32], dual IDualBoxed, p Parts, sb String
     r.Read(1) // PInterface
     b.Put(1) // PBoxed
     dual.Put(1) // PDualBoxed
+    dual.Put("s") // PDualBoxedString
     p.Go(1) // PPartial
     Util.Make(1) // PStatic
     WriteLine(Console.WriteLine) // PProbe

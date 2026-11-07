@@ -7,6 +7,8 @@
     <!-- Keep nullable annotations available to these tests without enabling
          nullable flow warnings in test projects. -->
     <Nullable>annotations</Nullable>
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
   </PropertyGroup>
 
   <ItemGroup>
