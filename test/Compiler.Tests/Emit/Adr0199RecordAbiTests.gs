@@ -643,6 +643,17 @@ data class Leaf(Side int32) : Base`
         let (eqExit, eqOut) = Adr0199RecordAbiWitness.TryCompileGSharp(abstractSelfEquals)
         Assert.NotEqual(0, eqExit)
         Assert.Contains("GS0387", eqOut, StringComparison.Ordinal)
+        const hiddenWrongReturnType = `package W
+import System.Text
+
+abstract class Root {
+    protected open func PrintMembers(builder StringBuilder) int32;
+}
+abstract data class Middle(Id int32) : Root
+data class Leaf(Side int32) : Middle(1)`
+        let (retExit, retOut) = Adr0199RecordAbiWitness.TryCompileGSharp(hiddenWrongReturnType)
+        Assert.NotEqual(0, retExit)
+        Assert.Contains("GS0387", retOut, StringComparison.Ordinal)
     }
 
     @Fact

@@ -1827,6 +1827,16 @@ class StructSymbol : TypeSymbol {
                     if !implemented &&
                         derivedCls.DataPrintMembers is {IsOverride: true} synthesizedPrintMembers &&
                         abstractMethod.Accessibility == synthesizedPrintMembers.Accessibility &&
+                        abstractMethod.ReturnRefKind == synthesizedPrintMembers.ReturnRefKind &&
+                        !abstractMethod.IsAsync &&
+                        !abstractMethod.IsSuspending &&
+                        (
+                        if subst != nil {
+                            SubstituteTypeForConstruction(abstractMethod.Type, subst)
+                        } else {
+                            abstractMethod.Type
+                        }
+                    ) == synthesizedPrintMembers.Type &&
                         AbstractMethodSatisfiedBy(abstractMethod, subst, synthesizedPrintMembers, candidateSubst) {
                         implemented = true
                         break
