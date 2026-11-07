@@ -230,6 +230,10 @@ class TypeParameterSymbol : TypeSymbol {
     /// verifiable.
     prop HasUnmanagedConstraint bool
 
+    internal prop HasNullableReferenceTypeConstraint bool
+
+    internal prop HasNotNullConstraint bool
+
     /// Gets or sets a value indicating whether this type parameter is declared
     /// on a generic method (as opposed to a generic type). When
     /// `true` the emitter encodes it as

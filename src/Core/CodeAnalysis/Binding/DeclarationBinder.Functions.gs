@@ -1237,6 +1237,8 @@ internal partial class DeclarationBinder {
                 symbol.ClassConstraint = nil
                 symbol.TypeParameterBound = nil
                 symbol.HasReferenceTypeConstraint = false
+                symbol.HasNullableReferenceTypeConstraint = false
+                symbol.HasNotNullConstraint = false
                 symbol.HasValueTypeConstraint = false
                 symbol.HasDefaultConstructorConstraint = false
                 symbol.HasUnmanagedConstraint = false
@@ -1317,9 +1319,11 @@ internal partial class DeclarationBinder {
                 // by the syntax — combining class + init() is legal and produces
                 // both CLR flag bits.
                 let hasRefType = p.HasClassConstraint
+                let hasNullableRefType = p.HasNullableClassConstraint
                 var hasValueType = p.HasStructConstraint
                 var hasDefaultCtor = p.HasInitConstraint
                 var hasUnmanaged = p.HasUnmanagedConstraint
+                var hasNotNull = p.HasNotNullConstraint
                 // Issue #1336: the `unmanaged` constraint subsumes `struct` —
                 // an unmanaged type is necessarily a non-nullable value type —
                 // so it implies the value-type (and therefore default-ctor)
@@ -1340,7 +1344,11 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportTypeParameterConstraintConflict(
                         p.ClassConstraintKeyword?.Location ?? p.Identifier.Location,
                         name,
-                        "class",
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
                         "unmanaged"
                     )
                     hasUnmanaged = false
@@ -1349,10 +1357,45 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportTypeParameterConstraintConflict(
                         p.StructConstraintKeyword?.Location ?? p.Identifier.Location,
                         name,
-                        "class",
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
                         "struct"
                     )
                     hasValueType = false
+                }
+                if hasNotNull && hasRefType {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
+                        "notnull"
+                    )
+                    hasNotNull = false
+                }
+                if hasNotNull && hasValueType {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "struct",
+                        "notnull"
+                    )
+                    hasNotNull = false
+                }
+                if hasNotNull && hasUnmanaged {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "unmanaged",
+                        "notnull"
+                    )
+                    hasNotNull = false
                 }
                 if hasValueType && hasDefaultCtor {
                     // `struct` already implies `init()` at the CLR level (ECMA-335 II.10.1.7);
@@ -1382,6 +1425,8 @@ internal partial class DeclarationBinder {
                 // bits. The dedicated modreq(UnmanagedType) GenericParamConstraint
                 // is emitted by TypeDefEmitter from HasUnmanagedConstraint.
                 symbol.HasReferenceTypeConstraint = hasRefType
+                symbol.HasNullableReferenceTypeConstraint = hasRefType && hasNullableRefType
+                symbol.HasNotNullConstraint = hasNotNull
                 symbol.HasValueTypeConstraint = hasValueType || hasUnmanaged
                 symbol.HasDefaultConstructorConstraint = hasDefaultCtor
                 symbol.HasUnmanagedConstraint = hasUnmanaged
@@ -2337,6 +2382,8 @@ internal partial class DeclarationBinder {
                     x.Variance != y.Variance ||
                     x.Constraint != y.Constraint ||
                     x.HasReferenceTypeConstraint != y.HasReferenceTypeConstraint ||
+                    x.HasNullableReferenceTypeConstraint != y.HasNullableReferenceTypeConstraint ||
+                    x.HasNotNullConstraint != y.HasNotNullConstraint ||
                     x.HasValueTypeConstraint != y.HasValueTypeConstraint ||
                     x.HasDefaultConstructorConstraint != y.HasDefaultConstructorConstraint ||
                     x.HasUnmanagedConstraint != y.HasUnmanagedConstraint ||
