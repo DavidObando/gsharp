@@ -2181,8 +2181,14 @@ internal class ConversionClassifier {
                     let isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression &&
                         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
                     let isRuntimeDelegateReturnMismatch = !isExpressionTreeLiteralTarget &&
-                        !DelegateReturnMentionsInferredMethodTypeParameter(method, paramIndex, call) &&
-                        RequiresRuntimeDelegateReturnValidation(argument, rejectionTargetType, out _)
+                        RequiresRuntimeDelegateReturnValidation(
+                        argument,
+                        rejectionTargetType,
+                        out _,
+                        method,
+                        paramIndex,
+                        call
+                    )
                     // Issue #2347: an unresolved method group's natural type is
                     // the Error sentinel (see
                     // ClrOverloadResolution.IsUnresolvedMethodGroupArgument), so
@@ -4000,7 +4006,10 @@ internal class ConversionClassifier {
     internal func RequiresRuntimeDelegateReturnValidation(
         expression BoundExpression,
         targetType TypeSymbol?,
-        @NotNullWhen(true) out lambdaSyntax LambdaExpressionSyntax?
+        @NotNullWhen(true) out lambdaSyntax LambdaExpressionSyntax?,
+        method MethodInfo? = nil,
+        paramIndex int32 = -1,
+        call CallExpressionSyntax? = nil
     ) bool {
         lambdaSyntax = nil
         if targetType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
@@ -4035,26 +4044,57 @@ internal class ConversionClassifier {
             sourceReturn = unwrappedSource
             targetReturn = unwrappedTarget
         }
-        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn) {
+        let openReturnClrType = GetInferredOpenDelegateReturnClrType(method, paramIndex, call, literal.Function.IsAsync)
+        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn, openReturnClrType) {
             return false
         }
         lambdaSyntax = syntax
         return true
     }
 
-    internal func DelegateReturnMentionsInferredMethodTypeParameter(
+    internal func BuildRuntimeDelegateValidationTarget(
+        expression BoundExpression,
+        targetType TypeSymbol,
+        method MethodInfo? = nil,
+        paramIndex int32 = -1,
+        call CallExpressionSyntax? = nil
+    ) TypeSymbol {
+        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
+            literal == nil ||
+            literal.FunctionType is not FunctionTypeSymbol sourceFunction ||
+            !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(targetType, out var targetFunction) ||
+            targetFunction == nil {
+            return targetType
+        }
+        let openReturnClrType = GetInferredOpenDelegateReturnClrType(method, paramIndex, call, literal.Function.IsAsync)
+        if openReturnClrType == nil || literal.Function.IsAsync {
+            return targetType
+        }
+        let mergedReturn = MergeInferredTupleReturnPositions(
+            sourceFunction.ReturnType,
+            targetFunction.ReturnType,
+            openReturnClrType
+        )
+        if object.ReferenceEquals(mergedReturn, targetFunction.ReturnType) {
+            return targetType
+        }
+        return FunctionTypeSymbol.Get(targetFunction.ParameterTypes, targetFunction.IsVariadic, mergedReturn)
+    }
+
+    private func GetInferredOpenDelegateReturnClrType(
         method MethodInfo?,
         paramIndex int32,
-        call CallExpressionSyntax?
-    ) bool {
+        call CallExpressionSyntax?,
+        isAsync bool
+    ) Type? {
         if method == nil {
-            return false
+            return nil
         }
         if !method.IsGenericMethod {
-            return false
+            return nil
         }
         if call?.TypeArgumentList is {} typeArgs && typeArgs.Arguments.Count > 0 {
-            return false
+            return nil
         }
         var openMethod MethodInfo
         var openParameters[]ParameterInfo
@@ -4066,37 +4106,79 @@ internal class ConversionClassifier {
             }
             openParameters = openMethod.GetParameters()
         } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
-            return false
+            return nil
         }
         if paramIndex < 0 || paramIndex >= openParameters.Length {
-            return false
+            return nil
         }
         var openParameterType Type? = GetPlainValueClrParameterType(openParameters[paramIndex])
         if MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out var innerDelegate) {
             openParameterType = innerDelegate
         }
         let invoke MethodInfo? = openParameterType?.GetMethodSafe("Invoke")
-        return ClrTypeMentionsMethodTypeParameter(invoke?.ReturnType)
-    }
-
-    private func ClrTypeMentionsMethodTypeParameter(type Type?) bool {
-        if type == nil {
-            return false
-        }
-        if type.IsGenericParameter {
-            return type.DeclaringMethod != nil
-        }
-        if type.IsArray || type.IsByRef || type.IsPointer {
-            return ClrTypeMentionsMethodTypeParameter(type.GetElementType())
-        }
-        if type.IsGenericType {
-            for arg in type.GetGenericArguments() {
-                if ClrTypeMentionsMethodTypeParameter(arg) {
-                    return true
-                }
+        var openReturn Type? = invoke?.ReturnType
+        if isAsync && openReturn != nil && openReturn.IsGenericType {
+            let taskArgs = openReturn.GetGenericArguments()
+            if taskArgs.Length == 1 {
+                openReturn = taskArgs[0]
             }
         }
-        return false
+        return openReturn
+    }
+
+    private func MergeInferredTupleReturnPositions(
+        sourceReturn TypeSymbol,
+        targetReturn TypeSymbol,
+        openReturnClrType Type?
+    ) TypeSymbol {
+        if openReturnClrType == nil {
+            return targetReturn
+        }
+        if openReturnClrType.IsGenericParameter && openReturnClrType.DeclaringMethod != nil {
+            return sourceReturn
+        }
+        let unwrappedSourceTuple = if sourceReturn is TupleTypeSymbol directSourceTuple {
+            directSourceTuple
+        } else if sourceReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableSourceTuple} {
+            nullableSourceTuple
+        } else {
+            default(TupleTypeSymbol?)
+        }
+        let unwrappedTargetTuple = if targetReturn is TupleTypeSymbol directTargetTuple {
+            directTargetTuple
+        } else if targetReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableTargetTuple} {
+            nullableTargetTuple
+        } else {
+            default(TupleTypeSymbol?)
+        }
+        if unwrappedSourceTuple == nil ||
+            unwrappedTargetTuple == nil ||
+            unwrappedSourceTuple.Arity != unwrappedTargetTuple.Arity {
+            return targetReturn
+        }
+        let builder = ImmutableArray.CreateBuilder[TypeSymbol](unwrappedTargetTuple.Arity)
+        var changed = false
+        for var i = 0; i < unwrappedTargetTuple.Arity; i++ {
+            let existing = unwrappedTargetTuple.ElementTypes[i]
+            let mergedElem = MergeInferredTupleReturnPositions(
+                unwrappedSourceTuple.ElementTypes[i],
+                existing,
+                GetOpenTupleElementClrType(openReturnClrType, i)
+            )
+            if !object.ReferenceEquals(mergedElem, existing) {
+                changed = true
+            }
+            builder.Add(mergedElem)
+        }
+        if !changed {
+            return targetReturn
+        }
+        let rebuiltTuple = TupleTypeSymbol.Get(builder.MoveToImmutable(), unwrappedTargetTuple.ElementNames)
+        return if targetReturn is NullableTypeSymbol {
+            NullableTypeSymbol.Get(rebuiltTuple)
+        } else {
+            rebuiltTuple
+        }
     }
 
     internal func BindLambdaReturnTupleConversion(
@@ -5342,7 +5424,54 @@ internal class ConversionClassifier {
             }
         }
 
-        func HasReferenceNullabilityReturnMismatch(sourceReturn TypeSymbol, targetReturn TypeSymbol) bool {
+        private func GetOpenTupleElementClrType(openType Type?, index int32) Type? {
+            if openType == nil || index < 0 {
+                return nil
+            }
+            var current Type = openType
+            if current.IsGenericType && string.Equals(
+                current.GetGenericTypeDefinition().FullName,
+                "System.Nullable`1",
+                StringComparison.Ordinal
+            ) {
+                let nullableArgs = current.GetGenericArguments()
+                if nullableArgs.Length == 1 {
+                    current = nullableArgs[0]
+                }
+            }
+            var remaining = index
+            while current.IsGenericType {
+                let defName = current.GetGenericTypeDefinition().FullName
+                if defName == nil || !defName.StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
+                    return nil
+                }
+                let args = current.GetGenericArguments()
+                if remaining < 7 {
+                    return if remaining < args.Length {
+                        args[remaining]
+                    } else {
+                        default(Type?)
+                    }
+                }
+                if args.Length < 8 {
+                    return nil
+                }
+                current = args[7]
+                remaining -= 7
+            }
+            return nil
+        }
+
+        func HasReferenceNullabilityReturnMismatch(
+            sourceReturn TypeSymbol,
+            targetReturn TypeSymbol,
+            openReturnClrType Type? = nil
+        ) bool {
+            if openReturnClrType != nil &&
+                openReturnClrType.IsGenericParameter &&
+                openReturnClrType.DeclaringMethod != nil {
+                return false
+            }
             let unwrappedSourceTuple = if sourceReturn is TupleTypeSymbol directSourceTuple {
                 directSourceTuple
             } else if sourceReturn is NullableTypeSymbol{UnderlyingType: TupleTypeSymbol nullableSourceTuple} {
@@ -5364,7 +5493,8 @@ internal class ConversionClassifier {
                 for var i = 0; i < unwrappedSourceTuple.Arity; i++ {
                     if HasReferenceNullabilityReturnMismatch(
                         unwrappedSourceTuple.ElementTypes[i],
-                        unwrappedTargetTuple.ElementTypes[i]
+                        unwrappedTargetTuple.ElementTypes[i],
+                        GetOpenTupleElementClrType(openReturnClrType, i)
                     ) {
                         return true
                     }

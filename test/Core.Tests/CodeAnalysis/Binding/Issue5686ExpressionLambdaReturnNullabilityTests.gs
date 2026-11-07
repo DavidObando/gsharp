@@ -382,6 +382,11 @@ func Run(token Token) {
                 "Maybe()"
             )
             yield Row(
+                "mixed-fixed-and-inferred-tuple-delegate-return",
+                `func Run() (string, Box) -> StrictSink5686.UseMixedTuple(Box(), (x) -> (Maybe(), x))`,
+                "(Maybe(), x)"
+            )
+            yield Row(
                 "mixed-object-delegate-and-expression-tree-overload",
                 `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
                 "MaybeThing()",
@@ -473,7 +478,8 @@ func Run(token Token) {
     let d = StrictSink5686.Eval(() -> Maybe())
     let e = StrictSink5686.PickNullableCustomDelegate((x) -> Maybe(), 1)
     let f = StrictSink5686.PickNullableCustomDelegate((x) -> Box().MaybeName, true)
-    return a ?? b ?? c ?? d ?? e ?? f
+    let g = StrictSink5686.UseMixedTuple(MaybeBox(), (x) -> ("ok", x))
+    return a ?? b ?? c ?? d ?? e ?? f ?? g.Item1
 }`)
             yield AcceptedRow("ok-fixed-expression-tree-return", `func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
 func Run() string? {
@@ -525,7 +531,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v14.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v15.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -541,6 +547,7 @@ namespace Lib5686
         public static string Take(Func<string> f) => f();
         public static string TakeArg(Func<int, string> f) => f(1);
         public static T Eval<T>(Func<T> f) => f();
+        public static (string, T) UseMixedTuple<T>(T seed, Func<T, (string, T)> f) => f(seed);
         public static string? TakeExpression(Expression<Func<string>> f) => f.Compile()();
         public static string? TakeExpressionArg(Expression<Func<int, string>> f) => f.Compile()(1);
         public static string Pick(Func<string> f, int n) => f();

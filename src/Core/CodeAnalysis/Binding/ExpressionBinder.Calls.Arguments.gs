@@ -2575,14 +2575,22 @@ internal partial class ExpressionBinder {
                     out targetFunctionType
                 )
             }
-            if parameterTargetSymbol != nil && !conversions.DelegateReturnMentionsInferredMethodTypeParameter(
+            if parameterTargetSymbol != nil && conversions.RequiresRuntimeDelegateReturnValidation(
+                argument,
+                parameterTargetSymbol,
+                out var runtimeLambdaSyntax,
                 method,
                 paramIndex,
                 call
-            ) &&
-                conversions
-                .RequiresRuntimeDelegateReturnValidation(argument, parameterTargetSymbol, out var runtimeLambdaSyntax) {
-                rebound = BindExpression(runtimeLambdaSyntax!!, parameterTargetSymbol)
+            ) {
+                let validationTarget = conversions.BuildRuntimeDelegateValidationTarget(
+                    argument,
+                    parameterTargetSymbol,
+                    method,
+                    paramIndex,
+                    call
+                )
+                rebound = BindExpression(runtimeLambdaSyntax!!, validationTarget)
             } else if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
                 hasTargetFunctionType &&
                 literal!!.FunctionType != targetFunctionType {
