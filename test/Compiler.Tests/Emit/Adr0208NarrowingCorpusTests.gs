@@ -28,6 +28,27 @@ import Xunit
 /// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1, n1, o1, o2 and o3 (issue #5206, amendment A1). They now
 /// record the new result. Rows R2 and R4 consume the normal branch exit states.
 open class Adr0208NarrowingCorpusTests {
+    @Theory
+    @InlineData("{ callback = erased }")
+    @InlineData("{ { callback = erased } }")
+    func ComposedErasedCallableCopy_PreservesItsExternalProof(block string) {
+        let source = `import System
+func External() { }
+func Run() int32 {
+    var s string? = "safe"
+    let clear = func() { s = nil }
+    let external Action = External
+    let erased object? = external
+    var callback object? = nil
+    if s == nil { return 0 }
+    __BLOCK__
+    cast[Action](callback)()
+    return s.Length
+}
+func Main() { Console.WriteLine(Run()) }`.Replace("__BLOCK__", block, StringComparison.Ordinal)
+        EveryProbe_KeepsItsRecordedResult("r5130_erased_copy", source, "", "run", "4", "R12")
+    }
+
     @Fact
     func ComposedScalarAssignment_InvalidatesAnErasedCallableAlias() {
         let source = `import System

@@ -6128,6 +6128,11 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            let assignedValue = UnwrapCallable(node.Expression)
+            if !assignedValue.Type.IsValueType && !(assignedValue is BoundLiteralExpression{Value: nil}) {
+                // Erased callable copies still transfer provenance in evaluation order.
+                hasAliasSensitiveOperations = true
+            }
             let protectedGlobalRoot GlobalVariableSymbol? = node.Variable as GlobalVariableSymbol
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Push(protectedGlobalRoot)
