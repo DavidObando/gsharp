@@ -5,13 +5,32 @@ import System.Diagnostics.CodeAnalysis
 import System.Reflection
 
 internal shared class ClrSpanTypes {
-    internal func TryResolveUtf8Type(references ReferenceResolver, @NotNullWhen(true) out spanType Type?) bool {
-        spanType = nil
-        if !TryResolveDefinition(references, true, out var definition) {
-            return false
+    internal sealed class Utf8LiteralMembers {
+        init(succeeded bool, spanType Type?, createSpan MethodInfo?, slice MethodInfo?) {
+            Succeeded = succeeded
+            SpanType = spanType
+            CreateSpan = createSpan
+            Slice = slice
         }
-        spanType = definition.MakeGenericType([]Type{references.GetCoreType("System.Byte")})
-        return true
+
+        prop Succeeded bool {
+            get;
+        }
+        prop SpanType Type? {
+            get;
+        }
+        prop CreateSpan MethodInfo? {
+            get;
+        }
+        prop Slice MethodInfo? {
+            get;
+        }
+    }
+
+    internal func TryResolveUtf8Type(references ReferenceResolver, @NotNullWhen(true) out spanType Type?) bool {
+        let cached = references.GetOrResolveUtf8LiteralMembers(ResolveUtf8LiteralCore)
+        spanType = cached.SpanType
+        return spanType != nil
     }
 
     internal func TryResolveUtf8Literal(
@@ -20,21 +39,32 @@ internal shared class ClrSpanTypes {
         @NotNullWhen(true) out createSpan MethodInfo?,
         @NotNullWhen(true) out slice MethodInfo?
     ) bool {
-        spanType = nil
-        createSpan = nil
-        slice = nil
-        if !TryResolveUtf8Type(references, out var resolvedSpan) {
+        let cached = references.GetOrResolveUtf8LiteralMembers(ResolveUtf8LiteralCore)
+        if !cached.Succeeded || cached.SpanType == nil || cached.CreateSpan == nil || cached.Slice == nil {
+            spanType = nil
+            createSpan = nil
+            slice = nil
             return false
+        }
+        spanType = cached.SpanType
+        createSpan = cached.CreateSpan
+        slice = cached.Slice
+        return true
+    }
+
+    private func ResolveUtf8LiteralCore(references ReferenceResolver) Utf8LiteralMembers {
+        if !TryResolveDefinition(references, true, out var definition) {
+            return Utf8LiteralMembers(false, nil, nil, nil)
         }
         let byteType = references.GetCoreType("System.Byte")
         let intType = references.GetCoreType("System.Int32")
-        spanType = resolvedSpan
-        slice = resolvedSpan.GetMethod("Slice", []Type{intType, intType})
+        let resolvedSpan = definition.MakeGenericType([]Type{byteType})
+        let slice = resolvedSpan.GetMethod("Slice", []Type{intType, intType})
         if !references.TryResolveType("System.Runtime.CompilerServices.RuntimeHelpers", out var helpers) ||
             helpers == nil ||
             slice == nil ||
-            slice.ReturnType != spanType {
-            return false
+            slice.ReturnType != resolvedSpan {
+            return Utf8LiteralMembers(false, resolvedSpan, nil, nil)
         }
         for method in helpers.GetMethods(BindingFlags.Public | BindingFlags.Static) {
             if method.Name != "CreateSpan" || !method.IsGenericMethodDefinition || method.GetGenericArguments()
@@ -46,13 +76,12 @@ internal shared class ClrSpanTypes {
                 "System.RuntimeFieldHandle"
             ) {
                 let constructed = method.MakeGenericMethod([]Type{byteType})
-                if constructed.ReturnType == spanType {
-                    createSpan = constructed
-                    return true
+                if constructed.ReturnType == resolvedSpan {
+                    return Utf8LiteralMembers(true, resolvedSpan, constructed, slice)
                 }
             }
         }
-        return false
+        return Utf8LiteralMembers(false, resolvedSpan, nil, nil)
     }
 
     internal func TryResolveDefinition(

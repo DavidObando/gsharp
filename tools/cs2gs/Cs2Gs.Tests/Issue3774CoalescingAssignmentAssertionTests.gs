@@ -43,8 +43,8 @@ open class Issue3774CoalescingAssignmentAssertionTests {
     @Fact
     func CoalescingAssignmentValue_DoesNotAssertAPromotedNullableRightHandSide() {
         let printed = TranslateOblivious(PromotedRightHandSideSource)
-        Assert.Contains("let v string? = (if cache == nil { (cache = Make()) } else { cache })", printed)
-        Assert.DoesNotContain("(if cache == nil { (cache = Make()) } else { cache })!!", printed)
+        Assert.Contains("let v string? = (cache ??= Make())", printed)
+        Assert.DoesNotContain("(cache ??= Make())!!", printed)
     }
 
     /// The behavioural half. C# prints `nil`; on `origin/main` the
@@ -57,12 +57,12 @@ open class Issue3774CoalescingAssignmentAssertionTests {
     }
 
     /// Anti-vacuity guard rail (passes on `origin/main` as well): a
-    /// right-hand side that genuinely cannot be nil keeps its faithful
-    /// assertion, so the fix is a narrowing of the guard rather than a deletion.
+    /// right-hand side that genuinely cannot be nil has non-null static type
+    /// `T` under G#'s native `??=` expression (#4967, #4979).
     @Fact
-    func CoalescingAssignmentValue_StillAssertsANonNullRightHandSide() {
+    func CoalescingAssignmentValue_EmitsNativeCoalescingAssignmentWithNonNullRightHandSide() {
         let printed = TranslateOblivious(NonNullRightHandSideSource)
-        Assert.Contains("(if cache == nil { (cache = \"d\") } else { cache })!!", printed)
+        Assert.Contains("let v = (cache ??= \"d\")", printed)
     }
 
     /// Anti-vacuity guard rail, behavioural half (passes on

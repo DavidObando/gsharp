@@ -432,6 +432,28 @@ let items = List[int32](capacity){` + "$elements" + `}
     }
 
     @Fact
+    func Format_SpacesConditionalExpressionAroundQuestionAndColon() {
+        const input = `package P
+func Run(c bool) int32 {
+    let x = c ? 1: 2
+    return x
+}
+`
+        let result = GSharpFormatter.Format(SourceText.From(input))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(`package P
+
+func Run(c bool) int32 {
+    let x = c ? 1 : 2
+    return x
+}
+`, result.Text!!.ToString())
+        let twice = GSharpFormatter.Format(result.Text!!)
+        Assert.Empty(twice.Diagnostics)
+        Assert.False(twice.Changed)
+    }
+
+    @Fact
     func Samples_RoundTripAndRemainIdempotent() {
         let root = FindRepositoryRoot()
         for path in Directory.EnumerateFiles(Path.Combine(root, "samples"), "*.gs", SearchOption.TopDirectoryOnly) {

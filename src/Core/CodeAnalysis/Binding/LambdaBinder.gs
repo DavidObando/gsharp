@@ -577,9 +577,10 @@ internal class LambdaBinder {
         // the enclosing function's labels and loop stack.
         let savedFrame = EnterNestedFrame(syntax.Body)
         var body BoundStatement
+        var hasInvalidGoto = false
         try {
             body = bindBlockStatement(syntax.Body)
-            FinalizeNestedFrameLabels()
+            hasInvalidGoto = FinalizeNestedFrameLabels()
         } finally {
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
@@ -612,7 +613,9 @@ internal class LambdaBinder {
         if synthetic.ReturnRefKind == RefKind.None {
             body = SynthesizeFunctionLiteralTrailingReturn(cast[BoundBlockStatement](body), syntax, synthetic.Type)
         }
-        CheckAllPathsReturn(cast[BoundBlockStatement](body), synthetic.Type, syntax.Body.Location)
+        if !hasInvalidGoto {
+            CheckAllPathsReturn(cast[BoundBlockStatement](body), synthetic.Type, syntax.Body.Location)
+        }
         let captured = CollectCapturedVariables(body, synthetic)
         // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
         // closure; the capture would hoist it into a heap-allocated display
@@ -1615,6 +1618,7 @@ internal class LambdaBinder {
         let savedFrame = EnterNestedFrame(syntax.Body)
         let lambdaScope = Scope
         var boundBody BoundExpression
+        var hasInvalidGoto = false
         try {
             var bodyTargetType TypeSymbol? = contextualReturnType
             if bodyTargetType == TypeSymbol.Void {
@@ -1625,7 +1629,7 @@ internal class LambdaBinder {
                 "lambda binding has a body-expression callback",
                 expression: "bindLambdaBodyExpression"
             )(syntax.Body, bodyTargetType)
-            FinalizeNestedFrameLabels()
+            hasInvalidGoto = FinalizeNestedFrameLabels()
         } finally {
             binderCtx.NarrowedVariables.Clear()
             binderCtx.NarrowedVariables.AddRange(savedNarrowed)
@@ -1804,7 +1808,9 @@ internal class LambdaBinder {
             setCurrentFunction(outerFunction)
         }
         let bodyBlock = BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable())
-        CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location)
+        if !hasInvalidGoto {
+            CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location)
+        }
         let fnType = FunctionTypeSymbol.Get(
             parameterTypes.MoveToImmutable(),
             BuildVariadicFlagsIfAny(parameterSymbols),
@@ -2611,6 +2617,8 @@ internal class LambdaBinder {
         binderCtx.UserLabels.Clear()
         binderCtx.DefinedUserLabels.Clear()
         binderCtx.UnresolvedGotoLabels.Clear()
+        binderCtx.UserLabelBlockRegions.Clear()
+        binderCtx.UserGotoBlockRegions.Clear()
         binderCtx.NarrowingFlow.Clear()
         binderCtx.LoopStack.Clear()
         this.binderCtx.CurrentFallthroughTarget = nil
@@ -2627,11 +2635,24 @@ internal class LambdaBinder {
     /// nested-frame goto is checked only against the nested frame's own
     /// labels (never silently satisfied by an outer label of the same
     /// name).
-    private func FinalizeNestedFrameLabels() {
+    private func FinalizeNestedFrameLabels() bool {
+        var hasInvalidGoto = false
         for entry in binderCtx.UnresolvedGotoLabels {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key)
+            hasInvalidGoto = true
+        }
+        for branch in binderCtx.UserGotoBlockRegions {
+            if binderCtx.UserLabelBlockRegions.TryGetValue(branch.LabelName, out var targetRegions) &&
+                !StatementBinder
+                .IsHandlerRegionPrefix(targetRegions, branch.SourceRegions) {
+                Diagnostics.ReportGotoIntoNestedBlock(branch.Location, branch.LabelName)
+                hasInvalidGoto = true
+            }
         }
         binderCtx.UnresolvedGotoLabels.Clear()
+        binderCtx.UserGotoBlockRegions.Clear()
+        binderCtx.UserLabelBlockRegions.Clear()
+        return hasInvalidGoto
     }
 
     /// Issue #2027: restores the enclosing frame's goto/label state and
@@ -2651,6 +2672,12 @@ internal class LambdaBinder {
         for kvp in saved.UnresolvedGotoLabels {
             binderCtx.UnresolvedGotoLabels[kvp.Key] = kvp.Value
         }
+        binderCtx.UserLabelBlockRegions.Clear()
+        for kvp in saved.UserLabelBlockRegions {
+            binderCtx.UserLabelBlockRegions[kvp.Key] = kvp.Value
+        }
+        binderCtx.UserGotoBlockRegions.Clear()
+        binderCtx.UserGotoBlockRegions.AddRange(saved.UserGotoBlockRegions)
         binderCtx.NarrowingFlow.Restore(saved.PendingJumps)
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
         // first; push back bottom-first so the restored stack's top matches
@@ -3450,6 +3477,11 @@ internal class LambdaBinder {
             UserLabels = Dictionary[string, BoundLabel](ctx.UserLabels)
             DefinedUserLabels = HashSet[string](ctx.DefinedUserLabels)
             UnresolvedGotoLabels = Dictionary[string, TextLocation](ctx.UnresolvedGotoLabels)
+            UserLabelBlockRegions = Dictionary[string, ImmutableArray[SyntaxNode]](
+                ctx.UserLabelBlockRegions,
+                StringComparer.Ordinal
+            )
+            UserGotoBlockRegions = ctx.UserGotoBlockRegions.ToArray()
             PendingJumps = ctx.NarrowingFlow.Clone()
             LoopStack = ctx.LoopStack.ToArray()
             FallthroughTarget = ctx.CurrentFallthroughTarget
@@ -3467,6 +3499,14 @@ internal class LambdaBinder {
         }
 
         prop UnresolvedGotoLabels Dictionary[string, TextLocation] {
+            get;
+        }
+
+        prop UserLabelBlockRegions Dictionary[string, ImmutableArray[SyntaxNode]] {
+            get;
+        }
+
+        prop UserGotoBlockRegions[](LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode]) {
             get;
         }
 
@@ -3655,17 +3695,34 @@ internal class LambdaBinder {
                     cast[BoundStatement](BoundReturnStatement(node.Syntax, heldValue, node.IsRef))
                 }
             }
-            // Issue #5603: the conversion runs outside the narrowing scope, so the stable member path of a narrowed
+            // Issue #5603 / #5631: the conversion runs outside the narrowing scope, so the access path of a narrowed
             // read comes from the read itself. The read takes its declared value when the result does not need the
             // narrowing, as an eager conversion does.
+            operand = conversions.DecideNarrowedConversion(
+                node.Syntax?.Location ?? syntax.Body.Location,
+                operand,
+                returnType
+            )
             let storedRead = if operand is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
                 unwrap.Operand
             } else {
                 operand
             }
-            if SmartCastStability.TryGetStableMemberPath(storedRead, out var path, out _) &&
-                ConversionClassifier
-                .TryRecoverDeclaredMemberRead(operand, path!!, operand.Type, returnType, out var declaredRead) {
+            let recoveredPath = if storedRead is BoundVariableExpression variableRead &&
+                (variableRead.NarrowedType != nil || operand is BoundUnaryExpression{IsNarrowingUnwrap: true}) {
+                AccessPath.ForVariable(variableRead.Variable)
+            } else if SmartCastStability.TryGetStableMemberPath(storedRead, out var memberPath, out _) {
+                memberPath
+            } else {
+                default(AccessPath?)
+            }
+            if recoveredPath != nil && ConversionClassifier.TryRecoverDeclaredMemberRead(
+                operand,
+                recoveredPath,
+                operand.Type,
+                returnType,
+                out var declaredRead
+            ) {
                 operand = declaredRead!!
             }
             if operand.Type == returnType {

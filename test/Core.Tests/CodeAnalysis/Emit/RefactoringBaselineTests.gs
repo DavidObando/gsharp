@@ -124,6 +124,39 @@ open class RefactoringBaselineTests {
         Assert.Empty(MetadataTableDigest.Diff(baseline, SortedDictionary[string, []string](baseline)))
     }
 
+    /// Issue #5515: two assemblies that differ only in a custom-attribute value
+    /// blob must produce a `CustomAttribute` table diff with all other tables equal.
+    @Fact
+    func MetadataTableDigest_DistinguishesAssembliesDifferingOnlyInCustomAttributeValueBlobs() {
+        using let resolver = SampleReferences.CreateResolver()
+        let EmitWithAttributeMessage = func (message string)[]uint8 {
+            let source = "package AttrTest\nimport System\n@Obsolete(\"$message\")\npublic class Widget {}\n"
+            let tree = SyntaxTree.Parse(SourceText.From(source, "AttrTest.gs"))
+            let compilation = Compilation(resolver, tree){
+                IsLibrary = true,
+                DebugInformation = DebugInformationOptions{Deterministic: true}
+            }
+            using let peStream = MemoryStream()
+            let result = compilation.Emit(
+                peStream: peStream,
+                pdbStream: nil,
+                refStream: nil,
+                assemblyName: "GSharp.AttrDigestOracle",
+                assemblyVersion: "1.0.0.0"
+            )
+            Assert.True(result.Success, string.Join("; ", result.Diagnostics.Select((d Diagnostic) -> d.Message)))
+            return peStream.ToArray()
+        }
+        let alphaBytes = EmitWithAttributeMessage("alpha")
+        let betaBytes = EmitWithAttributeMessage("beta")
+        Assert.NotEqual(HashEmittedContent(alphaBytes), HashEmittedContent(betaBytes))
+        let alphaDigest = MetadataTableDigest.Compute(alphaBytes)
+        let betaDigest = MetadataTableDigest.Compute(betaBytes)
+        let diff = MetadataTableDigest.Diff(alphaDigest, betaDigest)
+        let line = Assert.Single(diff)
+        Assert.StartsWith(MetadataTableDigest.CustomAttribute + ":", line, StringComparison.Ordinal)
+    }
+
     /// The sample compilations must not see which assemblies the test host
     /// loaded: the resolver has to be the ref pack plus the bundled G# runtime,
     /// with none of the host's test-only assemblies in it.

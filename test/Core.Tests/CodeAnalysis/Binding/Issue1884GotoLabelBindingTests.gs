@@ -105,6 +105,104 @@ reached = true`
         Assert.Empty(diags)
     }
 
+    @Fact
+    func Goto_IntoNestedReturnBlock_Emits_GS0636_Without_GS0100() {
+        let source = `package P
+import System
+var a = false
+var b = true
+class B {}
+func F() B {
+    if a {
+        return {
+            L: Console.Write("")
+            B()
+        }
+    }
+    if b {
+        b = false
+        goto L
+    }
+    return B()
+}
+let f = () -> {
+    if a {
+        return {
+            L: Console.Write("")
+            B()
+        }
+    }
+    if b {
+        b = false
+        goto L
+    }
+    return B()
+}`
+        let diags = EmittedOracle.Evaluate(source).Diagnostics
+        let errors = diags.Where((d Diagnostic) -> d.IsError).ToArray()
+        Assert.Equal(2, errors.Length)
+        Assert.All(
+            errors,
+            (d Diagnostic) -> {
+                Assert.Equal("GS0636", d.Id)
+                Assert.Equal("L", d.Location.Text!!.ToString(d.Location.Span))
+            }
+        )
+        Assert.DoesNotContain(diags, (d Diagnostic) -> d.Id == "GS0100")
+    }
+
+    @Fact
+    func Goto_ForwardIntoNestedBlockInitializer_Emits_GS0636_Without_GS0100() {
+        let source = `package P
+func Run(jump bool) int32 {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return 0 } else let unused = ({
+        L: var marker = 0
+        0
+    })
+    return x.Length
+}
+let _ = Run(false)`
+        let diags = EmittedOracle.Evaluate(source).Diagnostics
+        let jumpDiag = Assert.Single(diags, (d Diagnostic) -> d.Id == "GS0636")
+        Assert.Equal("L", jumpDiag.Location.Text!!.ToString(jumpDiag.Location.Span))
+        let nilDiag = Assert.Single(diags, (d Diagnostic) -> d.Id == "GS0158")
+        Assert.Equal("Length", nilDiag.Location.Text!!.ToString(nilDiag.Location.Span))
+        Assert.DoesNotContain(diags, (d Diagnostic) -> d.Id == "GS0100")
+    }
+
+    @Fact
+    func Goto_IntoIfExpressionOrIfLetExpressionBranch_Emits_GS0636() {
+        let ifSource = `package P
+func Run(flag bool) int32 {
+    goto L
+    return if flag {
+        L: let x = 1
+        x
+    } else {
+        0
+    }
+}`
+        let ifDiags = EmittedOracle.Evaluate(ifSource).Diagnostics
+        let ifDiag = Assert.Single(ifDiags, (d Diagnostic) -> d.Id == "GS0636")
+        Assert.Equal("L", ifDiag.Location.Text!!.ToString(ifDiag.Location.Span))
+
+        let ifLetSource = `package P
+func Run(opt int32?) int32 {
+    goto L
+    return if let v = opt {
+        L: let x = v
+        x
+    } else {
+        0
+    }
+}`
+        let ifLetDiags = EmittedOracle.Evaluate(ifLetSource).Diagnostics
+        let ifLetDiag = Assert.Single(ifLetDiags, (d Diagnostic) -> d.Id == "GS0636")
+        Assert.Equal("L", ifLetDiag.Location.Text!!.ToString(ifLetDiag.Location.Span))
+    }
+
     shared {
         private func Bind(source string) IReadOnlyList[Diagnostic] {
             let tree = SyntaxTree.Parse(SourceText.From(source))

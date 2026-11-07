@@ -4153,9 +4153,12 @@ internal class ReflectionMetadataEmitter {
                 } else {
                     entryHandle
                 },
-                ComputeDeterministicContentId
+                (content IEnumerable[Blob]) -> {
+                    let hash = ComputeContentHash(content)
+                    pdbChecksum = hash
+                    return BlobContentId.FromHash(hash)
+                }
             )
-            pdbChecksum = ComputePdbChecksum(pdbBlob!!)
         }
         // 8. Construct a DebugDirectoryBuilder when PDB emit is on, so the PE
         // image gains a real CodeView entry (sidecar discovery), PdbChecksum
@@ -5352,13 +5355,11 @@ internal class ReflectionMetadataEmitter {
             )
         )
 
-        /// Computes the SHA-256 checksum of the serialized Portable PDB content,
-        /// matching the algorithm name written into the `PdbChecksum` debug
-        /// directory entry. Returning a fresh byte array keeps callers from
-        /// having to thread (cref:IncrementalHash) through the call site.
-        private func ComputePdbChecksum(pdbBlob BlobBuilder)[]uint8 {
+        /// Computes the SHA-256 hash of [`content`](paramref).
+        /// `PortablePdbBuilder.Serialize` runs its ID provider while the 20-byte `#Pdb` ID is zeroed (#4926).
+        private func ComputeContentHash(content IEnumerable[Blob])[]uint8 {
             using let sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256)
-            for blob in pdbBlob.GetBlobs() {
+            for blob in content {
                 sha.AppendData(blob.GetBytes())
             }
             return sha.GetHashAndReset()
@@ -5368,11 +5369,7 @@ internal class ReflectionMetadataEmitter {
         /// serialized PE content blobs, mirroring Roslyn's deterministic emit so
         /// the same bound program always produces a byte-for-byte identical PE.
         private func ComputeDeterministicContentId(content IEnumerable[Blob]) BlobContentId {
-            using let sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256)
-            for blob in content {
-                sha.AppendData(blob.GetBytes())
-            }
-            return BlobContentId.FromHash(sha.GetHashAndReset())
+            return BlobContentId.FromHash(ComputeContentHash(content))
         }
 
         // -----------------------------------------------------------------
