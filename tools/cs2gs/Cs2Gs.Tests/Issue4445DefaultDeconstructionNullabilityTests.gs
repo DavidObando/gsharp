@@ -1938,9 +1938,160 @@ public sealed class Probe<T>
         this.callback?.Invoke();
     }
 
+    public void CheckHolderReassignmentForwardingEarlyReturnAndSiblingLocals(T replacement, bool skip)
+    {
+        var reassignedHolderPair = (replacement, replacement);
+        void ReassignedHolderLocal()
+        {
+            var (reassignedHolderLeft, _) = reassignedHolderPair;
+            Fill(ref reassignedHolderLeft, replacement);
+        }
+
+        var reassignedHolder = new Probe<T>();
+        var firstHolderRef = reassignedHolder;
+        reassignedHolder.callback = ReassignedHolderLocal;
+        reassignedHolder = new Probe<T>();
+        reassignedHolder.callback = null;
+        reassignedHolderPair = (default(T), replacement);
+        firstHolderRef.callback?.Invoke();
+
+        var localRestoredPair = (replacement, replacement);
+        void LocalRestoredLocal()
+        {
+            var (localRestoredLeft, _) = localRestoredPair;
+            Fill(ref localRestoredLeft, replacement);
+        }
+        System.Action? restoredLocalDelegate = LocalRestoredLocal;
+        void RestoreLocalDelegate()
+        {
+            restoredLocalDelegate = LocalRestoredLocal;
+        }
+
+        restoredLocalDelegate = null;
+        RestoreLocalDelegate();
+        this.callback = restoredLocalDelegate;
+        localRestoredPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var forwardRestoredPair = (replacement, replacement);
+        void ForwardRestoredLocal()
+        {
+            var (forwardRestoredLeft, _) = forwardRestoredPair;
+            Fill(ref forwardRestoredLeft, replacement);
+        }
+        void RestoreForForward()
+        {
+            this.callback = ForwardRestoredLocal;
+        }
+        void ForwardRestore()
+        {
+            RestoreForForward();
+        }
+
+        this.callback = ForwardRestoredLocal;
+        this.callback = null;
+        ForwardRestore();
+        forwardRestoredPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var earlyReturnClearPair = (replacement, replacement);
+        void EarlyReturnClearLocal()
+        {
+            var (earlyReturnClearLeft, _) = earlyReturnClearPair;
+            Fill(ref earlyReturnClearLeft, replacement);
+        }
+        void ClearWithSkip(bool shouldSkip)
+        {
+            if (shouldSkip)
+            {
+                return;
+            }
+            this.callback = null;
+        }
+
+        this.callback = EarlyReturnClearLocal;
+        ClearWithSkip(skip);
+        earlyReturnClearPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        {
+            var firstSiblingPair = (replacement, replacement);
+            void SiblingLocal()
+            {
+                var (firstSiblingLeft, _) = firstSiblingPair;
+                Keep(ref firstSiblingLeft);
+            }
+
+            this.callback = SiblingLocal;
+            this.callback = null;
+            firstSiblingPair = (default(T), replacement);
+            this.callback?.Invoke();
+        }
+
+        {
+            var secondSiblingPair = (replacement, replacement);
+            void SiblingLocal()
+            {
+                var (secondSiblingLeft, _) = secondSiblingPair;
+                Fill(ref secondSiblingLeft, replacement);
+            }
+
+            this.callback = SiblingLocal;
+            secondSiblingPair = (default(T), replacement);
+            this.callback?.Invoke();
+        }
+
+        var argSideEffectPair = (replacement, replacement);
+        void ArgSideEffectLocal()
+        {
+            var (argSideEffectLeft, _) = argSideEffectPair;
+            Fill(ref argSideEffectLeft, replacement);
+        }
+        System.Action? GetAfterSideEffect(bool unused) => this.callback;
+
+        this.secondCallback = GetAfterSideEffect((this.callback = ArgSideEffectLocal) != null);
+        this.callback = null;
+        argSideEffectPair = (default(T), replacement);
+        this.secondCallback?.Invoke();
+    }
+
     private System.Action? Saved => this.secondCallback;
 
     private static System.Action? GetFromHolder(Probe<T> holder) => holder.callback;
+}
+
+public class VirtualClearBase<T>
+{
+    protected System.Action? callback;
+
+    protected static void Fill(ref T? value, T replacement) => value = replacement;
+
+    protected virtual void Clear()
+    {
+        this.callback = null;
+    }
+
+    public void CheckVirtualClear(T replacement)
+    {
+        var virtualClearPair = (replacement, replacement);
+        void VirtualClearLocal()
+        {
+            var (virtualClearLeft, _) = virtualClearPair;
+            Fill(ref virtualClearLeft, replacement);
+        }
+
+        this.callback = VirtualClearLocal;
+        this.Clear();
+        virtualClearPair = (default(T), replacement);
+        this.callback?.Invoke();
+    }
+}
+
+public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
+{
+    protected override void Clear()
+    {
+    }
 }`
         let printed = Translate(source)
         Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
@@ -1963,6 +2114,65 @@ public sealed class Probe<T>
         Assert.Matches("\\b(let|var) restoredFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) savedPropertyLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) chainLocalLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) reassignedHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) localRestoredLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) forwardRestoredLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) earlyReturnClearLeft T\\? =", printed)
+        Assert.DoesNotMatch("\\b(let|var) firstSiblingLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) secondSiblingLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) argSideEffectLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualClearLeft T\\? =", printed)
+
+        let part1 = `#nullable enable
+public sealed partial class SplitProbe<T>
+{
+    private System.Action? callback;
+    private static void Keep(ref T value) { }
+    private static void Fill(ref T? value, T replacement) => value = replacement;
+    public void PartA(T replacement)
+    {
+        var pair = (replacement, replacement);
+        void Local()
+        {
+            var (firstPartLeft, _) = pair;
+            Keep(ref firstPartLeft);
+        }
+        this.callback = Local;
+        this.callback = null;
+        pair = (default(T), replacement);
+        this.callback?.Invoke();
+    }
+}`
+        let part2 = `#nullable enable
+public sealed partial class SplitProbe<T>
+{
+    private System.Action? unusedCb;
+    private static void Noop(ref T value) { }
+    private static void SetV(ref T? value, T replacement) => value = replacement;
+    public void PartB(T replacement)
+    {
+        var pair = (replacement, replacement);
+        void Local()
+        {
+            var (secondPartLeft, _) = pair;
+            Fill(ref secondPartLeft, replacement);
+        }
+        this.callback = Local;
+        pair = (default(T), replacement);
+        this.callback?.Invoke();
+    }
+}`
+        let splitProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("Part1.cs", part1), ("Part2.cs", part2)}
+        )
+        Assert.True(splitProject.BoundWithoutErrors, string.Join(Environment.NewLine, splitProject.ErrorDiagnostics))
+        let splitDoc = splitProject.Documents[0]
+        let splitContext = TranslationContext(splitProject.Compilation, splitDoc.SemanticModel, splitDoc.FilePath)
+        let splitPrinted = GSharpPrinter.Print(
+            CSharpToGSharpTranslator(preservePartialParts: false).TranslateDocument(splitDoc, splitContext)
+        )
+        Assert.DoesNotMatch("\\b(let|var) firstPartLeft T\\? =", splitPrinted)
+        Assert.Matches("\\b(let|var) secondPartLeft T\\? =", splitPrinted)
     }
 
     shared {

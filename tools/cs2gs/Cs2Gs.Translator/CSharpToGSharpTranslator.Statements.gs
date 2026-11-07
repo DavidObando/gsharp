@@ -2066,6 +2066,20 @@ partial class CSharpToGSharpTranslator {
             Dictionary[BasicBlock, HashSet[int32]]
         ](StringComparer.Ordinal)
 
+        private let syntaxTreeCacheIds Dictionary[SyntaxTree, int32] = Dictionary[SyntaxTree, int32]()
+
+        private func GetSyntaxTreeCacheId(tree SyntaxTree?) int32 {
+            if tree == nil {
+                return -1
+            }
+            if this.syntaxTreeCacheIds.TryGetValue(tree, out var id) {
+                return id
+            }
+            let nextId = this.syntaxTreeCacheIds.Count
+            this.syntaxTreeCacheIds[tree] = nextId
+            return nextId
+        }
+
         private func NonLocalDelegateMayReferenceAnonymousFunction(
             storage ExpressionSyntax,
             usePosition int32,
@@ -2137,7 +2151,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 return combinedStates
             }
-            let scopedStorageKey = this.GetDelegateStorageCycleKey(storage, enclosingExecutable, receiverOverride)
+            let scopedStorageKey = this.GetDelegateStorageCycleKey(
+                storage,
+                enclosingExecutable,
+                receiverOverride,
+                usePosition
+            )
             let cacheKey = this.BuildDelegateQueryCacheKey(
                 scopedStorageKey,
                 usePosition,
@@ -2194,9 +2213,14 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return HashSet[int32]{0}
             }
+            let blockCachePosition = if this.CanShareDelegateBlockOutputsAcrossPositions(storage, receiverOverride) {
+                -1
+            } else {
+                usePosition
+            }
             let blockCacheKey = this.BuildDelegateQueryCacheKey(
                 scopedStorageKey,
-                -1,
+                blockCachePosition,
                 anonymousFunction,
                 localFunction,
                 callerChain
@@ -2442,7 +2466,9 @@ partial class CSharpToGSharpTranslator {
                 return combinedStates
             }
             let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-            let localStorageKey = "${enclosingExecutable?.SpanStart ?? -1}:local:${local.Name}:${local.Locations.FirstOrDefault()?.SourceSpan.Start ?? -1}"
+            let localLocation = local.Locations.FirstOrDefault()
+            let localTreeId = this.GetSyntaxTreeCacheId(enclosingExecutable?.SyntaxTree ?? localLocation?.SourceTree)
+            let localStorageKey = "$localTreeId:${enclosingExecutable?.SpanStart ?? -1}:local:${local.Name}:${localLocation?.SourceSpan.Start ?? -1}"
             let cacheKey = this.BuildDelegateQueryCacheKey(
                 localStorageKey,
                 usePosition,
@@ -2737,7 +2763,9 @@ partial class CSharpToGSharpTranslator {
             for node in EagerExecutionNodes(operation.Syntax)
                 .Where(
                 (candidate SyntaxNode) -> (
-                    candidate is VariableDeclaratorSyntax || candidate is AssignmentExpressionSyntax
+                    candidate is VariableDeclaratorSyntax ||
+                        candidate is AssignmentExpressionSyntax ||
+                        candidate is InvocationExpressionSyntax
                 ) &&
                     candidate
                     .Span
@@ -2810,9 +2838,153 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     states = next
+                    continue
+                }
+                if node is InvocationExpressionSyntax invocation {
+                    states = this.ApplyInvocationLocalDelegateWrites(
+                        invocation,
+                        local,
+                        states,
+                        anonymousFunction,
+                        storageUsePosition,
+                        enclosingExecutable,
+                        localFunction,
+                        activeVisited,
+                        activeStorage,
+                        callerChain,
+                        activeCompleted,
+                        activeCycleFlags
+                    )
                 }
             }
             return states
+        }
+
+        private func ApplyInvocationLocalDelegateWrites(
+            invocation InvocationExpressionSyntax,
+            local ILocalSymbol,
+            states HashSet[int32],
+            anonymousFunction AnonymousFunctionExpressionSyntax?,
+            storageUsePosition int32,
+            enclosingExecutable SyntaxNode?,
+            localFunction IMethodSymbol?,
+            visited HashSet[ISymbol],
+            visitedStorage HashSet[string],
+            callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)]?,
+            completedQueries Dictionary[string, HashSet[int32]],
+            cycleFlags List[bool]
+        ) HashSet[int32] {
+            if invocation.SyntaxTree != this
+                .context
+                .SemanticModel
+                .SyntaxTree ||
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is not IMethodSymbol callee ||
+                callee.MethodKind != MethodKind.LocalFunction {
+                return states
+            }
+            let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+            if !nextVisited.Add(callee.OriginalDefinition) {
+                cycleFlags.Add(true)
+                return states
+            }
+            var currentStates = states
+            let nextCallerChain = AppendDelegateCaller(
+                callerChain,
+                enclosingExecutable ?? FindEnclosingExecutable(invocation),
+                invocation.SpanStart,
+                invocation
+            )
+            for reference in callee.OriginalDefinition.DeclaringSyntaxReferences {
+                let declaration = reference.GetSyntax()
+                if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                    continue
+                }
+                let body SyntaxNode? = switch declaration {
+                    case LocalFunctionStatementSyntax{Body: {} b}: cast[SyntaxNode](b)
+                    case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
+                    default: declaration
+                }
+                if body == nil || !body.DescendantNodesAndSelf().Any(
+                    (candidate SyntaxNode) -> (
+                        candidate is AssignmentExpressionSyntax assign && this.BindsTo(assign.Left, local)
+                    ) ||
+                        candidate is InvocationExpressionSyntax
+                ) {
+                    continue
+                }
+                var calleeGraph ControlFlowGraph?
+                try {
+                    calleeGraph = this.CreateControlFlowGraph(declaration)
+                } catch (ArgumentException) {
+                    continue
+                }
+                let computedOutputs = Dictionary[BasicBlock, HashSet[int32]]()
+                var changed bool
+                do {
+                    changed = false
+                    for block in calleeGraph!!.Blocks {
+                        if !block.IsReachable {
+                            continue
+                        }
+                        var blockStates = HashSet[int32]()
+                        if block.Kind == BasicBlockKind.Entry {
+                            blockStates.UnionWith(currentStates)
+                        }
+                        for predecessor in block.Predecessors {
+                            if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
+                                blockStates.UnionWith(predecessorStates)
+                            }
+                        }
+                        for operation in block.Operations {
+                            blockStates = this.ApplyLocalDelegateReachingOperation(
+                                operation,
+                                local,
+                                blockStates,
+                                anonymousFunction,
+                                storageUsePosition,
+                                enclosingExecutable: declaration,
+                                localFunction: localFunction,
+                                visited: nextVisited,
+                                visitedStorage: visitedStorage,
+                                callerChain: nextCallerChain,
+                                completedQueries: completedQueries,
+                                cycleFlags: cycleFlags
+                            )
+                        }
+                        if block.BranchValue is {} branchValue {
+                            blockStates = this.ApplyLocalDelegateReachingOperation(
+                                branchValue,
+                                local,
+                                blockStates,
+                                anonymousFunction,
+                                storageUsePosition,
+                                enclosingExecutable: declaration,
+                                localFunction: localFunction,
+                                visited: nextVisited,
+                                visitedStorage: visitedStorage,
+                                callerChain: nextCallerChain,
+                                completedQueries: completedQueries,
+                                cycleFlags: cycleFlags
+                            )
+                        }
+                        if !computedOutputs.TryGetValue(block, out var previous) || !previous.SetEquals(blockStates) {
+                            computedOutputs[block] = blockStates
+                            changed = true
+                        }
+                    }
+                } while changed
+                let exitBlock = calleeGraph!!.Blocks.FirstOrDefault(
+                    (block BasicBlock) -> block.Kind == BasicBlockKind.Exit
+                )
+                if exitBlock != nil && computedOutputs.TryGetValue(exitBlock, out var exitStates) &&
+                    exitStates.Count > 0 {
+                    currentStates = exitStates
+                }
+            }
+            return currentStates
         }
 
         private func IsNonLocalDelegateStorage(expression ExpressionSyntax?) bool {
@@ -2843,7 +3015,8 @@ partial class CSharpToGSharpTranslator {
             callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)]? = nil,
             receiverOverride ExpressionSyntax? = nil,
             completedQueries Dictionary[string, HashSet[int32]]? = nil,
-            cycleFlags List[bool]? = nil
+            cycleFlags List[bool]? = nil,
+            calleeContext(Declaration SyntaxNode, CallSite InvocationExpressionSyntax)? = nil
         ) HashSet[int32] {
             var states = states
             let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
@@ -2862,54 +3035,78 @@ partial class CSharpToGSharpTranslator {
             )
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
                 .ThenBy((candidate SyntaxNode) -> candidate.SpanStart) {
-                if node is AssignmentExpressionSyntax assignment && this.DelegateStorageMatches(
-                    assignment.Left,
-                    storage,
-                    storageUsePosition,
-                    receiverOverride
-                ) {
-                    let next = HashSet[int32]()
-                    for state in states {
-                        for rightCount in this.DelegateAssignmentValueAnonymousFunctionCounts(
-                            assignment.Right,
-                            state,
+                if node is AssignmentExpressionSyntax assignment {
+                    var leftReceiverOverride ExpressionSyntax? = nil
+                    let matchesStorage = if calleeContext is {} activeCallee {
+                        this.TryMapStorageReceiverToCallSite(
+                            assignment.Left,
+                            nil,
+                            activeCallee.Declaration,
+                            activeCallee.CallSite,
+                            out leftReceiverOverride
+                        ) &&
+                            this
+                            .DelegateStorageMatches(
+                            assignment.Left,
                             storage,
-                            anonymousFunction,
                             storageUsePosition,
-                            enclosingExecutable,
-                            localFunction,
-                            activeVisited,
-                            activeStorage,
-                            callerChain: callerChain,
-                            trackedStorageReceiverOverride: receiverOverride,
-                            completedQueries: activeCompleted,
-                            cycleFlags: activeCycleFlags
-                        ) {
-                            if opaqueStorage {
-                                // A property's or custom event's accessors may ignore or transform what is
-                                // stored, so a write never proves the earlier delegate
-                                // is gone: keep the prior state beside the written one.
-                                next.Add(state)
-                            }
-                            next.Add(
-                                switch assignment.Kind() {
-                                    case SyntaxKind.AddAssignmentExpression: CombineDelegateStates(state, rightCount)
-                                    case SyntaxKind.SubtractAssignmentExpression: SubtractDelegateStates(
-                                        state,
-                                        rightCount
-                                    )
-                                    case SyntaxKind.CoalesceAssignmentExpression: if state == 0 {
-                                        rightCount
-                                    } else {
-                                        state
-                                    }
-                                    default: rightCount
-                                }
-                            )
-                        }
+                            rightReceiverOverride: receiverOverride,
+                            leftReceiverOverride: leftReceiverOverride
+                        )
+                    } else {
+                        this.DelegateStorageMatches(assignment.Left, storage, storageUsePosition, receiverOverride)
                     }
-                    states = next
-                    continue
+                    if matchesStorage {
+                        let next = HashSet[int32]()
+                        for state in states {
+                            for rightCount in this.DelegateAssignmentValueAnonymousFunctionCounts(
+                                assignment.Right,
+                                state,
+                                storage,
+                                anonymousFunction,
+                                if calleeContext != nil {
+                                    assignment.SpanStart
+                                } else {
+                                    storageUsePosition
+                                },
+                                enclosingExecutable,
+                                localFunction,
+                                activeVisited,
+                                activeStorage,
+                                callerChain: callerChain,
+                                trackedStorageReceiverOverride: receiverOverride,
+                                completedQueries: activeCompleted,
+                                cycleFlags: activeCycleFlags
+                            ) {
+                                if opaqueStorage {
+                                    // A property's or custom event's accessors may ignore or transform what is
+                                    // stored, so a write never proves the earlier delegate
+                                    // is gone: keep the prior state beside the written one.
+                                    next.Add(state)
+                                }
+                                next.Add(
+                                    switch assignment.Kind() {
+                                        case SyntaxKind.AddAssignmentExpression: CombineDelegateStates(
+                                            state,
+                                            rightCount
+                                        )
+                                        case SyntaxKind.SubtractAssignmentExpression: SubtractDelegateStates(
+                                            state,
+                                            rightCount
+                                        )
+                                        case SyntaxKind.CoalesceAssignmentExpression: if state == 0 {
+                                            rightCount
+                                        } else {
+                                            state
+                                        }
+                                        default: rightCount
+                                    }
+                                )
+                            }
+                        }
+                        states = next
+                        continue
+                    }
                 }
                 if node is InvocationExpressionSyntax invocation {
                     states = this.ApplyInvocationDelegateStorageWrites(
@@ -2964,7 +3161,6 @@ partial class CSharpToGSharpTranslator {
                 return states
             }
             var currentStates = states
-            let opaqueStorage = this.IsOpaqueDelegateStorage(storage)
             let nextCallerChain = AppendDelegateCaller(
                 callerChain,
                 enclosingExecutable ?? FindEnclosingExecutable(invocation),
@@ -2983,102 +3179,88 @@ partial class CSharpToGSharpTranslator {
                     case MethodDeclarationSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
                     default: declaration
                 }
-                if body == nil || !body.DescendantNodesAndSelf().OfType[AssignmentExpressionSyntax]().Any() {
-                    continue
-                }
-                for node in EagerExecutionNodes(body)
-                    .Where(
+                if body == nil || !body.DescendantNodesAndSelf().Any(
                     (candidate SyntaxNode) -> candidate is AssignmentExpressionSyntax ||
                         candidate is InvocationExpressionSyntax
-                )
-                    .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
-                    .ThenBy((candidate SyntaxNode) -> candidate.SpanStart) {
-                    if node is AssignmentExpressionSyntax calleeAssignment && this.TryMapStorageReceiverToCallSite(
-                        calleeAssignment.Left,
-                        nil,
-                        declaration,
-                        invocation,
-                        out var mappedLeftReceiver
-                    ) &&
-                        this
-                        .DelegateStorageMatches(
-                        calleeAssignment.Left,
-                        storage,
-                        storageUsePosition,
-                        rightReceiverOverride: receiverOverride,
-                        leftReceiverOverride: mappedLeftReceiver
-                    ) {
-                        let isConditionalWrite = calleeAssignment
-                            .Ancestors()
-                            .TakeWhile((ancestor SyntaxNode) -> ancestor != body)
-                            .Any(
-                            (ancestor SyntaxNode) -> ancestor is IfStatementSyntax or
-                                ConditionalExpressionSyntax or
-                                SwitchStatementSyntax or
-                                SwitchExpressionSyntax or
-                                WhileStatementSyntax or
-                                ForStatementSyntax or
-                                ForEachStatementSyntax
-                        )
-                        let next = HashSet[int32]()
-                        if opaqueStorage || isConditionalWrite {
-                            next.UnionWith(currentStates)
+                ) {
+                    continue
+                }
+                var calleeGraph ControlFlowGraph?
+                try {
+                    calleeGraph = this.CreateControlFlowGraph(declaration)
+                } catch (ArgumentException) {
+                    continue
+                }
+                let computedOutputs = Dictionary[BasicBlock, HashSet[int32]]()
+                var changed bool
+                do {
+                    changed = false
+                    for block in calleeGraph!!.Blocks {
+                        if !block.IsReachable {
+                            continue
                         }
-                        for state in currentStates {
-                            for rightCount in this.DelegateAssignmentValueAnonymousFunctionCounts(
-                                calleeAssignment.Right,
-                                state,
-                                storage,
-                                anonymousFunction,
-                                calleeAssignment.SpanStart,
-                                declaration,
-                                localFunction,
-                                nextVisited,
-                                visitedStorage,
-                                callerChain: nextCallerChain,
-                                trackedStorageReceiverOverride: receiverOverride,
-                                completedQueries: completedQueries,
-                                cycleFlags: cycleFlags
-                            ) {
-                                next.Add(
-                                    switch calleeAssignment.Kind() {
-                                        case SyntaxKind.AddAssignmentExpression: CombineDelegateStates(
-                                            state,
-                                            rightCount
-                                        )
-                                        case SyntaxKind.SubtractAssignmentExpression: SubtractDelegateStates(
-                                            state,
-                                            rightCount
-                                        )
-                                        case SyntaxKind.CoalesceAssignmentExpression: if state == 0 {
-                                            rightCount
-                                        } else {
-                                            state
-                                        }
-                                        default: rightCount
-                                    }
-                                )
+                        var blockStates = HashSet[int32]()
+                        if block.Kind == BasicBlockKind.Entry {
+                            blockStates.UnionWith(currentStates)
+                        }
+                        for predecessor in block.Predecessors {
+                            if computedOutputs.TryGetValue(predecessor.Source, out var predecessorStates) {
+                                blockStates.UnionWith(predecessorStates)
                             }
                         }
-                        currentStates = next
-                        continue
+                        for operation in block.Operations {
+                            blockStates = this.ApplyDelegateReachingOperation(
+                                operation,
+                                storage,
+                                blockStates,
+                                anonymousFunction,
+                                storageUsePosition,
+                                enclosingExecutable: declaration,
+                                localFunction: localFunction,
+                                visited: nextVisited,
+                                visitedStorage: visitedStorage,
+                                callerChain: nextCallerChain,
+                                receiverOverride: receiverOverride,
+                                completedQueries: completedQueries,
+                                cycleFlags: cycleFlags,
+                                calleeContext: (declaration, invocation)
+                            )
+                        }
+                        if block.BranchValue is {} branchValue {
+                            blockStates = this.ApplyDelegateReachingOperation(
+                                branchValue,
+                                storage,
+                                blockStates,
+                                anonymousFunction,
+                                storageUsePosition,
+                                enclosingExecutable: declaration,
+                                localFunction: localFunction,
+                                visited: nextVisited,
+                                visitedStorage: visitedStorage,
+                                callerChain: nextCallerChain,
+                                receiverOverride: receiverOverride,
+                                completedQueries: completedQueries,
+                                cycleFlags: cycleFlags,
+                                calleeContext: (declaration, invocation)
+                            )
+                        }
+                        if !computedOutputs.TryGetValue(block, out var previous) || !previous.SetEquals(blockStates) {
+                            computedOutputs[block] = blockStates
+                            changed = true
+                        }
                     }
-                    if node is InvocationExpressionSyntax nestedInvocation {
-                        currentStates = this.ApplyInvocationDelegateStorageWrites(
-                            nestedInvocation,
-                            storage,
-                            currentStates,
-                            anonymousFunction,
-                            storageUsePosition,
-                            declaration,
-                            localFunction,
-                            nextVisited,
-                            visitedStorage,
-                            nextCallerChain,
-                            receiverOverride,
-                            completedQueries,
-                            cycleFlags
-                        )
+                } while changed
+                let exitBlock = calleeGraph!!.Blocks.FirstOrDefault(
+                    (block BasicBlock) -> block.Kind == BasicBlockKind.Exit
+                )
+                if exitBlock != nil && computedOutputs.TryGetValue(exitBlock, out var exitStates) &&
+                    exitStates.Count > 0 {
+                    if DelegateCalleeMayDispatchDynamically(invocation, callee) {
+                        let mergedStates = HashSet[int32](currentStates)
+                        mergedStates.UnionWith(exitStates)
+                        currentStates = mergedStates
+                    } else {
+                        currentStates = exitStates
                     }
                 }
             }
@@ -3494,9 +3676,13 @@ partial class CSharpToGSharpTranslator {
                 return string.Empty
             }
             let targetKey = if anonymousFunction != nil {
-                "anon:${anonymousFunction.SpanStart}"
+                let anonTreeId = this.GetSyntaxTreeCacheId(anonymousFunction.SyntaxTree)
+                "anon:$anonTreeId:${anonymousFunction.SpanStart}"
             } else if localFunction != nil {
-                "localfn:${localFunction.ToDisplayString()}"
+                let declLocation = localFunction.OriginalDefinition.Locations.FirstOrDefault()
+                let declTreeId = this.GetSyntaxTreeCacheId(declLocation?.SourceTree)
+                let declSpan = declLocation?.SourceSpan.Start ?? -1
+                "localfn:$declTreeId:$declSpan:${localFunction.ToDisplayString()}"
             } else {
                 "none"
             }
@@ -3508,7 +3694,7 @@ partial class CSharpToGSharpTranslator {
                     callerChain.Select(
                         (
                             entry(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)
-                        ) -> "${entry.Executable?.SpanStart ?? -1}@${entry.CallPosition}"
+                        ) -> "${this.GetSyntaxTreeCacheId(entry.Executable?.SyntaxTree)}:${entry.Executable?.SpanStart ?? -1}@${entry.CallPosition}"
                     )
                 )
             }
@@ -3548,15 +3734,49 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func CanShareDelegateBlockOutputsAcrossPositions(
+            storage ExpressionSyntax,
+            receiverOverride ExpressionSyntax?
+        ) bool {
+            let unwrapped = Unwrap(storage)
+            if unwrapped is ElementAccessExpressionSyntax {
+                return false
+            }
+            let receiver = Unwrap(receiverOverride ?? (unwrapped as MemberAccessExpressionSyntax)?.Expression)
+            if receiver == nil || receiver is ThisExpressionSyntax {
+                return true
+            }
+            if receiver.SyntaxTree == this
+                .context
+                .SemanticModel
+                .SyntaxTree &&
+                this
+                .context
+                .GetSymbolInfo(receiver)
+                .Symbol is ILocalSymbol receiverLocal {
+                return !this.IsLocalReassigned(receiverLocal)
+            }
+            return false
+        }
+
         private func GetDelegateStorageCycleKey(
             storage ExpressionSyntax,
             enclosingExecutable SyntaxNode?,
-            receiverOverride ExpressionSyntax? = nil
+            receiverOverride ExpressionSyntax? = nil,
+            usePosition int32? = nil
         ) string {
+            let treeId = this.GetSyntaxTreeCacheId((enclosingExecutable ?? storage).SyntaxTree)
             let unwrappedStorage = Unwrap(storage)
             if unwrappedStorage is ElementAccessExpressionSyntax elementAccess {
-                let receiverKey = this.GetDelegateReceiverCycleKey(elementAccess.Expression)
-                return "${enclosingExecutable?.SpanStart ?? -1}:elem:$receiverKey:${elementAccess.ArgumentList}"
+                let receiverKey = this.GetDelegateReceiverCycleKey(elementAccess.Expression, usePosition)
+                let indexKeys = string.Join(
+                    ",",
+                    elementAccess
+                        .ArgumentList
+                        .Arguments
+                        .Select((arg ArgumentSyntax) -> this.GetDelegateReceiverCycleKey(arg.Expression, usePosition))
+                )
+                return "$treeId:${enclosingExecutable?.SpanStart ?? -1}:elem:$receiverKey:[$indexKeys]"
             }
             let storageSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(unwrappedStorage)
             let symbolKey = if storageSymbol != nil {
@@ -3571,13 +3791,14 @@ partial class CSharpToGSharpTranslator {
                 "static"
             } else {
                 this.GetDelegateReceiverCycleKey(
-                    receiverOverride ?? (unwrappedStorage as MemberAccessExpressionSyntax)?.Expression
+                    receiverOverride ?? (unwrappedStorage as MemberAccessExpressionSyntax)?.Expression,
+                    usePosition
                 )
             }
-            return "${enclosingExecutable?.SpanStart ?? -1}:$receiverKey:$symbolKey"
+            return "$treeId:${enclosingExecutable?.SpanStart ?? -1}:$receiverKey:$symbolKey"
         }
 
-        private func GetDelegateReceiverCycleKey(receiver ExpressionSyntax?) string {
+        private func GetDelegateReceiverCycleKey(receiver ExpressionSyntax?, usePosition int32? = nil) string {
             let unwrapped = Unwrap(receiver)
             if unwrapped == nil || unwrapped is ThisExpressionSyntax {
                 return "this"
@@ -3591,14 +3812,40 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(unwrapped)
                 .Symbol is {} symbol {
                 if symbol is ILocalSymbol || symbol is IParameterSymbol {
-                    let loc = symbol.Locations.FirstOrDefault()?.SourceSpan.Start ?? -1
-                    return "${symbol.Kind.ToString()}:${symbol.Name}:$loc"
+                    let symbolLocation = symbol.Locations.FirstOrDefault()
+                    let treeId = this.GetSyntaxTreeCacheId(symbolLocation?.SourceTree ?? unwrapped.SyntaxTree)
+                    let loc = symbolLocation?.SourceSpan.Start ?? -1
+                    if symbol is ILocalSymbol receiverLocal && this.IsLocalReassigned(receiverLocal) &&
+                        usePosition != nil {
+                        let origins = this.GetIndexedDelegateReceiverOrigins(
+                            unwrapped,
+                            HashSet[ISymbol](SymbolEqualityComparer.Default),
+                            usePosition
+                        )
+                        if origins.Count > 0 {
+                            let originKey = string.Join(
+                                ",",
+                                origins.Select(
+                                    (
+                                        origin ExpressionSyntax
+                                    ) -> "${this.GetSyntaxTreeCacheId(origin.SyntaxTree)}:${origin.SpanStart}:${origin.Span.Length}"
+                                )
+                                    .OrderBy((key string) -> key, StringComparer.Ordinal)
+                            )
+                            return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc[$originKey]"
+                        }
+                        return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc@$usePosition"
+                    }
+                    return "${symbol.Kind.ToString()}:$treeId:${symbol.Name}:$loc"
                 }
                 if symbol is IFieldSymbol || symbol is IPropertySymbol {
                     let prefix = if symbol.IsStatic {
                         "static"
                     } else {
-                        this.GetDelegateReceiverCycleKey((unwrapped as MemberAccessExpressionSyntax)?.Expression)
+                        this.GetDelegateReceiverCycleKey(
+                            (unwrapped as MemberAccessExpressionSyntax)?.Expression,
+                            usePosition
+                        )
                     }
                     return "$prefix.${symbol.Name}"
                 }
@@ -3863,7 +4110,15 @@ partial class CSharpToGSharpTranslator {
             } else {
                 List[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)](callerChain)
             }
-            next.Add((executable, callPosition, callSite))
+            let effectivePosition = if callSite is InvocationExpressionSyntax{
+                ArgumentList: {CloseParenToken: var closeParen}
+            } &&
+                !closeParen.IsMissing {
+                closeParen.SpanStart
+            } else {
+                callPosition
+            }
+            next.Add((executable, effectivePosition, callSite))
             return next
         }
 
@@ -4155,7 +4410,9 @@ partial class CSharpToGSharpTranslator {
                 )
                     .ToList()
             }
-            if symbol is IPropertySymbol || symbol is IMethodSymbol || expression is InvocationExpressionSyntax {
+            if symbol is IPropertySymbol ||
+                (symbol is IMethodSymbol methodSymbol && methodSymbol.MethodKind != MethodKind.Constructor) ||
+                expression is InvocationExpressionSyntax {
                 return Array.Empty[ExpressionSyntax]()
             }
             return []ExpressionSyntax{expression!!}
@@ -7440,23 +7697,26 @@ partial class CSharpToGSharpTranslator {
             private func DelegateCalleeMayDispatchDynamically(
                 argument ArgumentSyntax,
                 parameter IParameterSymbol?
+            ) bool -> DelegateCalleeMayDispatchDynamically(
+                argument.Parent?.Parent as InvocationExpressionSyntax,
+                parameter?.ContainingSymbol as IMethodSymbol
+            )
+
+            private func DelegateCalleeMayDispatchDynamically(
+                invocation InvocationExpressionSyntax?,
+                method IMethodSymbol?
             ) bool {
-                if parameter!!.ContainingSymbol is not IMethodSymbol method ||
+                if method == nil ||
                     method.IsStatic ||
                     method.MethodKind == MethodKind.LocalFunction ||
                     method.IsSealed ||
                     method
                     .ContainingType
                     ?.IsSealed == true ||
-                    method != nil &&
-                    method.IsAbstract == false &&
-                    method.IsVirtual == false &&
-                    method.IsOverride == false {
+                    (method.IsAbstract == false && method.IsVirtual == false && method.IsOverride == false) {
                     return false
                 }
-                return argument
-                    .Parent
-                    ?.Parent is not(
+                return invocation is not(
                     InvocationExpressionSyntax and
                         {Expression: MemberAccessExpressionSyntax and {Expression: BaseExpressionSyntax}}
                 )
