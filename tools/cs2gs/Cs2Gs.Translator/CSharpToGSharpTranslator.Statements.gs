@@ -3062,10 +3062,9 @@ partial class CSharpToGSharpTranslator {
                     this.context.ReportUnsupported(declarator, message)
                     continue
                 }
-                let pointeeType GTypeReference? = this.typeMapper.Map(
-                    localSymbol.Type,
-                    this.context,
-                    declaration!!.Type.GetLocation()
+                let pointeeType GTypeReference? = this.PromoteIfUsedAsNullable(
+                    this.typeMapper.Map(localSymbol.Type, this.context, declaration!!.Type.GetLocation()),
+                    localSymbol
                 )
                 // The alias is written through by a plain `name = value` in the
                 // original C# (e.g. `r = 20;`) exactly like a normal local, so the

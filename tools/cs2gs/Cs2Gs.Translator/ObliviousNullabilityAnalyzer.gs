@@ -3741,15 +3741,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         return function as MethodDeclarationSyntax
     }
 
-    // The expression with its parentheses removed. A `q!` is NOT unwrapped: the
-    // author asserted `q` non-null there, so the value is no longer "the
-    // parameter unchanged".
-    private func Unwrap(expression ExpressionSyntax) ExpressionSyntax {
+    // Value forwarding retains suppressions. Ref initializers unwrap them to identify the shared storage.
+    private func Unwrap(expression ExpressionSyntax, unwrapSuppressions bool = false) ExpressionSyntax {
         var current = expression
-        while current is ParenthesizedExpressionSyntax parenthesized {
-            current = parenthesized.Expression
+        while true {
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if unwrapSuppressions && current is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                current = suppress.Operand
+            } else {
+                return current
+            }
         }
-        return current
     }
 
     // Syntactic prefilter for a forwarding edge: a bare identifier that names a
@@ -4577,6 +4582,22 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
                 if model.GetDeclaredSymbol(declarator) is ISymbol declared && IsValueDeclarationSymbol(declared) {
+                    if declared is ILocalSymbol{RefKind: not RefKind.None} &&
+                        Unwrap(declarator.Initializer!!.Value) is RefExpressionSyntax reference {
+                        // A ref initializer names storage. Guards narrow reads, not the shared declaration contract.
+                        let storage = Unwrap(reference.Expression, unwrapSuppressions: true)
+                        CollectScalarValueFlow(Canonical(declared), storage, model, tainted, edges, scalarTupleEdges)
+                        for source in ResolveSources(storage, model) {
+                            if !IsEligibleScalarTarget(source) {
+                                continue
+                            }
+                            if IsDeclaredNullablePosition(SymbolValueType(declared)) {
+                                tainted.Add(source!!)
+                            }
+                            edges.Add((source!!, Canonical(declared)!!))
+                        }
+                        break
+                    }
                     CollectScalarValueFlow(
                         Canonical(declared),
                         declarator.Initializer!!.Value,

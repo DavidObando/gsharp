@@ -24,6 +24,73 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Theory
+    @InlineData("let")
+    @InlineData("var")
+    func GuardedRefAlias_CannotNarrowNullableStorage(keyword string) {
+        let source = `import System
+func Run() {
+    var text string? = "x"
+    if text != nil {
+        ` + keyword + ` ref alias string = text
+        alias = "keep"
+    }
+}
+Run()
+`
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue4726", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let output = Path.Combine(directory, "NonNullableAlias.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            let column = source.Split('\n')[4].IndexOf("text", StringComparison.Ordinal) + 1
+            Assert.Contains(
+                Path.Combine(directory, "NonNullableAlias.gs") + "(5,$column,5,${column + 4}): error GS0155",
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("let", "string?")
+    @InlineData("var", "string?")
+    @InlineData("let", "")
+    @InlineData("var", "")
+    func GuardedRefAlias_UsesDeclaredStorageAndInvalidatesReferent(keyword string, typeClause string) {
+        let source = `import System
+func Run() {
+    var text string? = "x"
+    if text != nil {
+        ` + keyword + ` ref alias ` + typeClause + ` = text
+        alias = nil
+        Console.WriteLine(text ?? "null")
+    }
+}
+Run()
+`
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue4726", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let output = Path.Combine(directory, "GuardedAlias.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.True(exit == 0, log)
+            Assert.DoesNotContain("GS0612", log)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(
+                System.Text.Encoding.UTF8.GetBytes("null" + Environment.NewLine),
+                System.Text.Encoding.UTF8.GetBytes(stdout)
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     /// A write that can change the aliased storage makes the later read through
     /// the alias report the nullable-receiver diagnostic.
     /// @param name The case name.
