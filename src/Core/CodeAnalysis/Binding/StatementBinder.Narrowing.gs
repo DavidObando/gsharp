@@ -964,8 +964,11 @@ internal partial class StatementBinder {
                 mayMutateMemberPaths = true
             }
             case AssignmentExpressionSyntax, FieldAssignmentExpressionSyntax, MemberFieldAssignmentExpressionSyntax { }
+            // ADR-0208 R20 and R21 (#5832): an increment of a named member (`x.f++`) binds to a member write,
+            // which the bound effects classify like `x.f = v`. Any other target keeps the syntax answer.
             case EventSubscriptionExpressionSyntax{IsIncrementDecrement: true} inc {
-                mayMutateMemberPaths = inc.LeftHandSide is not NameExpressionSyntax
+                mayMutateMemberPaths = inc.LeftHandSide is not NameExpressionSyntax &&
+                    !(inc.LeftHandSide is AccessorExpressionSyntax{RightPart: NameExpressionSyntax})
             }
             case m is MultiAssignmentStatementSyntax {
                 for t in m.Targets {

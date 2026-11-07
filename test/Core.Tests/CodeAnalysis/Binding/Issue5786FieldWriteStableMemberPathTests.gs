@@ -463,6 +463,8 @@ import System.Diagnostics.CodeAnalysis
 
 class Owner {
     var A bool
+    var N int32
+    prop P int32 { get; set; }
 }
 ` + kind + ` Box {
     var _name string?
@@ -514,6 +516,36 @@ class Owner {
         let result = EmittedOracle.Evaluate(MemberNotNullBox(kind, write, read, "var b = Box(Owner())\nb.Run(b)"))
         Assert.Empty(result.Diagnostics)
         Assert.Equal("9", result.ValueText)
+    }
+
+    /// #5832 review: an increment or a compound assignment of a named member binds to a member write, so the bound
+    /// effects classify it like a plain write (R20, R21). An increment of another field keeps the `[MemberNotNull]`
+    /// fact and the fact on `owner`, and so does an increment through `owner`.
+    @Theory
+    @InlineData("class", "this.count++", "return _name.Length + this.count", "6")
+    @InlineData("struct", "this.count++", "return _name.Length + this.count", "6")
+    @InlineData("class", "owner.N++", "return _name.Length + owner.N", "6")
+    @InlineData("struct", "owner.N++", "return _name.Length + owner.N", "6")
+    @InlineData("class", "owner.P++", "return _name.Length + owner.P", "6")
+    @InlineData("struct", "owner.P++", "return _name.Length + owner.P", "6")
+    @InlineData("class", "owner.N += 2", "return _name.Length + owner.N", "7")
+    @InlineData("struct", "owner.N += 2", "return _name.Length + owner.N", "7")
+    func MemberIncrementOrCompoundWrite_KeepsFacts(kind string, write string, read string, expected string) {
+        let result = EmittedOracle.Evaluate(MemberNotNullBox(kind, write, read, "var b = Box(Owner())\nb.Run(b)"))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(expected, result.ValueText)
+    }
+
+    /// A compound assignment of the `[MemberNotNull]` field itself writes that field, so the fact dies (#5835).
+    @Theory
+    @InlineData("class", "other._name += \"x\"")
+    @InlineData("struct", "var copy = other\n            copy._name += \"x\"")
+    func CompoundWriteOfTheMemberNotNullField_RemovesMemberNotNullFact(kind string, write string) {
+        let source = MemberNotNullBox(kind, write, "return _name.Length // READ", "var b = Box(Owner())\nb.Run(b)")
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
     }
 
     /// A `[MemberNotNull]` fact on a bare field of a struct `this` is a fact on a member of `this`, so R20 applies:

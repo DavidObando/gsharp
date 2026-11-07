@@ -1003,7 +1003,9 @@ Details per row:
   apply to it unchanged: a separate `var` field write of another field keeps it, a write that can replace a struct
   `this` removes it, and a call or a full-rule write removes it. A write of the same field through any receiver
   removes it by the member symbol that `AssignedRootsCollector` records (`AssignsRoot`, #5835). The collector has
-  no second write classification for implicit members. The tests that pinned the old rule,
+  no second write classification for implicit members. An increment or a decrement of a named member (`x.f++`) binds to a member write, so the
+  bound effects classify it like `x.f = v` (and a compound assignment `x.f += v` already did); the syntax walk
+  (`SyntaxMayMutateMemberPaths`) keeps its conservative answer only for an increment of any other target. The tests that pinned the old rule,
   `Issue1180SmartCastMembersBinderTests.InterveningMemberAssignment_InvalidatesMemberPathNarrowing` and
   `Issue1639NarrowingInvalidationFastPathTests.ActiveMemberPathNarrowing_InterveningMemberAssignment_StillInvalidates`,
   now pin R21 (`InterveningVarFieldWrite_KeepsMemberPathNarrowing`) and an index write. New sibling cases
