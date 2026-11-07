@@ -1684,6 +1684,12 @@ public sealed class Probe<T>
 
     private System.Action? secondCallback;
     private event System.Action? secondHappened;
+    private event System.Action? CustomHappened
+    {
+        add { this.callback = value; }
+        remove { }
+    }
+    private System.Action? GetSaved() => this.secondCallback;
     private static void Other() { }
 
     public void CheckCyclicAliasedAndConditionalStorage(T replacement, bool choose)
@@ -1711,6 +1717,7 @@ public sealed class Probe<T>
         this.Happened = CopiedMulticastLocal;
         this.Happened += CopiedMulticastLocal;
         this.secondHappened = this.Happened;
+        this.callback = null;
         this.Happened = null;
         this.secondHappened -= CopiedMulticastLocal;
         copiedMulticastPair = (default(T), replacement);
@@ -1727,6 +1734,71 @@ public sealed class Probe<T>
         this.Happened -= choose ? ConditionalUnsubscribeLocal : Other;
         conditionalUnsubscribePair = (default(T), replacement);
         this.Happened?.Invoke();
+
+        var customEventPair = (replacement, replacement);
+        void CustomEventLocal()
+        {
+            var (customEventLeft, _) = customEventPair;
+            Fill(ref customEventLeft, replacement);
+        }
+
+        this.CustomHappened += CustomEventLocal;
+        this.CustomHappened -= CustomEventLocal;
+        customEventPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var combinedRemovePair = (replacement, replacement);
+        void CombinedRemoveLocal()
+        {
+            var (combinedRemoveLeft, _) = combinedRemovePair;
+            Fill(ref combinedRemoveLeft, replacement);
+        }
+
+        this.Happened = null;
+        this.Happened += CombinedRemoveLocal;
+        this.Happened -= (System.Action)CombinedRemoveLocal + Other;
+        combinedRemovePair = (default(T), replacement);
+        this.Happened?.Invoke();
+
+        var genericMismatchPair = (replacement, replacement);
+        void GenericMismatchLocal<U>()
+        {
+            var (genericMismatchLeft, _) = genericMismatchPair;
+            Fill(ref genericMismatchLeft, replacement);
+        }
+
+        this.Happened = null;
+        this.Happened += GenericMismatchLocal<int>;
+        this.Happened -= GenericMismatchLocal<string>;
+        genericMismatchPair = (default(T), replacement);
+        this.Happened?.Invoke();
+
+        var genericMatchedPair = (replacement, replacement);
+        void GenericMatchedLocal<U>()
+        {
+            var (genericMatchedLeft, _) = genericMatchedPair;
+            Keep(ref genericMatchedLeft);
+        }
+
+        this.Happened = null;
+        this.Happened += GenericMatchedLocal<int>;
+        this.Happened -= GenericMatchedLocal<int>;
+        genericMatchedPair = (default(T), replacement);
+        this.Happened?.Invoke();
+
+        var savedHelperPair = (replacement, replacement);
+        void SavedHelperLocal()
+        {
+            var (savedHelperLeft, _) = savedHelperPair;
+            Fill(ref savedHelperLeft, replacement);
+        }
+
+        this.callback = SavedHelperLocal;
+        this.secondCallback = this.callback;
+        this.callback = this.GetSaved();
+        this.secondCallback = null;
+        savedHelperPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 }`
         let printed = Translate(source)
@@ -1737,6 +1809,11 @@ public sealed class Probe<T>
         Assert.Matches("\\b(let|var) cyclicFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) copiedMulticastLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) conditionalUnsubscribeLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) customEventLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) combinedRemoveLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) genericMismatchLeft T\\? =", printed)
+        Assert.DoesNotMatch("\\b(let|var) genericMatchedLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) savedHelperLeft T\\? =", printed)
     }
 
     shared {
