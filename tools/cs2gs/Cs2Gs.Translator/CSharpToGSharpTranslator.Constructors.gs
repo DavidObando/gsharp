@@ -2257,19 +2257,393 @@ partial class CSharpToGSharpTranslator {
         // candidates go through the same predicate, so allocation always ends
         // on a proven name; an occupied-set shape this misses becomes a
         // suffix, never a silently rebound call.
+        private var isPreallocatingLiftedHelpers bool
+
         private func AllocateLiftedLocalFunctionName(localFunction IMethodSymbol, localName string?) string? {
+            let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
+            if allocator.TryGetAllocated(localFunction, out var existing) {
+                if !this.isPreallocatingLiftedHelpers {
+                    this.typeMapper.ReserveSiblingMemberName(existing)
+                }
+                return existing
+            }
             let aggregate INamedTypeSymbol? = this.state.CurrentEmittedAggregate ?? localFunction.ContainingType
+            this.EnsurePartialAggregateLiftedLocalFunctionsAllocated(aggregate)
+            if allocator.TryGetAllocated(localFunction, out existing) {
+                if !this.isPreallocatingLiftedHelpers {
+                    this.typeMapper.ReserveSiblingMemberName(existing)
+                }
+                return existing
+            }
             let occupied = this.CollectLiftedHelperOccupiedNames(aggregate, localFunction)
-            let allocated string? = LiftedLocalFunctionNameAllocator.For(this.context.Compilation).Allocate(
+            let scopeMapper = this.GetLiftedHelperScopeMapper(aggregate)
+            let allocated string? = allocator.Allocate(
                 localFunction,
                 aggregate,
                 occupied,
                 localName,
-                (candidate string) -> this.typeMapper.ClaimsDocumentScopeName(candidate, this.context) ||
+                (candidate string) -> scopeMapper.ClaimsDocumentScopeName(candidate, this.context) ||
                     this.IsLiftedHelperNameMentionedInSource(candidate, aggregate, localFunction)
             )
-            this.typeMapper.ReserveSiblingMemberName(allocated)
+            if !this.isPreallocatingLiftedHelpers {
+                this.typeMapper.ReserveSiblingMemberName(allocated)
+            }
             return allocated
+        }
+
+        private let partialAggregateScopeMappers Dictionary[INamedTypeSymbol, CSharpTypeMapper] = Dictionary[
+            INamedTypeSymbol,
+            CSharpTypeMapper
+        ](SymbolEqualityComparer.Default)
+        private let singleTreeScopeMappers Dictionary[Microsoft.CodeAnalysis.SyntaxTree, CSharpTypeMapper] = Dictionary[
+            Microsoft.CodeAnalysis.SyntaxTree,
+            CSharpTypeMapper
+        ]()
+        private let treeSetScopeMappers Dictionary[string, CSharpTypeMapper] = Dictionary[string, CSharpTypeMapper](
+            StringComparer.Ordinal
+        )
+
+        private func GetOrBuildSingleTreeScopeMapper(tree Microsoft.CodeAnalysis.SyntaxTree) CSharpTypeMapper {
+            if this.singleTreeScopeMappers.TryGetValue(tree, out var cached) {
+                return cached
+            }
+            let built = this.typeMapper.BuildAggregateScopeReservationMapper(
+                []Microsoft.CodeAnalysis.SyntaxTree{tree},
+                this.context
+            )
+            this.singleTreeScopeMappers[tree] = built
+            return built
+        }
+
+        private func GetLiftedHelperScopeMapper(aggregate INamedTypeSymbol?) CSharpTypeMapper {
+            if aggregate == nil || !this.preservePartialParts {
+                return this.typeMapper
+            }
+            let owner = aggregate.OriginalDefinition
+            if this.partialAggregateScopeMappers.TryGetValue(owner, out var cached) {
+                return cached
+            }
+            let declaredTrees = if this.partialTypeParts.TryGetValue(owner, out var parts) {
+                parts.Select((part TypeDeclarationSyntax) -> part.SyntaxTree)
+            } else {
+                owner
+                    .DeclaringSyntaxReferences
+                    .Select((r SyntaxReference) -> r.SyntaxTree)
+                    .Where(
+                    (tree Microsoft.CodeAnalysis.SyntaxTree) -> this.retainedFilePaths == nil ||
+                        this
+                        .retainedFilePaths
+                        .Contains(tree.FilePath)
+                )
+            }
+            let absorbedExtensions = this.GetAbsorbedOwnedExtensions(owner).ToList()
+            let trees = declaredTrees
+                .Concat(absorbedExtensions.Select((m MethodDeclarationSyntax) -> m.SyntaxTree))
+                .Distinct()
+                .OrderBy((tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath, StringComparer.Ordinal)
+                .ToList()
+            if trees.Count == 0 {
+                return this.typeMapper
+            }
+            if trees.Count == 1 {
+                let single = this.GetOrBuildSingleTreeScopeMapper(trees[0])
+                this.partialAggregateScopeMappers[owner] = single
+                return single
+            }
+            let treeSetKey = string.Join(
+                "\u0000",
+                trees.Select((tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath)
+            )
+            if !this.treeSetScopeMappers.TryGetValue(treeSetKey, out var built) {
+                built = this.typeMapper.CreateEmptyScopeReservationMapper(this.context)
+                for tree in trees {
+                    built.MergeScopeReservationsFrom(this.GetOrBuildSingleTreeScopeMapper(tree))
+                }
+                this.treeSetScopeMappers[treeSetKey] = built
+            }
+            this.partialAggregateScopeMappers[owner] = built
+            return built
+        }
+
+        private func GetAbsorbedOwnedExtensions(aggregate INamedTypeSymbol) IEnumerable[MethodDeclarationSyntax] {
+            if !this.ownedExtensions.TryGetMethods(aggregate, out var ownedMethods) {
+                return Enumerable.Empty[MethodDeclarationSyntax]()
+            }
+            return ownedMethods
+                .Where(
+                (m MethodDeclarationSyntax) -> this.CanLowerOwnedExtension(m) && !this.IsPreservedOwnedExtension(
+                    this.context.Compilation.GetSemanticModel(m.SyntaxTree).GetDeclaredSymbol(m) as IMethodSymbol
+                )
+            )
+                .OrderBy((m MethodDeclarationSyntax) -> m.SyntaxTree.FilePath, StringComparer.Ordinal)
+                .ThenBy((m MethodDeclarationSyntax) -> m.SpanStart)
+        }
+
+        func PreallocatePartialAggregates() {
+            if !this.preservePartialParts ||
+                (this.partialTypeParts.Count == 0 && !this.context.Compilation.SyntaxTrees.Skip(1).Any()) ||
+                !LiftedLocalFunctionNameAllocator
+                .For(this.context.Compilation).TryBeginCompilationPreallocation() {
+                return
+            }
+            let candidates = List[(Symbol INamedTypeSymbol, Parts List[TypeDeclarationSyntax])]()
+            for type in CSharpToGSharpTranslator.EnumerateNamedTypes(
+                this.context.Compilation.Assembly.GlobalNamespace
+            ) {
+                let parts = if this.partialTypeParts.TryGetValue(type, out var partialParts) {
+                    partialParts
+                } else {
+                    type
+                        .DeclaringSyntaxReferences
+                        .Select((r SyntaxReference) -> r.GetSyntax())
+                        .OfType[TypeDeclarationSyntax]()
+                        .Where(
+                        (p TypeDeclarationSyntax) -> this.retainedFilePaths == nil || this.retainedFilePaths.Contains(
+                            p.SyntaxTree.FilePath
+                        )
+                    )
+                        .OrderBy((p TypeDeclarationSyntax) -> p.SyntaxTree.FilePath, StringComparer.Ordinal)
+                        .ThenBy((p TypeDeclarationSyntax) -> p.SpanStart)
+                        .ToList()
+                }
+                if parts.Count == 0 {
+                    continue
+                }
+                if parts.Count == 1 && !ContainerHasLocalFunction(parts[0]) && !this.GetAbsorbedOwnedExtensions(
+                    type.OriginalDefinition
+                )
+                    .Any(ContainerHasLocalFunction) {
+                    continue
+                }
+                candidates.Add((type, parts))
+            }
+            for entry in candidates.OrderBy(
+                (pair(Symbol INamedTypeSymbol, Parts List[TypeDeclarationSyntax])) -> pair.Parts[0].SyntaxTree.FilePath,
+                StringComparer.Ordinal
+            )
+                .ThenBy((pair(Symbol INamedTypeSymbol, Parts List[TypeDeclarationSyntax])) -> pair.Parts[0].SpanStart) {
+                let partialSymbol = entry.Symbol
+                let parts = entry.Parts
+                let primaryCtorParamNames = this.CollectPrimaryConstructorParameterNames(
+                    partialSymbol,
+                    if parts.Count == 1 {
+                        parts[0]
+                    } else {
+                        default(TypeDeclarationSyntax?)
+                    },
+                    nil
+                )
+                for part in parts {
+                    using let loweredModelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    for loweredCandidate in part
+                        .Members
+                        .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
+                        if this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol &&
+                            this
+                            .IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
+                            this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames)
+                        }
+                    }
+                }
+                this.EnsurePartialAggregateLiftedLocalFunctionsAllocated(partialSymbol, parts)
+                this.state.SynthesizedPropertyBackingFieldNames.Clear()
+            }
+        }
+
+        private func ContainerHasLocalFunction(container Microsoft.CodeAnalysis.SyntaxNode) bool -> container
+            .DescendantNodes(
+            (child Microsoft.CodeAnalysis.SyntaxNode) -> child == container || child is not TypeDeclarationSyntax
+        )
+            .OfType[LocalFunctionStatementSyntax]()
+            .Any()
+
+        private func CollectPrimaryConstructorParameterNames(
+            symbol INamedTypeSymbol?,
+            node TypeDeclarationSyntax?,
+            liftedPrimaryParameters IReadOnlyList[Parameter]?
+        ) HashSet[string] {
+            let names = HashSet[string](
+                liftedPrimaryParameters?.Select((p Parameter) -> p.Name) ?? Enumerable.Empty[string](),
+                StringComparer.Ordinal
+            )
+            let paramList = GetPrimaryConstructorParameterList(symbol) ?? node?.ParameterList
+            if paramList != nil {
+                using let primaryModelScope = this.context.UseSemanticModelFor(paramList.SyntaxTree)
+                for parameter in paramList.Parameters {
+                    if this.context.GetDeclaredSymbol(parameter) is IParameterSymbol paramSymbol {
+                        names.Add(this.EmittedName(paramSymbol, parameter.Identifier.ValueText)!!)
+                    } else {
+                        names.Add(this.EmittedName(parameter, parameter.Identifier))
+                    }
+                }
+            }
+            return names
+        }
+
+        // Issue #4610: preallocate lifted local-function names across a partial
+        // aggregate's declarations in canonical (file path, span start) order so
+        // suffix ownership does not depend on syntax-tree visitation order.
+        private func EnsurePartialAggregateLiftedLocalFunctionsAllocated(
+            aggregate INamedTypeSymbol?,
+            explicitParts IReadOnlyList[TypeDeclarationSyntax]? = nil
+        ) {
+            if aggregate == nil || !this.preservePartialParts {
+                return
+            }
+            var parts IReadOnlyList[TypeDeclarationSyntax]? = explicitParts
+            if parts == nil {
+                if this.partialTypeParts.TryGetValue(aggregate.OriginalDefinition, out var partialParts) {
+                    parts = partialParts
+                } else {
+                    return
+                }
+            }
+            if !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryBeginPreallocation(aggregate) {
+                return
+            }
+            let savedPreallocating = this.isPreallocatingLiftedHelpers
+            let savedEmittedAggregate = this.state.CurrentEmittedAggregate
+            let savedInstanceSynthHelpers = this.state.PendingInstanceSynthHelpers
+            let savedStaticSynthHelpers = this.state.PendingStaticSynthHelpers
+            let savedStatic = Dictionary[IMethodSymbol, string](
+                this.state.LiftedStaticLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
+            let savedRecursive = Dictionary[IMethodSymbol, LiftedRecursiveLocalFunction](
+                this.state.LiftedRecursiveLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
+            let savedGroups = Dictionary[IMethodSymbol, RecursiveLocalFunctionGroup](
+                this.state.RecursiveLocalFunctionGroups,
+                SymbolEqualityComparer.Default
+            )
+            let savedUnsupportedTypeParam = HashSet[IMethodSymbol](
+                this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
+            let savedUnsupportedSuspending = HashSet[IMethodSymbol](
+                this.state.UnsupportedSuspendingRefCaptureLocalFunctions,
+                SymbolEqualityComparer.Default
+            )
+            this.isPreallocatingLiftedHelpers = true
+            this.state.CurrentEmittedAggregate = aggregate.OriginalDefinition
+            this.state.PendingInstanceSynthHelpers = List[MethodDeclaration]()
+            this.state.PendingStaticSynthHelpers = List[MethodDeclaration]()
+            this.state.LiftedStaticLocalFunctions.Clear()
+            this.state.LiftedRecursiveLocalFunctions.Clear()
+            this.state.RecursiveLocalFunctionGroups.Clear()
+            this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Clear()
+            this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
+            try {
+                for part in parts {
+                    using let modelScope = this.context.UseSemanticModelFor(part.SyntaxTree)
+                    this.PreallocateLiftedLocalFunctionsInContainer(part)
+                }
+                for ownedMethod in this.GetAbsorbedOwnedExtensions(aggregate.OriginalDefinition) {
+                    using let modelScope = this.context.UseSemanticModelFor(ownedMethod.SyntaxTree)
+                    this.PreallocateLiftedLocalFunctionsInContainer(ownedMethod)
+                }
+            } finally {
+                this.isPreallocatingLiftedHelpers = savedPreallocating
+                this.state.CurrentEmittedAggregate = savedEmittedAggregate
+                this.state.PendingInstanceSynthHelpers = savedInstanceSynthHelpers
+                this.state.PendingStaticSynthHelpers = savedStaticSynthHelpers
+                this.state.LiftedStaticLocalFunctions.Clear()
+                for entry in savedStatic {
+                    this.state.LiftedStaticLocalFunctions.Add(entry.Key, entry.Value)
+                }
+                this.state.LiftedRecursiveLocalFunctions.Clear()
+                for entry in savedRecursive {
+                    this.state.LiftedRecursiveLocalFunctions.Add(entry.Key, entry.Value)
+                }
+                this.state.RecursiveLocalFunctionGroups.Clear()
+                for entry in savedGroups {
+                    this.state.RecursiveLocalFunctionGroups.Add(entry.Key, entry.Value)
+                }
+                this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.Clear()
+                this.state.UnsupportedRecursiveEnclosingTypeParameterLocalFunctions.UnionWith(savedUnsupportedTypeParam)
+                this.state.UnsupportedSuspendingRefCaptureLocalFunctions.Clear()
+                this.state.UnsupportedSuspendingRefCaptureLocalFunctions.UnionWith(savedUnsupportedSuspending)
+            }
+        }
+
+        private func PreallocateLiftedLocalFunctionsInContainer(container Microsoft.CodeAnalysis.SyntaxNode) {
+            for node in container.DescendantNodes(
+                (child Microsoft.CodeAnalysis.SyntaxNode) -> child == container || child is not TypeDeclarationSyntax
+            ) {
+                switch node {
+                    case switchNode is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax {
+                        if switchNode.Sections.Any(
+                            (section SwitchSectionSyntax) -> section
+                                .Statements
+                                .OfType[LocalFunctionStatementSyntax]()
+                                .Any()
+                        ) {
+                            let _ = this.RegisterSwitchLocalFunctionLifts(switchNode, preallocateOnly: true)
+                        }
+                    }
+                    case blockNode is BlockSyntax {
+                        if blockNode.Statements.OfType[LocalFunctionStatementSyntax]().Any() {
+                            let ordered = this.HoistCallBeforeDeclLocalFunctions(blockNode)
+                            this.RegisterCapturingRecursiveLocalFunctions(ordered, preallocateOnly: true)
+                            this.RegisterRecursiveLocalFunctionLifts(ordered)
+                        }
+                    }
+                    default { }
+                }
+            }
+        }
+
+        private func RegisterSwitchLocalFunctionLifts(
+            node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax,
+            preallocateOnly bool = false
+        ) Dictionary[SwitchSectionSyntax, IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]] {
+            let sectionByLocalFunction = Dictionary[IMethodSymbol, SwitchSectionSyntax](SymbolEqualityComparer.Default)
+            let declarationByLocalFunction = Dictionary[IMethodSymbol, LocalFunctionStatementSyntax](
+                SymbolEqualityComparer.Default
+            )
+            let orderedBySection = Dictionary[
+                SwitchSectionSyntax,
+                IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]
+            ]()
+            for section in node.Sections {
+                orderedBySection.Add(section, this.HoistCallBeforeDeclLocalFunctions(section.Statements, section.Span))
+                for localFunction in section.Statements.OfType[LocalFunctionStatementSyntax]() {
+                    using let modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree)
+                    if this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol symbol {
+                        sectionByLocalFunction[symbol] = section
+                        declarationByLocalFunction[symbol] = localFunction
+                    }
+                }
+            }
+            this.RegisterRecursiveLocalFunctionLifts(
+                node.Sections.SelectMany(
+                    func (section SwitchSectionSyntax) IEnumerable[
+                        Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax
+                    ] {
+                        return section.Statements
+                    }
+                ),
+                (component IReadOnlyCollection[IMethodSymbol]) -> component
+                    .Select((symbol IMethodSymbol) -> sectionByLocalFunction[symbol])
+                    .Distinct()
+                    .Skip(1)
+                    .Any() ||
+                    component
+                    .Any(
+                    (symbol IMethodSymbol) -> this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                        symbol,
+                        declarationByLocalFunction[symbol]
+                    )
+                ),
+                processOnlyForcedGroups: true
+            )
+            for section in node.Sections {
+                let ordered = orderedBySection[section]
+                this.RegisterCapturingRecursiveLocalFunctions(ordered, preallocateOnly)
+                this.RegisterRecursiveLocalFunctionLifts(ordered)
+            }
+            return orderedBySection
         }
 
         private func TryClaimSynthesizedLocalName(
@@ -3673,7 +4047,8 @@ partial class CSharpToGSharpTranslator {
         // fold into that group, including optional-parameter helpers whose
         // omitted defaults are materialized at translated call sites.
         private func RegisterCapturingRecursiveLocalFunctions(
-            statements IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]
+            statements IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax],
+            preallocateOnly bool = false
         ) {
             // Callable storage belongs to this declaring block's activation.
             // Descendant helpers are registered by their own block, never folded
@@ -3833,6 +4208,11 @@ partial class CSharpToGSharpTranslator {
                 names List[string],
                 declarations List[GStatement]
             ) {
+                if preallocateOnly {
+                    members.Add(symbol)
+                    names.Add(syntax.Identifier.ValueText)
+                    return
+                }
                 using let modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree)
                 let parameterTypes = List[GTypeReference]()
                 for parameter in syntax.ParameterList.Parameters {

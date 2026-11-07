@@ -364,7 +364,30 @@ internal shared class Program {
         if !string.IsNullOrEmpty(baselinePath) {
             let ledger = GapLedger.Load(baselinePath)
             let artifacts = GapLedger.LoadRunArtifacts(runDir)
-            let classification = ledger.Classify(artifacts, fullCorpus: appIds.Count == 0)
+            let executedStages = result
+                .Apps
+                .SelectMany(
+                func (a AppResult) IEnumerable[StageResult] {
+                    return a.Stages
+                }
+            )
+                .Where((s StageResult) -> !string.Equals(s.Status, "skipped", StringComparison.Ordinal))
+                .Select((s StageResult) -> s.Stage)
+                .ToHashSet(StringComparer.Ordinal)
+            let executedStagesByApp = Dictionary[string, IReadOnlySet[string]](StringComparer.Ordinal)
+            for app in result.Apps {
+                executedStagesByApp[app.AppId] = app
+                    .Stages
+                    .Where((s StageResult) -> !string.Equals(s.Status, "skipped", StringComparison.Ordinal))
+                    .Select((s StageResult) -> s.Stage)
+                    .ToHashSet(StringComparer.Ordinal)
+            }
+            let classification = ledger.Classify(
+                artifacts,
+                fullCorpus: appIds.Count == 0,
+                executedStages,
+                executedStagesByApp
+            )
             PrintBaselineClassification(classification, baselineStrict)
             // A skipped/unverified stage produces NO triage artifact, so a
             // fingerprint-only gate would render such an app green (the issue
@@ -372,7 +395,16 @@ internal shared class Program {
             // the ledger's unverifiedApps list to pass.
             let unacknowledged = result
                 .Apps
-                .Where((a AppResult) -> a.Unverified && !ledger.UnverifiedApps!!.Contains(a.AppId))
+                .Where(
+                (a AppResult) -> (
+                    if options.PartialRun {
+                        a.Succeeded && a.Stages.Any((s StageResult) -> s.Status == "skipped")
+                    } else {
+                        a.Unverified
+                    }
+                ) &&
+                    !ledger.UnverifiedApps!!.Contains(a.AppId)
+            )
                 .Select((a AppResult) -> a.AppId)
                 .ToList()
             for appId in unacknowledged {

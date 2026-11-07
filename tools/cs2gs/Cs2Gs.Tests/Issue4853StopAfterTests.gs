@@ -7,6 +7,7 @@ package Cs2Gs.Tests
 import Cs2Gs.Cli
 import Cs2Gs.Pipeline
 import System
+import System.Collections.Generic
 import System.IO
 import System.Linq
 import System.Reflection
@@ -122,6 +123,196 @@ class Issue4853StopAfterTests : IDisposable {
         Assert.True(app.Succeeded)
         Assert.True(app.Unverified)
         Assert.True(result!!.Unverified)
+        Assert.Equal(0, exit)
+    }
+
+    /// Issue #4883: `migrate --stop-after compile` runs translate and compile
+    /// (stopping before ilverify/test-parity), and `--baseline --baseline-strict`
+    /// does not report open baseline entries from unexecuted later stages as stale.
+    @Fact
+    async func Migrate_StopAfterCompile_RunsTranslateAndCompile_AndIgnoresLaterStageBaselineEntries() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let source = Path.Combine(this.root, "source", "src", "Widget")
+        Directory.CreateDirectory(source)
+        File.WriteAllText(
+            Path.Combine(source, "Widget.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"
+        )
+        File.WriteAllText(
+            Path.Combine(source, "Widget.cs"),
+            "namespace Widget { public static class Answer { public static int Value() => 42; } }"
+        )
+        let baselinePath = Path.Combine(this.root, "gaps.json")
+        let ledger = GapLedger(
+            List[GapLedgerEntry]{
+                GapLedgerEntry{
+                    Fingerprint: "sha256:later-stage-entry",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Issue: 4883,
+                    Title: "test-parity gap",
+                    Stage: "test-parity",
+                    FirstSeenRun: "run-1",
+                    Apps: List[string]{"corpus/Widget"}
+                }
+            }
+        )
+        ledger.Save(baselinePath)
+        let destination = Path.Combine(this.root, "destination-compile")
+        let originalOut = Console.Out
+        let capturedOut = StringWriter()
+        Console.SetOut(capturedOut)
+        var exit int32
+        try {
+            exit = await Program.Main(
+                []string{
+                    "migrate",
+                    "--diagnostic-run",
+                    "--corpus",
+                    Path.Combine(this.root, "source"),
+                    "--out",
+                    destination,
+                    "--gsc",
+                    compiler,
+                    "--config",
+                    "Release",
+                    "--no-via-sdk",
+                    "--stop-after",
+                    "compile",
+                    "--baseline",
+                    baselinePath,
+                    "--baseline-strict"
+                }
+            )
+        } finally {
+            Console.SetOut(originalOut)
+        }
+        let stdout = capturedOut.ToString()
+        Assert.Contains("partial run (--stop-after compile)", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("STALE", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("UNVERIFIED", stdout, StringComparison.Ordinal)
+        let runJson = Directory.GetFiles(destination, "run.json", SearchOption.AllDirectories).Single()
+        let result RunResult? = JsonSerializer.Deserialize[RunResult](
+            File.ReadAllText(runJson),
+            TriageSerialization.Options
+        )
+        let app = Assert.Single(result!!.Apps)
+        Assert.Equal([]string{"translate", "compile"}, app.Stages.Select((stage StageResult) -> stage.Stage).ToArray())
+        Assert.True(app.Succeeded)
+        Assert.True(app.Unverified)
+        Assert.Equal(0, exit)
+    }
+
+    /// Issue #4883 (review): when a known baseline translation gap causes
+    /// `translate` to fail under `--stop-after compile --baseline`, the skipped
+    /// `compile` stage on that failed app must not trigger an `UNVERIFIED` failure.
+    @Fact
+    async func Migrate_StopAfterCompile_WithBaselinedTranslateGap_DoesNotReportUnverified() {
+        let compiler string? = FindCompiler()
+        if compiler == nil {
+            return
+        }
+        let source = Path.Combine(this.root, "source-gap", "src", "Broken")
+        Directory.CreateDirectory(source)
+        File.WriteAllText(
+            Path.Combine(source, "Broken.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup></Project>"
+        )
+        File.WriteAllText(
+            Path.Combine(source, "Broken.cs"),
+            "namespace Broken { public record struct BadRecord { public int X; public BadRecord(int x) { X = x; if (x < 0) X = -x; } } }"
+        )
+        let goodSource = Path.Combine(this.root, "source-gap", "src", "Widget")
+        Directory.CreateDirectory(goodSource)
+        File.WriteAllText(
+            Path.Combine(goodSource, "Widget.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"
+        )
+        File.WriteAllText(
+            Path.Combine(goodSource, "Widget.cs"),
+            "namespace Widget { public static class Answer { public static int Value() => 42; } }"
+        )
+        let firstOut = Path.Combine(this.root, "destination-gap-1")
+        let _ = await Program.Main(
+            []string{
+                "migrate",
+                "--diagnostic-run",
+                "--corpus",
+                Path.Combine(this.root, "source-gap"),
+                "--out",
+                firstOut,
+                "--gsc",
+                compiler,
+                "--config",
+                "Release",
+                "--no-via-sdk",
+                "--stop-after",
+                "compile"
+            }
+        )
+        let firstRunDir = Path.GetDirectoryName(
+            Directory.GetFiles(firstOut, "run.json", SearchOption.AllDirectories).Single()
+        )!!
+        let discoveredArtifacts = GapLedger.LoadRunArtifacts(firstRunDir)
+        let artifact = Assert.Single(discoveredArtifacts)
+        let baselinePath = Path.Combine(this.root, "gaps-translate.json")
+        let ledger = GapLedger(
+            List[GapLedgerEntry]{
+                GapLedgerEntry{
+                    Fingerprint: artifact.Fingerprint,
+                    Status: GapLedgerEntry.StatusOpen,
+                    Issue: 4883,
+                    Title: "known translate gap",
+                    Stage: artifact.Stage,
+                    FirstSeenRun: "run-1",
+                    Apps: List[string]{"corpus/Broken"}
+                },
+                GapLedgerEntry{
+                    Fingerprint: "sha256:skipped-compile-entry",
+                    Status: GapLedgerEntry.StatusOpen,
+                    Issue: 4883,
+                    Title: "open compile gap on skipped stage",
+                    Stage: "compile",
+                    FirstSeenRun: "run-1",
+                    Apps: List[string]{"corpus/Broken"}
+                }
+            }
+        )
+        ledger.Save(baselinePath)
+        let secondOut = Path.Combine(this.root, "destination-gap-2")
+        let originalOut = Console.Out
+        let capturedOut = StringWriter()
+        Console.SetOut(capturedOut)
+        var exit int32
+        try {
+            exit = await Program.Main(
+                []string{
+                    "migrate",
+                    "--diagnostic-run",
+                    "--corpus",
+                    Path.Combine(this.root, "source-gap"),
+                    "--out",
+                    secondOut,
+                    "--gsc",
+                    compiler,
+                    "--config",
+                    "Release",
+                    "--no-via-sdk",
+                    "--stop-after",
+                    "compile",
+                    "--baseline",
+                    baselinePath,
+                    "--baseline-strict"
+                }
+            )
+        } finally {
+            Console.SetOut(originalOut)
+        }
+        let stdout = capturedOut.ToString()
+        Assert.DoesNotContain("UNVERIFIED", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("STALE", stdout, StringComparison.Ordinal)
         Assert.Equal(0, exit)
     }
 
