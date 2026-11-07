@@ -2750,9 +2750,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                     return ClassifyNullArgumentSlot(operand, model, run, localSafety)
                 }
-                // A reference comparison takes a `T?` operand; `x ?? y` tests `x`.
+                // Comparisons and `is` tests admit nil inputs; `x ?? y` tests `x`.
                 return if binary.IsKind(SyntaxKind.EqualsExpression) || binary.IsKind(SyntaxKind.NotEqualsExpression) ||
-                    binary.IsKind(SyntaxKind.CoalesceExpression) && binary.Left == value {
+                    binary.IsKind(SyntaxKind.IsExpression) && binary.Left == value || binary.IsKind(
+                    SyntaxKind.CoalesceExpression
+                ) &&
+                    binary.Left == value {
                     (true, default(string?))
                 } else {
                     unsafe

@@ -554,6 +554,8 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 - **For-in over generic collections of source types no longer boxes the enumerator** (issue #4907, part of #2189). `for x in coll` over a `List`, `Dictionary`, `HashSet` or `ImmutableArray` whose type arguments are same-compilation types, type parameters or named tuples now calls the collection's own `GetEnumerator()` and drives the nested struct enumerator, as C# does, instead of going through `IEnumerable<T>`, which allocated 40 to 48 bytes per loop. Emitted IL changes for these loops only; `sequence[T]`, user collections and other imported collections keep the interface route. The compiler's own loops benefit once the SDK pin moves to a release carrying this change.
 
+- **cs2gs:** Preserve named-constant `is` tests and nullable numeric conversions. Enum and named constants test their values, not their types. Object and NaN patterns preserve C# value-equality semantics. Fallback patterns capture receiver and member values at their original evaluation points. Numeric comparisons and lifted conversions preserve values instead of using nullable runtime downcasts (#5675, #5676).
+
 ## 0.5.212 (October 22, 2026)
 
 This snapshot is grounded in [`v0.5.212`](https://github.com/DavidObando/gsharp/releases/tag/v0.5.212), commit `242d8777c778db4272103c9dcefd6d63609e10ee`, published October 22, 2026 at 01:07:10 UTC. The compiler, language server, formatter and tools are written in G#. This release includes native shared-storage slices, platform nullability, immutable byte strings, explicit UTF-8 text boundaries, lazy scalar iteration and code-point collection conversions. The following entries preserve the tag's complete 0.5 change history.

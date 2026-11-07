@@ -49,8 +49,9 @@ namespace Corpus.Issue1923
 `)
         // Issue #4315: a declared-non-null `Friend` can still be null at run
         // time, and C# yields false for it, so the nested `not { Age: 0 }`
-        // re-entry keeps the `person.Friend != nil` guard.
-        Assert.True(rendered.Contains("person.Friend != nil", StringComparison.Ordinal), rendered)
+        // re-entry guards the captured member.
+        Assert.True(rendered.Contains("person.Friend is var __spill0", StringComparison.Ordinal), rendered)
+        Assert.True(rendered.Contains("__spill0 != nil", StringComparison.Ordinal), rendered)
         Assert.True(rendered.Contains("Age == 0", StringComparison.Ordinal), rendered)
         AssertRoundTripParses(rendered)
     }

@@ -68,6 +68,23 @@ import Microsoft.CodeAnalysis
 class Issue4173NullConditionalAnalyzerMappingTests : IDisposable {
     private let workDirectory DirectoryInfo = Directory.CreateTempSubdirectory("cs2gs-issue4173-null-conditional")
 
+    @Fact
+    func ObjectTypedEnumConstant_KeepsTheAnalyzerMemberMapping() {
+        let (printed, _) = TranslateAnalyzerSource(`
+#nullable enable
+using Microsoft.CodeAnalysis.CSharp;
+namespace Demo
+{
+    public static class P
+    {
+        public static bool Match(object? value) => value is SyntaxKind.SimpleMemberAccessExpression;
+    }
+}`)
+        AssertBinds(printed)
+        Assert.Contains("SyntaxKind.AccessorExpression", printed)
+        Assert.DoesNotContain("SyntaxKind.SimpleMemberAccessExpression", printed)
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
