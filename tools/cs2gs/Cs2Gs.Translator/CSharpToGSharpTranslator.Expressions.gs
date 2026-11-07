@@ -4576,6 +4576,9 @@ partial class CSharpToGSharpTranslator {
         private func GetTupleElementTypeAtPath(rootType ITypeSymbol?, path List[int32]) ITypeSymbol? {
             var current = rootType
             for index in path {
+                if current is ITypeParameterSymbol {
+                    return current
+                }
                 let tupleType = this.UnwrapNullableValueTupleType(current) as INamedTypeSymbol
                 if tupleType == nil || !tupleType.IsTupleType || index < 0 || index >= tupleType.TupleElements.Length {
                     return nil
@@ -6456,6 +6459,25 @@ partial class CSharpToGSharpTranslator {
                         combinedPath.AddRange(path)
                         if this.TupleElementYieldsNilableBeyondItsCSharpType(argument.Expression, combinedPath, memo) {
                             return true
+                        }
+                    }
+                    if UnwrapExpressionTreeDelegateType(parameter.OriginalDefinition.Type) is INamedTypeSymbol{
+                        DelegateInvokeMethod: {} invoke
+                    } {
+                        let effectiveInvokeReturn = GetEffectiveReturnType(
+                            invoke.ReturnType,
+                            this.ExpressionHasAsyncLambdaOperand(argument.Expression, nil)
+                        )
+                        for callbackPath in this.FindParameterTypeParameterPaths(effectiveInvokeReturn, methodTp) {
+                            let combinedPath = List[int32](callbackPath)
+                            combinedPath.AddRange(path)
+                            if this.InitializerLambdaReturnsNilableAtTuplePath(
+                                argument.Expression,
+                                combinedPath,
+                                memo
+                            ) {
+                                return true
+                            }
                         }
                     }
                 }

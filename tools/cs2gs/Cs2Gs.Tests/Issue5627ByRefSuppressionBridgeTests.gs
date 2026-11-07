@@ -444,7 +444,7 @@ namespace Demo
         static int CastInitializer() { var read = (Func<Dictionary<string, int>>)(() => Volatile.Read(ref full!)); Func<Dictionary<string, int>> checkedRead = () => (checked(Volatile.Read(ref full!))); Func<Dictionary<string, int>> uncheckedRead = () => (unchecked(Volatile.Read(ref full!))); return read().Count + checkedRead().Count + uncheckedRead().Count; }
         static int AssignGenericMember(Box<Dictionary<string, int>> b) { b.Read = () => Volatile.Read(ref full!); b.ReadProp = () => Volatile.Read(ref full!); return b.Read().Count + b.ReadProp().Count; }
         static bool AssignInferredGenericMember() { var b = Wrap(Volatile.Read(ref cache!)); b.Read = () => Volatile.Read(ref cache!); return b.Read() == null; }
-        static int ExplicitDelegateArray() { var nestedReaders = new[] { new[] { () => "ok" } }; var asyncTupleReaders = new[] { async () => (Volatile.Read(ref cache!), 0) }; var mixedNullReaders = new[] { () => Volatile.Read(ref cache!), null }; var inferredReaders = new[] { () => Volatile.Read(ref cache!) }; inferredReaders[0] = () => Volatile.Read(ref cache!); var tr0 = new[] { () => (new Dictionary<string, int>(), Volatile.Read(ref cache!)) }; var tr1 = true ? tr0 : tr0; var tr2 = true ? tr1 : tr1; tr2[0] = () => (Volatile.Read(ref full!), Volatile.Read(ref cache!)); var pair = (Volatile.Read(ref full!), 0); var consumed = ConsumeTuple(() => pair); var readers = new Func<Dictionary<string, int>>[] { () => Volatile.Read(ref full!) }; readers[0] = () => Volatile.Read(ref full!); return readers[0]().Count + (inferredReaders[0]() == null ? 1 : 0) + (mixedNullReaders[0]!() == null ? 1 : 0) + (asyncTupleReaders[0]().GetAwaiter().GetResult().Item1 == null ? 1 : 0) + nestedReaders[0][0]().Length + tr2[0]().Item1.Count + consumed + GenericInputArrayElem(0) + UseAwaitedAsync().GetAwaiter().GetResult(); }
+        static int ExplicitDelegateArray() { var nestedReaders = new[] { new[] { () => "ok" } }; var asyncTupleReaders = new[] { async () => (Volatile.Read(ref cache!), 0) }; var mixedNullReaders = new[] { () => Volatile.Read(ref cache!), null }; var inferredReaders = new[] { () => Volatile.Read(ref cache!) }; inferredReaders[0] = () => Volatile.Read(ref cache!); var tr0 = new[] { () => (new Dictionary<string, int>(), Volatile.Read(ref cache!)) }; var tr1 = true ? tr0 : tr0; var tr2 = true ? tr1 : tr1; tr2[0] = () => (Volatile.Read(ref full!), Volatile.Read(ref cache!)); var pair = (Volatile.Read(ref full!), 0); var consumed = ConsumeTuple(() => pair); Func<(Dictionary<string, int>, int)> readCallbackTuple = () => Read(() => (Volatile.Read(ref full!), 0)); var readers = new Func<Dictionary<string, int>>[] { () => Volatile.Read(ref full!) }; readers[0] = () => Volatile.Read(ref full!); return readers[0]().Count + (inferredReaders[0]() == null ? 1 : 0) + (mixedNullReaders[0]!() == null ? 1 : 0) + (asyncTupleReaders[0]().GetAwaiter().GetResult().Item1 == null ? 1 : 0) + nestedReaders[0][0]().Length + tr2[0]().Item1.Count + consumed + readCallbackTuple().Item1.Count + GenericInputArrayElem(0) + UseAwaitedAsync().GetAwaiter().GetResult(); }
         static int Deconstruct() { (Dictionary<string, int> d, int n) = (Volatile.Read(ref cache!), 0); d = Volatile.Read(ref cache!); return 1; }
         static int TypedThenGeneric() { Dictionary<string, int> d = Id(Volatile.Read(ref cache!)); d = Volatile.Read(ref cache!); return 1; }
         static int FixedField() { fixedRead = () => { return Volatile.Read(ref full!); }; return fixedRead().Count; }
@@ -523,6 +523,7 @@ namespace Demo
         Assert.Contains("readTask = () -> Volatile.Read(&fullTask)!!", printed)
         Assert.Contains("UseNestedGeneric(() -> Volatile.Read(&fullInner)!!)", printed)
         Assert.Contains("tr2[0] = () -> (Volatile.Read(&full)!!, Volatile.Read(&cache))", printed)
+        Assert.Contains("Read(() -> (Volatile.Read(&full), 0))", printed)
         Assert.Contains("readers[0] = () -> Volatile.Read(&full)!!", printed)
         Assert.Contains("Use(() -> Volatile.Read(&full)!!)", printed)
         Assert.Contains("Bag(){ () -> Volatile.Read(&cache) }", printed)
@@ -567,7 +568,7 @@ namespace Demo
         Assert.Contains("var d = Volatile.Read(&full)!!\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("let read Delegate = () -> {\n            return Volatile.Read(&cache)\n", printed)
         Assert.Contains("let read Delegate = () -> Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 34 4 4 7 3 True 1 1 1 2 2 2 2 5 3 2 True 14 1 1 1 1 1 1 True True")
+        RunsAs(printed, "True 1 1 2 1 True 1 1 1 2 34 4 4 7 3 True 1 1 1 2 2 2 2 5 3 2 True 15 1 1 1 1 1 1 True True")
     }
 
     /// An indexer key is a parameter slot: a key that is `T?` only in G# is asserted at a non-null indexer

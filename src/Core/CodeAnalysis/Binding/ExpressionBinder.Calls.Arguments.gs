@@ -2473,7 +2473,8 @@ internal partial class ExpressionBinder {
                 method,
                 symbolicMethodTypeArgs,
                 receiverType,
-                parameterTypeOverrides
+                parameterTypeOverrides,
+                call
             )
         } else {
             RebindNumericReturnWideningDelegateArguments(handlerArgs, parameters, parameterMapping)
@@ -2521,7 +2522,8 @@ internal partial class ExpressionBinder {
         method MethodInfo? = nil,
         symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
         receiverType TypeSymbol? = nil,
-        parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil
+        parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil,
+        call CallExpressionSyntax? = nil
     ) ImmutableArray[BoundExpression] {
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < arguments.Length; i++ {
@@ -2573,11 +2575,13 @@ internal partial class ExpressionBinder {
                     out targetFunctionType
                 )
             }
-            if parameterTargetSymbol != nil && conversions.RequiresRuntimeDelegateReturnValidation(
-                argument,
-                parameterTargetSymbol,
-                out var runtimeLambdaSyntax
-            ) {
+            if parameterTargetSymbol != nil && !conversions.DelegateReturnMentionsInferredMethodTypeParameter(
+                method,
+                paramIndex,
+                call
+            ) &&
+                conversions
+                .RequiresRuntimeDelegateReturnValidation(argument, parameterTargetSymbol, out var runtimeLambdaSyntax) {
                 rebound = BindExpression(runtimeLambdaSyntax!!, parameterTargetSymbol)
             } else if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
                 hasTargetFunctionType &&

@@ -1813,8 +1813,12 @@ internal class LambdaBinder {
         // ClosureCaptureLegalityChecker so the `go`-statement closure path
         // (StatementBinder.BindGoStatement) applies the exact same rules.
         ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location)
+        let deferredRuntimeReturnValidation = isExpressionTreeTarget ||
+            targetFunctionType == nil ||
+            inferReturnTypeFromBody ||
+            keptNaturalType
         let literal = BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured){
-            DeferredExpressionTreeReturnValidation = isExpressionTreeTarget
+            DeferredExpressionTreeReturnValidation = deferredRuntimeReturnValidation
         }
         if !needsExplicitParameterAdapter {
             return literal
@@ -1830,7 +1834,7 @@ internal class LambdaBinder {
             adapterTarget,
             ImmutableArray.Create(exactTargetParameterSlots)
         )
-        adapted.DeferredExpressionTreeReturnValidation = isExpressionTreeTarget
+        adapted.DeferredExpressionTreeReturnValidation = deferredRuntimeReturnValidation
         return adapted
     }
 

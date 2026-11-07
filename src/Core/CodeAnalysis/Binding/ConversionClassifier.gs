@@ -2181,6 +2181,7 @@ internal class ConversionClassifier {
                     let isExpressionTreeLiteralTarget = argument is BoundFunctionLiteralExpression &&
                         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
                     let isRuntimeDelegateReturnMismatch = !isExpressionTreeLiteralTarget &&
+                        !DelegateReturnMentionsInferredMethodTypeParameter(method, paramIndex, call) &&
                         RequiresRuntimeDelegateReturnValidation(argument, rejectionTargetType, out _)
                     // Issue #2347: an unresolved method group's natural type is
                     // the Error sentinel (see
@@ -4039,6 +4040,63 @@ internal class ConversionClassifier {
         }
         lambdaSyntax = syntax
         return true
+    }
+
+    internal func DelegateReturnMentionsInferredMethodTypeParameter(
+        method MethodInfo?,
+        paramIndex int32,
+        call CallExpressionSyntax?
+    ) bool {
+        if method == nil {
+            return false
+        }
+        if !method.IsGenericMethod {
+            return false
+        }
+        if call?.TypeArgumentList is {} typeArgs && typeArgs.Arguments.Count > 0 {
+            return false
+        }
+        var openMethod MethodInfo
+        var openParameters[]ParameterInfo
+        try {
+            openMethod = if method.IsGenericMethodDefinition {
+                method
+            } else {
+                method.GetGenericMethodDefinition()
+            }
+            openParameters = openMethod.GetParameters()
+        } catch (ex Exception) when ClrTypeUtilities.IsMetadataLoadFailure(ex) {
+            return false
+        }
+        if paramIndex < 0 || paramIndex >= openParameters.Length {
+            return false
+        }
+        var openParameterType Type? = GetPlainValueClrParameterType(openParameters[paramIndex])
+        if MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out var innerDelegate) {
+            openParameterType = innerDelegate
+        }
+        let invoke MethodInfo? = openParameterType?.GetMethodSafe("Invoke")
+        return ClrTypeMentionsMethodTypeParameter(invoke?.ReturnType)
+    }
+
+    private func ClrTypeMentionsMethodTypeParameter(type Type?) bool {
+        if type == nil {
+            return false
+        }
+        if type.IsGenericParameter {
+            return type.DeclaringMethod != nil
+        }
+        if type.IsArray || type.IsByRef || type.IsPointer {
+            return ClrTypeMentionsMethodTypeParameter(type.GetElementType())
+        }
+        if type.IsGenericType {
+            for arg in type.GetGenericArguments() {
+                if ClrTypeMentionsMethodTypeParameter(arg) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     internal func BindLambdaReturnTupleConversion(

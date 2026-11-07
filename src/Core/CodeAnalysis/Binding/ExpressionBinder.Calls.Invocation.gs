@@ -4376,6 +4376,10 @@ internal partial class ExpressionBinder {
         private func SameDelegateIdentity(left TypeSymbol, right TypeSymbol) bool {
             var left = left
             var right = right
+            if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(left, out _) !=
+            MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(right, out _) {
+                return false
+            }
             left = UnwrapExpressionTreeDelegate(left).StripToBareShape()
             right = UnwrapExpressionTreeDelegate(right).StripToBareShape()
             if object.ReferenceEquals(left, right) {

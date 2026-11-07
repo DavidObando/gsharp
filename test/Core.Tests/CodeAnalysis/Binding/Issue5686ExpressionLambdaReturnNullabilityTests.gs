@@ -372,6 +372,16 @@ func Run(token Token) {
                 "Maybe()"
             )
             yield Row(
+                "mixed-explicit-param-custom-generic-delegate-and-expression-tree-overload",
+                `func Run() string -> StrictSink5686.PickCustomDelegate((x int32) -> Maybe(), 1)`,
+                "Maybe()"
+            )
+            yield Row(
+                "mixed-disagreeing-nullability-delegate-and-expression-tree-overload",
+                `func Run() string -> StrictSink5686.PickMixedNullability(() -> Maybe(), 1)`,
+                "Maybe()"
+            )
+            yield Row(
                 "mixed-object-delegate-and-expression-tree-overload",
                 `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
                 "MaybeThing()",
@@ -474,7 +484,9 @@ func Run() string? {
     let s = StrictSink5686.Pick(() -> Box().MaybeName, true)
     let t = StrictSink5686.PickArg((x) -> Box().MaybeName, true)
     let u = StrictSink5686.PickExpressionOrInt(() -> Box().MaybeName, 1)
-    return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u
+    let v = StrictSink5686.PickCustomDelegate((x int32) -> Box().MaybeName, true)
+    let w = StrictSink5686.PickMixedNullability(() -> Box().MaybeName, true)
+    return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u ?? v ?? w
 }`)
         }
 
@@ -513,7 +525,7 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v13.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v14.dll")
             const csharpSource = `#nullable enable
 using System;
 using System.Linq.Expressions;
@@ -533,6 +545,8 @@ namespace Lib5686
         public static string? TakeExpressionArg(Expression<Func<int, string>> f) => f.Compile()(1);
         public static string Pick(Func<string> f, int n) => f();
         public static string? Pick(Expression<Func<string>> f, bool b) => f.Compile()();
+        public static string PickMixedNullability(Func<string> f, int n) => f();
+        public static string? PickMixedNullability(Expression<Func<string?>> f, bool b) => f.Compile()();
         public static string PickCustomDelegate(CustomGenericDelegate5686<string> f, int n) => f(n);
         public static string? PickCustomDelegate(Expression<CustomGenericDelegate5686<string>> f, bool b) => f.Compile()(1);
         public static string? PickNullableCustomDelegate(CustomGenericDelegate5686<string?> f, int n) => f(n);
