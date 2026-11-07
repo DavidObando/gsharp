@@ -156,7 +156,7 @@ open class Middle : Base {
                 isCollectible: true
             )
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(libraryPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 Assert.True(assembly.GetType("i2871intermediary.Middle", throwOnError: true)!!.IsAbstract)
             } finally {
                 loadContext.Unload()
@@ -543,9 +543,9 @@ public static class Probe
             }
             let loadContext = AssemblyLoadContext("Issue2871-" + Guid.NewGuid().ToString(), isCollectible: true)
             try {
-                let libraryAssembly = loadContext.LoadFromAssemblyPath(libraryPath)
+                let libraryAssembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 let _ = libraryAssembly.GetTypes()
-                let consumerAssembly = loadContext.LoadFromAssemblyPath(consumerPath)
+                let consumerAssembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 return cast[string](
                     consumerAssembly.GetType("Probe", throwOnError: true)!!.GetMethod(
                         "Run",

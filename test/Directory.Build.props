@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
 
-  <PropertyGroup>
+  <PropertyGroup Condition="!$(MSBuildProjectDirectory.Replace('\', '/').Contains('/TestAssets/'))">
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
   <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
 
-  <PropertyGroup>
+  <PropertyGroup Condition="!$(MSBuildProjectDirectory.Replace('\', '/').Contains('/TestAssets/'))">
     <IsTestProject>true</IsTestProject>
     <TestResultsDirectory Condition=" '$(TestResultsDirectory)' == '' ">$(BaseOutputPath)/TestResults</TestResultsDirectory>
   </PropertyGroup>

@@ -117,7 +117,7 @@ open class Issue3879RefPropertyEmitTests {
                 library,
                 "RefPropertyAndIndexer_ReturnAliasesThatWriteThrough"
             )
-            let driver = loadContext.LoadFromAssemblyPath(driverPath)
+            let driver = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(driverPath)))
             let result = driver.GetType("Repro.Driver")!!.GetMethod("Run")!!.Invoke(nil, nil)!!
             Assert.Equal([]int32{99, 88, 77}, Assert.IsType[[]int32](result))
         } finally {
@@ -383,7 +383,7 @@ public class Holder {
 }`)
 
         private func LoadHolder(loadContext AssemblyLoadContext, libraryPath string) Type {
-            let library = loadContext.LoadFromAssemblyPath(libraryPath)
+            let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             return library.GetType("Repro.Holder") ??
                 throw InvalidOperationException(
                 "Repro.Holder is missing from the emitted assembly: " + string.Join(
@@ -425,7 +425,7 @@ public class Holder {
 ` + "$diagnostics"))
             let loadContext = AssemblyLoadContext(testName, isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(outputPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
                 let program = assembly.GetTypes().First((t Type) -> t.Name == "<Program>")
                 let entry = program.GetMethod(
                     "<Main>$$",

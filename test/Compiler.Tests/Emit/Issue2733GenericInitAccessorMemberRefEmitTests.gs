@@ -141,7 +141,7 @@ list.CursorIndex = 1`))
             Assert.Equal(reader.GetBlobBytes(definition.Signature), reader.GetBlobBytes(memberRef.Signature))
             let context = AssemblyLoadContext("issue2733-reflection-" + accessorName, isCollectible: true)
             try {
-                let assembly = context.LoadFromAssemblyPath(assemblyPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let reflectedType = assembly.GetType("Oahu.Cli.Tui.SelectList`1", throwOnError: true)!!
                 let setter = reflectedType.GetMethods().Single((method MethodInfo) -> method.Name == accessorName)
                 let modifiers = setter.ReturnParameter.GetRequiredCustomModifiers()

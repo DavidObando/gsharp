@@ -31,7 +31,7 @@ open class Issue2852GenericUnmanagedStackAllocEmitTests {
             isCollectible: true
         )
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(outputPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
             let probe = assembly.GetType("Probe.StackAllocProbe") ??
                 throw InvalidOperationException("StackAllocProbe type not found.")
             Assert.Equal(7, probe.GetMethod("Byte")!!.Invoke(nil, nil))
@@ -89,8 +89,8 @@ open class Issue2852GenericUnmanagedStackAllocEmitTests {
                 isCollectible: true
             )
             try {
-                let fixture = loadContext.LoadFromAssemblyPath(fixturePath)
-                let assembly = loadContext.LoadFromAssemblyPath(outputPath)
+                let fixture = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(fixturePath)))
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
                 let probe = assembly.GetType("Probe.ImportedEnumProbe") ??
                     throw InvalidOperationException("ImportedEnumProbe type not found.")
                 let enumType = fixture.GetType("ImportedTypes.ImportedEnum") ??

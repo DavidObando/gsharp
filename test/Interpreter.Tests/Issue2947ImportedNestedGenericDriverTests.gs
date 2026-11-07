@@ -10,6 +10,7 @@ import System
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Runtime.Loader
 import System.Text
 import System.Text.RegularExpressions
 import Xunit
@@ -41,7 +42,7 @@ open class Issue2947ImportedNestedGenericDriverTests {
             )
             AssertSucceeded(emitted, "reported emit")
             Assert.Equal("5${Environment.NewLine}", RunAssembly(directory, reportedAssemblyPath))
-            let _ = Assembly.LoadFrom(libraryPath)
+            let _ = AssemblyLoadContext.Default.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let gsi = RunGsi(executedReportedPath)
             AssertSucceeded(gsi, "reported gsi")
             Assert.Equal("5${Environment.NewLine}", Normalize(gsi.StandardOutput))
@@ -72,9 +73,9 @@ open class Issue2947ImportedNestedGenericDriverTests {
             Assert.Equal(34, falsePositiveMatrix.SiteCount)
             CompileAndRunMatrix(directory, libraryPath, "matrix-controls", falsePositiveMatrix)
         } finally {
-            try {
+            if Directory.Exists(directory) {
                 Directory.Delete(directory, recursive: true)
-            } catch { }
+            }
         }
     }
 

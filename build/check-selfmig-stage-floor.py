@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +14,39 @@ STAGE_ORDER = ("translate", "compile", "ilverify", "test-parity")
 ATTEMPTED_STATUSES = {"passed", "failed"}
 UNREACHED_STATUSES = {"skipped", "not-applicable"}
 VALID_STATUSES = ATTEMPTED_STATUSES | UNREACHED_STATUSES
+
+
+def expected_apps(repo: Path, commit: str | None = None) -> set[str]:
+    """Independently derive the migrated corpus: tracked C# projects minus the gate's exclusions."""
+    common_path = repo / "build" / "selfmig-common.sh"
+    if not common_path.is_file():
+        common_path = Path(__file__).resolve().parent / "selfmig-common.sh"
+    common = common_path.read_text(encoding="utf-8")
+    block = re.search(r"selfmig_project_filters=\((.*?)^\)", common, re.S | re.M)
+    if block is None:
+        raise ValueError("cannot find selfmig_project_filters in build/selfmig-common.sh")
+    excluded = []
+    for line in block.group(1).splitlines():
+        line = line.split("#", 1)[0].strip()
+        match = re.fullmatch(r"--(?:exclude|passthrough)\s+(\S+)", line)
+        if match:
+            excluded.append(match.group(1).rstrip("/"))
+    if commit is None:
+        tracked = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "*.csproj"],
+            capture_output=True, text=True, check=True).stdout.split()
+    else:
+        tracked = [
+            path for path in subprocess.run(
+                ["git", "-C", str(repo), "ls-tree", "-r", "--name-only", commit],
+                capture_output=True, text=True, check=True).stdout.splitlines()
+            if path.endswith(".csproj")
+        ]
+    return {
+        path for path in tracked
+        if not path.startswith("out/")
+        and not any(path == item or path.startswith(item + "/") for item in excluded)
+    }
 
 
 def reached_stage(app: dict) -> tuple[str | None, str | None]:

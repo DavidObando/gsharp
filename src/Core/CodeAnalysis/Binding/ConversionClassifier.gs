@@ -735,6 +735,9 @@ internal class ConversionClassifier {
         trackNarrowing bool
     ) BoundExpression {
         var expression = expression
+        if (callParameter == nil || callParameter.RefKind == RefKind.None) && type is PointerTypeSymbol {
+            binderCtx.RecordPointerEscapedArgument(expression)
+        }
         if type != nil && NativeProtocolOperations.GetProtocol(type) != nil &&
             expression.Type != type &&
             expression.Type != TypeSymbol.Error {
@@ -3460,6 +3463,9 @@ internal class ConversionClassifier {
         parameter ParameterSymbol?,
         argumentIndex int32
     ) BoundExpression {
+        if (parameter == nil || parameter.RefKind == RefKind.None) && expectedType is PointerTypeSymbol {
+            binderCtx.RecordPointerEscapedArgument(argument)
+        }
         if parameter != nil && parameter.RefKind != RefKind.None {
             if argument is BoundAddressOfExpression{IsUnmanaged: false} addr {
                 let operandType TypeSymbol? = addr.Operand?.Type

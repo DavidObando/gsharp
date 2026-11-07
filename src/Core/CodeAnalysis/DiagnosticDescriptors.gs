@@ -2608,6 +2608,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "A goto cannot enter a nested block at label '{0}'."
     )
+    internal let CannotConvertViaAs DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0637",
+        DiagnosticSeverity.Error,
+        "Cannot convert type '{0}' to '{1}' via a reference conversion, boxing conversion, unboxing conversion, wrapping conversion, or null type conversion.{2}"
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

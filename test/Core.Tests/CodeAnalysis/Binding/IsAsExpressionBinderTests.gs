@@ -50,6 +50,72 @@ open class IsAsExpressionBinderTests {
         )
     }
 
+    @Fact
+    func BindAsExpression_IncompatibleValueAndReferenceTypes_ReportsGS0637() {
+        let result = Evaluate("let s = 42 as string")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Contains("Cannot convert type 'int32' to 'string'", diagnostic.Message)
+    }
+
+    @Fact
+    func BindAsExpression_IncompatibleValueTypesWithExplicitConversion_ReportsGS0637WithCastHint() {
+        let result = Evaluate("let u = nuint(1)\nlet p = u as int64?")
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Contains("Cannot convert type 'nuint' to 'int64?'", diagnostic.Message)
+        Assert.Contains("cast[int64]", diagnostic.Message)
+    }
+
+    @Fact
+    func BindAsExpression_FunctionPointerTargetRejectsNuintAndAdmitsNintAndObject() {
+        let rejected = Evaluate("let u = nuint(1)\nlet fp = u as (unmanaged () -> int32)?")
+        let diagnostic = Assert.Single(rejected.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Contains("cast[unmanaged () -> int32]", diagnostic.Message)
+
+        let allowed = Evaluate(`let addr = nint(0)
+let obj object = addr
+let fp1 = addr as (unmanaged () -> int32)?
+let fp2 = obj as (unmanaged () -> int32)?
+fp1 != nil && fp2 != nil`)
+        Assert.Empty(allowed.Diagnostics)
+        Assert.Equal(true, allowed.Value)
+    }
+
+    @Fact
+    func BindAsExpression_SealedUnrelatedClassesAndInterfaces_ReportsGS0637() {
+        let unrelatedClasses = Evaluate(`class Alpha {}
+class Beta {}
+let a = Alpha()
+let b = a as Beta`)
+        Assert.Single(unrelatedClasses.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let unrelatedInterfaceAndSealed = Evaluate(`interface IFoo {}
+class SealedBar {}
+func Check(x IFoo) SealedBar? -> x as SealedBar
+Check(nil!!)`)
+        Assert.Single(unrelatedInterfaceAndSealed.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+    }
+
+    @Fact
+    func BindAsExpression_ValidReferenceAndInterfaceHierarchyControls_BindCleanly() {
+        let result = Evaluate(`interface IFoo {}
+open class OpenBase {}
+class Derived : OpenBase, IFoo {}
+open class UnrelatedOpen {}
+
+func Check(o object, i IFoo, b OpenBase) bool {
+    let s = o as string
+    let d1 = i as Derived
+    let d2 = b as Derived
+    let u = i as UnrelatedOpen
+    return s == nil && d1 != nil && d2 != nil && u == nil
+}
+
+let d = Derived()
+Check(42, d, d)`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

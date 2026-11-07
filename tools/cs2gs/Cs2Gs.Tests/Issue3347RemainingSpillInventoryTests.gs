@@ -121,6 +121,106 @@ class Issue3347RemainingSpillInventoryTests {
         Assert.Equal(0, spillCount)
     }
 
+    /// Issue #4745: when loading a C# project with `ProjectReference`s (such as
+    /// `Cs2Gs.Translator` referencing `Cs2Gs.CodeModel`), `SelfMigratedCompilerSource`
+    /// must bind against the referenced C# source projects rather than a stale
+    /// prebuilt `Debug` ref assembly on disk that lacks `isRefReturn`.
+    @Fact
+    async func TranslatorMigration_BindsReferencedCodeModelFromSourceInsteadOfStaleDebugRefAssembly() {
+        let root = Path.Combine(AppContext.BaseDirectory, "issue4745-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root)
+        try {
+            File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project></Project>")
+            File.WriteAllText(Path.Combine(root, "Directory.Build.targets"), "<Project></Project>")
+            let parserDir = Path.Combine(root, "src", "Core", "CodeAnalysis", "Syntax")
+            Directory.CreateDirectory(parserDir)
+            File.WriteAllText(Path.Combine(parserDir, "Parser.cs"), "namespace GSharp; public sealed class Parser {}")
+
+            let codeModelDir = Path.Combine(root, "tools", "cs2gs", "Cs2Gs.CodeModel")
+            let translatorDir = Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Translator")
+            Directory.CreateDirectory(codeModelDir)
+            Directory.CreateDirectory(translatorDir)
+
+            File.WriteAllText(Path.Combine(codeModelDir, "Cs2Gs.CodeModel.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+`)
+            // Emit a stale Debug ref/bin assembly without the `isRefReturn` parameter.
+            let staleProject = CSharpProjectLoader.LoadInMemory([](string, string){("LambdaExpression.cs", `namespace Cs2Gs.CodeModel.Ast
+{
+    public sealed class LambdaExpression
+    {
+        public LambdaExpression(bool isFunctionLiteral = false)
+        {
+            IsFunctionLiteral = isFunctionLiteral;
+        }
+
+        public bool IsFunctionLiteral { get; }
+    }
+}`)}, assemblyName: "Cs2Gs.CodeModel")
+            for relativeDir in[]string{
+                Path.Combine("obj", "Debug", "net10.0", "ref"),
+                Path.Combine("obj", "Debug", "net10.0", "refint"),
+                Path.Combine("bin", "Debug", "net10.0")
+            } {
+                let outDir = Path.Combine(codeModelDir, relativeDir)
+                Directory.CreateDirectory(outDir)
+                using let peStream = File.Create(Path.Combine(outDir, "Cs2Gs.CodeModel.dll"))
+                Assert.True(staleProject.Compilation.Emit(peStream).Success)
+            }
+
+            // Current source in Cs2Gs.CodeModel includes `isRefReturn`.
+            File.WriteAllText(Path.Combine(codeModelDir, "LambdaExpression.cs"), `namespace Cs2Gs.CodeModel.Ast
+{
+    public sealed class LambdaExpression
+    {
+        public LambdaExpression(bool isFunctionLiteral = false, bool isRefReturn = false)
+        {
+            IsFunctionLiteral = isFunctionLiteral;
+            IsRefReturn = isRefReturn;
+        }
+
+        public bool IsFunctionLiteral { get; }
+        public bool IsRefReturn { get; }
+    }
+}`)
+            File.WriteAllText(Path.Combine(translatorDir, "Cs2Gs.Translator.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
+  </ItemGroup>
+</Project>
+`)
+            File.WriteAllText(Path.Combine(translatorDir, "Deconstruction.cs"), `using Cs2Gs.CodeModel.Ast;
+
+namespace Cs2Gs.Translator
+{
+    public static class Deconstruction
+    {
+        public static LambdaExpression Build(bool isRefReturn) =>
+            new LambdaExpression(isFunctionLiteral: true, isRefReturn: isRefReturn);
+    }
+}`)
+
+            let migrated = await SelfMigratedCompilerSource.LoadAsync(
+                root,
+                "tools/cs2gs/Cs2Gs.Translator",
+                preservePartialParts: true
+            )
+            let deconstruction = Assert.Single(migrated.Values)
+            Assert.Contains("isRefReturn:", deconstruction.Text, StringComparison.Ordinal)
+            Assert.DoesNotContain("let __spill", StripCommentLines(deconstruction.Text), StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(root, recursive: true)
+        }
+    }
+
     @Fact
     func Issue3421AssertedAsInventory_AllowsExplicitSourceSuppression() {
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", `public static class C

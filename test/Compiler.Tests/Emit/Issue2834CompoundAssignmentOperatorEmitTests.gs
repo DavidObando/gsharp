@@ -124,14 +124,14 @@ namespace Consumer
             isCollectible: true
         )
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let runner = consumerAsm.GetType("Consumer.Runner")!!
             Assert.Equal(10, runner.GetMethod("Run")!!.Invoke(nil, nil))
         } finally {
@@ -185,7 +185,7 @@ public class Driver {
             isCollectible: true
         )
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let driver = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Driver")
             Assert.Equal(12, driver.GetMethod("RunLocal", BindingFlags.Public | BindingFlags.Static)!!.Invoke(nil, nil))
             Assert.Equal(3, driver.GetMethod("RunField", BindingFlags.Public | BindingFlags.Static)!!.Invoke(nil, nil))
@@ -219,7 +219,7 @@ public class Driver {
             isCollectible: true
         )
         try {
-            let asm = loadContext.LoadFromAssemblyPath(csharpLibraryPath)
+            let asm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(csharpLibraryPath)))
             let bag = asm.GetTypes().Single((t Type) -> t.Name == "Bag")
             let op = bag.GetMethod(
                 "op_AdditionAssignment",
@@ -238,7 +238,7 @@ public class Driver {
         private func LoadDeclaredMethod(libraryPath string, typeName string, methodName string) MethodInfo {
             let loadContext = AssemblyLoadContext("Probe_" + typeName + "_" + methodName, isCollectible: true)
             try {
-                let asm = loadContext.LoadFromAssemblyPath(libraryPath)
+                let asm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 let type = asm.GetTypes().Single((t Type) -> t.Name == typeName)
                 let method MethodInfo? = type.GetMethod(
                     methodName,
