@@ -136,7 +136,8 @@ class Values {
 }
 `, library: true)
         let load = AssemblyLoadContext("decimal-constants", isCollectible: true)
-        let assembly = load.LoadFromAssemblyPath(constants.Path)
+        using let image = MemoryStream(File.ReadAllBytes(constants.Path))
+        let assembly = load.LoadFromStream(image)
         let fields = assembly.GetType("DecimalValues.Values", throwOnError: true)!!.GetFields(
             BindingFlags.Public | BindingFlags.Static
         )
@@ -197,16 +198,17 @@ Console.WriteLine(P.ClassNil == nil && P.DefaultNil == nil && P.InterfaceNil == 
         Assert.Equal("True|True", program.Run())
         let load = AssemblyLoadContext("reference-constants", isCollectible: true)
         try {
-            let fields = load.LoadFromAssemblyPath(program.Path).GetType(
-                "NullValues.P",
-                throwOnError: true
-            )!!.GetFields(BindingFlags.Public | BindingFlags.Static)
+            using let image = MemoryStream(File.ReadAllBytes(program.Path))
+            let assembly = load.LoadFromStream(image)
+            let fields = assembly.GetType("NullValues.P", throwOnError: true)!!.GetFields(
+                BindingFlags.Public | BindingFlags.Static
+            )
             Assert.Equal(7, fields.Length)
             for field in fields {
                 Assert.True(field.IsLiteral)
                 Assert.Null(field.GetRawConstantValue())
             }
-            let read = load.LoadFromAssemblyPath(program.Path).GetType("NullValues.P", throwOnError: true)!!.GetMethod(
+            let read = assembly.GetType("NullValues.P", throwOnError: true)!!.GetMethod(
                 "Read",
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
             )!!
@@ -291,9 +293,18 @@ Console.WriteLine(P.ClassNil == nil && P.DefaultNil == nil && P.InterfaceNil == 
                     UseShellExecute = false
                 }
             )!!
-            let output = process.StandardOutput.ReadToEnd()
-            let error = process.StandardError.ReadToEnd()
-            Assert.True(process.WaitForExit(30_000), "dotnet timed out")
+            let outputTask = process.StandardOutput.ReadToEndAsync()
+            let errorTask = process.StandardError.ReadToEndAsync()
+            let exited = process.WaitForExit(30_000)
+            if !exited {
+                try {
+                    process.Kill(entireProcessTree: true)
+                } catch (InvalidOperationException) { }
+                process.WaitForExit()
+            }
+            let output = outputTask.GetAwaiter().GetResult()
+            let error = errorTask.GetAwaiter().GetResult()
+            Assert.True(exited, "dotnet timed out")
             Assert.True(process.ExitCode == 0, error)
             return string.Join("|", output.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n'))
         }

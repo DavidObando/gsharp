@@ -35,6 +35,7 @@ A source reference type can lack a runtime `Type` while its constant value is kn
    Use the type-level `ForNullConstant` operation to make that declaration nullable.
    Existing nullable and platform wrappers retain their distinct kinds.
    Do not permit non-null, non-string reference constants.
+   Preserve existing named local function-literal `const` bindings; these are not CLR field constants.
    Do not widen the ordinary `nil` conversion rule or add nullable-value constant declarations.
 
 ## Verification

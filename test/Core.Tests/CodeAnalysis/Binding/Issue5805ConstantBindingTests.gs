@@ -49,20 +49,28 @@ Read(float64.NaN)
         Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
     }
 
-    @Fact
-    func ExplicitNullPattern_DoesNotInvalidateClosureAssignedNarrowing() {
+    @Theory
+    @InlineData("cast[object?](nil)")
+    @InlineData("P.Nil")
+    @InlineData("Local")
+    @InlineData("Global")
+    func NullPattern_DoesNotInvalidateClosureAssignedNarrowing(pattern string) {
         let result = EmittedOracle.Evaluate(`
+class C {}
+class P { public const Nil C? = nil }
 func Read(value object?) int32 {
+    const Local C? = nil
     var text string? = "ok"
     let clear = () -> { text = nil }
     if text != nil {
-        let matches = value is (cast[object?](nil))
+        let matches = value is (PATTERN)
         return text.Length
     }
     return 0
 }
+const Global C? = nil
 Read(nil)
-`)
+`.Replace("PATTERN", pattern))
         Assert.Empty(result.Diagnostics)
         Assert.Equal("2", result.ValueText)
     }

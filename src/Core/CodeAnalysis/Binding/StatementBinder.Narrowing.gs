@@ -8508,8 +8508,11 @@ internal partial class StatementBinder {
                     constLocal.ConstantValue = constValue
                 }
             } else if (
-                declaredVariable is GlobalVariableSymbol || Conversion.IsReferenceLikeTarget(
-                    declaredVariable.Type.StripToBareShape()
+                declaredVariable is GlobalVariableSymbol ||
+                    (
+                    convertedInitializer is not BoundFunctionLiteralExpression && Conversion.IsReferenceLikeTarget(
+                        declaredVariable.Type.StripToBareShape()
+                    )
                 )
             ) &&
                 !(convertedInitializer is BoundErrorExpression) &&
@@ -11055,6 +11058,13 @@ internal partial class StatementBinder {
             }
             return value.Type == TypeSymbol.Null ||
                 value is BoundLiteralExpression{Value: nil} ||
+                value is BoundFieldAccessExpression{
+                Field: {IsConst: true, HasConstantValue: true, ConstantValue: nil}
+            } ||
+                value is BoundVariableExpression{
+                Variable: LocalVariableSymbol{IsConst: true, ConstantValue: nil} or
+                    GlobalVariableSymbol{IsConst: true, ConstantValue: nil}
+            } ||
                 (value is BoundDefaultExpression && IsNullDefault(value.Type))
         }
 

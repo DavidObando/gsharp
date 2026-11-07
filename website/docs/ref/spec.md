@@ -1264,6 +1264,8 @@ Constructor-owned field initialization follows these rules. Plain struct literal
   reference-type `default`. Only `string` permits a non-null reference constant.
   A null constant cannot establish a non-null reference type, even when its type
   clause omits `?`.
+  Named local function literals retain their existing `const` binding form.
+  These function bindings do not represent CLR field constants.
   A `const` field with no initializer reports
   `GS0375`; a `const` field whose initializer is not a constant expression reports
   `GS0376`.
