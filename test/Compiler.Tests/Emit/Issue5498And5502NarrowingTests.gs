@@ -95,6 +95,20 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
+            yield[]object{"finally_assigned_out_write_discharges_widening", `import System
+import System.Collections.Generic
+func Write(out target string) int32 {
+    target = "safe"
+    return 0
+}
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    var count = 0
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { count = Write(&value) }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4"}
             yield[]object{"finally_out_write_discharges_nullable_widening", `import System
 import System.Collections.Generic
 func Write(out target string) { target = "safe" }

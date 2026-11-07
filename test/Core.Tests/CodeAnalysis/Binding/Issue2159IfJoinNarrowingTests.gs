@@ -25,6 +25,27 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func FinallyAssignedOutWrite_DischargesNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) int32 {
+    target = "safe"
+    return 0
+}
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    var count = 0
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { count = Write(&value) }
+    return value.Length
+}
+Console.WriteLine(Run(Dictionary[string, string]()))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
     func FinallyOutWrite_DischargesNullableWidening() {
         let result = Evaluate(`package T
 import System.Collections.Generic

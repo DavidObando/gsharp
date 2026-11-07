@@ -183,6 +183,7 @@ Only fresh map literals retain the primitive/string-key exemption.
 The operand-purity fast path uses the same callback predicate before it binds a later operand.
 Ordered cleanup summaries also consume definite non-null `out` postconditions.
 The shared query retains alias checks; later writes remove the proof before the cleanup exits.
+Assignments and calls use the same expression transfer, including postconditions from an assignment's right-hand side.
 
 ## Experiments on the deferred loop rule
 

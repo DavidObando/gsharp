@@ -2114,49 +2114,6 @@ internal partial class StatementBinder {
             case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement, BoundGotoStatement {
                 return false
             }
-            case BoundExpressionStatement{Expression: BoundAssignmentExpression assign} {
-                if ContainsUserLabel(stmt) {
-                    state.Clear()
-                    aliases.Clear()
-                    ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
-                    return true
-                }
-                // The right-hand side can write other roots, aliases included.
-                ClearAssignedRootsAndUpdateAliases(stmt, state, aliases)
-                if TryClassifyNonNullAssignment(
-                    assign,
-                    out var local,
-                    out var underlying,
-                    includeNonNullableStorage: true
-                ) {
-                    RemoveSharingStorage(
-                        state,
-                        Invariant.Required(
-                            local,
-                            "a successful assignment narrowing has a variable",
-                            expression: "local"
-                        )
-                    )
-                    state[
-                        AccessPath.ForVariable(
-                            Invariant.Required(
-                                local,
-                                "a successful assignment narrowing has a variable",
-                                expression: "local"
-                            )
-                        )
-                    ] = Invariant.Required(
-                        underlying,
-                        "a successful assignment narrowing has an underlying type",
-                        expression: "underlying"
-                    )
-                } else if assign.Variable != nil {
-                    // Any other assignment to a tracked local (nullable value,
-                    // value type, …) drops its narrowing.
-                    RemoveSharingStorage(state, assign.Variable)
-                }
-                return true
-            }
             case expressionStatement is BoundExpressionStatement {
                 if !CanCompleteNormally(stmt) {
                     return false
