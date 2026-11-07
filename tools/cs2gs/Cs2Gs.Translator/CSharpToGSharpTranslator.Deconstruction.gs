@@ -1249,10 +1249,14 @@ partial class CSharpToGSharpTranslator {
             emittedReceiverType GTypeReference? = nil,
             receiverSyntax ExpressionSyntax? = nil,
             conversions List[GStatement]? = nil,
-            assignments List[GStatement]? = nil
+            assignments List[GStatement]? = nil,
+            orderedConversions bool = false
         ) List[GExpression] {
-            // C# completes recursive extraction and conversion before writing any target.
+            // Record adapters require every extraction and conversion before target writes.
             let ownsPhases = conversions == nil
+            let orderedConversions = orderedConversions || forceRealTemps || this.RecordDeconstructionRunsUserCode(
+                deconstruction
+            )
             let conversionStatements = conversions ?? List[GStatement]()
             let assignmentStatements = assignments ?? List[GStatement]()
             let count = pattern.Arguments.Count
@@ -1375,7 +1379,8 @@ partial class CSharpToGSharpTranslator {
                         this.MapDeconstructionOutputType(deconstruction, i, rhsTupleType),
                         this.DeconstructionOutputSyntax(receiverSyntax, i),
                         conversionStatements,
-                        assignmentStatements
+                        assignmentStatements,
+                        orderedConversions
                     )
                     values.Add(
                         if forceRealTemps {
@@ -1427,7 +1432,8 @@ partial class CSharpToGSharpTranslator {
                     assignedValue = this.ConvertDeconstructionAssignmentValue(
                         targetExpr,
                         tempRead,
-                        conversionStatements
+                        conversionStatements,
+                        orderedConversions
                     )
                     assignmentStatements.Add(AssignmentStatement(assignTarget, assignedValue))
                 }
@@ -1443,9 +1449,13 @@ partial class CSharpToGSharpTranslator {
         private func ConvertDeconstructionAssignmentValue(
             target ExpressionSyntax,
             value GExpression,
-            conversions List[GStatement]
+            conversions List[GStatement],
+            materialize bool
         ) GExpression {
             let bridged = this.BridgeDeconstructedElementStore(target, value)!!
+            if !materialize {
+                return bridged
+            }
             if !this.TryGetDeconstructionSlotInfo(target, out var conversion, out var sourceType) ||
                 (conversion.IsIdentity && object.ReferenceEquals(bridged, value)) {
                 return bridged
