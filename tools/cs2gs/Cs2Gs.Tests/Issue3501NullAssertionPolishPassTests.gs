@@ -94,4 +94,61 @@ class Issue3501NullAssertionPolishPassTests {
             Directory.Delete(directory, recursive: true)
         }
     }
+
+    /// Issue #4858: stripping `!!` from a multi-line wrapped call leaves the
+    /// modified `.gs` file in canonical `gsfmt` form.
+    @Fact
+    func Strip_ReformatsModifiedFilesToCanonicalGsfmtForm() {
+        let directory = Path.Combine(
+            Path.GetTempPath(),
+            "Issue3501NullAssertionPolishPassTests",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(directory)
+        let file = Path.Combine(directory, "Wrapped.gs")
+        let unformatted = Path.Combine(directory, "Unformatted.gs")
+        let initialLines = []string{
+            "func Run() {",
+            "    allBaseTypes.Add(",
+            "        TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier!!)",
+            "    )",
+            "}"
+        }
+        try {
+            File.WriteAllLines(file, initialLines)
+            File.WriteAllLines(unformatted, initialLines)
+            let diagnostics = []GscDiagnostic{GscDiagnostic("GS0536", "Redundant '!!'…", "warning", file, 3, 89, 3, 91)}
+            let stripped = NullAssertionPolishPass.Strip(diagnostics, []string{file})
+            Assert.Equal(1, stripped)
+            Assert.Equal(
+                []string{
+                    "func Run() {",
+                    "    allBaseTypes.Add(TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier))",
+                    "}"
+                },
+                File.ReadAllLines(file)
+            )
+            let unformattedDiagnostics = []GscDiagnostic{
+                GscDiagnostic("GS0536", "Redundant '!!'…", "warning", unformatted, 3, 89, 3, 91)
+            }
+            let unformattedStripped = NullAssertionPolishPass.Strip(
+                unformattedDiagnostics,
+                []string{unformatted},
+                formatOutput: false
+            )
+            Assert.Equal(1, unformattedStripped)
+            Assert.Equal(
+                []string{
+                    "func Run() {",
+                    "    allBaseTypes.Add(",
+                    "        TypeClauseSyntax(syntax.BaseTypeIdentifier.SyntaxTree, syntax.BaseTypeIdentifier)",
+                    "    )",
+                    "}"
+                },
+                File.ReadAllLines(unformatted)
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
 }

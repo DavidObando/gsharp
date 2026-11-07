@@ -1216,28 +1216,53 @@ partial class CSharpToGSharpTranslator {
             // Computed here — before the member loop that translates properties —
             // so it can be threaded into that collision check as an extra reserved
             // name set.
-            var primaryCtor IReadOnlyList[Parameter]? = if lift.DropConstructor {
-                lift.PrimaryParameters
-            } else {
-                this.MapPrimaryConstructor(node)
-            }
-            let primaryCtorParamNames = HashSet[string](
-                primaryCtor?.Select((p Parameter) -> p.Name) ?? Enumerable.Empty[string](),
-                StringComparer.Ordinal
+            let primaryCtorParamNames = this.CollectPrimaryConstructorParameterNames(
+                symbol,
+                node,
+                if lift.DropConstructor {
+                    lift.PrimaryParameters
+                } else {
+                    default(IReadOnlyList[Parameter]?)
+                }
             )
             // Issue #4350 (review): allocate every lowered get-only
             // auto-property's backing field NOW, with the primary-constructor
             // names reserved, so a constructor write translated before its
             // property (`this.Value = v` or `Value = v`) reuses a name that
             // cannot collide with a synthesized primary-constructor field.
-            for loweredCandidate in mergedMembers
-                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
-                using let loweredModelScope = this.context.UseSemanticModelFor(loweredCandidate.SyntaxTree)
-                if this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol &&
-                    this
-                    .IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
-                    this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames)
+            if symbol != nil && this.preservePartialParts && this.partialTypeParts.ContainsKey(symbol) {
+                for (property, backingFieldName) in LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
+                    .GetAllocatedBackingFields(symbol) {
+                    this.state.SynthesizedPropertyBackingFieldNames[property] = backingFieldName
                 }
+            } else {
+                let loweredPropertyCandidates = if symbol != nil && this.partialTypeParts.TryGetValue(
+                    symbol,
+                    out var allParts
+                ) {
+                    allParts.SelectMany(
+                        func (part TypeDeclarationSyntax) IEnumerable[MemberDeclarationSyntax] {
+                            return part.Members
+                        }
+                    )
+                } else {
+                    cast[IEnumerable[MemberDeclarationSyntax]](mergedMembers)
+                }
+                for loweredCandidate in loweredPropertyCandidates
+                    .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax]() {
+                    using let loweredModelScope = this.context.UseSemanticModelFor(loweredCandidate.SyntaxTree)
+                    if this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol &&
+                        this
+                        .IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol) {
+                        this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames)
+                    }
+                }
+            }
+            this.EnsurePartialAggregateLiftedLocalFunctionsAllocated(symbol)
+            var primaryCtor IReadOnlyList[Parameter]? = if lift.DropConstructor {
+                lift.PrimaryParameters
+            } else {
+                this.MapPrimaryConstructor(node)
             }
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only
@@ -1863,7 +1888,7 @@ partial class CSharpToGSharpTranslator {
             // a plain struct/class (ADR-0115 §B.3 / issue #1024 follow-up).
             let isRecordStructLift = kind == TypeDeclarationKind.DataStruct &&
                 node is RecordDeclarationSyntax &&
-                node.ParameterList == nil
+                GetPrimaryConstructorParameterList(symbol) == nil
             if symbol == nil ||
                 (kind != TypeDeclarationKind.Class && kind != TypeDeclarationKind.Struct && !isRecordStructLift) {
                 return ConstructorLift.None

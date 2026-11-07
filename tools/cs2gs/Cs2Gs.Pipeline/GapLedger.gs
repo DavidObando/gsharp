@@ -85,8 +85,16 @@ class GapLedger {
     /// warns on the PR gate, fails the strict nightly).
     /// @param artifacts The run's triage artifacts.
     /// @param fullCorpus Whether the run covered the full corpus (enables STALE detection).
+    /// @param executedStages Optional set of stage names (`translate`/`compile`/`ilverify`/`test-parity`)
+    /// actually executed in the run; when supplied, open ledger entries for stages
+    /// not in this set are not reported as STALE (issue #4883).
     /// @returns The classification.
-    func Classify(artifacts IReadOnlyList[TriageArtifact], fullCorpus bool) BaselineClassification {
+    func Classify(
+        artifacts IReadOnlyList[TriageArtifact],
+        fullCorpus bool,
+        executedStages IReadOnlySet[string]? = nil,
+        executedStagesByApp IReadOnlyDictionary[string, IReadOnlySet[string]]? = nil
+    ) BaselineClassification {
         let byFingerprint = Dictionary[string, GapLedgerEntry](StringComparer.Ordinal)
         for entry in this.Entries {
             byFingerprint[entry.Fingerprint] = entry
@@ -113,7 +121,7 @@ class GapLedger {
                         GapLedgerEntry.StatusOpen,
                         StringComparison.Ordinal
                     ) &&
-                        !seen.Contains(e.Fingerprint)
+                        !seen.Contains(e.Fingerprint) && WasEntryStageExecuted(e, executedStages, executedStagesByApp)
                 )
             )
         }
@@ -121,6 +129,19 @@ class GapLedger {
     }
 
     shared {
+        private func WasEntryStageExecuted(
+            entry GapLedgerEntry,
+            executedStages IReadOnlySet[string]?,
+            executedStagesByApp IReadOnlyDictionary[string, IReadOnlySet[string]]?
+        ) bool {
+            if executedStagesByApp != nil && entry.Apps is {Count: > 0} entryApps {
+                let matchedApps = entryApps.Where((appId string) -> executedStagesByApp.ContainsKey(appId)).ToList()
+                if matchedApps.Count > 0 {
+                    return matchedApps.All((appId string) -> executedStagesByApp[appId].Contains(entry.Stage))
+                }
+            }
+            return executedStages == nil || executedStages.Contains(entry.Stage)
+        }
         /// The repo-relative path of the ledger file.
         const RepoRelativePath string = "tools/cs2gs/triage/gaps.json"
 

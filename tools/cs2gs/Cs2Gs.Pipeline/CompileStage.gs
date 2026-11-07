@@ -154,7 +154,8 @@ class CompileStage : IMigrationStage {
                 sdkResult,
                 RunSdkCompile,
                 gsFiles,
-                context.Options.OutputRoot
+                context.Options.OutputRoot,
+                formatOutput: context.Options.FormatOutput
             )
             sdkResult = polish.Result
             ReportPolishOutcome(context, polish)

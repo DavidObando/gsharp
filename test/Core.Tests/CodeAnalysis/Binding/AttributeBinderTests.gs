@@ -105,23 +105,25 @@ func Helper() {
     }
 
     @Fact
-    func Issue1921_NamedArgumentOnUserAttribute_ReportsGS0466() {
-        // Code-review follow-up: a named (property/field-style) argument on a
-        // same-compilation user attribute type used to bind clean and then be
-        // silently dropped by the emitter (never written to metadata). It
-        // must now be rejected at bind time with a clear diagnostic instead.
+    func Issue4798_NamedArgumentOnUserAttribute_BindsNamedMemberArgument() {
         let source = `class NoteAttribute : Attribute {
     var Tag string = ""
+    prop Visible bool { get; set; }
 }
 
-@Note(Tag: "x")
+@Note(Tag: "x", Visible = true)
 func Helper() {
 }`
         let globalScope = BindSource(source)
-        Assert.Contains(
-            GetBinderDiagnostics(globalScope),
-            (d Diagnostic) -> d.Id == "GS0466" && d.Message.Contains("Tag")
-        )
+        Assert.Empty(GetBinderDiagnostics(globalScope))
+        let helper = globalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Helper")
+        let attr = Assert.Single(helper.Attributes)
+        Assert.Empty(attr.PositionalArguments)
+        Assert.Equal(2, attr.NamedArguments.Length)
+        Assert.Equal("Tag", attr.NamedArguments[0].Name)
+        Assert.Equal("x", attr.NamedArguments[0].Value)
+        Assert.Equal("Visible", attr.NamedArguments[1].Name)
+        Assert.Equal(true, attr.NamedArguments[1].Value)
     }
 
     @Fact

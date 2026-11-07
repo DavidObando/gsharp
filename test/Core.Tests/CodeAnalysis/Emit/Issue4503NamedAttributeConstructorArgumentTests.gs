@@ -315,6 +315,201 @@ class Tagged {
     }
 
     @Fact
+    func SameCompilationNamedPropertyAndFieldArguments_AreEncodedAndReadable() {
+        let result = Emit(`import System
+
+enum StampKind {
+    Ordinary,
+    Special
+}
+
+open class BaseStampAttribute : Attribute {
+    var InheritedCode int32
+    prop InheritedFlag bool { get; set; }
+}
+
+@AttributeUsage(AttributeTargets.Class | AttributeTargets.Parameter)
+class StampAttribute : BaseStampAttribute {
+    var Code int32
+    var WideCode int64
+    prop Label string { get; set; }
+    prop Visible bool { get; set; }
+    prop SmallByte uint8 { get; set; }
+    prop Ratio float64 { get; set; }
+    prop Kind StampKind { get; set; }
+    prop Target Type? { get; set; }
+    prop BoxedValue object? { get; set; }
+    prop ExplicitlyBoxedValue object? { get; set; }
+
+    init(label string, code int32) {
+        Label = label
+        Code = code
+    }
+}
+
+class Node {
+}
+
+@Stamp("class", 7, Visible = true, WideCode = 1, SmallByte = 5, Ratio = 3, Kind = StampKind.Special, Target = typeof(Node), BoxedValue = StampKind.Special, ExplicitlyBoxedValue = cast[object](StampKind.Special), InheritedFlag = true, InheritedCode = 42)
+class Holder {
+}
+
+func (@Stamp("receiver", int32(17), Visible = true, Code = 99, BoxedValue = typeof(Node), ExplicitlyBoxedValue = cast[object](typeof(Node))) node Node) TryNode() bool -> true`)
+        Assert.True(result.Success, FormatDiagnostics(result))
+        let assembly = EmittedFixture.Load(result.Image)
+        let stampType = assembly.GetTypes().Single((type Type) -> type.Name == "StampAttribute")
+        let stampKindType = assembly.GetTypes().Single((type Type) -> type.Name == "StampKind")
+        let holder = assembly.GetTypes().Single((type Type) -> type.Name == "Holder")
+        let holderAttr = holder.GetCustomAttributes(stampType, inherit: false).Single()
+        Assert.Equal("class", stampType.GetProperty("Label")?.GetValue(holderAttr))
+        Assert.Equal(7, stampType.GetField("Code")?.GetValue(holderAttr))
+        Assert.Equal(int64(1), stampType.GetField("WideCode")?.GetValue(holderAttr))
+        Assert.Equal(true, stampType.GetProperty("Visible")?.GetValue(holderAttr))
+        Assert.Equal(uint8(5), stampType.GetProperty("SmallByte")?.GetValue(holderAttr))
+        Assert.Equal(3.0, stampType.GetProperty("Ratio")?.GetValue(holderAttr))
+        Assert.Equal(1, Convert.ToInt32(stampType.GetProperty("Kind")?.GetValue(holderAttr)))
+        Assert.Equal("Node", (stampType.GetProperty("Target")?.GetValue(holderAttr) as Type)?.Name)
+        let boxedEnum = stampType.GetProperty("BoxedValue")?.GetValue(holderAttr)
+        Assert.Equal(stampKindType, boxedEnum?.GetType())
+        Assert.Equal(1, Convert.ToInt32(boxedEnum))
+        let explicitlyBoxedEnum = stampType.GetProperty("ExplicitlyBoxedValue")?.GetValue(holderAttr)
+        Assert.Equal(stampKindType, explicitlyBoxedEnum?.GetType())
+        Assert.Equal(1, Convert.ToInt32(explicitlyBoxedEnum))
+        Assert.Equal(true, stampType.GetProperty("InheritedFlag")?.GetValue(holderAttr))
+        Assert.Equal(42, stampType.GetField("InheritedCode")?.GetValue(holderAttr))
+
+        let programType = assembly.GetTypes().Single((type Type) -> type.Name == "<Program>")
+        let tryNodeMethod = programType.GetMethod(
+            "TryNode",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+        )
+        Assert.NotNull(tryNodeMethod)
+        let receiverParam = tryNodeMethod!!.GetParameters()[0]
+        let paramAttr = receiverParam.GetCustomAttributes(stampType, inherit: false).Single()
+        Assert.Equal("receiver", stampType.GetProperty("Label")?.GetValue(paramAttr))
+        Assert.Equal(99, stampType.GetField("Code")?.GetValue(paramAttr))
+        Assert.Equal(true, stampType.GetProperty("Visible")?.GetValue(paramAttr))
+        Assert.Equal("Node", (stampType.GetProperty("BoxedValue")?.GetValue(paramAttr) as Type)?.Name)
+        Assert.Equal("Node", (stampType.GetProperty("ExplicitlyBoxedValue")?.GetValue(paramAttr) as Type)?.Name)
+    }
+
+    @Fact
+    func SourceAttributeInheritingConstructedImportedGenericBase_EncodesSymbolicMemberTypes() {
+        using let contracts = Issue4503ImportedAttributeContracts()
+        let result = Emit(`import Issue4503.Contracts
+
+enum StampKind {
+    Ordinary,
+    Special
+}
+
+class StampAttribute : ImportedGenericStampBaseAttribute[StampKind] {
+}
+
+@Stamp(Value = StampKind.Special, Tag = StampKind.Ordinary)
+class Holder {
+}`, contracts.Path)
+        Assert.True(result.Success, FormatDiagnostics(result))
+        let (_, assembly) = contracts.LoadWith(result.Image)
+        let stampType = assembly.GetTypes().Single((type Type) -> type.Name == "StampAttribute")
+        let stampKindType = assembly.GetTypes().Single((type Type) -> type.Name == "StampKind")
+        let holder = assembly.GetTypes().Single((type Type) -> type.Name == "Holder")
+        let holderAttr = holder.GetCustomAttributes(stampType, inherit: false).Single()
+        let propVal = stampType.GetProperty("Value")?.GetValue(holderAttr)
+        let fieldVal = stampType.GetField("Tag")?.GetValue(holderAttr)
+        Assert.Equal(stampKindType, propVal?.GetType())
+        Assert.Equal(1, Convert.ToInt32(propVal))
+        Assert.Equal(stampKindType, fieldVal?.GetType())
+        Assert.Equal(0, Convert.ToInt32(fieldVal))
+    }
+
+    @Theory
+    @InlineData("@Stamp(\"a\", 1, Missing = true)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, ReadOnlyField = 2)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, GetOnlyProp = true)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, HiddenGetOnlyProp = true)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, HiddenReadOnlyField = 2)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, HiddenStaticProp = true)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, HiddenStaticField = 2)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, HiddenConstField = 2)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, Item = 2)", "GS0613")
+    @InlineData("@Stamp(\"a\", 1, Visible = \"wrong\")", "GS0614")
+    @InlineData("@Stamp(\"a\", 1, SmallByte = 300)", "GS0614")
+    @InlineData("@Stamp(\"a\", 1, WideCode = cast[object](7))", "GS0614")
+    @InlineData("@Stamp(\"a\", 1, BoxedValue = decimal(1))", "GS0614")
+    @InlineData("@Stamp(\"a\", 1, BoxedValue = []object{decimal(1)})", "GS0614")
+    @InlineData("@Stamp(\"a\", 1, Visible = true, Visible = false)", "GS0245")
+    @InlineData("@Stamp(\"a\", 1, NullableValue = 5)", "GS0615")
+    func SameCompilationInvalidNamedAttributeMembers_ReportClearDiagnostics(annotation string, expectedId string) {
+        let result = Emit((`import System
+
+open class BaseStampAttribute : Attribute {
+    var HiddenReadOnlyField int32
+    var HiddenStaticField int32
+    var HiddenConstField int32
+    prop HiddenGetOnlyProp bool { get; set; }
+    prop HiddenStaticProp bool { get; set; }
+}
+
+class StampAttribute(Label string, Code int32) : BaseStampAttribute {
+    const HiddenConstField int32 = 1
+    let ReadOnlyField int32 = 1
+    let HiddenReadOnlyField int32 = 1
+    var WideCode int64
+    prop GetOnlyProp bool -> false
+    prop HiddenGetOnlyProp bool -> false
+    prop Visible bool { get; set; }
+    prop SmallByte uint8 { get; set; }
+    prop BoxedValue object? { get; set; }
+    prop NullableValue int32? { get; set; }
+    prop this[index int32] int32 {
+        get -> index
+        set { }
+    }
+
+    shared {
+        var HiddenStaticField int32
+        prop HiddenStaticProp bool { get; set; }
+    }
+}
+
+` + "$annotation" + `
+class Tagged {
+}`))
+        let diagnostic = Assert.Single(result.Diagnostics, (item Diagnostic) -> item.Id == expectedId)
+        Assert.Equal(32, diagnostic.Location.StartLine)
+        Assert.False(result.Success)
+    }
+
+    @Fact
+    func Issue4683_QualifiedAndUnqualifiedGenericConstructorReceiver_ResolvesExtensionMethod() {
+        let result = Emit(`package Gsharp.Concurrency
+import System.Diagnostics.CodeAnalysis
+
+struct ReceiveResult[T] {
+    @AllowNull
+    private let value T
+    prop Ok bool { get; }
+    internal prop Element T -> value
+
+    init(@AllowNull value T, ok bool) {
+        this.value = value
+        Ok = ok
+    }
+}
+
+shared class ChannelOps {
+    func Unqualified[T](value T, ok bool)(Value T, Ok bool) -> ReceiveResult[T](value, ok).ToTuple()
+
+    func Qualified[T](value T, ok bool)(Value T, Ok bool) -> Gsharp.Concurrency.ReceiveResult[T](value, ok).ToTuple()
+}
+
+@ExtensionOwner(typeof(ChannelOps))
+private func (result ReceiveResult[T]) ToTuple[T]()(Value T, Ok bool) -> (result.Element, result.Ok)`)
+        Assert.True(result.Success, FormatDiagnostics(result))
+    }
+
+    @Fact
     func ConstructorParameterAliases_ReportDuplicateNamedDiagnostic() {
         using let contracts = Issue4503ImportedAttributeContracts()
         let result = Emit(`import Issue4503.Contracts

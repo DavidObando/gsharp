@@ -517,28 +517,9 @@ internal partial class DeclarationBinder {
         if annotation.Arguments != nil {
             for argSyntax in annotation.Arguments {
                 if argSyntax is NamedArgumentExpressionSyntax namedArg {
-                    // Issue #1921 code review (GS0466): the emitter can only
-                    // write named args against an already-emitted CLR type
-                    // (it resolves the target member via reflection); a
-                    // same-compilation user attribute has no ClrType yet, so
-                    // reject named args on it here instead of silently
-                    // dropping them at emit time.
                     let isMemberAssignment = namedArg.EqualsToken.Kind == SyntaxKind.EqualsToken
                     let isConstructorArgument = !isMemberAssignment &&
                         IsAttributeConstructorParameterName(attrType, namedArg.NameToken.ValueText)
-                    if attrType is StructSymbol{ClrType: nil} userAttribute && !isConstructorArgument {
-                        Diagnostics.ReportNamedArgumentsNotSupportedOnUserAttribute(
-                            namedArg.NameToken.Location,
-                            if nameIsExact {
-                                nameText
-                            } else {
-                                (nameText + "Attribute")
-                            },
-                            namedArg.NameToken.ValueText
-                        )
-                        hadArgumentError = true
-                        continue
-                    }
                     if !TryBindAttributeArgument(namedArg.Expression, out var value, out var valueType) {
                         Diagnostics.ReportAttributeArgumentNotConstant(namedArg.Expression.Location)
                         hadArgumentError = true
@@ -1130,6 +1111,24 @@ internal partial class DeclarationBinder {
             )
         ) &&
             IsSerialisableAttributeConstant(constantType) {
+            var unwrappedExpr = bound
+            while unwrappedExpr is BoundConversionExpression objConv && UnwrapAttributeConversionType(objConv.Type)
+                ?.ClrType
+                ?.IsSameAs(typeof(object)) == true {
+                unwrappedExpr = objConv.Expression
+            }
+            if !object.ReferenceEquals(unwrappedExpr, bound) &&
+                unwrappedExpr.Syntax is ExpressionSyntax innerSyntax &&
+                TryBindAttributeArgument(innerSyntax, out var innerValue, out var innerType) {
+                value = if innerValue is not BoundAttributeArgument &&
+                    ShouldPreserveBoxedAttributeElementType(innerValue, innerType!!) {
+                    cast[object?](BoundAttributeArgument(nil, innerValue, innerType!!))
+                } else {
+                    innerValue
+                }
+                type = constantType
+                return true
+            }
             if bound is BoundConversionExpression{Expression: BoundLiteralExpression{Value: nil}} &&
                 !constantType.IsValueType {
                 value = nil
@@ -1138,7 +1137,12 @@ internal partial class DeclarationBinder {
             }
             if ConstantExpressionEvaluator.TryEvaluate(bound, out var convertedValue) &&
                 (convertedValue != nil || (bound is BoundConversionExpression && !constantType.IsValueType)) {
-                value = convertedValue
+                value = if !object.ReferenceEquals(unwrappedExpr, bound) &&
+                    ShouldPreserveBoxedAttributeElementType(convertedValue, unwrappedExpr.Type) {
+                    cast[object?](BoundAttributeArgument(nil, convertedValue, unwrappedExpr.Type))
+                } else {
+                    convertedValue
+                }
                 type = constantType
                 return true
             }
@@ -1648,11 +1652,28 @@ internal partial class DeclarationBinder {
                 ) {
                     return true
                 }
-                return userAttribute.EffectiveExplicitConstructors.Any(
+                if userAttribute.EffectiveExplicitConstructors.Any(
                     (constructor ConstructorSymbol) -> constructor.Parameters.Any(
                         (parameter ParameterSymbol) -> parameter.Name == name
                     )
-                )
+                ) {
+                    return true
+                }
+                if userAttribute.Declaration != nil {
+                    if userAttribute.Declaration!!.PrimaryConstructorParameters?.Any(
+                        (parameter ParameterSyntax) -> parameter.Identifier?.ValueText == name
+                    ) == true {
+                        return true
+                    }
+                    if userAttribute.Declaration!!.Constructors.Any(
+                        (constructor ConstructorDeclarationSyntax) -> constructor.Parameters.Any(
+                            (parameter ParameterSyntax) -> parameter.Identifier?.ValueText == name
+                        )
+                    ) {
+                        return true
+                    }
+                }
+                return false
             }
             if attributeType.ClrType is not{} clrType {
                 return false
@@ -1982,6 +2003,21 @@ internal partial class DeclarationBinder {
             type
         ) ||
             !TypeSymbol.ContainsTypeParameter(type)
+
+        private func UnwrapAttributeConversionType(type TypeSymbol?) TypeSymbol? {
+            var current = type
+            while true {
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                    continue
+                }
+                if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    current = nullable.UnderlyingType
+                    continue
+                }
+                return current
+            }
+        }
 
         private func ShouldPreserveBoxedAttributeElementType(value object?, type TypeSymbol) bool {
             let unwrapped = if type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(

@@ -148,6 +148,13 @@ public sealed class ImportedValueOrNullableValueAttribute : Attribute
     public ImportedValueOrNullableValueAttribute(DayOfWeek? value) { }
     public ImportedValueOrNullableValueAttribute(int value) { }
     public ImportedValueOrNullableValueAttribute(int? value) { }
+}
+
+[AttributeUsage(AttributeTargets.All)]
+public abstract class ImportedGenericStampBaseAttribute<T> : Attribute
+{
+    public T Value { get; set; } = default!;
+    public T Tag = default!;
 }`
     }
 }

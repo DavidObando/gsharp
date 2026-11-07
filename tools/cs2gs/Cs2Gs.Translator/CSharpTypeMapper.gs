@@ -912,6 +912,90 @@ class CSharpTypeMapper {
             .ContainsKey(name!!) || this.sourceDeclaredTypeNames!!.Contains(name!!)
     }
 
+    /// Issue #4610: builds an isolated (cref:CSharpTypeMapper) populated with
+    /// the union of document-scope import reservations across [`contributingTrees`](paramref)
+    /// without mutating this document's own import set.
+    internal func BuildAggregateScopeReservationMapper(
+        contributingTrees IReadOnlyList[Microsoft.CodeAnalysis.SyntaxTree],
+        context TranslationContext
+    ) CSharpTypeMapper {
+        let names = this.nameAllocator ?? EmittedNameAllocator.For(context.Compilation)
+        let mapper = CSharpTypeMapper(AnonymousTypeRegistry(), names){AnalyzerApiMode = this.AnalyzerApiMode}
+        let imports = List[ImportDirective]()
+        for tree in contributingTrees {
+            let semanticModel = if tree == context
+                .SemanticModel
+                .SyntaxTree &&
+                !context
+                .SemanticModel
+                .IgnoresAccessibility {
+                context.SemanticModel
+            } else {
+                context.Compilation.GetSemanticModel(tree)
+            }
+            let root = tree.GetRoot()
+            let usings = root
+                .DescendantNodesAndSelf()
+                .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax]()
+                .SelectMany((u Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax) -> u.Usings)
+                .Concat(
+                root
+                    .DescendantNodes()
+                    .OfType[BaseNamespaceDeclarationSyntax]()
+                    .SelectMany((n BaseNamespaceDeclarationSyntax) -> n.Usings)
+            )
+            for directive in usings {
+                if !directive.StaticKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) ||
+                    directive.NamespaceOrType is not NameSyntax {
+                    continue
+                }
+                let symbol ISymbol? = semanticModel.GetSymbolInfo(directive.NamespaceOrType).Symbol
+                var targetName = switch symbol {
+                    case ns is INamespaceSymbol when !ns.IsGlobalNamespace: names.GetNamespaceName(ns) ??
+                        ns.ToDisplayString()
+                    case namedType is INamedTypeSymbol: this.QualifiedAliasTarget(namedType)
+                    default: StripGlobalPrefix(directive.NamespaceOrType.ToString())
+                }
+                if this.AnalyzerApiMode && RoslynAnalyzerApiMap.IsRoslynNamespace(targetName) {
+                    if RoslynAnalyzerApiMap.TryMapNamespace(targetName, out var gsNamespace) {
+                        targetName = gsNamespace
+                    } else {
+                        continue
+                    }
+                }
+                if directive.Alias != nil {
+                    let aliasName = names.GetName(
+                        semanticModel.GetDeclaredSymbol(directive),
+                        IdentifierNameContext.Type
+                    ) ??
+                        names.GetName(directive.Alias!!.Name.Identifier.ValueText, IdentifierNameContext.Type)
+                    imports.Add(ImportDirective(targetName, aliasName))
+                } else {
+                    imports.Add(ImportDirective(targetName))
+                }
+            }
+        }
+        mapper.ReserveImportNames(imports, contributingTrees, context)
+        return mapper
+    }
+
+    internal func CreateEmptyScopeReservationMapper(context TranslationContext) CSharpTypeMapper {
+        let names = this.nameAllocator ?? EmittedNameAllocator.For(context.Compilation)
+        return CSharpTypeMapper(AnonymousTypeRegistry(), names){AnalyzerApiMode = this.AnalyzerApiMode}
+    }
+
+    internal func MergeScopeReservationsFrom(other CSharpTypeMapper) {
+        this.reservedImportedNamespaces.UnionWith(other.reservedImportedNamespaces)
+        this.reservedImportedTypeNames.UnionWith(other.reservedImportedTypeNames)
+        for pair in other.reservedTypeAliases {
+            if !this.reservedTypeAliases.TryGetValue(pair.Key, out var targets) {
+                targets = HashSet[string](StringComparer.Ordinal)
+                this.reservedTypeAliases.Add(pair.Key, targets)
+            }
+            targets.UnionWith(pair.Value)
+        }
+    }
+
     internal func ReserveSiblingMemberName(name string?) -> this.reservedSiblingMemberNames.Add(name!!)
 
     /// Maps an exact inferred contract while qualifying metadata homonyms
@@ -2910,6 +2994,12 @@ class CSharpTypeMapper {
             }
         }
 
+        internal func IsAnalyzerTargetType(type Type) bool -> !type.IsNested && type.IsPublic && !type.Name.Contains(
+            '<',
+            StringComparison.Ordinal
+        ) &&
+            !type.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
+
         private func BuildAnalyzerTargetTypeNames() IReadOnlyDictionary[string, List[string]] {
             let targetNamespaces = HashSet[string](
                 RoslynAnalyzerApiMap.EnumerateTargetNamespaces(),
@@ -2923,7 +3013,7 @@ class CSharpTypeMapper {
                 StringComparer.Ordinal
             )
             for type in typeof(GSharp.Core.CodeAnalysis.Diagnostic).Assembly.GetTypes() {
-                if type.IsNested || !type.IsPublic || type.Namespace is not{} typeNamespace || !result.TryGetValue(
+                if !IsAnalyzerTargetType(type) || type.Namespace is not{} typeNamespace || !result.TryGetValue(
                     typeNamespace,
                     out var names
                 ) {
