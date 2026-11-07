@@ -321,20 +321,107 @@ class CSharpTestOracle {
                     .ToLowerInvariant()
             }
             let lower = text.ToLowerInvariant()
-            if lower.StartsWith("net", StringComparison.Ordinal) && lower.Length > 3 && char.IsDigit(lower[3]) {
-                if !lower.Contains('.') && int32.TryParse(lower.Substring(3), out var major) &&
-                    major >= 5 &&
-                    major < 40 {
-                    return "net$major.0"
+            if lower.StartsWith("netstandard", StringComparison.Ordinal) {
+                let versionPart = lower.Substring("netstandard".Length)
+                return if IsMajorMinorDigits(versionPart) {
+                    lower
+                } else {
+                    default(string?)
                 }
-                return lower
             }
-            if lower.StartsWith("netstandard", StringComparison.Ordinal) &&
-                lower.Length > "netstandard".Length &&
-                char.IsDigit(lower["netstandard".Length]) {
-                return lower
+            if lower.StartsWith("netcoreapp", StringComparison.Ordinal) {
+                let versionPart = lower.Substring("netcoreapp".Length)
+                return if IsMajorMinorDigits(versionPart) {
+                    lower
+                } else {
+                    default(string?)
+                }
+            }
+            if lower.StartsWith("net", StringComparison.Ordinal) && lower.Length > 3 && char.IsDigit(lower[3]) {
+                let remainder = lower.Substring(3)
+                let dashIndex = remainder.IndexOf('-')
+                let versionPart = if dashIndex >= 0 {
+                    remainder.Substring(0, dashIndex)
+                } else {
+                    remainder
+                }
+                let platformSuffix = if dashIndex >= 0 {
+                    remainder.Substring(dashIndex + 1)
+                } else {
+                    default(string?)
+                }
+                if platformSuffix != nil && !IsValidTargetPlatformSuffix(platformSuffix) {
+                    return nil
+                }
+                if IsAsciiDigits(versionPart) {
+                    let normalizedVersion = if int32.TryParse(versionPart, out var major) && major >= 5 && major < 40 {
+                        "$major.0"
+                    } else {
+                        versionPart
+                    }
+                    return if platformSuffix != nil {
+                        "net$normalizedVersion-$platformSuffix"
+                    } else {
+                        "net$normalizedVersion"
+                    }
+                }
+                if IsMajorMinorDigits(versionPart) {
+                    return lower
+                }
             }
             return nil
+        }
+
+        private func IsAsciiDigits(value string) bool {
+            if value.Length == 0 {
+                return false
+            }
+            for ch in value {
+                if ch < '0' || ch > '9' {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsMajorMinorDigits(value string) bool {
+            let dotIndex = value.IndexOf('.')
+            if dotIndex <= 0 || dotIndex == value.Length - 1 || value.IndexOf('.', dotIndex + 1) >= 0 {
+                return false
+            }
+            return IsAsciiDigits(value.Substring(0, dotIndex)) && IsAsciiDigits(value.Substring(dotIndex + 1))
+        }
+
+        private func IsValidTargetPlatformSuffix(platform string) bool {
+            if platform.Length == 0 || platform[0] < 'a' || platform[0] > 'z' {
+                return false
+            }
+            var index = 0
+            while index < platform.Length && platform[index] >= 'a' && platform[index] <= 'z' {
+                index++
+            }
+            if index == platform.Length {
+                return true
+            }
+            if platform[index] < '0' || platform[index] > '9' || platform[platform.Length - 1] == '.' {
+                return false
+            }
+            var previousWasDot = false
+            while index < platform.Length {
+                let ch = platform[index]
+                if ch == '.' {
+                    if previousWasDot {
+                        return false
+                    }
+                    previousWasDot = true
+                } else if ch >= '0' && ch <= '9' {
+                    previousWasDot = false
+                } else {
+                    return false
+                }
+                index++
+            }
+            return true
         }
 
         internal func InferTargetFrameworkFromPath(path string?) string? {
@@ -347,7 +434,15 @@ class CSharpTestOracle {
                 }
             }
             let stem = Path.GetFileNameWithoutExtension(path)
-            for token in stem.Split('_', '-') {
+            if NormalizeTargetFramework(stem) is {} stemTfm {
+                return stemTfm
+            }
+            for token in stem.Split('_') {
+                if NormalizeTargetFramework(token) is {} tfm {
+                    return tfm
+                }
+            }
+            for token in stem.Split('-') {
                 if NormalizeTargetFramework(token) is {} tfm {
                     return tfm
                 }
@@ -361,18 +456,21 @@ class CSharpTestOracle {
             }
             let openParen = line.LastIndexOf('(')
             let closeParen = line.LastIndexOf(')')
+            let pathPart = if openParen > "Test run for ".Length {
+                line.Substring("Test run for ".Length, openParen - "Test run for ".Length).Trim()
+            } else {
+                line.Substring("Test run for ".Length).Trim()
+            }
+            if InferTargetFrameworkFromPath(pathPart) is {} pathTfm {
+                return pathTfm
+            }
             if openParen > 0 && closeParen > openParen {
                 let inside = line.Substring(openParen + 1, closeParen - openParen - 1)
                 if NormalizeTargetFramework(inside) is {} tfm {
                     return tfm
                 }
             }
-            let pathPart = if openParen > "Test run for ".Length {
-                line.Substring("Test run for ".Length, openParen - "Test run for ".Length).Trim()
-            } else {
-                line.Substring("Test run for ".Length).Trim()
-            }
-            return InferTargetFrameworkFromPath(pathPart)
+            return nil
         }
 
         private func Tail(output string) string {
