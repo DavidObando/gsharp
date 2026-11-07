@@ -164,6 +164,28 @@ open class Issue4938TypeClauseScannerParityTests {
         AssertWholeTypeArgument(call, typeText)
     }
 
+    @Theory
+    @InlineData("List[[]*int32]()")
+    @InlineData("List[[4]*int32]()")
+    @InlineData("List[[,]*int32]()")
+    @InlineData("List[[][]*int32]()")
+    @InlineData("List[[]?[]*int32]()")
+    @InlineData("List[List[[]*int32]]()")
+    @InlineData("Dictionary[string, []*int32]()")
+    func Generic_Call_With_Pointer_Array_Type_Argument_Parses_As_Generic_Call(expression string) {
+        // Issue #4944: an array of pointers is a legal CLR generic argument,
+        // and `[]*T` cannot be an index expression. The scanner must enable
+        // `pointerAllowed` below an array/slice prefix even outside `cast`.
+        let tree = Parse("unsafe func probe() {\n    let xs = " + expression + "\n}\n")
+        AssertNoErrors(tree)
+        let call = tree
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType[CallExpressionSyntax]()
+            .Single((c CallExpressionSyntax) -> c.TypeArgumentList != nil)
+        Assert.NotEmpty(call.TypeArgumentList!!.Arguments)
+    }
+
     @Fact
     func Pointer_Shaped_Index_On_A_Non_Cast_Name_Stays_An_Indexer() {
         // `*p` is ALSO a dereference expression, so outside the reserved

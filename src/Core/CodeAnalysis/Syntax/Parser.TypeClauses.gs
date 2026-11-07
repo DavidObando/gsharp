@@ -138,11 +138,7 @@ open partial class Parser {
             }
             let star = NextToken()
             let pointee = ParseTypeClause()
-            let ptrQuestion = if Current.Kind == SyntaxKind.QuestionToken {
-                MatchToken(SyntaxKind.QuestionToken)
-            } else {
-                default(SyntaxToken?)
-            }
+            let ptrQuestion = ParseOptionalTrailingTypeQuestionToken()
             return TypeClauseSyntax.CreatePointer(syntaxTree, star, pointee, ptrQuestion)
         }
         if Current.Kind == SyntaxKind.OpenSquareBracketToken {
@@ -199,11 +195,7 @@ open partial class Parser {
                 IsReadOnlyManagedHead() ||
                 IsFunctionPointerTypeHead() {
                 let nestedElement = ParseTypeClause()
-                let nestedQuestion = if Current.Kind == SyntaxKind.QuestionToken {
-                    MatchToken(SyntaxKind.QuestionToken)
-                } else {
-                    default(SyntaxToken?)
-                }
+                let nestedQuestion = ParseOptionalTrailingTypeQuestionToken()
                 return TypeClauseSyntax.CreateArray(
                     syntaxTree,
                     openBracket,
@@ -222,11 +214,7 @@ open partial class Parser {
             // type-argument list per segment so an outer segment can be generic
             // and still dot into a nested type.
             let arrayTail = ParseDottedTypeNameTail()
-            let arrayQuestion = if Current.Kind == SyntaxKind.QuestionToken {
-                MatchToken(SyntaxKind.QuestionToken)
-            } else {
-                default(SyntaxToken?)
-            }
+            let arrayQuestion = ParseOptionalTrailingTypeQuestionToken()
             return TypeClauseSyntax(
                 syntaxTree,
                 openBracket,
@@ -253,11 +241,7 @@ open partial class Parser {
         // (`List[int32].Enumerator`, `A[T].B[U].C`); the list on the LAST segment
         // continues to be tracked by `TypeArguments` for backwards compatibility.
         let tail = ParseDottedTypeNameTail()
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax(
             syntaxTree,
             openBracketToken: nil,
@@ -415,11 +399,7 @@ open partial class Parser {
             }
         }
         let closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
-        let question SyntaxToken? = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question SyntaxToken? = ParseOptionalTrailingTypeQuestionToken()
         if !sawComma && nodesAndSeparators.Count == 1 && nodesAndSeparators[0] is TypeClauseSyntax parenthesizedInner {
             // Grouping (issue #3315): `(T)` is `T`; `(T)?` is whole-`T`
             // nullable. The parens themselves are dropped, exactly like the
@@ -521,11 +501,7 @@ open partial class Parser {
             let valueText = syntaxTree.Text.ToString(valueType.Span)
             Diagnostics.ReportLegacyMapTypeClauseSyntax(legacyLocation, keyText, valueText)
         }
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax(
             syntaxTree,
             mapKeyword,
@@ -536,6 +512,13 @@ open partial class Parser {
             closeBracket,
             question
         )
+    }
+
+    private func ParseOptionalTrailingTypeQuestionToken() SyntaxToken? {
+        if Current.Kind != SyntaxKind.QuestionToken || ShouldLeaveQuestionTokenForConditional() {
+            return nil
+        }
+        return MatchToken(SyntaxKind.QuestionToken)
     }
 
     /// ADR-0095 §6: `unmanaged` is a contextual keyword that heads a raw
@@ -578,11 +561,7 @@ open partial class Parser {
             let openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken)
             let elementType = ParseTypeClause()
             let closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken)
-            let question = if Current.Kind == SyntaxKind.QuestionToken {
-                MatchToken(SyntaxKind.QuestionToken)
-            } else {
-                default(SyntaxToken?)
-            }
+            let question = ParseOptionalTrailingTypeQuestionToken()
             return TypeClauseSyntax(
                 syntaxTree,
                 directionToken,
@@ -619,11 +598,7 @@ open partial class Parser {
         let openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken)
         let elementType = ParseTypeClause()
         let closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken)
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax.CreateSequence(
             syntaxTree,
             sequenceKeyword,
@@ -657,11 +632,7 @@ open partial class Parser {
         let openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken)
         let elementType = ParseTypeClause()
         let closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken)
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax.CreateAsyncSequence(
             syntaxTree,
             asyncModifier,
@@ -701,11 +672,7 @@ open partial class Parser {
         }
         let closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
         let returnTypeClause = ParseOptionalTypeClause()
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax.CreateAsyncFunction(
             syntaxTree,
             asyncModifier,
@@ -747,11 +714,7 @@ open partial class Parser {
         }
         let closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
         let returnTypeClause = ParseOptionalTypeClause()
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         return TypeClauseSyntax.CreateLegacyFunction(
             syntaxTree,
             funcKeyword,
@@ -806,11 +769,7 @@ open partial class Parser {
         let closeParen = MatchToken(SyntaxKind.CloseParenthesisToken)
         let arrow = MatchToken(SyntaxKind.RightArrowToken)
         let returnTypeClause = ParseTypeClause()
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         var clause TypeClauseSyntax
         if asyncModifier != nil {
             clause = TypeClauseSyntax.CreateAsyncArrowFunction(
@@ -852,11 +811,7 @@ open partial class Parser {
         let _ = MatchToken(SyntaxKind.OpenParenthesisToken)
         let inner = ParseArrowFunctionTypeClause(asyncModifier)
         let _ = MatchToken(SyntaxKind.CloseParenthesisToken)
-        let question = if Current.Kind == SyntaxKind.QuestionToken {
-            MatchToken(SyntaxKind.QuestionToken)
-        } else {
-            default(SyntaxToken?)
-        }
+        let question = ParseOptionalTrailingTypeQuestionToken()
         var rebuilt TypeClauseSyntax
         if inner.AsyncModifier != nil {
             rebuilt = TypeClauseSyntax.CreateAsyncArrowFunction(

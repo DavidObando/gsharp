@@ -2332,16 +2332,15 @@ internal class ImportedMemberRefFactory {
                     typeArguments = ImmutableArray.Create[TypeSymbol](map_.KeyType, map_.ValueType)
                     return true
                 }
-                case nul is NullableTypeSymbol when nul.UnderlyingType is TypeParameterSymbol &&
-                    (cast[TypeParameterSymbol](nul.UnderlyingType))
-                    .HasValueTypeConstraint {
-                    // Issue #806: a `T?` receiver where T is an open value-type
-                    // type parameter has no constructed CLR `Nullable<T>` here —
-                    // route member-ref encoding through the symbolic container
-                    // path so the MemberRef parent is `Nullable<!!T>` against
-                    // System.Runtime, not against the current assembly.
+                case nul is NullableTypeSymbol when NullableLifting.RequiresSymbolicNullableGetValue(nul) {
+                    // Issue #806 / #5001: a `T?` receiver whose underlying value
+                    // type has no runtime CLR type (a same-compilation struct
+                    // or enum, or a struct-constrained type parameter) has no
+                    // constructed CLR `Nullable<T>` here — route member-ref
+                    // encoding through the symbolic container path so the
+                    // MemberRef parent is the constructed `Nullable<T>` TypeSpec.
                     openDefinition = typeof(System.Nullable[_])
-                    typeArguments = ImmutableArray.Create[TypeSymbol](cast[TypeParameterSymbol](nul.UnderlyingType))
+                    typeArguments = ImmutableArray.Create[TypeSymbol](nul.UnderlyingType)
                     return true
                 }
                 case nullableReference is NullableTypeSymbol when !NullableLifting.IsAnyValueTypeNullable(

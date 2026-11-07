@@ -14,12 +14,47 @@ import System.Runtime.CompilerServices
 open partial class Parser {
     private var patternParseContext PatternParseContext
     private var patternNestingDepth int32
+    private var inPatternTypeClause bool
+    private var suppressTopLevelConditionalTail bool
+    private var colonTerminatedDepth int32
+    private var conditionalTailCache Dictionary[
+        (int32, int32, bool, int32, int32, int32, int32),
+        CachedConditionalTail?
+    ]?
     private enum PatternParseContext {
         General,
         IsExpression,
         IsExpressionBodyHeader,
         SwitchStatement,
         SwitchExpression
+    }
+
+    private struct CachedConditionalTail {
+        let WhenTrueMod SyntaxToken?
+        let WhenTrue ExpressionSyntax
+        let ColonToken SyntaxToken
+        let WhenFalseMod SyntaxToken?
+        let WhenFalse ExpressionSyntax
+        let EndPosition int32
+        let EndTokens ImmutableArray[SyntaxToken]
+
+        init(
+            whenTrueMod SyntaxToken?,
+            whenTrue ExpressionSyntax,
+            colonToken SyntaxToken,
+            whenFalseMod SyntaxToken?,
+            whenFalse ExpressionSyntax,
+            endPosition int32,
+            endTokens ImmutableArray[SyntaxToken]
+        ) {
+            WhenTrueMod = whenTrueMod
+            WhenTrue = whenTrue
+            ColonToken = colonToken
+            WhenFalseMod = whenFalseMod
+            WhenFalse = whenFalse
+            EndPosition = endPosition
+            EndTokens = endTokens
+        }
     }
 
     private func ParseSwitchStatement() StatementSyntax {
@@ -86,7 +121,7 @@ open partial class Parser {
             let guard_ = if bodyFollows {
                 ParseExpressionInBodyHeader()
             } else {
-                ParseExpression()
+                ParseExpression(colonTerminatedDepth: 1)
             }
             return (whenKeyword, guard_)
         }
@@ -200,7 +235,7 @@ open partial class Parser {
                 return ParseRelationalPattern()
             }
             default {
-                return ConstantPatternSyntax(syntaxTree, ParseExpression())
+                return ConstantPatternSyntax(syntaxTree, ParsePatternOperandExpression())
             }
         }
     }
@@ -215,15 +250,175 @@ open partial class Parser {
     private func ParseTypePattern() PatternSyntax {
         let identifier = MatchToken(SyntaxKind.IdentifierToken)
         let isKeyword = MatchToken(SyntaxKind.IsKeyword)
-        let type = ParseTypeClause()
+        let type = ParsePatternTypeClause()
         let propertyPattern = TryParseTypePropertyPattern(type)
         return TypePatternSyntax(syntaxTree, identifier, isKeyword, type, propertyPattern)
     }
 
     private func ParseRelationalPattern() PatternSyntax {
         let operatorToken = NextToken()
-        let expression = ParseExpression()
+        let expression = ParsePatternOperandExpression()
         return RelationalPatternSyntax(syntaxTree, operatorToken, expression)
+    }
+
+    private func ParsePatternTypeClause() TypeClauseSyntax {
+        let savedInPatternTypeClause = inPatternTypeClause
+        inPatternTypeClause = true
+        try {
+            return ParseTypeClause()
+        } finally {
+            inPatternTypeClause = savedInPatternTypeClause
+        }
+    }
+
+    private func ParsePatternOperandExpression() ExpressionSyntax -> ParseExpression(
+        stopAtTopLevelConditional: patternNestingDepth == 0 &&
+            (patternParseContext is PatternParseContext.IsExpression or PatternParseContext.IsExpressionBodyHeader),
+        colonTerminatedDepth: this.colonTerminatedDepth
+    )
+
+    private func GetConditionalTailCacheKey()(int32, int32, bool, int32, int32, int32, int32) -> (
+        Current.Position,
+        this.colonTerminatedDepth,
+        this.stopAtTopLevelLogical,
+        this.suppressStructLiteral,
+        this.suppressTrailingObjectInitializer,
+        this.suppressRangeOperator,
+        this.skimBraceBodies
+    )
+
+    private func TryTakeCachedConditionalTail(condition ExpressionSyntax) ExpressionSyntax? {
+        if conditionalTailCache == nil || !conditionalTailCache!!.TryGetValue(
+            GetConditionalTailCacheKey(),
+            out var cached
+        ) ||
+            cached is not{} tail {
+            return nil
+        }
+        let questionToken = NextToken()
+        position = tail.EndPosition
+        tokens = tail.EndTokens
+        return if tail.WhenTrueMod != nil || tail.WhenFalseMod != nil {
+            ConditionalRefArgumentExpressionSyntax(
+                syntaxTree,
+                condition,
+                questionToken,
+                tail.WhenTrueMod,
+                tail.WhenTrue,
+                tail.ColonToken,
+                tail.WhenFalseMod,
+                tail.WhenFalse
+            )
+        } else {
+            ConditionalExpressionSyntax(
+                syntaxTree,
+                condition,
+                questionToken,
+                tail.WhenTrue,
+                tail.ColonToken,
+                tail.WhenFalse
+            )
+        }
+    }
+
+    // Issue #4970: in `o is T ? a : b` and `o !is T ? a : b`, the `?` after `T`
+    // opens the conditional expression when it is followed by an expression and
+    // a matching `:`.
+    private func ShouldLeaveQuestionTokenForConditional() bool {
+        if !inPatternTypeClause ||
+            patternNestingDepth != 0 ||
+            !(patternParseContext is PatternParseContext.IsExpression or PatternParseContext.IsExpressionBodyHeader) ||
+            Current.Kind != SyntaxKind.QuestionToken {
+            return false
+        }
+        let next = Peek(1)
+        if next.Kind == SyntaxKind.OpenBraceToken {
+            return false
+        }
+        if CanFollowBareTypePattern(next) && next.Kind.GetUnaryOperatorPrecedence() == 0 &&
+            next.Kind != SyntaxKind.PlusPlusToken &&
+            next.Kind != SyntaxKind.MinusMinusToken &&
+            next.Kind != SyntaxKind.HatToken {
+            return false
+        }
+        let cacheKey = GetConditionalTailCacheKey()
+        if conditionalTailCache != nil && conditionalTailCache!!.TryGetValue(cacheKey, out var cached) {
+            return cached != nil
+        }
+        let computed = ComputeCachedConditionalTail()
+        conditionalTailCache ??= Dictionary[(int32, int32, bool, int32, int32, int32, int32), CachedConditionalTail?]()
+        conditionalTailCache!![cacheKey] = computed
+        return computed != nil
+    }
+
+    private func ComputeCachedConditionalTail() CachedConditionalTail? {
+        let savedPosition = position
+        let savedTokens = tokens
+        let savedDiagnosticCount = Diagnostics.Count
+        let savedInPatternTypeClause = inPatternTypeClause
+        let savedPatternContext = patternParseContext
+        let savedPatternNestingDepth = patternNestingDepth
+        let savedSuppressConditional = suppressTopLevelConditionalTail
+        let savedColonTerminatedDepth = colonTerminatedDepth
+        let savedStructLiteral = suppressStructLiteral
+        let savedObjectInitializer = suppressTrailingObjectInitializer
+        let savedRangeOperator = suppressRangeOperator
+        try {
+            inPatternTypeClause = false
+            patternParseContext = PatternParseContext.General
+            patternNestingDepth = 0
+            suppressTopLevelConditionalTail = false
+            NextToken()
+            let whenTrueMod = TryConsumeInnerRefModifier()
+            let whenTrue = ParseExpression(colonTerminatedDepth: savedColonTerminatedDepth + 1)
+            if Diagnostics.Count != savedDiagnosticCount || Current.Kind != SyntaxKind.ColonToken {
+                return nil
+            }
+            let colonToken = NextToken()
+            let whenFalseMod = TryConsumeInnerRefModifier()
+            colonTerminatedDepth = savedColonTerminatedDepth
+            let whenFalse = ParseAssignmentExpression()
+            if Diagnostics.Count != savedDiagnosticCount {
+                return nil
+            }
+            let endPosition = position
+            let endTokens = tokens
+            for var d = 0; d < savedColonTerminatedDepth; d++ {
+                if Current.Kind != SyntaxKind.ColonToken {
+                    return nil
+                }
+                if d + 1 < savedColonTerminatedDepth {
+                    NextToken()
+                    let _ = TryConsumeInnerRefModifier()
+                    colonTerminatedDepth = savedColonTerminatedDepth - d - 1
+                    let _ = ParseAssignmentExpression()
+                    if Diagnostics.Count != savedDiagnosticCount {
+                        return nil
+                    }
+                }
+            }
+            return CachedConditionalTail(
+                whenTrueMod,
+                whenTrue,
+                colonToken,
+                whenFalseMod,
+                whenFalse,
+                endPosition,
+                endTokens
+            )
+        } finally {
+            position = savedPosition
+            tokens = savedTokens
+            Diagnostics.TruncateTo(savedDiagnosticCount)
+            inPatternTypeClause = savedInPatternTypeClause
+            patternParseContext = savedPatternContext
+            patternNestingDepth = savedPatternNestingDepth
+            suppressTopLevelConditionalTail = savedSuppressConditional
+            colonTerminatedDepth = savedColonTerminatedDepth
+            suppressStructLiteral = savedStructLiteral
+            suppressTrailingObjectInitializer = savedObjectInitializer
+            suppressRangeOperator = savedRangeOperator
+        }
     }
 
     // Parses `{ Name: pattern, ... }` without a trailing designation. Callers
@@ -358,7 +553,7 @@ open partial class Parser {
         var candidateEnd = savedPosition
         var isCandidate = false
         try {
-            let trialType = ParseTypeClause()
+            let trialType = ParsePatternTypeClause()
             candidateEnd = position
             // ADR-0166: `Type name` — an identifier that directly follows the
             // type on the same line is a designation, so a bare name is a type
@@ -377,7 +572,7 @@ open partial class Parser {
         if !isCandidate {
             return nil
         }
-        let candidateType = ParseTypeClause()
+        let candidateType = ParsePatternTypeClause()
         candidateEnd = position
         let candidateFollowKind = Current.Kind
         let candidateTokens = tokens
@@ -395,7 +590,7 @@ open partial class Parser {
         suppressTrailingObjectInitializer++
         var expression ExpressionSyntax? = nil
         try {
-            expression = ParseExpression()
+            expression = ParsePatternOperandExpression()
         } finally {
             suppressStructLiteral = savedStructLiteral
             suppressTrailingObjectInitializer = savedObjectInitializer

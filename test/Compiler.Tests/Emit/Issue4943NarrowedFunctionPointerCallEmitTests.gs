@@ -191,6 +191,92 @@ run()`)
         AssertEveryCalliUnwrapsItsPointer(result.MethodIl, result.MethodTokens, methods)
     }
 
+    @Fact
+    func Issue4949_4950_4951_ShortCircuit_ImplicitWrap_And_NullConditional_FunctionPointers() {
+        let source = Expand(`import System
+import System.Runtime.InteropServices
+
+unsafe class Holder {
+    let Fp (unmanaged[CC] () -> int32)?
+    init(fp (unmanaged[CC] () -> int32)?) {
+        Fp = fp
+    }
+    func ShortCircuitImplicit(expected int32) bool -> Fp != nil && Fp() == expected
+    func NullConditionalImplicit() int32 -> Fp?() ?? -1
+    func NullConditionalThis() int32 -> this.Fp?() ?? -1
+}
+
+func shortCircuitInt(x int32?) bool -> x != nil && x.CompareTo(1) == 0
+
+unsafe func shortCircuitAnd(fn (unmanaged[CC] () -> int32)?, expected int32) bool -> fn != nil && fn() == expected
+unsafe func shortCircuitOr(fn (unmanaged[CC] () -> int32)?, expected int32) bool -> fn == nil || fn() == expected
+
+unsafe func implicitWrapAndNullConditional(address nint) int32 {
+    let raw = cast[unmanaged[CC] () -> int32](address)
+    let lifted (unmanaged[CC] () -> int32)? = raw
+    let empty (unmanaged[CC] () -> int32)? = nil
+    let indirect = ((lifted)?() ?? 0) + ((empty)?() ?? -2)
+    return (lifted?() ?? 0) + (empty?() ?? -1) + indirect
+}
+
+unsafe func run() {
+    let address = NativeLibrary.GetExport(NativeLibrary.Load("LIBRARY"), "EXPORT")
+    let pid = Environment.ProcessId
+    let raw = cast[unmanaged[CC] () -> int32](address)
+    let lifted (unmanaged[CC] () -> int32)? = raw
+    let h = Holder(lifted)
+    let emptyHolder = Holder(nil)
+    Console.WriteLine("${shortCircuitInt(1)} ${shortCircuitInt(2)} ${shortCircuitInt(nil)}")
+    Console.WriteLine("${shortCircuitAnd(lifted, pid)} ${shortCircuitAnd(nil, pid)}")
+    Console.WriteLine("${shortCircuitOr(lifted, pid)} ${shortCircuitOr(nil, pid)}")
+    Console.WriteLine("${h.ShortCircuitImplicit(pid)} ${emptyHolder.ShortCircuitImplicit(pid)}")
+    Console.WriteLine("${h.NullConditionalImplicit() == pid} ${emptyHolder.NullConditionalImplicit()}")
+    Console.WriteLine("${h.NullConditionalThis() == pid} ${emptyHolder.NullConditionalThis()}")
+    Console.WriteLine(implicitWrapAndNullConditional(address) == pid * 2 - 3)
+}
+
+run()`)
+        let narrowedMethods = []string{"shortCircuitAnd", "shortCircuitOr", "ShortCircuitImplicit"}
+        let nullConditionalMethods = []string{
+            "NullConditionalImplicit",
+            "NullConditionalThis",
+            "implicitWrapAndNullConditional"
+        }
+        let allMethods = []string{
+            "shortCircuitAnd",
+            "shortCircuitOr",
+            "ShortCircuitImplicit",
+            "NullConditionalImplicit",
+            "NullConditionalThis",
+            "implicitWrapAndNullConditional"
+        }
+        let result = CompileInspectAndRun(source, allMethods)
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "True False False",
+                "True False",
+                "True True",
+                "True False",
+                "True -1",
+                "True -1",
+                "True"
+            ) +
+                Environment.NewLine,
+            result.Output
+        )
+        AssertEveryCalliUnwrapsItsPointer(result.MethodIl, result.MethodTokens, narrowedMethods)
+        for method in nullConditionalMethods {
+            let il = IlInstructionReader.Read(result.MethodIl[method])
+            Assert.Contains(il, (inst IlInstruction) -> inst.OpCode == OpCodes.Calli)
+            Assert.Contains(
+                il,
+                (inst IlInstruction) -> inst.OpCode == OpCodes.Call &&
+                    result.MethodTokens[inst.MetadataToken ?? 0] == "Nullable`1.GetValueOrDefault"
+            )
+        }
+    }
+
     shared {
         private let UnsafeIlVerifyIgnored[]string = []string{
             "UnmanagedPointer",
