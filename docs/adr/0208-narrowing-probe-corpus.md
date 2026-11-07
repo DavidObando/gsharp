@@ -143,6 +143,48 @@ The rows e9 (R4), e17 (R2), g1 and the `goto` rows (R6) did not change. New rows
 | o7 | the same as o4 but no closure assigns `b` | accepted: nothing can replace the root |
 | unit | `NarrowingState.IsNoStrongerThan` | the gain table: a boxed or nullable-wrapped supertype of a held value type adds nothing and never replaces it; `object` to `int32` and `int32?` to `int32` are gains |
 
+## PR 2, rows R2 and R4: joins consume normal exit states
+
+The corpus now accepts `e17`, `h1`, `h2`, and `h7` (R2), and `e9` (R4).
+Each row checks emitted output after compiling without diagnostics.
+Writes and calls in an exiting branch do not reach the join.
+Switch arms contribute their normal exit states, including assignments to variables other than the discriminator.
+The join includes reachable switch `break` edges and the dispatch state when no arm need match.
+Calls and writes on a surviving path still remove facts (`h4`, `h6`, and `k2` remain rejected).
+The shadow-join tests expect no R1–R6 disagreements for these probes.
+Rows `n2_5130` and `n3_5130` reject a sibling-only type refinement and an unbraced call that leaves an out value nullable.
+Refinements stay in the branch's own frame; they do not replace weaker enclosing facts.
+Nullable-widening facts survive effect kills unless the write proves non-nullness, and survive joins if any reachable predecessor carries them.
+Rows `n4_5130` and `n5_5130` keep nullable-widening controls across switch prefixes and deferred cleanup.
+Rows `n6_5130` and `n7_5130` reject a jump into an unbraced labeled branch and an unsafe caller-owned fact forwarded through `else if`.
+Labeled statements forward the label's joined exit, and each originating conditional applies the same caller-owned-storage restriction before forwarding.
+Rows `n8_5130` and `n9_5130` accept stronger protected-block facts across empty cleanup and definite non-null cleanup writes into non-null-declared storage.
+
+Row `n10_5130` preserves a stronger subtype across an effect-free nil recheck.
+Condition facts refine the post-effect entry state; they do not replace a stronger surviving proof.
+
+Row `n11_5130` keeps normal paths through internal `if let` labels in the enclosing join.
+An unmatched binding can leave a nullable local unchanged.
+
+Row `n12_5130` preserves the joined state of a label inside an unbraced declaration's initializer.
+The fallback must not replay a pre-statement proof after such a join removes it.
+The separate unsupported-jump diagnostic gap remains tracked in [#5588](https://github.com/DavidObando/gsharp/issues/5588).
+Cleanup facts do not overwrite stronger facts that survived its effects; assignment summaries preserve execution order.
+
+`Issue2159IfJoinNarrowingTests` and `Issue5498And5502NarrowingTests` cover assignments nested inside property, field, and index writes.
+A non-null assignment discharges a failed dictionary lookup's nullable widening before the branch joins.
+The same operand transfer establishes nullable-local facts and applies setter effects after the right-hand side.
+A setter callback that writes the local still removes its proof.
+The positive probes fail on the preceding product; omitting setter effects kills the negative controls.
+Assignment replay starts with recorded expression-entry callable aliases, not the aliases at expression exit.
+Native-map hashing and equality remove callback-reachable facts after key and value evaluation.
+Indexed maps can carry CLR custom comparers, including for primitive keys.
+Only fresh map literals retain the primitive/string-key exemption.
+The operand-purity fast path uses the same callback predicate before it binds a later operand.
+Ordered cleanup summaries also consume definite non-null `out` postconditions.
+The shared query retains alias checks; later writes remove the proof before the cleanup exits.
+Assignments and calls use the same expression transfer, including postconditions from an assignment's right-hand side.
+
 ## Experiments on the deferred loop rule
 
 These measured the loop kill set that ADR-0208 section 10 defers to the

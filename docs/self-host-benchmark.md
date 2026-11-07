@@ -52,6 +52,13 @@ python3 build/compiler-bench.py \
 
 - **Cells.** Each `--cell NAME RSP CWD` is a response file and the project directory its relative paths resolve against. `--hello FILE.gs` adds a hello-world cell that reuses the first cell's options with `FILE.gs` as the only source.
 - **Response files** are read as `utf-8-sig`, because the SDK writes a BOM.
+- **N-1 narrowing changes.** A built compiler can report redundant `!!` in source that still needs those assertions under the released pin.
+  For an approved narrowing comparison, add `GS0536` to `/nowarn` in temporary response-file copies only.
+  Keep the source-file set, `/warnaserror`, repository project options, and SDK pin unchanged.
+  Compare the original strict diagnostics first, and require zero non-`GS0536` diagnostics.
+  Record the suppression and newly redundant assertion sites in the PR body.
+  The post-release pin-move PR removes those assertions; see [ADR-0208 §15](adr/0208-narrowing-as-flow-state-with-a-query.md)
+  and [#5808](https://github.com/DavidObando/gsharp/issues/5808).
 - **Work root.** Output options are redirected into a staging directory under `~/.cache/q9-bench/run-<time>` (override with `--work`). Every run stages to the same path, so the path embedded in the PDB, and the content hash derived from it, is the same for all runs. A work root under `/tmp` is refused unless `--allow-tmp` is given. Large outputs are deleted after each run; `compiler-bench-report.json` stays, and `--keep` keeps everything. The work root must not exist or must be empty, and cell names must be plain names (letters, digits, dot, underscore, hyphen). After a failed compile the run's `compile.log` is kept.
 - **Interleaving.** Runs alternate which compiler goes first.
 - **Measurements.** Per cell: wall, CPU and peak RSS as median (min-max), and the `GSHARP_MEASURE_PHASES` phases aggregated by name (count, median wall milliseconds) with the counters. The script sets `GSHARP_MEASURE_PHASES` for each run. Samples are small and the host is shared, so the numbers rank costs; they are not confidence intervals.

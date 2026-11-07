@@ -62,11 +62,7 @@ internal partial class StatementBinder {
             let shadowFlow = ShadowBegin(condition)
             let joinEntry = binderCtx.Narrowing
             let joinExits = List[NarrowingState]()
-            let outerConditionKills = if syntax.ElseClause == nil {
-                conditionKillJournal
-            } else {
-                BeginThenBranchConditionKills()
-            }
+            let outerConditionKills = BeginThenBranchConditionKills()
             RestoreExternalCallableAliases(callableWhenTrue)
             let thenStatement = BindWithPatternVariables(
                 patternThen,
@@ -75,14 +71,10 @@ internal partial class StatementBinder {
                 },
                 syntax.ThenStatement
             )
-            let restoredConditionKills = if syntax.ElseClause == nil {
-                default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
-            } else {
-                RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
-            }
             AddBranchExits(joinExits, thenStatement)
             ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
+            let restoredConditionKills = RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
             RestoreExternalCallableAliases(callableWhenFalse)
             ShadowBeginBranch(shadowFlow)
             let elseStatement = if syntax.ElseClause == nil {
@@ -96,15 +88,13 @@ internal partial class StatementBinder {
                     syntax.ElseClause.ElseStatement
                 )
             }
-            if restoredConditionKills != nil {
-                EndThenBranchConditionKills(restoredConditionKills)
-            }
             if elseStatement == nil {
                 joinExits.Add(SkippedBranchExit(joinEntry, elseNarrow))
             } else {
                 AddBranchExits(joinExits, elseStatement)
             }
             ShadowAddBranch(shadowFlow, elseNarrow, elseStatement)
+            EndThenBranchConditionKills(restoredConditionKills)
             let callableElseExit = if syntax.ElseClause == nil {
                 callableWhenFalse
             } else {
@@ -112,7 +102,7 @@ internal partial class StatementBinder {
             }
             RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
             let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
-            RecordIfExit(result, joinEntry, joinExits)
+            RecordJoinExits(result, joinExits)
             ShadowFinish(shadowFlow, "if", syntax.Location, []BoundStatement{result}, false, false)
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
             // can lift it into the enclosing block when the then-branch ends in
@@ -157,11 +147,7 @@ internal partial class StatementBinder {
         let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initJoinEntry = binderCtx.Narrowing
         let initJoinExits = List[NarrowingState]()
-        let initOuterConditionKills = if syntax.ElseClause == nil {
-            conditionKillJournal
-        } else {
-            BeginThenBranchConditionKills()
-        }
+        let initOuterConditionKills = BeginThenBranchConditionKills()
         RestoreExternalCallableAliases(initCallableWhenTrue)
         let initThen = BindWithPatternVariables(
             initPatternThen,
@@ -170,14 +156,10 @@ internal partial class StatementBinder {
             },
             syntax.ThenStatement
         )
-        let initRestoredConditionKills = if syntax.ElseClause == nil {
-            default(List[(Frame NarrowingFrame, Path AccessPath, Type TypeSymbol)]?)
-        } else {
-            RestoreThenBranchConditionKills(initOuterConditionKills, initJoinEntry)
-        }
         AddBranchExits(initJoinExits, initThen)
         ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
+        let initRestoredConditionKills = RestoreThenBranchConditionKills(initOuterConditionKills, initJoinEntry)
         RestoreExternalCallableAliases(initCallableWhenFalse)
         ShadowBeginBranch(initShadowFlow)
         let initElse = if syntax.ElseClause == nil {
@@ -191,15 +173,13 @@ internal partial class StatementBinder {
                 syntax.ElseClause.ElseStatement
             )
         }
-        if initRestoredConditionKills != nil {
-            EndThenBranchConditionKills(initRestoredConditionKills)
-        }
         if initElse == nil {
             initJoinExits.Add(SkippedBranchExit(initJoinEntry, initElseNarrow))
         } else {
             AddBranchExits(initJoinExits, initElse)
         }
         ShadowAddBranch(initShadowFlow, initElseNarrow, initElse)
+        EndThenBranchConditionKills(initRestoredConditionKills)
         let initCallableElseExit = if syntax.ElseClause == nil {
             initCallableWhenFalse
         } else {
@@ -226,7 +206,7 @@ internal partial class StatementBinder {
             )
         )
         ShadowFinish(initShadowFlow, "if", syntax.Location, []BoundStatement{inner, initResult}, false, false)
-        RecordIfExit(initResult, initJoinEntry, initJoinExits)
+        RecordJoinExits(initResult, initJoinExits)
         return initResult
     }
 
@@ -1408,25 +1388,22 @@ internal partial class StatementBinder {
         frame Dictionary[AccessPath, TypeSymbol]?
     ) BoundStatement {
         let inheritedFallthrough = currentStatementListFallsThrough
+        if frame != nil {
+            PushConditionNarrowingFrame(frame)
+        }
         try {
-            if frame == nil {
-                return Invariant.Required(
-                    BindStatement(syntax),
-                    "a narrowed statement has a bound statement",
-                    expression: "BindStatement(syntax)"
-                )
-            }
-            binderCtx.PushNarrowingFrame(frame)
-            try {
-                return Invariant.Required(
-                    BindStatement(syntax),
-                    "a narrowed statement has a bound statement",
-                    expression: "BindStatement(syntax)"
-                )
-            } finally {
+            let aliasesAtEntry = externalCallableAliases.ToArray()
+            let bound = Invariant.Required(
+                BindStatement(syntax),
+                "a narrowed statement has a bound statement",
+                expression: "BindStatement(syntax)"
+            )
+            RecordFallbackExit(bound, aliasesAtEntry, syntax)
+            return bound
+        } finally {
+            if frame != nil {
                 binderCtx.EndNarrowingProof()
             }
-        } finally {
             currentStatementListFallsThrough = inheritedFallthrough
         }
     }
@@ -1441,7 +1418,7 @@ internal partial class StatementBinder {
         if frame == nil {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         }
-        binderCtx.PushNarrowingFrame(frame)
+        PushConditionNarrowingFrame(frame)
         try {
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool)
         } finally {

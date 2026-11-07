@@ -625,7 +625,7 @@ internal partial class DeclarationBinder {
                 }
                 // A by-ref argument is forwarded as-is (it is already a managed
                 // pointer, e.g. the result of `&x`); no value conversion applies.
-                if ByRefStorageMatching.TryGetStorageType(orderedArgs[i]) is {} baseByRefStorage {
+                if ByRefStorageMatching.TryGetStorageType(orderedArgs[i], refKind) is {} baseByRefStorage {
                     let baseByRefPointee = ByRefStorageMatching.PreserveNominalClrPointeeType(
                         clrParamType,
                         TryProjectSymbolicBaseInPointeeType(

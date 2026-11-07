@@ -25,6 +25,464 @@ import Xunit
 /// re-nullable-ization.
 open class Issue2159IfJoinNarrowingTests {
     @Fact
+    func FinallyAssignedOutWrite_DischargesNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) int32 {
+    target = "safe"
+    return 0
+}
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    var count = 0
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { count = Write(&value) }
+    return value.Length
+}
+Console.WriteLine(Run(Dictionary[string, string]()))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func FinallyOutWrite_DischargesNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { Write(&value) }
+    return value.Length
+}
+Console.WriteLine(Run(Dictionary[string, string]()))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func FinallyOutWrite_LaterNullableWriteRemovesTheProof() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Write(out target string) { target = "safe" }
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally {
+        Write(&value)
+        dict.TryGetValue("missing", &value)
+    }
+    return value.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func NativeMapRead_InvalidatesBeforeTheNextOperand() {
+        let result = Evaluate(`package T
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, int32]{key: 0}
+    var safe = []string?{nil}
+    safe[0] = (text = "safe")
+    return m[key] + text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func AssignmentBlockReplay_KeepsEntryExternalAliases() {
+        let result = Evaluate(`package T
+func External() { }
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    let clear = func() { text = nil }
+    var action = callback
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = clear
+        0
+    })
+    return text.Length
+}
+Console.WriteLine(Run(External))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func AssignmentBlockReplay_UsesEntryCallableAliases() {
+        let result = Evaluate(`package T
+func Run(callback () -> void) int32 {
+    var text string? = nil
+    var action = func() { text = nil }
+    var n = 0
+    n = ({
+        text = "safe"
+        action()
+        action = callback
+        0
+    })
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData(`m[key] = (text = "safe")`)
+    @InlineData(`n = ({
+        text = "safe"
+        let unused = m[key]
+        0
+    })`)
+    func NativeMapHashCallback_RemovesNestedAssignmentFacts(body string) {
+        let result = Evaluate(`package T
+class Key {
+    var Callback () -> void
+    override func GetHashCode() int32 {
+        Callback()
+        return 1
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let key = Key{}
+    key.Callback = func() { text = nil }
+    var m = map[Key, string?]{key: nil}
+    var n = 0
+    ` + body + `
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func NativeMapSetter_PreservesAnUncapturedLocal() {
+        let result = Evaluate(`package T
+func Run() int32 {
+    var text string? = nil
+    var m = map[int32, string?]{}
+    m[0] = (text = "safe")
+    return text.Length
+}
+Console.WriteLine(Run())
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func NativeMapCustomComparer_RemovesCapturedAssignmentFacts() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+class Comparer : IEqualityComparer[int32] {
+    var Callback () -> void
+    func Equals(left int32, right int32) bool -> left == right
+    func GetHashCode(value int32) int32 {
+        Callback()
+        return value
+    }
+}
+func Run() int32 {
+    var text string? = nil
+    let comparer = Comparer{}
+    comparer.Callback = func() { text = nil }
+    var m map[int32, string?] = Dictionary[int32, string?](comparer)
+    m[0] = (text = "safe")
+    return text.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func DictionaryAssignmentValue_DischargesTheFailedLookupWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Run(dict Dictionary[string, HashSet[string]]) int32 {
+    if !dict.TryGetValue("key", out var set) {
+        dict["key"] = (set = HashSet[string]())
+    }
+    set.Add("ok")
+    return set.Count
+}
+let dict = Dictionary[string, HashSet[string]]()
+Console.WriteLine(Run(dict))
+Console.WriteLine(Run(dict))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("1\n1\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`dict["key"] = (value = "safe")`)
+    @InlineData(`items[0] = (value = "safe")`)
+    @InlineData(`holder.Field = (value = "safe")`)
+    @InlineData(`holder.Value = (value = "safe")`)
+    @InlineData(`holder[0] = (value = "safe")`)
+    @InlineData(`info.ReasonPhrase = (value = "safe")`)
+    @InlineData(`other = (value = "safe")`)
+    func AssignmentValueWrappers_EstablishNullableLocalFacts(assignment string) {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+import System.Net.Http
+class Holder {
+    var Field string? = nil
+    prop Value string? { set { } }
+    prop this[index int32] string? { set { } }
+}
+func Run() int32 {
+    let dict = Dictionary[string, string?]()
+    var items = []string?{nil}
+    let holder = Holder{}
+    let info = HttpResponseMessage()
+    var other string? = nil
+    var value string? = nil
+    ` + assignment + `
+    return value.Length
+}
+Console.WriteLine(Run())
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("4\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`holder.Value = (value = "safe")`)
+    @InlineData(`holder[0] = (value = "safe")`)
+    func AssignmentValueSetterCallback_DoesNotDischargeWidening(assignment string) {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+class Holder {
+    var Callback () -> void
+    prop Value string { set { Callback() } }
+    prop this[index int32] string { set { Callback() } }
+}
+func Run() int32 {
+    let dict = Dictionary[string, string]()
+    var value string = ""
+    let holder = Holder{}
+    holder.Callback = func() { dict.TryGetValue("missing", &value) }
+    if !dict.TryGetValue("key", &value) {
+        ` + assignment + `
+    }
+    return value.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func ExpressionLabel_DoesNotRestoreThePreStatementProof() {
+        let result = Evaluate(`package T
+func Run(jump bool) {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return } else let unused = ({
+        L: var marker = 0
+        0
+    })
+    Console.WriteLine(x.Length)
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData("if x != nil { }")
+    @InlineData("if x == nil { }")
+    @InlineData("if var n = 1; x != nil && n == 1 { }")
+    func NilRecheck_PreservesTheStrongerSubtype(recheck string) {
+        let result = Evaluate(`package T
+open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x !is Dog { return "" }
+    ` + recheck + `
+    return x.Bark()
+}
+Console.WriteLine(Run(Dog{}))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("woof\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
+    func BranchRefinement_DoesNotChangeTheSiblingEntry() {
+        let result = Evaluate(`package T
+open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?, flag bool) string {
+    if x == nil { return "" }
+    if flag {
+        if x !is Dog { return "" }
+    } else {
+        return x.Bark()
+    }
+    return ""
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0159", diagnostic.Id)
+        Assert.Equal("Bark()", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func UnbracedOutCall_PreservesTheNullableWidening() {
+        let result = Evaluate(`package T
+import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if !dict.TryGetValue("key", &value) {
+        if flag dict.TryGetValue("other", &value)
+        return value.Length
+    }
+    return 0
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData("")
+    @InlineData("var n = 0; ")
+    func ConditionCall_DoesNotRestoreACallerOwnedFact(initializer string) {
+        let result = Evaluate(`package T
+class C { var Value int32 = 1 }
+func Clear(values []C?) bool {
+    values[0] = nil
+    return true
+}
+func Run(ref value C?, values []C?) int32 {
+    if ` + initializer + `value != nil && Clear(values) {
+    } else { return 0 }
+    return value.Value
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Value", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func DeferredWrite_EndsTheBranchFactBeforeItsNormalExit() {
+        let result = Evaluate(`package T
+func Run(flag bool, input string?) int32 {
+    var s = input
+    let clear = func() { s = nil }
+    if s == nil { return 0 }
+    if flag {
+        defer clear()
+    } else { }
+    return s.Length
+}
+`)
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData(`if flag {
+        s = nil
+        return -1
+    }`)
+    @InlineData(`if flag {
+        s = nil
+        return -1
+    } else { }`)
+    @InlineData(`if var n = 1; flag && n == 1 {
+        s = nil
+        return -1
+    }`)
+    func ExitingBranchWrite_DoesNotRemoveTheSurvivingFact(branch string) {
+        let result = Evaluate(`package T
+func Run(flag bool, input string?) int32 {
+    var s = input
+    if s == nil { return 0 }
+    ` + branch + `
+    return s.Length
+}
+Console.WriteLine(Run(false, "abc"))
+Console.WriteLine(Run(true, "abc"))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3\n-1\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Theory
+    @InlineData(`switch 1 { case 1 { s = "abc" } default { return -1 } }`)
+    @InlineData(`switch 1 {
+        case 1 {
+            s = "abc"
+            break
+        }
+        default { return -1 }
+    }`)
+    @InlineData(`switch 1 {
+        case 1 {
+            try { break } finally { s = "abc" }
+        }
+        default { return -1 }
+    }`)
+    @InlineData(`for {
+        s = "abc"
+        break
+    }`)
+    @InlineData(`try { s = "abc" } catch { s = "abc" }`)
+    func NestedStatement_ContributesItsNormalExitState(body string) {
+        let result = Evaluate(`package T
+func Run(flag bool) int32 {
+    var s string? = nil
+    if flag {
+        ` + body + `
+    } else {
+        s = "abc"
+    }
+    return s.Length
+}
+Console.WriteLine(Run(true))
+Console.WriteLine(Run(false))
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("3\n3\n", result.Output.ReplaceLineEndings("\n"))
+    }
+
+    @Fact
     func ReassignInNullBranch_NoElse_Narrows() {
         // Repro (1): non-null branch reached via the implicit negated-condition
         // else (`r != nil`); the then-branch reassigns `r` to a non-null value.

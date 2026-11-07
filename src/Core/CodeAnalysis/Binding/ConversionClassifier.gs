@@ -3314,7 +3314,10 @@ internal class ConversionClassifier {
                 let operandType TypeSymbol? = addr.Operand?.Type
                 if operandType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
-                    (operandType != nil && CheckByRefArgumentStorage(location, parameter, operandType, expectedType)) {
+                    (
+                    operandType != nil &&
+                        CheckByRefArgumentStorage(location, parameter, operandType, expectedType, addr)
+                ) {
                     return argument
                 }
                 // Issue #4422: report the mismatch against the storage type
@@ -3381,6 +3384,7 @@ internal class ConversionClassifier {
     /// @param parameter The target parameter (carrying its ref kind).
     /// @param storageType The type of the storage the argument addresses.
     /// @param parameterType The (substituted) parameter type.
+    /// @param argument The addressed expression, used for declared out storage.
     /// @returns `true` when the storage is accepted.
     func CheckByRefArgumentStorage(
         location TextLocation,
@@ -3389,10 +3393,15 @@ internal class ConversionClassifier {
         parameterType TypeSymbol,
         argument BoundExpression? = nil
     ) bool {
+        let checkedStorageType = if parameter.RefKind == RefKind.Out {
+            ByRefStorageMatching.TryGetStorageType(argument, parameter.RefKind) ?? storageType
+        } else {
+            storageType
+        }
         var storageNullable = false
         var parameterNullable = false
         var nestedMismatch = false
-        var mismatchStorageType = storageType
+        var mismatchStorageType = checkedStorageType
         if argument is BoundConditionalAddressExpression condAddr {
             let leaves = List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]()
             ExpressionBinder.CollectConditionalAddressLeafStorageTypes(condAddr, leaves)
@@ -3432,7 +3441,7 @@ internal class ConversionClassifier {
                 }
             }
         } else if !ByRefStorageMatching.AreSameStorageType(
-            storageType,
+            checkedStorageType,
             parameterType,
             out storageNullable,
             out parameterNullable,

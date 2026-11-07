@@ -129,10 +129,7 @@ Console.WriteLine(Run(1))
             store = LinuxStore()
         }
     }
-    guard let s = store else {
-        return ""
-    }
-    return s.MEMBER()`)
+    return store.MEMBER()`)
             values.Add("SwitchExpressionArms", `    var store IStore? = nil
     store = switch k {
         case 0: MacStore()
@@ -159,10 +156,7 @@ Console.WriteLine(Run(1))
         }
         break
     }
-    guard let s = store else {
-        return ""
-    }
-    return s.MEMBER()`)
+    return store.MEMBER()`)
             values.Add("LoopContinue", `    var store IStore? = nil
     for var i = 0; i < 2; i++ {
         if i == 0 {
@@ -186,10 +180,7 @@ Console.WriteLine(Run(1))
     } catch (Exception) {
         store = LinuxStore()
     }
-    guard let s = store else {
-        return ""
-    }
-    return s.MEMBER()`)
+    return store.MEMBER()`)
             values.Add("TryFinally", `    var store IStore? = nil
     try {
         store = MacStore()

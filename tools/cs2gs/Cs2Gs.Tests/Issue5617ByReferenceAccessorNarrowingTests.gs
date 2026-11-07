@@ -27,6 +27,35 @@ import Xunit
 /// too. Each test translates the C#, compiles the G# with the repository's `gsc.dll`, runs it, and compares the
 /// output with the output of the C#.
 open class Issue5617ByReferenceAccessorNarrowingTests {
+    @Fact
+    func RefParameter_AdjacentGotoCase_KeepsThePrecedingSectionEffects() {
+        let printed = AssertRunsLikeCSharp(`
+public sealed class Box { public int F; }
+public class Demo
+{
+    public static int Read(ref string? s, Box box, int k)
+    {
+        if (s == null) return 0;
+        switch (k)
+        {
+            case 0:
+                box.F = 1;
+                goto case 1;
+            case 1:
+                return s.Length;
+            default:
+                return 0;
+        }
+    }
+    public static string Run()
+    {
+        string? text = "abc";
+        return Read(ref text, new Box(), 0).ToString();
+    }
+}`)
+        Assert.Contains("return s!!.Length", printed)
+    }
+
     /// The issue shape: `Lazy<T>.Value` is an imported getter that is not on the stable list (R16).
     @Fact
     func RefParameter_ReadAfterAnUnlistedImportedGetter_IsAsserted() {
@@ -955,8 +984,8 @@ public class Demo
     }
 
     /// gsc binds the `else` branch of an `if` from the state before the `then` branch (#5650, #5654), so a loop or a
-    /// field write in the `then` branch leaves a read in the `else` branch bare, while a loop in an earlier `switch`
-    /// section reaches a later section.
+    /// field write in the `then` branch leaves a read in the `else` branch bare.
+    /// ADR-0208 R4 also isolates switch section bodies when no goto can enter another section.
     @Fact
     func RefParameter_ReadInAnElseAfterALoopInTheThenBranch_StaysBare() {
         let printed = AssertRunsLikeCSharp(`
@@ -1143,9 +1172,9 @@ public class Demo
         Assert.Contains("return s.Length + 1", printed)
         Assert.Contains("return s.Length + 2", printed)
         Assert.Contains("return s.Length + 3", printed)
-        Assert.Contains("return s!!.Length + 4", printed)
+        Assert.Contains("return s.Length + 4", printed)
         Assert.Contains("return s.Length + 5", printed)
-        Assert.Contains("return s!!.Length + 6", printed)
+        Assert.Contains("return s.Length + 6", printed)
         Assert.Contains("return s.Length + 7", printed)
         Assert.Contains("return s.Length + 8", printed)
         Assert.Contains("return s!!.Length + 9", printed)

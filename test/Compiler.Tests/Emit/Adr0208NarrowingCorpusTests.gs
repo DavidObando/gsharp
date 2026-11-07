@@ -26,7 +26,7 @@ import Xunit
 /// Each row names the row of ADR-0208 section 16 that changes it, if any.
 /// PR 2, slice 2a flipped e7 (Run2), e8, e10, e21, f1, f6 and g4 (rows R1, R3,
 /// R5) and added h1 to h7, i1, i2, j1, k1, k2, l1, l2, m1, n1, o1, o2 and o3 (issue #5206, amendment A1). They now
-/// record the new result. The rows h1 and h2 stay rejected until slice 2b (R2).
+/// record the new result. Rows R2 and R4 consume the normal branch exit states.
 open class Adr0208NarrowingCorpusTests {
     /// Compiles one probe, checks its diagnostics, and for a program that
     /// compiles verifies and runs it.
@@ -268,7 +268,18 @@ open class Adr0208NarrowingCorpusTests {
                 "m18_5301_goto_into_if_condition_after_return_in_branch_does_not_lift_R6",
                 "m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6",
                 "m1_unrelated_interface_refinement",
+                "n10_5130_nil_recheck_keeps_stronger_fact",
+                "n11_5130_internal_if_let_labels_keep_normal_exits",
+                "n12_5130_expression_label_does_not_restore_entry",
                 "n1_boxed_value_type_test",
+                "n2_5130_sibling_type_refinement",
+                "n3_5130_nullable_widening_unbraced_call",
+                "n4_5130_nullable_widening_switch_prefix",
+                "n5_5130_nullable_widening_switch_cleanup",
+                "n6_5130_labeled_branch_entry",
+                "n7_5130_else_if_caller_owned_condition",
+                "n8_5130_noop_finally_keeps_stronger_fact",
+                "n9_5130_finally_discharges_nullable_widening",
                 "o1_callback_after_test_replaces_root",
                 "o2_callback_in_or_arm_replaces_root",
                 "o3_callback_in_else_if_replaces_root",
@@ -1059,7 +1070,7 @@ func Run(c bool) int32 {
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run(false)) }`, "GS0158@9:14", "reject", "", "R2 (accepted after)"}
+func Main() { Console.WriteLine(Run(false)) }`, "", "run", "0", ""}
             yield[]object{"e18_backward_goto_nowrite", `func Get() string? { return nil }
 func Run(n int32) int32 {
     var s string? = Get()
@@ -1257,7 +1268,7 @@ func Main() { Console.WriteLine(Run()) }`, "", "run", "0", ""}
     }
     return s.Length
 }
-func Main() { Console.WriteLine(Run(1)) }`, "GS0158@8:14", "reject", "", "R4 (accepted after)"}
+func Main() { Console.WriteLine(Run(1)) }`, "", "run", "1", ""}
             yield[]object{"f1_dog_cat_join", `open class Animal {
     var Name string = "a"
 }
@@ -1706,7 +1717,7 @@ func Run() int32 {
     }
     return t.Length
 }
-func Main() { Console.WriteLine(Run()) }`, "GS0158@8:14", "reject", "", "R2 (accepted after)"}
+func Main() { Console.WriteLine(Run()) }`, "", "run", "1", ""}
             yield[]object{"h2_call_in_exiting_branch_member_path", `open class Animal { var Name string = "" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
@@ -1722,7 +1733,7 @@ func Run(b Box) string {
     }
     return b.Pet.Bark()
 }
-func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
             yield[]object{"h3_call_in_condition_before_fact", `open class Animal { var Name string = "" }
 class Dog : Animal { func Bark() string { return "woof" } }
 class Box {
@@ -1835,7 +1846,7 @@ func Run(b Box) string {
     }
     return b.Pet.Bark()
 }
-func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "GS0159@14:18", "reject", "", "R2 (accepted after)"}
+func Main() { Console.WriteLine(Run(Box(Dog()))) }`, "", "run", "woof", ""}
             yield[]object{"l1_condition_call_kills_alias_fact", `class C {
     var Value int32 = 1
 }
@@ -1908,6 +1919,119 @@ func Main() {
     var xs = []Box{Box(Pet())}
     Console.WriteLine(Run(ref xs[0], xs))
 }`, "GS0158@15:18", "reject", "", ""}
+            yield[]object{"n2_5130_sibling_type_refinement", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?, flag bool) string {
+    if x == nil { return "" }
+    if flag {
+        if x !is Dog { return "" }
+    } else {
+        return x.Bark()
+    }
+    return ""
+}
+func Main() { Console.WriteLine(Run(Animal{}, false)) }`, "GS0159@8:18", "reject", "", ""}
+            yield[]object{"n3_5130_nullable_widening_unbraced_call", `import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if !dict.TryGetValue("key", &value) {
+        if flag dict.TryGetValue("other", &value)
+        return value.Length
+    }
+    return 0
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string](), true)) }`, "GS0158@6:22", "reject", "", ""}
+            yield[]object{"n4_5130_nullable_widening_switch_prefix", `import System.Collections.Generic
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    switch dict.TryGetValue("other", &value) {
+        case true { break }
+        case false { break }
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "GS0158@9:18", "reject", "", ""}
+            yield[]object{"n5_5130_nullable_widening_switch_cleanup", `import System.Collections.Generic
+func Run(dict Dictionary[string, string], flag bool) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    let clear = func() { dict.TryGetValue("other", &value) }
+    switch flag {
+        case true {
+            defer clear()
+            break
+        }
+        case false { return 0 }
+    }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string](), true)) }`, "GS0158@13:18", "reject", "", ""}
+            yield[]object{"n6_5130_labeled_branch_entry", `func Run(jump bool) int32 {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return 0 } else L: { }
+    return x.Length
+}
+func Main() { Console.WriteLine(Run(true)) }`, "GS0158@5:14", "reject", "", ""}
+            yield[]object{"n7_5130_else_if_caller_owned_condition", `class C { var Value int32 = 1 }
+func Clear(values []C?) bool {
+    values[0] = nil
+    return true
+}
+func Run(ref value C?, values []C?, skip bool) int32 {
+    if skip { return 0 } else if value != nil && Clear(values) { } else { return 0 }
+    return value.Value
+}
+func Main() {
+    var values = []C?{C{}}
+    Console.WriteLine(Run(ref values[0], values, false))
+}`, "GS0158@8:18", "reject", "", ""}
+            yield[]object{"n8_5130_noop_finally_keeps_stronger_fact", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x == nil { return "" }
+    try {
+        if x !is Dog { return "" }
+    } finally { }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
+            yield[]object{"n11_5130_internal_if_let_labels_keep_normal_exits", `func Run(flag bool, s string?, t string?) int32 {
+    var text string? = nil
+    if flag {
+        if let a = s, let b = t { } else { }
+    } else { text = "ok" }
+    return text.Length
+}
+func Main() { Console.WriteLine(Run(true, "s", "t")) }`, "GS0158@6:17", "reject", "", ""}
+            yield[]object{"n12_5130_expression_label_does_not_restore_entry", `func Run(jump bool) {
+    var x string? = nil
+    if jump { goto L }
+    if x == nil { return } else let unused = ({
+        L: var marker = 0
+        0
+    })
+    Console.WriteLine(x.Length)
+}
+func Main() { Run(true) }`, "GS0158@8:25", "reject", "", ""}
+            yield[]object{"n9_5130_finally_discharges_nullable_widening", `import System.Collections.Generic
+func Run(dict Dictionary[string, string]) int32 {
+    var value string = ""
+    if dict.TryGetValue("key", &value) { return 0 }
+    try { } finally { value = "safe" }
+    return value.Length
+}
+func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4", ""}
+            yield[]object{"n10_5130_nil_recheck_keeps_stronger_fact", `open class Animal { }
+class Dog : Animal { func Bark() string { return "woof" } }
+func Run(x Animal?) string {
+    if x !is Dog { return "" }
+    if x != nil { }
+    if x == nil { }
+    return x.Bark()
+}
+func Main() { Console.WriteLine(Run(Dog{})) }`, "", "run", "woof", ""}
             yield[]object{"n1_boxed_value_type_test", `func Run(x object?) int32 {
     if x == nil { return 0 }
     if x is int32 {

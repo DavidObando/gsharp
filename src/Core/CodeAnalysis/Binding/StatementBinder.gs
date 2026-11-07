@@ -324,7 +324,6 @@ internal partial class StatementBinder {
     internal func BindBlockStatement(syntax BlockStatementSyntax) BoundStatement {
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
         let reachableOnEntry = currentStatementListFallsThrough
-        let joinEntry = binderCtx.Narrowing
         $scope = BoundScope($scope)
         // ADR-0175 (#3820/#3824): a block statement accepts only the
         // compiler-intrinsic scope annotations — `@SuppressDiagnostic`, and
@@ -371,7 +370,7 @@ internal partial class StatementBinder {
                 boundStatementEntries[block] = (blockFrameIndex, blockAliasesAtEntry)
             }
             ShadowRecordBlock(block, shadowEntry)
-            RecordBlockExit(block, joinEntry)
+            RecordBlockExit(block)
             if !reachableOnEntry && fallsThrough {
                 internallyReachableFallthroughStatements.Add(block)
             }
@@ -503,6 +502,7 @@ internal partial class StatementBinder {
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
         let shadowSavedOverlay = ShadowEnterList()
         let shadowSavedBase = binderCtx.ShadowOverlayBase
+        var completedCleanupExit NarrowingState? = nil
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
                 let statementSyntax = statementSyntaxes[i]
@@ -615,6 +615,12 @@ internal partial class StatementBinder {
                     statements.Add(
                         BuildCleanupTryStatement(innerStatements.ToImmutable(), defer_.Cleanup!!, shieldCleanup: true)
                     )
+                    completedCleanupExit = KillExitEffects(
+                        listExitState,
+                        cleanupEffect,
+                        externalCallableAliases,
+                        deferSyntax
+                    )
                     return fallsThrough
                 }
                 if statementSyntax is UsingStatementSyntax usingSyntax {
@@ -682,6 +688,12 @@ internal partial class StatementBinder {
                             usingResource
                         )
                     )
+                    completedCleanupExit = KillExitEffects(
+                        listExitState,
+                        cleanupEffect,
+                        externalCallableAliases,
+                        usingSyntax
+                    )
                     return fallsThrough
                 }
                 if statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax {
@@ -747,6 +759,12 @@ internal partial class StatementBinder {
                             awaitUsingLowering.Initialized,
                             awaitUsingResource
                         )
+                    )
+                    completedCleanupExit = KillExitEffects(
+                        listExitState,
+                        cleanupEffect,
+                        externalCallableAliases,
+                        awaitUsingSyntax
                     )
                     return fallsThrough
                 }
@@ -826,7 +844,7 @@ internal partial class StatementBinder {
                 // block — and nested blocks — see the non-nullable type until a
                 // later mutation invalidates it again. Runs last so it wins over
                 // the invalidation pass for the same statement.
-                ApplyAssignmentNarrowing(statement, memberNotNullFrame)
+                ApplyAssignmentNarrowing(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 UpdateExternalCallableAliases(statement, externalCallableAliasesAtEntry)
                 // Issue #2159: `if`-join narrowing. After invalidation (which
                 // drops any narrowing the `if` mutates), lift a nullable `var`
@@ -835,12 +853,9 @@ internal partial class StatementBinder {
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
-                // ADR-0208: lift what the join of the branch exits proves, for an
-                // `if` and for a bare block. It runs after the invalidation, which
-                // owns every kill that a write causes, and after the legacy lifts,
-                // so it can strengthen a fact they lifted but never weakens one.
-                ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
+                // The normal exits already include their path's effects. Whole-statement kills must not remove their facts.
+                ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 // ADR-0213 row R7 (f): the facts that the header of a loop proves when the loop ends.
                 ApplyLoopExitNarrowings(statementSyntax, memberNotNullFrame)
                 ShadowAfterStatement(statement)
@@ -874,7 +889,7 @@ internal partial class StatementBinder {
             return currentStatementListFallsThrough
         } finally {
             ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
-            NoteListExit()
+            NoteListExit(completedCleanupExit)
             binderCtx.EndNarrowingProof()
             currentStatementListFallsThrough = inheritedFallthrough
         }

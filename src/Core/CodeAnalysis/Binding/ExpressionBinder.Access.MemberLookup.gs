@@ -3651,7 +3651,8 @@ internal partial class ExpressionBinder {
                     )
                     if storageType == TypeSymbol.Error ||
                         inPointee == TypeSymbol.Error ||
-                        conversions.CheckByRefArgumentStorage(location, parameter, storageType, inPointee) {
+                        conversions
+                        .CheckByRefArgumentStorage(location, parameter, storageType, inPointee, arguments[i]) {
                         converted.Add(arguments[i])
                     } else {
                         conversions.ReportByRefStorageMismatch(location, parameter.Name, inPointee, storageType)

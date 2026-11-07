@@ -2126,7 +2126,7 @@ internal partial class OverloadResolver {
                     }
                     inferTypeArguments(
                         paramType,
-                        RefCapabilities.GetInferenceType(function!!.Parameters[i], boundArguments[i].Type),
+                        RefCapabilities.GetInferenceType(function!!.Parameters[i], boundArguments[i]),
                         substitution
                     )
                 }
@@ -2405,7 +2405,8 @@ internal partial class OverloadResolver {
                         refArgumentLocation,
                         parameter,
                         operandType,
-                        refParameterType
+                        refParameterType,
+                        addr
                     ) {
                         conversions.ReportByRefStorageMismatch(
                             refArgumentLocation,
