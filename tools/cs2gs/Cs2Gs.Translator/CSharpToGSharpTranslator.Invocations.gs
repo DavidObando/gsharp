@@ -1717,7 +1717,10 @@ partial class CSharpToGSharpTranslator {
                 return operationParameter
             }
             let parameter IParameterSymbol? = this.GetArgumentParameter(argument, method, operationParameter)
-            if parameter != nil &&
+            if parameter != nil && CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                method,
+                this.context.Compilation
+            ) &&
                 argument
                 .Parent
                 ?.Parent is Microsoft
@@ -4577,6 +4580,7 @@ partial class CSharpToGSharpTranslator {
             call Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             out projected IMethodSymbol?
         ) bool {
+            this.state.ManagedReferenceArrayNullable.ProjectedMethodQueryCount++
             if this
                 .state
                 .ManagedReferenceArrayNullable

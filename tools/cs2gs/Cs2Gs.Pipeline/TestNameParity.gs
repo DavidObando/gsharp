@@ -103,12 +103,11 @@ shared class TestNameParity {
         let missing = List[string]()
         let extra = List[string]()
         for framework in frameworks {
-            var expectedForFramework IReadOnlyList[string] = Array.Empty[string]()
+            let expectedForFramework = List[string]()
             for pair in expectedByFramework {
                 let normalizedKey = CSharpTestOracle.NormalizeTargetFramework(pair.Key) ?? pair.Key
-                if string.Equals(normalizedKey, framework, StringComparison.Ordinal) {
-                    expectedForFramework = pair.Value ?? List[string]()
-                    break
+                if string.Equals(normalizedKey, framework, StringComparison.Ordinal) && pair.Value != nil {
+                    expectedForFramework.AddRange(pair.Value)
                 }
             }
             let actualForFramework = if actualByFramework.TryGetValue(framework, out var outcomes) {

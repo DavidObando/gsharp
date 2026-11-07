@@ -195,6 +195,30 @@ The following Tests are available:
                 return CSharpTestOracle.LoadOrNull(mismatchDir, AppId)
             }
         )
+        let duplicateFrameworkDir = NewDirectory()
+        CSharpTestOracle{
+            AppId: AppId,
+            TestCount: 2,
+            Tests: List[string]{"Own.Tests.A.Works", "Own.Tests.B.Works"},
+            TestsByFramework: Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net10.0"] = List[string]{"Own.Tests.A.Works"},
+                [".NETCoreApp,Version=v10.0"] = List[string]{"Own.Tests.B.Works"}
+            }
+        }.Write(duplicateFrameworkDir)
+        Assert.Throws[InvalidOperationException](
+            func () object? {
+                return CSharpTestOracle.LoadOrNull(duplicateFrameworkDir, AppId)
+            }
+        )
+        let combinedBuckets = TestNameParity.CompareByFramework(
+            Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net10.0"] = List[string]{"Own.Tests.A.Works"},
+                [".NETCoreApp,Version=v10.0"] = List[string]{"Own.Tests.B.Works"}
+            },
+            []TestCaseOutcome{TestCaseOutcome("Own.Tests.A.Works", "Passed", "net10.0")}
+        )
+        Assert.False(combinedBuckets.IsMatch)
+        Assert.Equal([]string{"Own.Tests.B.Works"}, combinedBuckets.Missing)
     }
 
     /// A bare C# case with neither an exact result nor any row is missing.
