@@ -2632,9 +2632,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateReceiverWithNullForgiveness(
-            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedValue GExpression? = nil
         ) GExpression? {
-            var translated GExpression? = this.TranslateExpression(recv)
+            var translated GExpression? = translatedValue ?? this.TranslateExpression(recv)
             // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
             // the seam that produced it, so an assertion there is at best
             // redundant and at worst masks the guard — and it is not even

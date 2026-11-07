@@ -53,6 +53,20 @@ internal class EmittedNameAllocator {
         }
     }
 
+    func HasImportedDeconstructionContract(method IMethodSymbol) bool {
+        lock this.gate {
+            return this
+                .GetContractGroup(Canonical(method))
+                .OfType[IMethodSymbol]()
+                .Any(
+                (member IMethodSymbol) -> member.Name == "Deconstruct" &&
+                    member
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty
+            )
+        }
+    }
+
     private init(compilation Compilation) {
         this.compilation = compilation
         this.CollectContractGroups()
@@ -88,7 +102,12 @@ internal class EmittedNameAllocator {
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
             // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
-            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
+            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) &&
+                !contract
+                .OfType[IMethodSymbol]().Any(
+                (member IMethodSymbol) ->
+                member.Name == "Deconstruct" && member.DeclaringSyntaxReferences.IsDefaultOrEmpty
+            ) {
                 let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
                 for member in contract {
                     if member is IMethodSymbol method && IsUserRecordDeconstruct(method) {

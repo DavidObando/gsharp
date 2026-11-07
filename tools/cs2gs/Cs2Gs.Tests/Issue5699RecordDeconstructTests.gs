@@ -3,6 +3,7 @@ package Cs2Gs.Tests
 import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
 import System
 import System.Diagnostics
 import System.IO
@@ -11,6 +12,242 @@ import System.Reflection
 import Xunit
 
 class Issue5699RecordDeconstructTests {
+    @Theory
+    @InlineData("record", false)
+    @InlineData("record", true)
+    @InlineData("record class", false)
+    @InlineData("record class", true)
+    @InlineData("record struct", false)
+    @InlineData("record struct", true)
+    func NestedAssignment_ExtractsAndConvertsBeforeWritingTargets(kind string, valuePosition bool) {
+        Verify((`
+namespace RecordDeconstruction {
+    public struct V {
+        public int Value;
+        public static implicit operator int(V value) {
+            R.Events += $"C{R.Stored};";
+            return value.Value;
+        }
+    }
+    public KIND R {
+        public static int Stored;
+        public static string Events = "";
+        public void Deconstruct(out V x, out int y) {
+            Events += $"D{Stored};";
+            x = new V { Value = Stored };
+            y = 2;
+        }
+    }
+    public static class Probe {
+        public static string Run() {
+            int b = -1, c = -1;
+            ASSIGNMENT
+            return resultText + $"{R.Stored},{b},{c},{R.Events}";
+        }
+    }
+}`).Replace("KIND", kind)
+                .Replace(
+                "ASSIGNMENT",
+                if valuePosition {
+                    "var result = ((R.Stored, (b, c)) = (9, new R())); var resultText = $\"{result.Item2.Item1.GetType().Name},{result.Item2.Item1};\";"
+                } else {
+                    "(R.Stored, (b, c)) = (9, new R()); var resultText = \"\";"
+                }
+            ))
+    }
+
+    @Fact
+    func RepeatedCapturedPatternReceiver_ResetsOutputsOnEveryEvaluation() {
+        Verify(`
+namespace RecordDeconstruction {
+    public record R(int Value) {
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; x = Value; y = 2; }
+    }
+    public static class Probe {
+        public static int Gets;
+        public static R Next() { return new R(Gets++ == 0 ? 1 : 0); }
+        public static string Run() {
+            int iterations = 0;
+            while (iterations < 2 && Next() is R(1, _)) iterations++;
+            return $"{iterations},{Gets},{R.Calls}";
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func RepeatedSwitchSectionEmission_DeclaresPatternCachesInEachScope() {
+        Verify(`
+namespace RecordDeconstruction {
+    public record R {
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; x = 1; y = 2; }
+    }
+    public static class Probe {
+        public static string Classify(int n, R r) {
+            switch (n) {
+                case 0:
+                case 1 when true:
+                    var matched = r is R(1, 2);
+                    var arm = r switch { R(1, 2) => true, _ => false };
+                    return $"{matched}:{arm}";
+                default: return "other";
+            }
+        }
+        public static string Run() {
+            var r = new R();
+            return Classify(0, r) + "," + Classify(1, r) + "," + R.Calls;
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func NullableReceivers_DeconstructOnceAndThrowOnlyAtTheCall() {
+        Verify(`
+#nullable enable
+namespace RecordDeconstruction {
+    public record R {
+        public int X;
+        public int Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public record Outer(R? Child, int Tag) {
+        public void Deconstruct(out R? child, out int tag) { child = Child; tag = Tag; }
+    }
+    public static class Probe {
+        public static int Gets;
+        public static R? Create(bool absent) { Gets++; return absent ? null : new R { X = 2, Y = 3 }; }
+        public static int Guarded(R? r) {
+            if (r == null) return 0;
+            var (x, y) = r;
+            return x + y;
+        }
+        public static bool Missing() {
+            try { var (x, y) = Create(true); return false; }
+            catch (System.NullReferenceException) { return true; }
+        }
+        public static string Run() {
+            var r = Create(false);
+            var (a, b) = r;
+            var ((c, d), e) = (Create(false), 4);
+            var total = 0;
+            foreach (var (x, y) in new R?[] { Create(false) }) total += x + y;
+            var ((f, g), h) = new Outer(Create(false), 4);
+            var sum = a + b + c + d + e + total + f + g + h + Guarded(r);
+            return $"{sum},{Missing()},{Gets}";
+        }
+    }
+}`)
+    }
+
+    @Theory
+    @InlineData("record")
+    @InlineData("record class")
+    @InlineData("record struct")
+    func FlatTypedForEachTargets_ApplySelectedOutputConversions(kind string) {
+        Verify((`
+namespace RecordDeconstruction {
+    public KIND R {
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var text = "";
+            foreach ((long x, long y) in new[] { r }) text += $"{x.GetType().Name},{y.GetType().Name};";
+            foreach ((double x, double y) in new[] { r }) text += $"{x.GetType().Name},{y.GetType().Name}";
+            return text;
+        }
+    }
+}`).Replace("KIND", kind))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ImportedDeconstructContracts_ReportDeclarationGapWithoutRenaming(overrideBase bool) {
+        let external = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", `
+namespace External {
+    public interface IParts { void Deconstruct(out int x, out int y); }
+    public record Base {
+        public int X, Y;
+        public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
+}`)}, assemblyName: "External" + Guid.NewGuid().ToString("N"))
+        Assert.True(external.BoundWithoutErrors, string.Join("\n", external.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(external.Compilation.Emit(image).Success)
+        let source = (`
+namespace RecordDeconstruction {
+    public record R : PARENT {
+        FIELDS
+        public OVERRIDE void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R { X = 2, Y = 3 };
+            r.Deconstruct(out var x, out var y);
+            return $"{x},{y}";
+        }
+    }
+}`).Replace(
+            "PARENT",
+            if overrideBase {
+                "External.Base"
+            } else {
+                "External.IParts"
+            }
+        ).Replace(
+            "FIELDS",
+            if overrideBase {
+                ""
+            } else {
+                "public int X, Y;"
+            }
+        ).Replace(
+            "OVERRIDE",
+            if overrideBase {
+                "override"
+            } else {
+                ""
+            }
+        )
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromImage(image.ToArray()))
+            .ToArray()
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)}, references)
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let baseline = MemoryStream()
+        Assert.True(project.Compilation.Emit(baseline).Success)
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("imported Deconstruct contract", gap.Message)
+        Assert.Equal(
+            source.IndexOf(
+                "public " +
+                    (
+                    if overrideBase {
+                        "override"
+                    } else {
+                        ""
+                    }
+                ) +
+                    " void Deconstruct",
+                StringComparison.Ordinal
+            ),
+            gap.Location!!.SourceSpan.Start
+        )
+        Assert.DoesNotContain("func deconstruct", printed)
+    }
+
     @Theory
     @InlineData("record", false)
     @InlineData("record class", false)

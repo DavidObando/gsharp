@@ -652,6 +652,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchExpression(
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GExpression? {
+            this.BeginRecordPatternDecision(node)
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerTypeNameSwitch(node, out var analyzerTypeName) {
                 return analyzerTypeName
             }
@@ -1016,6 +1017,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchExpressionAsStatement(
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GStatement {
+            this.BeginRecordPatternDecision(node)
             let subject GExpression? = this.TranslateExpression(node.GoverningExpression)
             let cases = List[SwitchStatementCase]()
             var hasTotalArm = false
@@ -1120,6 +1122,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchStatement(node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax) sequence[
             GStatement
         ] {
+            this.BeginRecordPatternDecision(node)
             let subject GExpression? = this.TranslateExpression(node.Expression)
             let cases = List[SwitchStatementCase]()
             let sectionByLocalFunction = Dictionary[IMethodSymbol, SwitchSectionSyntax](SymbolEqualityComparer.Default)
@@ -1725,7 +1728,14 @@ partial class CSharpToGSharpTranslator {
             let extractions = List[GStatement]()
             let conversions = List[GStatement]()
             let deconstruction = this.context.SemanticModel.GetDeconstructionInfo(node)
-            this.CollectForEachVariableTargets(node.Variable, names, extractions, conversions, deconstruction)
+            this.CollectForEachVariableTargets(
+                node.Variable,
+                names,
+                extractions,
+                conversions,
+                deconstruction,
+                forEachInfo.ElementType
+            )
             if names.Count >= 2 {
                 let isAwait = !node.AwaitKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
                 var body BlockStatement
@@ -1772,7 +1782,19 @@ partial class CSharpToGSharpTranslator {
                 ){TupleDeconstructionStatement(
                         BindingKind.Let,
                         names,
-                        this.RewriteRecordDeconstruction(IdentifierExpression(pair), deconstruction.Method)
+                        this.RewriteRecordDeconstruction(
+                            IdentifierExpression(pair),
+                            deconstruction.Method,
+                            emittedReceiverType: if forEachInfo.ElementType == nil {
+                                nil
+                            } else {
+                                this.typeMapper.Map(
+                                    projectedElement ?? forEachInfo.ElementType,
+                                    this.context,
+                                    node.Variable.GetLocation()
+                                )
+                            }
+                        )
                     )
                 }
                 statements.AddRange(extractions)
@@ -1907,7 +1929,8 @@ partial class CSharpToGSharpTranslator {
             names List[string],
             extractions List[GStatement],
             conversions List[GStatement],
-            deconstruction DeconstructionInfo
+            deconstruction DeconstructionInfo,
+            receiverType ITypeSymbol?
         ) {
             switch Unparenthesize(variable) {
                 case tuple is TupleExpressionSyntax {
@@ -1917,7 +1940,10 @@ partial class CSharpToGSharpTranslator {
                         .Any() ||
                         tuple
                         .Arguments
-                        .Any((argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax)
+                        .Any(
+                        (argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax
+                    ) ||
+                        this.RecordDeconstructionRunsUserCode(deconstruction)
                     for var i = 0; i < tuple.Arguments.Count; i++ {
                         this.CollectForEachTupleArgumentTarget(
                             tuple.Arguments[i].Expression,
@@ -1925,7 +1951,9 @@ partial class CSharpToGSharpTranslator {
                             extractions,
                             conversions,
                             this.NestedDeconstructionInfo(deconstruction, i),
-                            hasNestedDeconstruction
+                            hasNestedDeconstruction,
+                            this.DeconstructionOutputType(deconstruction, i, receiverType),
+                            this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
                     }
                 }
@@ -1935,7 +1963,8 @@ partial class CSharpToGSharpTranslator {
                         names,
                         extractions,
                         deconstruction,
-                        declaration.Type.IsVar
+                        declaration.Type.IsVar,
+                        receiverType
                     )
                 }
                 case identifier is IdentifierNameSyntax {
@@ -1956,7 +1985,9 @@ partial class CSharpToGSharpTranslator {
             extractions List[GStatement],
             conversions List[GStatement],
             deconstruction DeconstructionInfo,
-            hasNestedDeconstruction bool
+            hasNestedDeconstruction bool,
+            receiverType ITypeSymbol? = nil,
+            emittedReceiverType GTypeReference? = nil
         ) {
             let unwrapped = Unparenthesize(expression)!!
             if this.IsDeconstructionDiscard(unwrapped) {
@@ -2039,7 +2070,9 @@ partial class CSharpToGSharpTranslator {
                                 preserveValue: false,
                                 extractions,
                                 deconstruction,
-                                declaration.Type.IsVar
+                                declaration.Type.IsVar,
+                                receiverType,
+                                emittedReceiverType
                             )
                         }
                     }
@@ -2056,14 +2089,20 @@ partial class CSharpToGSharpTranslator {
                             nestedExtractions,
                             conversions,
                             this.NestedDeconstructionInfo(deconstruction, i),
-                            hasNestedDeconstruction: true
+                            hasNestedDeconstruction: true,
+                            this.DeconstructionOutputType(deconstruction, i, receiverType),
+                            this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
                     }
                     extractions.Add(
                         TupleDeconstructionStatement(
                             BindingKind.Let,
                             nestedNames,
-                            this.RewriteRecordDeconstruction(IdentifierExpression(carrier), deconstruction.Method)
+                            this.RewriteRecordDeconstruction(
+                                IdentifierExpression(carrier),
+                                deconstruction.Method,
+                                emittedReceiverType: emittedReceiverType
+                            )
                         )
                     )
                     extractions.AddRange(nestedExtractions)
@@ -2079,7 +2118,8 @@ partial class CSharpToGSharpTranslator {
             names List[string],
             extractions List[GStatement],
             deconstruction DeconstructionInfo,
-            inferredType bool
+            inferredType bool,
+            receiverType ITypeSymbol?
         ) {
             switch designation {
                 case single is SingleVariableDesignationSyntax {
@@ -2107,7 +2147,9 @@ partial class CSharpToGSharpTranslator {
                                     preserveValue: false,
                                     extractions,
                                     this.NestedDeconstructionInfo(deconstruction, i),
-                                    inferredType
+                                    inferredType,
+                                    this.DeconstructionOutputType(deconstruction, i, receiverType),
+                                    this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                                 )
                             }
                         }

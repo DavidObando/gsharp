@@ -20,6 +20,8 @@ import System.Linq
 
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
+        private let recordDeconstructionAdapterNames Dictionary[IMethodSymbol, string] =
+        Dictionary[IMethodSymbol, string](SymbolEqualityComparer.Default)
         private let recordPatternCaches Dictionary[
             SyntaxNode,
             List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
@@ -27,6 +29,9 @@ partial class CSharpToGSharpTranslator {
 
         private func RecordDeconstructionAdapterName(method IMethodSymbol) string {
             let original = (method.PartialDefinitionPart ?? method).OriginalDefinition
+            if this.recordDeconstructionAdapterNames.TryGetValue(original, out var existing) {
+                return existing
+            }
             var ordinal = original
                 .ContainingType
                 .GetMembers("Deconstruct")
@@ -61,7 +66,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 name = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
+            this.recordDeconstructionAdapterNames.Add(original, name)
             return name
+        }
+
+        private func BeginRecordPatternDecision(owner SyntaxNode) {
+            this.recordPatternCaches.Remove(owner)
         }
 
         private func BuildRecordDeconstructionAdapter(method IMethodSymbol) MethodDeclaration? {
@@ -189,15 +199,69 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func RewriteRecordDeconstruction(value GExpression?, method IMethodSymbol?) GExpression? {
+        private func RewriteRecordDeconstruction(
+            value GExpression?,
+            method IMethodSymbol?,
+            receiverSyntax ExpressionSyntax? = nil,
+            emittedReceiverType GTypeReference? = nil
+        ) GExpression? {
             this.ReportUnsupportedRecordDeconstruction(method)
             if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {
                 return value
             }
+            let receiver = if receiverSyntax != nil {
+                this.TranslateReceiverWithNullForgiveness(receiverSyntax, value)
+            } else if emittedReceiverType?.IsNullable == true {
+                EnsureNonNullAssertion(value)
+            } else {
+                value
+            }
             return InvocationExpression(
-                MemberAccessExpression(value, this.RecordDeconstructionAdapterName(method!!)),
+                MemberAccessExpression(receiver, this.RecordDeconstructionAdapterName(method!!)),
                 Array.Empty[GExpression]()
             )
+        }
+
+        private func DeconstructionOutputType(
+            info DeconstructionInfo,
+            index int32,
+            receiverType ITypeSymbol?
+        ) ITypeSymbol? {
+            if EmittedNameAllocator.IsUserRecordDeconstruct(info.Method) && index < info.Method!!.Parameters.Length {
+                return info.Method!!.Parameters[index].Type
+            }
+            if receiverType is INamedTypeSymbol{IsTupleType: true} tuple && index < tuple.TupleElements.Length {
+                return GetEffectiveTupleElementType(tuple, index)
+            }
+            return nil
+        }
+
+        private func DeconstructionOutputSyntax(receiver ExpressionSyntax?, index int32) ExpressionSyntax? {
+            return if receiver != nil &&
+                Unparenthesize(receiver) is TupleExpressionSyntax tuple &&
+                index < tuple
+                .Arguments
+                .Count {
+                tuple.Arguments[index].Expression
+            } else {
+                nil
+            }
+        }
+
+        private func MapDeconstructionOutputType(
+            info DeconstructionInfo,
+            index int32,
+            receiverType ITypeSymbol?
+        ) GTypeReference? {
+            if EmittedNameAllocator.IsUserRecordDeconstruct(info.Method) && index < info.Method!!.Parameters.Length {
+                return this.MapRecordDeconstructionParameterTypes(info.Method!!)[index]
+            }
+            let type = this.DeconstructionOutputType(info, index, receiverType)
+            return if type == nil {
+                nil
+            } else {
+                this.typeMapper.Map(type, this.context, location: nil)
+            }
         }
 
         private func GetDeconstructionInfo(right ExpressionSyntax?) DeconstructionInfo ->
@@ -978,7 +1042,8 @@ partial class CSharpToGSharpTranslator {
                 statements,
                 captured,
                 this.GetDeconstructionInfo(right),
-                this.context.GetTypeInfo(right).Type as INamedTypeSymbol
+                this.context.GetTypeInfo(right).Type as INamedTypeSymbol,
+                receiverSyntax: right
             )
             return statements
         }
@@ -1108,7 +1173,8 @@ partial class CSharpToGSharpTranslator {
                 statements,
                 captured,
                 this.GetDeconstructionInfo(right),
-                this.context.GetTypeInfo(right).Type as INamedTypeSymbol
+                this.context.GetTypeInfo(right).Type as INamedTypeSymbol,
+                receiverSyntax: right
             )
             let value GExpression = TupleLiteralExpression(values)
             this.state.TupleAssignmentValues[leftTuple] = value
@@ -1179,8 +1245,16 @@ partial class CSharpToGSharpTranslator {
             statements List[GStatement],
             captured Dictionary[ExpressionSyntax, GExpression],
             deconstruction DeconstructionInfo,
-            rhsTupleType INamedTypeSymbol? = nil
+            rhsTupleType INamedTypeSymbol? = nil,
+            emittedReceiverType GTypeReference? = nil,
+            receiverSyntax ExpressionSyntax? = nil,
+            conversions List[GStatement]? = nil,
+            assignments List[GStatement]? = nil
         ) List[GExpression] {
+            // C# completes recursive extraction and conversion before writing any target.
+            let ownsPhases = conversions == nil
+            let conversionStatements = conversions ?? List[GStatement]()
+            let assignmentStatements = assignments ?? List[GStatement]()
             let count = pattern.Arguments.Count
             let temps = List[string](count)
             let directNames = [count]bool
@@ -1255,7 +1329,12 @@ partial class CSharpToGSharpTranslator {
                 TupleDeconstructionStatement(
                     BindingKind.Let,
                     temps,
-                    this.RewriteRecordDeconstruction(rhsValue, deconstruction.Method)
+                    this.RewriteRecordDeconstruction(
+                        rhsValue,
+                        deconstruction.Method,
+                        receiverSyntax,
+                        emittedReceiverType
+                    )
                 )
             )
             let values = List[GExpression](count)
@@ -1280,15 +1359,11 @@ partial class CSharpToGSharpTranslator {
                     // to flatten every depth into one `let (...)` (issue
                     // #1974). The recursive rhsValue is already a bare temp
                     // read, so no further spill is needed before recursing.
-                    let nestedRhsTupleType INamedTypeSymbol? = if rhsTupleType != nil &&
-                        rhsTupleType.IsTupleType == true &&
-                        i < rhsTupleType
-                        .TupleElements
-                        .Length {
-                        rhsTupleType.TupleElements[i].Type as INamedTypeSymbol
-                    } else {
-                        default(INamedTypeSymbol?)
-                    }
+                    let nestedRhsTupleType = this.DeconstructionOutputType(
+                        deconstruction,
+                        i,
+                        rhsTupleType
+                    ) as INamedTypeSymbol
                     let nestedValues = this.LowerTuplePattern(
                         nestedTuple,
                         tempRead,
@@ -1296,7 +1371,11 @@ partial class CSharpToGSharpTranslator {
                         statements,
                         captured,
                         this.NestedDeconstructionInfo(deconstruction, i),
-                        nestedRhsTupleType
+                        nestedRhsTupleType,
+                        this.MapDeconstructionOutputType(deconstruction, i, rhsTupleType),
+                        this.DeconstructionOutputSyntax(receiverSyntax, i),
+                        conversionStatements,
+                        assignmentStatements
                     )
                     values.Add(
                         if forceRealTemps {
@@ -1314,7 +1393,11 @@ partial class CSharpToGSharpTranslator {
                         forceRealTemps,
                         statements,
                         this.NestedDeconstructionInfo(deconstruction, i),
-                        declaration.Type.IsVar
+                        declaration.Type.IsVar,
+                        this.DeconstructionOutputType(deconstruction, i, rhsTupleType),
+                        this.MapDeconstructionOutputType(deconstruction, i, rhsTupleType),
+                        this.DeconstructionOutputSyntax(receiverSyntax, i),
+                        conversionStatements
                     )
                     if declaredValue != nil {
                         values.Add(declaredValue)
@@ -1330,6 +1413,7 @@ partial class CSharpToGSharpTranslator {
                 // the outer tuple, but `_` isn't a real assignable location —
                 // skip the write itself to avoid emitting a stray, dead
                 // discard write-back statement (issue #2099).
+                var assignedValue GExpression = tempRead
                 if !this.IsDeconstructionDiscard(targetExpr) {
                     // A member/element-access target was already captured
                     // into a duplication-safe replacement BEFORE the RHS was
@@ -1340,13 +1424,52 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         this.TranslateExpression(targetExpr)
                     }
-                    statements.Add(
-                        AssignmentStatement(assignTarget, this.BridgeDeconstructedElementStore(targetExpr, tempRead))
+                    assignedValue = this.ConvertDeconstructionAssignmentValue(
+                        targetExpr,
+                        tempRead,
+                        conversionStatements
                     )
+                    assignmentStatements.Add(AssignmentStatement(assignTarget, assignedValue))
                 }
-                values.Add(tempRead)
+                values.Add(assignedValue)
+            }
+            if ownsPhases {
+                statements.AddRange(conversionStatements)
+                statements.AddRange(assignmentStatements)
             }
             return values
+        }
+
+        private func ConvertDeconstructionAssignmentValue(
+            target ExpressionSyntax,
+            value GExpression,
+            conversions List[GStatement]
+        ) GExpression {
+            let bridged = this.BridgeDeconstructedElementStore(target, value)!!
+            if !this.TryGetDeconstructionSlotInfo(target, out var conversion, out var sourceType) ||
+                (conversion.IsIdentity && object.ReferenceEquals(bridged, value)) {
+                return bridged
+            }
+            let symbol = this.GetProjectedAssignmentTarget(target, this.context.GetSymbolInfo(target).Symbol)
+            let targetType = this.GetAssignmentTargetType(target, symbol)
+            if targetType == nil {
+                return bridged
+            }
+            var mappedType = this.typeMapper.Map(targetType, this.context, target.GetLocation())
+            if symbol is ILocalSymbol local {
+                mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
+            }
+            let converted = this.BuildConvertedDeconstructionValue(
+                bridged,
+                sourceType,
+                targetType,
+                mappedType,
+                conversion,
+                target.GetLocation()
+            )
+            let temp = this.AllocateDeconstructionTempName(target)
+            conversions.Add(LocalDeclarationStatement(BindingKind.Let, temp, mappedType, converted))
+            return IdentifierExpression(temp)
         }
 
         // Issue #5561: the store bridge of `target = element` for a variable,
@@ -1506,7 +1629,11 @@ partial class CSharpToGSharpTranslator {
             preserveValue bool,
             statements List[GStatement],
             deconstruction DeconstructionInfo,
-            inferredType bool
+            inferredType bool,
+            receiverType ITypeSymbol? = nil,
+            emittedReceiverType GTypeReference? = nil,
+            receiverSyntax ExpressionSyntax? = nil,
+            conversions List[GStatement]? = nil
         ) GExpression? {
             if designation is DiscardDesignationSyntax {
                 return if preserveValue {
@@ -1518,12 +1645,30 @@ partial class CSharpToGSharpTranslator {
             if designation is SingleVariableDesignationSyntax single {
                 let name = this.EmittedName(single, single.Identifier)
                 let local ILocalSymbol? = this.context.GetDeclaredSymbol(single) as ILocalSymbol
-                let type = if inferredType && local != nil && this.InferredLocalDefaultRequiresTypedDeclaration(local) {
+                var type = if inferredType && local != nil && this.InferredLocalDefaultRequiresTypedDeclaration(local) {
                     MakeNullable(this.typeMapper.MapEventType(local.Type, this.context, single.GetLocation()))
+                } else if !inferredType && local != nil {
+                    this.typeMapper.Map(local.Type, this.context, single.GetLocation())
                 } else {
                     default(GTypeReference?)
                 }
-                statements.Add(
+                var initializer = value
+                if local != nil {
+                    type = this.PromoteIfUsedAsNullable(type, local)
+                    if this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType) &&
+                        !conversion
+                        .IsIdentity {
+                        initializer = this.BuildConvertedDeconstructionValue(
+                            value,
+                            sourceType,
+                            local.Type,
+                            type,
+                            conversion,
+                            single.GetLocation()
+                        )
+                    }
+                }
+                (conversions ?? statements).Add(
                     LocalDeclarationStatement(
                         if local != nil && this.IsLocalReassigned(local) {
                             BindingKind.Var
@@ -1532,7 +1677,7 @@ partial class CSharpToGSharpTranslator {
                         },
                         name,
                         type,
-                        initializer: value
+                        initializer: initializer
                     )
                 )
                 return IdentifierExpression(name)
@@ -1564,7 +1709,7 @@ partial class CSharpToGSharpTranslator {
                 TupleDeconstructionStatement(
                     BindingKind.Let,
                     temps,
-                    this.RewriteRecordDeconstruction(value, deconstruction.Method)
+                    this.RewriteRecordDeconstruction(value, deconstruction.Method, receiverSyntax, emittedReceiverType)
                 )
             )
             let values = List[GExpression](parenthesized.Variables.Count)
@@ -1583,7 +1728,11 @@ partial class CSharpToGSharpTranslator {
                     preserveValue,
                     statements,
                     this.NestedDeconstructionInfo(deconstruction, i),
-                    inferredType
+                    inferredType,
+                    this.DeconstructionOutputType(deconstruction, i, receiverType),
+                    this.MapDeconstructionOutputType(deconstruction, i, receiverType),
+                    this.DeconstructionOutputSyntax(receiverSyntax, i),
+                    conversions
                 )
                 if declaredValue != nil {
                     values.Add(declaredValue)
@@ -1608,14 +1757,19 @@ partial class CSharpToGSharpTranslator {
                 includeSelf: true,
                 func () List[GStatement] {
                     let statements = List[GStatement]()
+                    let conversions = List[GStatement]()
                     this.LowerDeconstructionDeclaration(
                         designation,
                         this.TranslateExpression(right)!!,
                         preserveValue: false,
                         statements,
                         this.GetDeconstructionInfo(right),
-                        inferredType
+                        inferredType,
+                        this.context.GetTypeInfo(right).Type,
+                        receiverSyntax: right,
+                        conversions: conversions
                     )
+                    statements.AddRange(conversions)
                     return statements
                 }
             )

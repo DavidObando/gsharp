@@ -797,6 +797,11 @@ partial class CSharpToGSharpTranslator {
         )
 
         private func TranslateIsPattern(isPattern IsPatternExpressionSyntax) GExpression? {
+            this.BeginRecordPatternDecision(isPattern)
+            return this.ResetRecordPatternCaches(isPattern, this.TranslateIsPatternCore(isPattern))
+        }
+
+        private func TranslateIsPatternCore(isPattern IsPatternExpressionSyntax) GExpression? {
             // ADR-0169 analyzer mode: the C# base-call detection idiom has no
             // direct G# counterpart (#3536).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerBaseCallCheck(isPattern, out var analyzerBaseCall) {
@@ -905,10 +910,7 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let test = this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression)
-            return this.ResetRecordPatternCaches(
-                isPattern,
-                this.MaterializeFallbackPatternBindings(isPattern, receiver, test)
-            )
+            return this.MaterializeFallbackPatternBindings(isPattern, receiver, test)
         }
 
         // Issue #4356: true when a property subpattern reads a member whose
