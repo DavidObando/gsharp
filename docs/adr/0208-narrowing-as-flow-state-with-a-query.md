@@ -9,8 +9,9 @@
 - **Amendments**: A1 (join fallback, #5206) and A2 (property reads, row
   R14, #5215) of section 19a, found by PR 1 of #5130 (#5212) and accepted by
   the maintainer on 2026-10-23 (PR #5226); the clarifications of #5207 are
-  folded into the text; row R20 (member writes, #5796 and #5827, amended
-  2026-11-06 by maintainer decision on #5786)
+  folded into the text; rows R20 (member writes, #5796 and #5827) and R21
+  (field writes, #5786), amended 2026-11-06 by maintainer decision on #5786
+  (option B)
 - **Phase**: Compiler architecture (study roadmap item M1b; implementation
   is [#5130](https://github.com/DavidObando/gsharp/issues/5130))
 - **Issue**: [#5129](https://github.com/DavidObando/gsharp/issues/5129)
@@ -545,7 +546,7 @@ covers. The classes, with representative kinds:
 | --- | --- | --- |
 | `none` | `BoundVariableExpression`, `BoundLiteralExpression`, `BoundDefaultExpression`, `BoundTypeOfExpression`, `BoundSizeOfExpression`, `BoundLenExpression`, `BoundTupleElementAccessExpression`, `BoundIsExpression`/`BoundAsExpression` without user code, `BoundTypePattern`, `BoundDiscardPattern`, `BoundLabelStatement`, `BoundAwaitSequencePoint`, `BoundLocalFunctionDeclaration`, `BoundErrorExpression` | children only |
 | `root-write` | `BoundAssignmentExpression`, `BoundVariableDeclaration` with an initializer, deconstruction targets, `out`/`ref` arguments, `++`/`--` on a name | removes every path on the root; if the root is in the alias class, every fact on the class; applies P2 afterwards |
-| `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call`. Row R20 (#5796, #5827): a `BoundPropertyAssignmentExpression` that runs no user code (R14) through a setter that is not `init` keeps the member-bearing paths, except the paths whose root is a by-reference root (`IsExternalStorageAlias`) when the written location can hold the storage of that root (`StorageWriteMayOverwriteRoot`). Every member, index or indirect write removes those paths. A loop or backward-jump region keeps the full rule (ADR-0213) |
+| `member-write` | `BoundFieldAssignmentExpression`, `BoundPropertyAssignmentExpression`, `BoundIndexAssignmentExpression`, `BoundClrIndexAssignmentExpression`, `BoundClrPropertyAssignmentExpression`, `BoundIndirectAssignmentExpression` through an address-of operand | removes every member-bearing path and every fact on the alias class (a `ref` local or a by-reference parameter may alias the written element or member: probes f2, g2); a property setter with user code is also `call`. Row R20 (#5796, #5827): a `BoundPropertyAssignmentExpression` that runs no user code (R14) through a setter that is not `init` keeps the member-bearing paths, except the paths whose root is a by-reference root (`IsExternalStorageAlias`) when the written location can hold the storage of that root (`StorageWriteMayOverwriteRoot`). Row R21 (#5786): a `BoundFieldAssignmentExpression` of a field that is not `let` keeps them in the same way; a constructor write of a `let` field keeps the full rule. Both rows apply only to a write into separate storage, an allow-list (`MemberWriteStorage`): a member of a source type of this compilation whose layout is known not to be explicit, through an object, a value-type variable, or a value-type field of such a receiver; an imported type, an interface field and every other write keep the full rule. A separate write through a by-reference value receiver (a struct `this`, a `ref` parameter or local) keeps the member facts of that root and removes the member facts of every other root (`ByReferenceWritesReach`), because another root can name overlapping storage. Every member, index or indirect write removes those paths. A loop or backward-jump region keeps the full rule (ADR-0213) |
 | `pointer-write` | `BoundIndirectAssignmentExpression` through anything else, `BoundDereferenceExpression` as a target | removes every mutable root (`MayMutateAnyRootViaPointer`) |
 | `alias` | `BoundAddressOfExpression`, `BoundConditionalAddressExpression` (both operands, whichever the condition selects; its condition and operands flow like `?:`), `BoundManagedReferenceExpression`, `BoundFixedStatement`, `BoundStackAllocExpression`, a `ref` local declaration | puts the operand's root (every operand's root, for a conditional address) in the alias class; the write rules above then apply to the class |
 | `call` | `BoundCallOperationExpression`, `BoundIndirectCallExpression`, `BoundFunctionPointerInvocationExpression`, `BoundConstructorCallExpression`, `BoundClrConstructorCallExpression`, `BoundTypeParameterConstructionExpression`, `BoundStructLiteralExpression` (field initializers), `BoundBaseClassCallExpression`, `BoundConstructorChainingExpression`, `BoundClrConversionCallExpression`, `BoundConversionExpression` with a user-defined conversion, `BoundBinaryOperationExpression`/`BoundUnaryExpression`/`BoundClrUnaryOperatorExpression` on user-defined operators, `BoundEventSubscriptionExpression`, `BoundClrEventSubscriptionExpression`, `BoundInterpolatedStringExpression` (`ToString`), `BoundAwaitExpression` (awaiter calls), `BoundForRangeStatement`/`BoundAwaitForRangeStatement` (`GetEnumerator`, `MoveNext`, `Current`, disposal; probe f5), `using`/`await using`/`lock`/`defer` cleanup regions (disposal, `Monitor`), `BoundGoStatement`, `BoundYieldStatement` (the consumer runs arbitrary code before resumption), property reads and writes with user code (a non-auto accessor, or an auto accessor that can dispatch to an override: an `open` or `override` property on a receiver type that can have a subclass, or an interface property; in any position, a condition included: row R14, amendment A2, #5215, #5599, and in loop and backward-jump regions under [ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) W5 / #5549 unless the receiver resolves at the region's entry scope without a type test in the region and the member is on the R16/R17 stable accessor list or is a field or auto property of a type that cannot have a subclass) and `BoundPropertyPattern`/`BoundListPattern`/`BoundSlicePattern`/`BoundConstantPattern`/`BoundRelationalPattern` that invoke user code, `BoundMethodReferenceOperationExpression`/`BoundPropertyReferenceOperationExpression` when invoked, **and every kind not in the table** | removes every member-bearing path and every fact on the indirect-write class (mutable globals, closure-assigned locals, the alias class; row R15), except that a plain `BoundCallOperationExpression` does not kill the fact of a by-reference parameter unless the call passes one variable more than once with a `ref`/`out` (amendment A3, #5292: `Use(path)` and `TryGetValue(path, out found)` keep the fact); in straight-line code with a bound callee, today's finer classification may keep mutable globals only when the callee is a declared function proven not to assign them, which this ADR does not define, so globals are always removed |
@@ -856,6 +857,7 @@ compatibility note. "Probe" refers to section 4.
 | R18 | The effects of the condition of an `if` statement (a call, a getter with user code, an assignment) apply to the narrowing facts before either branch is bound, as section 9 says and as a catch filter already does (R10). `var x C? = C{}; let lazy = Lazy[int32](() -> { x = nil; return 1 }); if x == nil { return 0 }; if lazy.Value > 0 { return x.Value }` (bug [#5534](https://github.com/DavidObando/gsharp/issues/5534); the same with a plain call or a source getter). The facts that the condition proves are added after its effects, so `if Check(h) && x != nil { return x.Value }` still narrows | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact in either branch | less permissive (soundness) |
 | R19 | A pattern test that calls code which can be user code is a `call`, in a statement and in a condition, and so is the test of its own operand (R18 (6)). A constant pattern counts when its emitted test calls `object.Equals(object, object)`, which calls the `Equals` of the input: an `object` input, even with a literal pattern value, or a nullable value input whose underlying type is not a primitive, an enum or `decimal`, unless the pattern value is null for every instantiation (`nil`, or the default of a reference type or of a value-type `Nullable<T>`, by `Binder.IsReferenceTypeForConstraint` and `NullableLifting.IsAnyValueTypeNullable`; a type parameter only with an explicit `class` constraint, so not `default(T)` of an unconstrained or a `T Enum struct` parameter). It is a plain method call, so it keeps the fact of a by-reference parameter (amendment A3). A list pattern over an indexable input counts when its `Length`/`Count` getter is not on the stable list of R16 and R17, or when an element that reads its value (not a slice, a discard `_`, `{}` on a value type that is not nullable, or `and`, `or` and `not` of these) calls a `this[int]` getter that is not on it. `var x object? = e; e.Clear = func() { x = nil }; if x is 1 { return x.GetHashCode() }` where `E.Equals` calls `Clear`; `ReadOnlyCollection[int32](l) is [1]` where the `Count` of the wrapped `IList[int32]` clears `x` (bug [#5593](https://github.com/DavidObando/gsharp/issues/5593)). A test that the compiler emits as a reference test, `string.Equals`, `decimal.op_Equality` or `ceq` (an `int32`, `string`, `int32?`, `nil` or floating-point constant), a `nil`, `default(object)` or `default(C)` (a source class) pattern on `object?` and a `nil` pattern on `DateTime?`, a list pattern over an array or a `List<T>`, and `[]`, `[..]`, `[_]`, `[_ and _]` or `[{}]` over a type whose indexer is not stable keep the facts | accepted, throws `NullReferenceException` at run time | GS0158 / GS0159 on the read of the fact | less permissive (soundness) |
 | R20 | A write of a source auto property that runs no user code (R14) through a setter that is not `init` keeps the facts on member paths: `if owner != nil { this.owner.A = true; this.owner.B = true }` with `let owner Owner?` and `prop A bool { get; set; }` on a class `Owner` that cannot have a subclass (#5786, #5796). A write whose location can hold the storage of a by-reference root (a struct `this`, a `ref` parameter, a `ref` local) still removes the facts on the member paths of that root: in `class Holder { prop Tok Token { get; set; } }`, `Tok.Restore(this, Token(nil))` runs `Restore` on the backing field of `Tok`, and `h.Tok = fresh` in `Restore` replaces `this.owner` (bug [#5827](https://github.com/DavidObando/gsharp/issues/5827)) | first: GS0158 on `this.owner.B`; second: GS0158 on 0.5.460, accepted after #5796 and throws `NullReferenceException` at run time | first: accepted; second: GS0158 | first: more permissive; second: the 0.5.460 result (soundness) |
+| R21 | A write of a source field that is not `let` keeps the facts on member paths, with the R20 exception for a by-reference root: `class Box { var Other int32 let Pet Animal }`, `if b.Pet !is Dog { return "" }; b.Other = 1; return b.Pet.Bark()`; `if owner != nil { this.owner.A = true; this.owner.B = true }` with `var A bool` and `var B bool` (#5786). A constructor write of a `let` field (`this.owner = second` in `init`) and a field write whose location can hold the storage of a by-reference root (`h.tok = fresh` in `Token.Restore`, called as `tok.Restore(this, ...)` in `Holder`) still remove the facts | GS0159 on `b.Pet.Bark()`; GS0158 on `this.owner.B` | accepted | more permissive |
 
 Details per row:
 
@@ -966,6 +968,56 @@ Details per row:
   before the guard) in the pin-move PR, not with `!!` (section 15). The
   rejected alternatives are in section 19a. Tests: the two shapes with a
   mutant witness (property reads classed `none`).
+- **R21 (#5786, amended 2026-11-06 by maintainer decision on #5786, option B).** R20 kept the member-bearing
+  paths at a source property write only. A field write had the same reason to keep them: a link of a stable path
+  (`SmartCastStability.IsStableField`) is a `let` field, and only a constructor or a static initializer can write
+  a `let` field. So a write of a field that is not `let` (`BoundFieldAssignmentExpression` with
+  `Field.IsReadOnly` false) stores no link and keeps the member-bearing paths. A write of a `let` field can store
+  a link, so it keeps the full rule. R20 does not change: the write is recorded for
+  `MayWriteStorageOf`, so the facts on the member paths of a by-reference root die when the field can hold the
+  storage of that root (`h.tok = fresh` where `this` names `tok`). The fact on a by-reference root itself still
+  dies on every member write (R12). An index, indirect or imported write, and a loop or backward-jump region
+  (ADR-0213), keep the full rule. Review of #5832 made the decision an allow-list, which applies to R20 too
+  (`StatementBinder.MemberWriteStorage`). (1) Fields of a type with explicit layout
+  (`@StructLayout(LayoutKind.Explicit)`) can share storage: after `if b.Text != nil` with
+  `@FieldOffset(0) let Text string?` and `@FieldOffset(0) var Other string?`, `b.Other = nil` replaces
+  `b.Text`. So a write keeps the facts only when the written member is declared in a source type of this
+  compilation whose layout is known not to be explicit (`IsSeparateStorageOwner`: a declaration, and resolved
+  layout metadata that is not explicit or no `StructLayout` annotation), and its receiver is an object, a
+  value-type variable, or a value-type field of such a receiver in such a type. An imported type, G# or CLR,
+  does not qualify: an imported G# data type is built without its layout metadata (`BuildSemanticAggregate`). A
+  by-reference value receiver (a struct `this`, a `ref` parameter or local) stores a field of its own storage, so
+  the write keeps the member facts of that root. That root can name a field of a type with explicit layout that
+  overlaps another root (`Run(ref e.a, ref e.b)` where `a` and `b` overlap), so the write removes the member facts
+  of every other root (`AssignedRootsCollector.ByReferenceWritesReach`). The R20 type test then never decides a
+  write that overlaps without containment. (2) A field of an interface has no owner
+  type in the write, so it keeps the full rule. The first access of such a field runs the interface's type
+  initializer, which runs its `shared` field initializers and can run a stored callback. So a read or a write of
+  it is user code when the interface declares an initializer that is not a literal of its field type
+  (`StaticMemberAccessRunsUserCode` reads `InterfaceInitializationRunsUserCode`, R11). This is the test of a
+  struct or class owner (#5520, `DeclaresNonLiteralSharedFieldInitializer`, set in the declaration pass by the one
+  `IsLiteralInitializerSyntax`). A `const`, a field with no initializer and a literal initializer do not count. (3) A `[MemberNotNull]` fact is on the implicit
+  field symbol (#5830, #5835). It is a fact on a member of `this`, so one decision serves it and the member paths:
+  `DropsOnMemberMutation` treats a path whose root is an implicit member as a path with member links
+  (`HasMemberLinks`) whose storage root is the receiver of the member (`EffectiveMemberRoot`). So R20 and R21
+  apply to it unchanged: a separate `var` field write of another field keeps it, a write that can replace a struct
+  `this` removes it, and a call or a full-rule write removes it. A write of the same field through any receiver
+  removes it by the member symbol that `AssignedRootsCollector` records (`AssignsRoot`, #5835). The collector has
+  no second write classification for implicit members. An increment or a decrement of a named member (`x.f++`) binds to a member write, so the
+  bound effects classify it like `x.f = v` (and a compound assignment `x.f += v` already did); the syntax walk
+  (`SyntaxMayMutateMemberPaths`) keeps its conservative answer only for an increment of any other target. A write in an operand of a condition uses the same overlap rule as a statement
+  (`OperandKillsStableMemberPath`, shared by `ClearOperandFacts` and `ClearAssignedRootsForConditionOperand`): a
+  member write that is not separate, or a separate write through another by-reference root, removes the fact on a
+  stable member path of the earlier operand (`b.a.x != nil && (u.y = nil) == nil` where `u` names a field that
+  overlaps `a`). A call in an operand still removes such a fact only when it can replace the root; a call that
+  writes a field overlapping a `let` link in a type with explicit layout is
+  [#5843](https://github.com/DavidObando/gsharp/issues/5843). The tests that pinned the old rule,
+  `Issue1180SmartCastMembersBinderTests.InterveningMemberAssignment_InvalidatesMemberPathNarrowing` and
+  `Issue1639NarrowingInvalidationFastPathTests.ActiveMemberPathNarrowing_InterveningMemberAssignment_StillInvalidates`,
+  now pin R21 (`InterveningVarFieldWrite_KeepsMemberPathNarrowing`) and an index write. New sibling cases
+  (an index write, a constructor write of the `let` link, a field write over a `ref` root) still invalidate.
+  Tests: `Issue5786FieldWriteStableMemberPathTests` and `Issue5786BareMemberWriteReceiverNarrowingTests`, with
+  mutant witnesses.
 - **R20 (#5796, #5827, amended 2026-11-06 by maintainer decision on #5786).** The `member-write` class removed
   every member-bearing path. #5796 keeps them at a write of a source property whose accessor runs no user code
   (`SourcePropertyAccessRunsUserCode` is false) through a setter that is not `init`. The soundness argument: every
@@ -1244,7 +1296,8 @@ Details per row:
 - What narrows and what paths are stable (`SmartCastStability`): locals,
   parameters, implicit fields, stable member paths; e20's global behaviour.
 - Member-bearing paths die on any call or member write (ADR-0069 #1180),
-  except at the source property writes of row R20.
+  except at the source property writes of row R20 and the `var` field
+  writes of row R21.
 - Assignment narrowing proves non-nil, never the assigned class (#4989).
 - The #2442 closure rule (e14 stays rejected).
 - `!!` is a runtime check and does not narrow later reads (e11 stays

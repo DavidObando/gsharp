@@ -127,6 +127,12 @@ class InterfaceSymbol : TypeSymbol {
 
     internal prop IsProtocol bool -> Declaration?.IsProtocol ?? false
 
+    /// Gets a value indicating whether a `shared` field has an initializer that is not a literal of its field type
+    /// (#5520, #5832). The type initializer runs it at the first static field access. The declaration pass sets it
+    /// from the syntax with the test of (cref:StructSymbol.DeclaresNonLiteralSharedFieldInitializer), before any body
+    /// is bound. A `const` and a field with no initializer do not count.
+    internal prop DeclaresNonLiteralSharedFieldInitializer bool
+
     /// Gets the abstract method signatures declared on this interface. Populated by the binder via
     /// (cref:SetMethods).
     prop Methods ImmutableArray[FunctionSymbol] {

@@ -292,9 +292,9 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 
 
 
-## Row R20 (#5796, #5827): member writes and by-reference roots
+## Rows R20 and R21 (#5796, #5827, #5786): member writes and by-reference roots
 
-[#5827](https://github.com/DavidObando/gsharp/issues/5827): a source auto-property write that runs no user code keeps the facts on member paths (#5796), except on the member paths of a by-reference root whose storage the written location can hold (`StatementBinder.StorageWriteMayOverwriteRoot`). The rows are pinned by `Issue5827ValueTypeWriteOverByReferenceRootTests` (run output or diagnostic line) and its mutant witness.
+[#5827](https://github.com/DavidObando/gsharp/issues/5827): a source auto-property write that runs no user code keeps the facts on member paths (#5796), except on the member paths of a by-reference root whose storage the written location can hold (`StatementBinder.StorageWriteMayOverwriteRoot`). Row R21 (#5786) extends the property rule to writes of fields that are not `let` (rows w9 to w12). The rows are pinned by `Issue5827ValueTypeWriteOverByReferenceRootTests`, `Issue5786FieldWriteStableMemberPathTests` and `Issue1180SmartCastMembersBinderTests` (run output or diagnostic line) and their mutant witnesses.
 
 | Probe | Shape | 0.5.460 | After #5796 | Result now |
 | --- | --- | --- | --- | --- |
@@ -306,3 +306,17 @@ d06 when another fact is in force at the loop entry; the row now gets the same r
 | w6 | w2 with the write in `if c { h.Tok = fresh }` before the read | rejected (`GS0158`) | accepted, throws `NullReferenceException` | rejected (`GS0158`) |
 | w7 | struct `this`, `h.Name = "x"` (`string?`), `h.Next = h` (a class) or `h.Count = 4` (`int32`) before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
 | w8 | class `this` (not a by-reference root), `h.Tok = fresh` or `h.Pair = pair` before `this.owner.A` | rejected (`GS0158`) | accepted | accepted, runs |
+| w9 | `class Box { var Other int32 let Pet Animal }`, `if b.Pet !is Dog { return "" }; b.Other = 1; return b.Pet.Bark()` (R21) | rejected (`GS0159`) | rejected (`GS0159`) | accepted, prints `woof` |
+| w10 | w1 with `var A bool` and `var B bool` fields instead of auto properties, bare or through `this` (R21) | rejected (`GS0158`) | rejected (`GS0158`) | accepted, runs |
+| w11 | `init(first Owner, second Owner?) { this.owner = first; if owner != nil { this.owner = second; owner.A = true } }` (R21, a `let` link) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
+| w12 | w2 with `var tok Token` in `Holder`, `tok.Restore(this, ...)` and `h.tok = fresh` (R20 over R21) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
+| w13 | `@StructLayout(LayoutKind.Explicit)`, `@FieldOffset(0) let Text string?`, `@FieldOffset(0) var Other string?`; `if b.Text != nil { b.Other = nil; return b.Text.Length }` (class and struct) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
+| w14 | `func Run(ref t T, ref u U)` over overlapping fields of an explicit-layout struct, `u.y = nil` before `t.x.Length` | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`) |
+| w15 | `interface IState { shared { var Count int32 = Fire() } }`, `Fire` runs a callback that replaces a captured `b`; `IState.Count = 1` or `let n = IState.Count` before `b.Pet.Length` | not compiled (GS0130 on `Fire` in the initializer) | write: rejected; read: accepted, throws `NullReferenceException` | rejected (`GS0158`) |
+| w16 | w13 with `Box` declared in a referenced G# library (`data class`, explicit layout) | rejected (`GS0158`) | rejected (`GS0158`) | rejected (`GS0158`); a read alone is accepted |
+| w17 | w15 with `var Count int32 = 0`, `var Count int32`, or a `const` next to an uninitialized field; `let n = IState.Count` before `b.Pet.Length` | accepted | accepted | accepted, runs |
+| w18 | `@MemberNotNull("_name")` helper, then `if owner != nil { other._name = nil; owner.A = true; return _name.Length }` (`var _name`, `let owner`; class, and a struct with a local copy) | rejected (`GS0158` on `owner.A` only; the `_name` read is accepted, #5830) | rejected (`GS0158` on `owner.A` and on `_name`, #5835) | rejected (`GS0158` on `_name` only) |
+| w19 | w18 with `other.count = 4` or `this.count = 4` (another `var` field) | rejected (`GS0158` on `owner.A`) | rejected (`GS0158` on `owner.A`) | accepted, prints `9` |
+| w20 | struct `Token` with a `[MemberNotNull]` field, `tok.Restore(this, ...)` in `Holder`, `h.tok = fresh` before `_name.Length` | accepted, throws `NullReferenceException` | accepted, throws `NullReferenceException` (a05dc428e) | rejected (`GS0158`) |
+| w21 | w19 with `this.count++`, `owner.N++`, `owner.P++` (an auto property) or `owner.N += 2` before the reads | rejected (`GS0158` on `owner.A`) | `this.count++`: accepted; the others: rejected (`GS0158` on `owner.A`) | accepted, runs |
+| w22 | explicit-layout `struct E { @FieldOffset(0) let a T; @FieldOffset(0) var c U }`, `let ref u U = b.c`; `b.a.x != nil && (u.y = nil) == nil`, the `||` form, and a direct `(b.c.y = nil)` before `b.a.x.Length` | `&&` forms: accepted, throw `NullReferenceException`; `||` form: rejected | `u` forms: rejected; direct write: accepted, throws `NullReferenceException` | rejected (`GS0158`) |

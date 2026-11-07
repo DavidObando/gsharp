@@ -3398,12 +3398,7 @@ internal partial class StatementBinder {
                 return RegionKillDecision(true, "A3(indirect-call-on-by-reference-parameter)", "R7 c")
             }
         }
-        if DropsOnMemberMutation(
-            path,
-            mayMutateMemberPaths,
-            mayMutateReferenceStorage,
-            callLike || readLike || effects.ContainsMemberWrite || effects.ContainsPointerWrite
-        ) {
+        if DropsOnMemberMutation(path, mayMutateMemberPaths, mayMutateReferenceStorage) {
             return RegionKillDecision(
                 true,
                 callRule + "(alias-class)",
