@@ -308,6 +308,24 @@ internal class ClosureEmitter {
                     continue
                 }
                 let requiredTypeParameters = CollectOwnerTypeParameters(zeroCaptureEnclosing)
+                var cachedDelegateType TypeSymbol? = nil
+                if !literal
+                    .Function
+                    .IsAsyncOrSuspending &&
+                    literal
+                    .Function
+                    .ReturnRefKind == RefKind.None &&
+                    literal
+                    .Function
+                    .Parameters
+                    .All((p ParameterSymbol) -> p.RefKind == RefKind.None && p.Type is not ByRefTypeSymbol) &&
+                    this
+                    .slotPlanner
+                    .LambdaTargetDelegateTypes
+                    .TryGetValue(literal, out var recordedTarget) &&
+                    CanEncodeCachedDelegateFieldType(recordedTarget) {
+                    cachedDelegateType = recordedTarget
+                }
                 let hostName = "<lambda_host_" + literal.Function.Name + "_" + Interlocked.Increment(&this.Counter)
                     .ToString(CultureInfo.InvariantCulture) + ">"
                 let hostInfo = this.SynthesizeDisplayClass(
@@ -319,7 +337,8 @@ internal class ClosureEmitter {
                     literal.Body,
                     hostPackage,
                     invokeName: "Invoke",
-                    requiredTypeParameters: requiredTypeParameters
+                    requiredTypeParameters: requiredTypeParameters,
+                    cachedDelegateType: cachedDelegateType
                 )
                 this.ClosureInfos[literal] = hostInfo
                 this.ClosureInfosByFunction[literal.Function] = hostInfo
@@ -527,7 +546,8 @@ internal class ClosureEmitter {
         hostPackage PackageSymbol,
         invokeName string,
         requiredTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol]),
-        excludedTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol])
+        excludedTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol]),
+        cachedDelegateType TypeSymbol? = nil
     ) ClosureInfo {
         let packageName = hostPackage?.Name ?? string.Empty
         let fieldBuilder = ImmutableArray.CreateBuilder[FieldSymbol](capturedVariables.Length)
@@ -547,6 +567,11 @@ internal class ClosureEmitter {
             isInline: false,
             isClass: true
         )
+        var cachedDelegateField FieldSymbol? = nil
+        if cachedDelegateType != nil {
+            cachedDelegateField = FieldSymbol("<>9__cached", cachedDelegateType, Accessibility.Public, isStatic: true)
+            closureClass.SetStaticFields(ImmutableArray.Create(cachedDelegateField))
+        }
         let invokeMethod = FunctionSymbol(
             name: invokeName,
             parameters: parameters,
@@ -580,7 +605,8 @@ internal class ClosureEmitter {
             body,
             requiredTypeParameters,
             excludedTypeParameters,
-            getPromotedExtras: nil
+            getPromotedExtras: nil,
+            extraType: cachedDelegateType
         )
         var constructedClass = closureClass
         if !origTPs.IsDefaultOrEmpty {
@@ -621,7 +647,8 @@ internal class ClosureEmitter {
             constructedClass,
             body,
             requiredTypeParameters,
-            excludedTypeParameters
+            excludedTypeParameters,
+            cachedDelegateField
         )
         this.ClosureInvokeToInfo[invokeMethod] = info
         return info
@@ -670,7 +697,8 @@ internal class ClosureEmitter {
                     originalBody,
                     info.RequiredTypeParameters,
                     info.ExcludedTypeParameters,
-                    getPromotedExtras
+                    getPromotedExtras,
+                    info.CachedDelegateField?.Type
                 )
                 let currentTPs = info.ClassSym.ReifiedFromTypeParameters
                 let currentCount = if currentTPs.IsDefault {
@@ -716,7 +744,8 @@ internal class ClosureEmitter {
         body BoundBlockStatement,
         requiredTypeParameters ImmutableArray[TypeParameterSymbol],
         excludedTypeParameters ImmutableArray[TypeParameterSymbol],
-        getPromotedExtras((FunctionSymbol) -> ImmutableArray[TypeParameterSymbol])?
+        getPromotedExtras((FunctionSymbol) -> ImmutableArray[TypeParameterSymbol])?,
+        extraType TypeSymbol? = nil
     ) ImmutableArray[TypeParameterSymbol] {
         let enclosingRefSink = List[TypeSymbol]()
         for captured in capturedVariables {
@@ -726,6 +755,9 @@ internal class ClosureEmitter {
             enclosingRefSink.Add(parameter.Type)
         }
         enclosingRefSink.Add(returnType)
+        if extraType != nil {
+            enclosingRefSink.Add(extraType)
+        }
         let bodyTypeParameters = List[TypeParameterSymbol]()
         LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters, getPromotedExtras)
         enclosingRefSink.AddRange(bodyTypeParameters)
@@ -770,7 +802,8 @@ internal class ClosureEmitter {
             constructedClassSym StructSymbol,
             originalBody BoundBlockStatement? = nil,
             requiredTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol]),
-            excludedTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol])
+            excludedTypeParameters ImmutableArray[TypeParameterSymbol] = default(ImmutableArray[TypeParameterSymbol]),
+            cachedDelegateField FieldSymbol? = nil
         ) {
             this.ClassSym = classSym
             this.InvokeMethod = invokeMethod
@@ -779,9 +812,14 @@ internal class ClosureEmitter {
             this.OriginalBody = originalBody
             this.RequiredTypeParameters = requiredTypeParameters
             this.ExcludedTypeParameters = excludedTypeParameters
+            this.CachedDelegateField = cachedDelegateField
         }
 
         prop ClassSym StructSymbol {
+            get;
+        }
+
+        prop CachedDelegateField FieldSymbol? {
             get;
         }
 
@@ -1009,5 +1047,48 @@ internal class ClosureEmitter {
                 default: ImmutableArray[TypeParameterSymbol].Empty
             }
         )
+
+        private func CanEncodeCachedDelegateFieldType(type TypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type is FunctionTypeSymbol fn {
+                if fn
+                    .ParameterTypes
+                    .Length > 16 ||
+                    !CanUseInSystemDelegateTypeArgument(fn.ReturnType, allowVoid: true) {
+                    return false
+                }
+                for pt in fn.ParameterTypes {
+                    if !CanUseInSystemDelegateTypeArgument(pt, allowVoid: false) {
+                        return false
+                    }
+                }
+                return true
+            }
+            if type is DelegateTypeSymbol {
+                return true
+            }
+            if type is ImportedTypeSymbol{ClrType: {} clr} && ClrTypeUtilities.IsDelegateType(clr) {
+                return clr.FullName != "System.Delegate" && clr.FullName != "System.MulticastDelegate"
+            }
+            return false
+        }
+
+        private func CanUseInSystemDelegateTypeArgument(type TypeSymbol?, allowVoid bool) bool {
+            if type == nil {
+                return false
+            }
+            if type == TypeSymbol.Void {
+                return allowVoid
+            }
+            if type is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol {
+                return false
+            }
+            if ClrTypeUtilities.IsByRefLike(type.ClrType) {
+                return false
+            }
+            return true
+        }
     }
 }

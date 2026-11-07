@@ -129,14 +129,14 @@ namespace Consumer
             isCollectible: true
         )
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let metersType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Meters")
             let factoryType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Factory")
             let make = factoryType.GetMethod("Make", BindingFlags.Public | BindingFlags.Static)!!
@@ -204,14 +204,14 @@ func UseAdd(a Meters, b Meters) Meters {
         IlVerifier.Verify(consumerPath, additionalReferences: []string{libraryPath})
         let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let factoryType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Factory")
             let make = factoryType.GetMethod("Make", BindingFlags.Public | BindingFlags.Static)!!
             let m5 object? = make.Invoke(nil, []object{5.0})
@@ -273,14 +273,14 @@ func Predicate() Expression[Func[Meters, Meters, bool]] {
         IlVerifier.Verify(consumerPath, additionalReferences: []string{libraryPath})
         let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let programType = consumerAsm.GetTypes().Single((t Type) -> t.Name == "<Program>")
             let predicate = programType.GetMethod(
                 "Predicate",
@@ -361,14 +361,14 @@ namespace Consumer
             isCollectible: true
         )
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let factoryType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Factory")
             let makeDerived = factoryType.GetMethod("MakeDerived", BindingFlags.Public | BindingFlags.Static)!!
             let d5 object? = makeDerived.Invoke(nil, []object{5})

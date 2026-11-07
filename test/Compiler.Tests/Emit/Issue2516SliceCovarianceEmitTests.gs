@@ -307,8 +307,8 @@ public static class Consumer
                 }
                 let loadContext = AssemblyLoadContext("Issue2516Interop", isCollectible: true)
                 try {
-                    loadContext.LoadFromAssemblyPath(libraryDllPath)
-                    let consumerAssembly = loadContext.LoadFromAssemblyPath(consumerDllPath)
+                    loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryDllPath)))
+                    let consumerAssembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerDllPath)))
                     let consumerType Type? = consumerAssembly.GetType("Consumer", throwOnError: true)
                     let runMethod MethodInfo? = consumerType!!.GetMethod("Run")
                     return cast[string](runMethod!!.Invoke(nil, nil))

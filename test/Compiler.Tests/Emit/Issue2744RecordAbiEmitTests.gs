@@ -197,8 +197,8 @@ public static class Probe
                 }
                 let loadContext = AssemblyLoadContext("Issue2744-" + Guid.NewGuid().ToString(), isCollectible: true)
                 try {
-                    let _ = loadContext.LoadFromAssemblyPath(libraryPath)
-                    let assembly = loadContext.LoadFromAssemblyPath(consumerPath)
+                    let _ = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
+                    let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                     return cast[string](
                         assembly.GetType("Probe", throwOnError: true)!!.GetMethod(
                             "Run",

@@ -373,7 +373,7 @@ Translated G#:
 `, printed.Values))
             let loadContext = AssemblyLoadContext(name, isCollectible: true)
             try {
-                let library = loadContext.LoadFromAssemblyPath(libraryPath)
+                let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 let references = List[MetadataReference](
                     CSharpProjectLoader.RuntimeReferences()
                 ){MetadataReference.CreateFromFile(libraryPath)}
@@ -392,7 +392,7 @@ Translated G#:
                         emitted.Diagnostics
                     )
                 )
-                let driver = loadContext.LoadFromAssemblyPath(driverPath)
+                let driver = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(driverPath)))
                 let result object? = driver.GetType("Repro.Driver")!!.GetMethod("Run")!!.Invoke(nil, nil)
                 return Assert.IsType[int32](result)
             } finally {

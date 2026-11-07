@@ -481,7 +481,7 @@ stderr:
                 isCollectible: true
             )
             try {
-                let library = loadContext.LoadFromAssemblyPath(libraryPath)
+                let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == library.GetName()
                     .Name {
                     library
@@ -489,7 +489,7 @@ stderr:
                     default(Assembly?)
                 }
                 Assert.NotEmpty(library.GetTypes())
-                Assert.NotEmpty(loadContext.LoadFromAssemblyPath(consumerPath).GetTypes())
+                Assert.NotEmpty(loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath))).GetTypes())
             } finally {
                 loadContext.Unload()
             }

@@ -1064,6 +1064,13 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         typeName
     )
 
+    internal func ReportCannotConvertViaAs(
+        location TextLocation,
+        fromType TypeSymbol,
+        toType TypeSymbol,
+        explicitHint string
+    ) -> Report(location, DiagnosticDescriptors.CannotConvertViaAs, fromType, toType, explicitHint)
+
     /// Reports that `nil` was supplied as an attribute argument for a
     /// parameter whose type is not nullable. The user should make the
     /// corresponding parameter nullable (e.g. `string?` instead of

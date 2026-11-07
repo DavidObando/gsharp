@@ -4040,6 +4040,27 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportAsRequiresReferenceOrNullableType(syntax.Location, targetType.Name)
             return BoundErrorExpression(nil)
         }
+        if NativeProtocolOperations.GetProtocol(expression.Type) == nil && NativeProtocolOperations.GetProtocol(
+            targetType
+        ) == nil &&
+            !CanConvertViaAs(expression.Type, targetType) {
+            let toCore = if targetType is NullableTypeSymbol tn {
+                PeelPlatformType(tn.UnderlyingType)
+            } else {
+                PeelPlatformType(targetType)
+            }
+            let explicitHint = if Conversion.Classify(expression.Type, toCore).Exists || Conversion.Classify(
+                expression.Type,
+                targetType
+            )
+                .Exists {
+                " An explicit conversion exists; use 'cast[$toCore](...)' or '$toCore(...)' instead."
+            } else {
+                string.Empty
+            }
+            Diagnostics.ReportCannotConvertViaAs(syntax.Location, expression.Type, targetType, explicitHint)
+            return BoundErrorExpression(syntax)
+        }
         if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
             if NativeProtocolOperations.GetProtocol(targetType) is {} targetProtocol {
                 NativeProtocolOperations.RequireCoverage(
@@ -4079,6 +4100,82 @@ internal partial class ExpressionBinder {
             cast[TypeSymbol](NullableTypeSymbol.Get(targetType))
         }
         return BoundAsExpression(syntax, expression, resultType)
+    }
+
+    private func PeelPlatformType(type TypeSymbol) TypeSymbol -> if type is PlatformTypeSymbol platform {
+        platform.UnderlyingType
+    } else {
+        type
+    }
+
+    private func CanConvertViaAs(fromType TypeSymbol?, targetType TypeSymbol?) bool {
+        if fromType == nil || targetType == nil || fromType == TypeSymbol.Error || targetType == TypeSymbol.Error {
+            return true
+        }
+        if fromType == TypeSymbol.Null {
+            return true
+        }
+        let from = PeelPlatformType(fromType)
+        let to = PeelPlatformType(targetType)
+        let fromCore = if from is NullableTypeSymbol fn {
+            PeelPlatformType(fn.UnderlyingType)
+        } else {
+            from
+        }
+        let toCore = if to is NullableTypeSymbol tn {
+            PeelPlatformType(tn.UnderlyingType)
+        } else {
+            to
+        }
+        if fromCore == TypeSymbol.Error || toCore == TypeSymbol.Error {
+            return true
+        }
+        if TypeSymbol.ContainsTypeParameter(fromCore) || TypeSymbol.ContainsTypeParameter(toCore) {
+            return true
+        }
+        if fromCore is PointerTypeSymbol || toCore is PointerTypeSymbol {
+            return false
+        }
+        if toCore is FunctionPointerTypeSymbol {
+            return fromCore is FunctionPointerTypeSymbol ||
+                fromCore == TypeSymbol.NInt ||
+                fromCore == TypeSymbol.Object ||
+                fromCore
+                .ClrType
+                ?.FullName == "System.ValueType"
+        }
+        if fromCore is FunctionPointerTypeSymbol {
+            return CanConvertViaAs(TypeSymbol.NInt, targetType)
+        }
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromCore, toCore) ||
+            Conversion.HaveIdenticalTypeArgumentContracts(fromCore, toCore) {
+            return true
+        }
+        let fromIsValue = IsNonNullableValueType(fromCore)
+        let toIsValue = IsNonNullableValueType(toCore)
+        if fromIsValue && toIsValue {
+            return false
+        }
+        if fromIsValue {
+            return HasBoxingConversionForAs(fromCore, toCore)
+        }
+        if toIsValue {
+            return HasBoxingConversionForAs(toCore, fromCore)
+        }
+        return Conversion.HasCheckedReferenceConversion(fromCore, toCore) || Conversion.HasCheckedReferenceConversion(
+            toCore,
+            fromCore
+        )
+    }
+
+    private func HasBoxingConversionForAs(valueType TypeSymbol, referenceType TypeSymbol) bool {
+        if referenceType == TypeSymbol.Object || referenceType.ClrType?.FullName == "System.ValueType" {
+            return true
+        }
+        if referenceType.ClrType?.FullName == "System.Enum" {
+            return valueType is EnumSymbol || valueType.ClrType?.IsEnum == true
+        }
+        return Conversion.IsInterfaceLikeType(referenceType) && Conversion.Classify(valueType, referenceType).IsImplicit
     }
 
     shared {

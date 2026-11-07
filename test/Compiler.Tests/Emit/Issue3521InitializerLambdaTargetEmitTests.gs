@@ -265,7 +265,7 @@ func Build() Holder3521WrongType[int32] ->
         private func Run(assemblyPath string) int32 {
             let context = AssemblyLoadContext("Issue3521-" + Guid.NewGuid().ToString("N"), isCollectible: true)
             try {
-                let assembly = context.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath))
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(Path.GetFullPath(assemblyPath))))
                 let entryPoint MethodInfo? = assembly.EntryPoint
                 Assert.NotNull(entryPoint)
                 let arguments[]?object = if entryPoint!!.GetParameters().Length == 0 {

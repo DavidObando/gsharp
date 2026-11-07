@@ -173,12 +173,12 @@ public static class AmbiguousApi
             IlVerifier.Verify(consumerPath, additionalReferences: []string{libraryPath})
             let context = AssemblyLoadContext("Issue2782" + caseName, isCollectible: true)
             context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Fixture2782" {
-                context.LoadFromAssemblyPath(libraryPath)
+                context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }
             try {
-                let assembly = context.LoadFromAssemblyPath(consumerPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 let output = Console.Out
                 using let captured = StringWriter()
                 Console.SetOut(captured)

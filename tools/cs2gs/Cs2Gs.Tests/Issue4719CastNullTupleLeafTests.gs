@@ -784,9 +784,9 @@ public static class Obj {
         Assert.Equal("15" + Environment.NewLine, executed.Output)
         let loadContext = AssemblyLoadContext("issue4719-metadata", isCollectible: true)
         try {
-            loadContext.LoadFromAssemblyPath(fixture)
+            loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(fixture)))
             let owner = Assert.Single(
-                loadContext.LoadFromAssemblyPath(assemblyPath).GetTypes(),
+                loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath))).GetTypes(),
                 (type Type) -> type.Name == "Obj"
             )
             let nullability = NullabilityInfoContext()

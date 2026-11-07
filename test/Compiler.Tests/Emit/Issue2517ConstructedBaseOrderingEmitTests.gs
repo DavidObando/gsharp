@@ -32,7 +32,7 @@ class Issue2517ConstructedBaseOrderingEmitTests {
             VerifyCSharpConsumer(assemblyPath)
             let loadContext = AssemblyLoadContext("Issue2517", isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let derived = assembly.GetType("P.Audio.Derived2517", throwOnError: true)!!
                 let middle = assembly.GetType("P.Middle2517`2", throwOnError: true)!!
                 let baseType = assembly.GetType("P.Base2517`1", throwOnError: true)!!

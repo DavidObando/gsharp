@@ -85,11 +85,8 @@ stderr:
         }
 
         func Dispose() {
-            try {
-                Directory.Delete(Directory, recursive: true)
-            } catch {
-                // Best-effort cleanup after a failed assertion or loaded assembly.
-
+            if System.IO.Directory.Exists(Directory) {
+                System.IO.Directory.Delete(Directory, recursive: true)
             }
         }
     }
@@ -132,7 +129,7 @@ func Main() {
         private func AssertIlShape(assemblyPath string) {
             let loadContext = AssemblyLoadContext("Issue3094-" + Guid.NewGuid().ToString("N"), isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let programType = assembly.GetType("i3094.<Program>", throwOnError: true)!!
                 let stackallocMethod = GetMethod(programType, "HasMagic")
                 let stackallocBody = stackallocMethod.GetMethodBody()!!

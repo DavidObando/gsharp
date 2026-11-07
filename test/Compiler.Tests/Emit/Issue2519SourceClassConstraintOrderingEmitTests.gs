@@ -36,7 +36,7 @@ class Issue2519SourceClassConstraintOrderingEmitTests {
             VerifyCSharpConsumer(assemblyPath)
             let loadContext = AssemblyLoadContext("Issue2519", isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let holderDefinition = assembly.GetType("P.Audio.Holder2519`1", throwOnError: true)!!
                 let entryType = assembly.GetType("P.Entry2519", throwOnError: true)!!
                 let concreteType = assembly.GetType("P.Concrete2519", throwOnError: true)!!

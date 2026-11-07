@@ -1115,7 +1115,7 @@ func Main() {
                 LibraryAssemblyName,
                 StringComparison.Ordinal
             ) {
-                context.LoadFromAssemblyPath(libraryPath)
+                context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }
@@ -1177,9 +1177,9 @@ func Main() {
         }
 
         private func DeleteOutputDirectory(directory string) {
-            try {
+            if Directory.Exists(directory) {
                 Directory.Delete(directory, recursive: true)
-            } catch (IOException) { }
+            }
         }
     }
 }
