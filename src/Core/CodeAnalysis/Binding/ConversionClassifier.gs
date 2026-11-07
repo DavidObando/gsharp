@@ -5715,8 +5715,12 @@ internal class ConversionClassifier {
                 sourceReturn == TypeSymbol.Error ||
                 targetReturn == TypeSymbol.Void ||
                 targetReturn == TypeSymbol.Error ||
-                TypeSymbol.ContainsTypeParameter(targetReturn) || object.ReferenceEquals(sourceReturn, targetReturn) ||
-                NullableLifting.IsAnyValueTypeNullable(sourceReturn as NullableTypeSymbol) ||
+                targetReturn
+                .ClrType
+                ?.ContainsGenericParameters == true ||
+                object.ReferenceEquals(sourceReturn, targetReturn) || NullableLifting.IsAnyValueTypeNullable(
+                sourceReturn as NullableTypeSymbol
+            ) ||
                 NullableLifting.IsAnyValueTypeNullable(targetReturn as NullableTypeSymbol) ||
                 targetReturn is NullableTypeSymbol ||
                 targetReturn is PlatformTypeSymbol {

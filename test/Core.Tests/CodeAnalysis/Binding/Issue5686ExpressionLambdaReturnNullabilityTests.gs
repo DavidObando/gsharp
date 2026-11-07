@@ -78,6 +78,7 @@ class Holder {
 func Maybe() string? -> nil
 func MaybeArgException() ArgumentException? -> nil
 func MaybeRef[T class]() T? -> nil
+func MaybeList[T]() List[T]? -> nil
 func MaybeBox() Box? -> nil
 func MaybeThing() IThing? -> nil
 func MaybeInt() int32? -> nil
@@ -405,6 +406,16 @@ func Run(token Token) {
                 "(Maybe(), x)"
             )
             yield Row(
+                "explicit-method-type-parameter-return",
+                `func Run[T class]() T -> StrictSink5686.Eval[T](() -> MaybeRef[T]())`,
+                "MaybeRef[T]()"
+            )
+            yield Row(
+                "generic-receiver-fixed-list-return",
+                `func Run[T](b StrictGenericBox5686[T]) List[T] -> b.RunList((x) -> MaybeList[T]())`,
+                "MaybeList[T]()"
+            )
+            yield Row(
                 "mixed-object-delegate-and-expression-tree-overload",
                 `func Run() object -> StrictSink5686.PickObject(() -> MaybeThing(), 1)`,
                 "MaybeThing()",
@@ -489,7 +500,8 @@ func Run(token Token) {
         return (() -> x, 0)
     }
 }`)
-            yield AcceptedRow("ok-imported-annotated-nullable-delegate", `func Run() string? {
+            yield AcceptedRow("ok-imported-annotated-nullable-delegate", `func CheckInferred[T class]() T? -> StrictSink5686.Eval(() -> MaybeRef[T]())
+func Run() string? {
     let a = StrictSink5686.TakeNullable(() -> Maybe())
     let b = StrictSink5686.TakeNullableArg((x) -> Maybe())
     let c = StrictSink5686.TakeNullableExpression(() -> Box().MaybeName)
@@ -497,7 +509,8 @@ func Run(token Token) {
     let e = StrictSink5686.PickNullableCustomDelegate((x) -> Maybe(), 1)
     let f = StrictSink5686.PickNullableCustomDelegate((x) -> Box().MaybeName, true)
     let g = StrictSink5686.UseMixedTuple(MaybeBox(), (x) -> ("ok", x))
-    return a ?? b ?? c ?? d ?? e ?? f ?? g.Item1
+    let h = CheckInferred[string]()
+    return a ?? b ?? c ?? d ?? e ?? f ?? g.Item1 ?? h
 }`)
             yield AcceptedRow("ok-fixed-expression-tree-return", `func TakeLocalExpression(e Expression[Func[int32, string]]) string? -> e.Compile()(1)
 func Run() string? {
@@ -551,9 +564,10 @@ func Run() string? {
         private func EmitLibrary() string {
             let outputDir = Path.Combine(AppContext.BaseDirectory, "Issue5686Binding")
             Directory.CreateDirectory(outputDir)
-            let libraryPath = Path.Combine(outputDir, "Lib5686_v16.dll")
+            let libraryPath = Path.Combine(outputDir, "Lib5686_v17.dll")
             const csharpSource = `#nullable enable
 using System;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
 
@@ -610,6 +624,7 @@ namespace Lib5686
         public string Run(Func<T, string> f) => "";
         public string? RunNullable(Func<T, string?> f) => null;
         public string RunWithNullableParam(Func<T, string?, string> f) => "";
+        public List<T> RunList(Func<T, List<T>> f) => new List<T>();
     }
 }
 
