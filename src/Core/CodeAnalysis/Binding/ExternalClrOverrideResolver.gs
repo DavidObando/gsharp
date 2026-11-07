@@ -883,21 +883,21 @@ internal shared class ExternalClrOverrideResolver {
             implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable {
             return false
         }
-        var valueShape = contract.StripToBareShape()
-        while valueShape is ByRefTypeSymbol || NullableLifting.IsAnyValueTypeNullable(
-            valueShape as NullableTypeSymbol
-        ) {
-            valueShape = TypeSymbol.GetWrappedTypes(valueShape).Single().StripToBareShape()
-        }
+        let valueShape = GetReturnValueShape(contract)
+        let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out var isValueTask)
         // Preserve semantic positions while recognizing tuple values through storage and async-result carriers.
-        if !TupleTypeSymbol.TryGetTupleShape(valueShape, out _) && !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
-            valueShape,
-            out _
-        ) {
+        if !TupleTypeSymbol.TryGetTupleShape(valueShape, out _) && !isTask {
             return true
         }
         let contractPositions = contract.GetElementPositions()
-        let implementationPositions = implementation.GetElementPositions()
+        if contractPositions.IsDefaultOrEmpty {
+            return true
+        }
+        let implementationPositions = if isTask {
+            GetTaskResultPositions(implementation, isValueTask)
+        } else {
+            implementation.GetElementPositions()
+        }
         if contractPositions.Length != implementationPositions.Length {
             return false
         }
@@ -907,6 +907,45 @@ internal shared class ExternalClrOverrideResolver {
             }
         }
         return true
+    }
+
+    private func GetReturnValueShape(type TypeSymbol) TypeSymbol {
+        var shape = type.StripToBareShape()
+        while shape is ByRefTypeSymbol || NullableLifting.IsAnyValueTypeNullable(shape as NullableTypeSymbol) {
+            shape = TypeSymbol.GetWrappedTypes(shape).Single().StripToBareShape()
+        }
+        return shape
+    }
+
+    private func GetTaskResultPositions(implementation TypeSymbol, isValueTask bool) ImmutableArray[TypeSymbol] {
+        if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
+            GetReturnValueShape(implementation),
+            out _,
+            out var implementationIsValueTask
+        ) &&
+            implementationIsValueTask == isValueTask {
+            return implementation.GetElementPositions()
+        }
+        var receiver = implementation
+        while receiver.ReferenceNullability is ReferenceNullabilityKind.Nullable or ReferenceNullabilityKind.Platform {
+            receiver = TypeSymbol.GetWrappedTypes(receiver).Single()
+        }
+        let imported = MemberLookup.GetProjectionReceiverImportedType(receiver)
+        let taskDefinition = if isValueTask {
+            typeof(System.Threading.Tasks.ValueTask[_])
+        } else {
+            typeof(System.Threading.Tasks.Task[_])
+        }
+        return if imported != nil && MemberLookup.TryGetSymbolicDeclaringContext(
+            imported,
+            taskDefinition,
+            out _,
+            out var arguments
+        ) {
+            arguments
+        } else {
+            ImmutableArray[TypeSymbol].Empty
+        }
     }
 
     private func PropertyTypeMatches(

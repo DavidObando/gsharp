@@ -339,6 +339,86 @@ class Issue4756TupleOverrideContractTests {
     }
 
     @Theory
+    @InlineData("nongeneric-base", true)
+    @InlineData("native-subclass", true)
+    @InlineData("generic-subclass", true)
+    @InlineData("source-subclass", true)
+    @InlineData("nullable-subclass", false)
+    func CovariantTaskOverride_ProjectsOnlyTheContractResult(shape string, accepted bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let annotation = if accepted {
+            ""
+        } else {
+            "?"
+        }
+        let value = if accepted {
+            "new Box()"
+        } else {
+            "null"
+        }
+        let nativeReturn = if shape == "nongeneric-base" {
+            "Task"
+        } else {
+            "Task<(Box Value, int Code)>"
+        }
+        let native = fixture.CompileCSharp(
+            "#nullable enable\nusing System.Threading.Tasks;\nnamespace Covariant4795;\npublic sealed class Box { }\n" +
+                "public abstract class Contract { public abstract $nativeReturn Read(); }\n" +
+                "public class RowsTask : Task<(Box$annotation Value, int Code)> {\n" +
+                "public RowsTask() : base(() => ($value, 1)) { RunSynchronously(); } }\n" +
+                "public class GenericRowsTask<T> : RowsTask { }",
+            "nativeCovariant4795"
+        )
+        let sourceReturn = switch shape {
+            case "nongeneric-base": "Task[Box]"
+            case "generic-subclass": "GenericRowsTask[Box?]"
+            case "source-subclass": "SourceTask"
+            default: "RowsTask"
+        }
+        let sourceValue = if shape == "nongeneric-base" {
+            "Task.FromResult[Box](Box())"
+        } else {
+            "$sourceReturn()"
+        }
+        let (exit, output) = fixture.TryCompile(
+            "package Covariant4795\nimport System.Threading.Tasks\nclass SourceTask : RowsTask { }\n" +
+                "class Rows : Contract {\n    override func Read() $sourceReturn -> $sourceValue\n}",
+            "Covariant4795",
+            executable: false,
+            "/r:" + native
+        )
+        let emitted = Path.Combine(fixture.Directory, "Covariant4795.dll")
+        if !accepted {
+            Assert.NotEqual(0, exit)
+            Assert.Contains("error GS0185", output, StringComparison.Ordinal)
+            Assert.Contains("Covariant4795.gs(5,19,5,", output, StringComparison.Ordinal)
+            Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
+            Assert.False(File.Exists(emitted))
+            return
+        }
+        Assert.True(exit == 0, output)
+        let check = if shape == "nongeneric-base" {
+            "task.GetAwaiter().GetResult(); if (task is not Task<Box> typed || typed.Result == null) throw new Exception(\"result\");"
+        } else {
+            "var row = task.GetAwaiter().GetResult(); if (row.Value == null || row.Code != 1) throw new Exception(\"result\");"
+        }
+        let genericCheck = if shape == "generic-subclass" {
+            "if (task.GetType().GetGenericArguments()[0] != typeof(Box)) throw new Exception(\"erasure\");"
+        } else {
+            ""
+        }
+        let consumer = fixture.CompileCSharp(
+            "using System;\nusing System.Threading.Tasks;\nusing Covariant4795;\npublic static class Consumer {\n" +
+                "public static string Run() { Contract rows = new Rows(); var task = rows.Read(); $check $genericCheck\n" +
+                "return \"covariant:base-dispatch;nonnull-result\"; }\n}",
+            "consumerCovariant4795",
+            native,
+            emitted
+        )
+        VerifyAndRun(native, emitted, consumer, "covariant:base-dispatch;nonnull-result")
+    }
+
+    @Theory
     @InlineData("Task", "disable", "", true)
     @InlineData("ValueTask", "disable", "", true)
     @InlineData("Task", "enable", "", false)
