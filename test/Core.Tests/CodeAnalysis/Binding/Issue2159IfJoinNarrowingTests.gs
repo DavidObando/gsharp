@@ -315,8 +315,9 @@ func Run(jump bool) {
     Console.WriteLine(x.Length)
 }
 `)
-        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.IsError)
-        Assert.Equal("GS0158", diagnostic.Id)
+        let jumpDiagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0636")
+        Assert.Equal("L", jumpDiagnostic.Location.Text!!.ToString(jumpDiagnostic.Location.Span))
+        let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
         Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
     }
 

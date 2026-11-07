@@ -2603,6 +2603,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Constant value '{0}' cannot be converted to '{1}' because it is NaN or out of range. Use 'unchecked(...)' to convert it with saturation."
     )
+    internal let GotoIntoNestedBlock DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0636",
+        DiagnosticSeverity.Error,
+        "A goto cannot enter a nested block at label '{0}'."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

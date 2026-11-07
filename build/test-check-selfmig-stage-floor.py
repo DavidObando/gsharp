@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +20,14 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 ratchet = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ratchet)
+
+VERIFY_SPEC = importlib.util.spec_from_file_location(
+    "verify_migration_run",
+    REPO / "build" / "verify-migration-run.py",
+)
+assert VERIFY_SPEC and VERIFY_SPEC.loader
+verify_migration = importlib.util.module_from_spec(VERIFY_SPEC)
+VERIFY_SPEC.loader.exec_module(verify_migration)
 
 
 def stages(*statuses: str) -> list[dict]:
@@ -127,13 +137,46 @@ class StageFloorTests(unittest.TestCase):
         self.assertEqual(1, status)
         self.assertIn("missing from the run", "\n".join(lines))
 
-    def test_new_red_app_is_reported_for_banking(self) -> None:
+    def test_new_red_app_absent_from_baseline_fails_closed(self) -> None:
         status, lines = ratchet.evaluate(
             {"greenApps": [], "stageFloor": {}},
             {"apps": [app("new", "passed", "failed", "skipped", "skipped")]},
         )
-        self.assertEqual(0, status)
-        self.assertIn("new: compile", "\n".join(lines))
+        output = "\n".join(lines)
+        self.assertEqual(1, status)
+        self.assertIn("new: compile", output)
+        self.assertIn("GATE: corpus app 'new' (reached 'compile') is absent from the baseline", output)
+        self.assertIn("GATE: discovered corpus app list (1 apps) differs from baseline (0 tracked apps).", output)
+
+    def test_new_green_app_absent_from_baseline_fails_closed(self) -> None:
+        status, lines = ratchet.evaluate(
+            {"greenApps": [], "stageFloor": {}},
+            {"apps": [app("new-green", "passed", "passed", "passed", "passed", succeeded=True)]},
+        )
+        output = "\n".join(lines)
+        self.assertEqual(1, status)
+        self.assertIn("GATE: corpus app 'new-green' (green) is absent from the baseline", output)
+        self.assertIn("GATE: discovered corpus app list (1 apps) differs from baseline (0 tracked apps).", output)
+
+    def test_checked_in_baseline_matches_pinned_csharp_corpus(self) -> None:
+        manifest = json.loads((REPO / "tools" / "cs2gs" / "external" / "gsharp-csharp.json").read_text(encoding="utf-8"))
+        commit = manifest["commit"]
+        has_commit = subprocess.run(
+            ["git", "-C", str(REPO), "cat-file", "-e", f"{commit}^{{commit}}"],
+            capture_output=True,
+        ).returncode == 0
+        self.assertTrue(
+            has_commit,
+            f"Pinned corpus commit {commit} ({manifest['branch']}) is not available locally; "
+            f"fetch {manifest['branch']} from {manifest['repository']} before running this check.",
+        )
+        corpus_apps = verify_migration.expected_apps(REPO, commit)
+        baseline = json.loads((REPO / "tools" / "cs2gs" / "selfmig-baseline.json").read_text(encoding="utf-8"))
+        green_apps = baseline.get("greenApps", [])
+        stage_floor = baseline.get("stageFloor", {})
+        tracked = set(green_apps) | set(stage_floor)
+        self.assertEqual(len(green_apps) + len(stage_floor), len(tracked))
+        self.assertEqual(corpus_apps, tracked)
 
     def test_green_and_stage_floor_overlap_is_invalid(self) -> None:
         status, lines = ratchet.evaluate(

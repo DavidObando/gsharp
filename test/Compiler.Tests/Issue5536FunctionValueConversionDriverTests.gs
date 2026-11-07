@@ -1635,13 +1635,15 @@ func Main() {
                 "f()"
             )
         }
-        RejectMarked(
-            fixture,
-            BranchValuePrelude + BranchValueJumpIntoBranch.Replace("@s", "s").Replace(
-                "Console.Write(t == nil)",
-                "let r string = @t\n    Console.Write(r)"
-            ),
-            "t"
+        Assert.Equal(
+            [](Code string, Line int32, Column int32){("GS0155", 16, 20), ("GS0636", 20, 14)},
+            RejectConsumerErrors(
+                fixture,
+                BranchValuePrelude + BranchValueJumpIntoBranch.Replace("@s", "s").Replace(
+                    "Console.Write(t == nil)",
+                    "let r string = t\n    Console.Write(r)"
+                )
+            )
         )
         RejectConsumer(
             fixture,

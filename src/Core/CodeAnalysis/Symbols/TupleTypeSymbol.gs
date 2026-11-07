@@ -20,12 +20,22 @@ import System.Text
 /// reference. Arity 8 and higher use the CLR's canonical
 /// `ValueTuple<T1,...,T7,TRest>` nesting.
 class TupleTypeSymbol : TypeSymbol {
+    private var withoutNames TupleTypeSymbol?
+
     private init(elementTypes ImmutableArray[TypeSymbol], elementNames ImmutableArray[string?]) : base(
         BuildName(elementTypes, elementNames),
         BuildClrType(elementTypes)
     ) {
         ElementTypes = elementTypes
         ElementNames = elementNames
+        var hasNil = false
+        for elementType in elementTypes {
+            if elementType == TypeSymbol.Null || elementType is TupleTypeSymbol nested && nested.HasNilElement {
+                hasNil = true
+                break
+            }
+        }
+        HasNilElement = hasNil
     }
 
     /// Gets the tuple element types in declaration order.
@@ -89,6 +99,9 @@ class TupleTypeSymbol : TypeSymbol {
     /// (cref:WithoutNames) results are reference-equal.
     /// @returns The (cached) unnamed same-shape tuple symbol.
     func WithoutNames() TupleTypeSymbol {
+        if withoutNames != nil {
+            return withoutNames!!
+        }
         let stripped = ImmutableArray.CreateBuilder[TypeSymbol](ElementTypes.Length)
         var changed = HasNames
         for elementType in ElementTypes {
@@ -96,25 +109,20 @@ class TupleTypeSymbol : TypeSymbol {
             stripped.Add(strippedElement)
             changed |= !object.ReferenceEquals(strippedElement, elementType)
         }
-        return if changed {
+        let result = if changed {
             Get(stripped.MoveToImmutable())
         } else {
             this
         }
+        withoutNames = result
+        return result
     }
 
     /// Issue #4316: whether an element, at any depth, is the `nil` type (`(nil, int32)`, the type of
     /// a tuple literal that holds a bare `nil`). Such a tuple has no runtime representation until it
     /// converts to a tuple whose element is a `T?`.
     internal prop HasNilElement bool {
-        get {
-            for elementType in ElementTypes {
-                if elementType == TypeSymbol.Null || elementType is TupleTypeSymbol nested && nested.HasNilElement {
-                    return true
-                }
-            }
-            return false
-        }
+        get;
     }
 
     /// Finds the zero-based position of a declared element name (ordinal,

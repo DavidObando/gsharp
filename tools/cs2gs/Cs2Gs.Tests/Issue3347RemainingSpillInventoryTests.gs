@@ -355,7 +355,10 @@ public static class C
     }
 
     @Fact
-    func CoalesceAssignmentOnNontrivialTarget_RemainsRequiredSpill() {
+    func CoalesceAssignmentOnNontrivialTarget_EmitsNativeCoalescingAssignmentWithoutSpill() {
+        // Issue #4979: G#'s native value-position `??=` (#4967) captures a
+        // non-trivial target receiver once inside the compiler, so cs2gs emits
+        // `(GetItem().Name ??= "default")` directly without a translator spill.
         let printed = Translate(`#nullable enable
 
 public sealed class Item
@@ -370,8 +373,8 @@ public static class C
     public static string Coalesce() =>
         GetItem().Name ??= "default";
 }`)
-        Assert.Contains("__spill", printed, StringComparison.Ordinal)
-        Assert.Equal(1, CountOccurrences(printed, "= GetItem()"))
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
+        Assert.Contains("(GetItem().Name ??= \"default\")", printed, StringComparison.Ordinal)
     }
 
     @Fact

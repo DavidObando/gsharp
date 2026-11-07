@@ -595,10 +595,14 @@ partial class CSharpToGSharpTranslator {
                 }
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
-                ) ||
-                    assignment
-                    .IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                ) {
                     return this.InferredInitializerOriginatesFromDefault(assignment.Right, visited)
+                }
+                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.InferredInitializerOriginatesFromDefault(coalesceAssignment.Right, visited)
                 }
                 case conditional is ConditionalExpressionSyntax {
                     return this.InferredInitializerOriginatesFromDefault(

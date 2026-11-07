@@ -58,6 +58,8 @@ def evaluate(baseline: dict, run: dict) -> tuple[int, list[str]]:
     if not isinstance(green_apps, list) or any(not isinstance(app, str) for app in green_apps):
         return 1, ["GATE: greenApps must be an array of app-id strings."]
     green_set = set(green_apps)
+    if len(green_set) != len(green_apps):
+        errors.append("GATE: greenApps contains duplicate app-id entries.")
 
     for app_id, floor in sorted(floors.items()):
         if not isinstance(app_id, str) or not isinstance(floor, str):
@@ -163,9 +165,21 @@ def evaluate(baseline: dict, run: dict) -> tuple[int, list[str]]:
 
     tracked = set(floors) | green_set
     for app_id in sorted(by_id):
-        if app_id not in reached or green[app_id] or app_id in tracked:
+        if app_id in tracked:
             continue
-        untracked.append(f"  ? {app_id}: {reached[app_id] or 'none'}")
+        if app_id in reached and not green[app_id]:
+            untracked.append(f"  ? {app_id}: {reached[app_id] or 'none'}")
+        state = "green" if green.get(app_id) else f"reached '{reached.get(app_id) or 'none'}'"
+        errors.append(
+            f"GATE: corpus app '{app_id}' ({state}) is absent from the baseline "
+            "(greenApps / stageFloor); update tools/cs2gs/selfmig-baseline.json."
+        )
+
+    if len(by_id) != len(tracked) or set(by_id) != tracked:
+        errors.append(
+            f"GATE: discovered corpus app list ({len(by_id)} apps) differs from "
+            f"baseline ({len(tracked)} tracked apps)."
+        )
 
     lines: list[str] = []
     if advanced:

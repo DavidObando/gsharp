@@ -2375,6 +2375,7 @@ above retain their longer explanations and examples.
 | GS0496 | Error | A bare source type name is ambiguous between same-named types declared by multiple imported packages.  | |
 | GS0497 | Error | A function literal is an async iterator; declare a named async iterator and reference it instead.  | |
 | GS0498 | Error | A `goto` enters a `catch` or `finally` handler from outside that handler.  | |
+| GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |

@@ -1320,19 +1320,11 @@ public static class C
         Assert.DoesNotContain("\"safe\"!!", printed, StringComparison.Ordinal)
         let expected = List[string]{
             Expected(source, "MaybeArgument()") +
-                " kind=explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string"
-        }
-        if assignment == "??=" {
-            expected.Add(
-                Expected(source, "holder.Path ??=") +
-                    " kind=explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string"
-            )
-        }
-        expected.Add(Expected(source, "MaybeArray()") + " kind=array-element | target=string?[] | slot-type=string?")
-        expected.Add(
+                " kind=explicit-type-argument | target=C.Id<string>(string) parameter 'value' | slot-type=string",
+            Expected(source, "MaybeArray()") + " kind=array-element | target=string?[] | slot-type=string?",
             Expected(source, "MaybeIntermediate()") +
                 " kind=constructed-generic-member | target=Dictionary<string, string>.this[string] | slot-type=string"
-        )
+        }
         Assert.Equal(
             expected,
             sites.Select(
@@ -1342,11 +1334,7 @@ public static class C
                 )
             )
         )
-        let argumentSites = if assignment == "=" {
-            1
-        } else {
-            2
-        }
+        let argumentSites = 1
         Assert.All(
             sites.Take(argumentSites),
             (site TranslationDiagnostic) -> Assert.Contains(
