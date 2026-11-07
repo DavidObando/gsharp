@@ -70,7 +70,7 @@ func main() {
         let d = Assert.Single(diagnostics)
         Assert.Contains("'map[K]V' type-clause spelling has been removed", d.Message)
         Assert.Contains("map[string,int32]", d.Message)
-        Assert.Contains("ADR-0104", d.Message)
+        Assert.DoesNotContain("ADR-", d.Message)
     }
 
     @Fact

@@ -64,7 +64,7 @@ interface IB {
 ` + "$declarationKind" + ` Lookup : IA, IB {
 }`))
         Assert.Equal(
-            "$displayKind 'Lookup' inherits conflicting default implementations of method 'Required' from interfaces 'IA' and 'IB'; declare an override on 'Lookup' to disambiguate (ADR-0085).",
+            "$displayKind 'Lookup' inherits conflicting default implementations of method 'Required' from interfaces 'IA' and 'IB'; declare an override on 'Lookup' to disambiguate.",
             diagnostic.Message
         )
     }
@@ -81,7 +81,7 @@ interface IB {
 ` + "$declarationKind" + ` Lookup : IContract {
 }`))
         Assert.Equal(
-            "$displayKind 'Lookup' does not implement abstract interface method 'IContract.Required', and the interface provides no default body (ADR-0085).",
+            "$displayKind 'Lookup' does not implement abstract interface method 'IContract.Required', and the interface provides no default body.",
             diagnostic.Message
         )
     }
@@ -99,7 +99,7 @@ interface IB {
 ` + "$declarationKind" + ` Lookup : IContract {
 }`))
         Assert.Equal(
-            "$displayKind 'Lookup' does not implement static-virtual interface method 'IContract.Required', and the interface provides no default body (ADR-0089).",
+            "$displayKind 'Lookup' does not implement static-virtual interface method 'IContract.Required', and the interface provides no default body.",
             diagnostic.Message
         )
     }
@@ -118,7 +118,7 @@ interface IB {
     func Required() int32 -> 11
 }`))
         Assert.Equal(
-            "$displayKind 'Lookup' declares instance method 'Required' but interface 'IContract.Required' is static-virtual; declare it inside a 'shared { ... }' block (ADR-0089).",
+            "$displayKind 'Lookup' declares instance method 'Required' but interface 'IContract.Required' is static-virtual; declare it inside a 'shared { ... }' block.",
             diagnostic.Message
         )
     }

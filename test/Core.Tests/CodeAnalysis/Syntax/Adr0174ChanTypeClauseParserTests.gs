@@ -118,7 +118,7 @@ func main() {
         let d = Assert.Single(LegacyDiagnostics(source))
         Assert.Contains("'chan T' type-clause spelling has been removed", d.Message)
         Assert.Contains("chan[int32]", d.Message)
-        Assert.Contains("ADR-0174", d.Message)
+        Assert.DoesNotContain("ADR-", d.Message)
     }
 
     @Fact

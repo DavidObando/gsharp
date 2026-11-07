@@ -767,7 +767,7 @@ internal shared class Program {
     }
 
     private func PrintUsage() {
-        Console.WriteLine("cs2gs - C# to G# migration tool (ADR-0115)")
+        Console.WriteLine("cs2gs - C# to G# migration tool")
         Console.WriteLine()
         Console.WriteLine("Usage:")
         Console.WriteLine("  cs2gs migrate [options]")
@@ -788,9 +788,7 @@ internal shared class Program {
         Console.WriteLine("  --diagnostic-run  Preserve the historical timestamped corpus/CI layout.")
         Console.WriteLine("  --app <id>        Diagnostic-run only; migrate one app (repeatable).")
         Console.WriteLine("  --gsc <path>      Override gsc.dll (default: out/bin/<Config>/Compiler/gsc.dll).")
-        Console.WriteLine(
-            "  --gsgen <path>    Override gsgen.dll (default: out/bin/<Config>/Gsgen.Cli/gsgen.dll); issue #2215."
-        )
+        Console.WriteLine("  --gsgen <path>    Override gsgen.dll (default: out/bin/<Config>/Gsgen.Cli/gsgen.dll).")
         Console.WriteLine("                    With --diagnostic-run, --out is the runs root.")
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).")
         Console.WriteLine("  --exclude <path>  Repository migration only: exclude apps whose repo-relative id")
@@ -799,11 +797,11 @@ internal shared class Program {
         Console.WriteLine("                    translation but preserve their original C# project and sources.")
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on")
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.")
-        Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).")
-        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:")
+        Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries.")
+        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list; default:")
         Console.WriteLine("                    <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.")
         Console.WriteLine("  --csharp-test-oracle <dir>  Check mirrored test projects name for name against the")
-        Console.WriteLine("                    C# case lists `cs2gs capture-test-oracle` wrote (issue #4633); the")
+        Console.WriteLine("                    C# case lists `cs2gs capture-test-oracle` wrote; the")
         Console.WriteLine(
             "                    justified differences are read from <corpus>/" +
                 TestNameParityBaseline.DefaultRelativePath
@@ -817,13 +815,13 @@ internal shared class Program {
         Console.WriteLine("                    that cannot be edited; G# has no conditional compilation.")
         Console.WriteLine("                    Applies to the Translate stage only: test-parity, orphan-source")
         Console.WriteLine("                    and analyzer-snippet translation still reject #if.")
-        Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE")
+        Console.WriteLine("  --translate-only  Repository migration only: run stage 1 across the WHOLE")
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so")
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.")
         Console.WriteLine("  --stop-after <s>  Run the stages up to and including <s> (translate, compile, ilverify or")
         Console.WriteLine("                    test-parity; default test-parity). 'compile' includes the redundant-!!")
-        Console.WriteLine("                    polish, so the migrated tree is final without running test parity")
-        Console.WriteLine("                    (issue #4853). --translate-only selects the same stages as")
+        Console.WriteLine("                    polish, so the migrated tree is final without running test parity.")
+        Console.WriteLine("                    --translate-only selects the same stages as")
         Console.WriteLine("                    --stop-after translate but does not mark apps unverified.")
         Console.WriteLine("  --sdk-version <v> Repository migration only: pin Gsharp.NET.Sdk to exactly <v> (default:")
         Console.WriteLine("                    the newest local nupkg). A local nupkg of <v> is staged into .nugs;")
@@ -832,7 +830,7 @@ internal shared class Program {
         Console.WriteLine("                    every generated project's Sdk declaration; 'global-json' writes it")
         Console.WriteLine("                    under msbuild-sdks in the root and nested global.json files")
         Console.WriteLine("                    and keeps Gsharp.NET.Sdk declarations unversioned.")
-        Console.WriteLine("  --format          Run the ADR-0179 gsfmt post-pass (default).")
+        Console.WriteLine("  --format          Run the gsfmt post-pass (default).")
         Console.WriteLine("  --no-format       Keep the printer layout instead (A/B measurement only).")
         Console.WriteLine()
         Console.WriteLine("validate options: run 'cs2gs validate --help'.")
@@ -851,9 +849,7 @@ internal shared class Program {
         Console.WriteLine("                    construct inventory, and regenerate the docs matrix + surface golden.")
         Console.WriteLine("  --repo-root <dir> Repository root (default: walk up from the current directory).")
         Console.WriteLine()
-        Console.WriteLine(
-            "A migrate run also writes report.html + summary.json into the run dir automatically (ADR-0115 §F)."
-        )
+        Console.WriteLine("A migrate run also writes report.html + summary.json into the run dir automatically.")
         Console.WriteLine()
         Console.WriteLine("Exit code is non-zero if any app fails a stage (so CI can gate).")
     }

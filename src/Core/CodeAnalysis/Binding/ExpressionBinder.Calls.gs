@@ -3500,6 +3500,9 @@ internal partial class ExpressionBinder {
                 } else {
                     rawParameterType
                 }
+                if parameterType.IsByRef {
+                    continue
+                }
                 sawAnyMatchingSlot = true
                 if parameterType.ContainsGenericParameters {
                     // Open generic delegate parameters are resolved later, once the

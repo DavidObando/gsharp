@@ -22,6 +22,7 @@ Set `core.bare` to `false` before copying or translating repository files.
 Use no checkout, no hard links, and no borrowed objects.
 Keep the source commit graph, HEAD, branches, tags, and remote-tracking refs.
 Keep source fetch and push URLs instead of the local clone path.
+Copy source-local (`local` and `worktree`, including included files) `url.<base>.insteadOf` and `url.<base>.pushInsteadOf` rewrite rules into the mirror without copying global configuration, credential helpers, credentials, or hooks.
 Use an explicit clone remote name, independent of user configuration.
 Remove only its temporary configuration, not the source refs.
 When HEAD exists, read its tree into the index without updating working files.

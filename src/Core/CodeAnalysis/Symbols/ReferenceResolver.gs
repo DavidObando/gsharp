@@ -110,6 +110,27 @@ class ReferenceResolver : IDisposable {
     // content fingerprint. Null when no index was adopted, where the names come
     // from `typeNameIndex`.
     private var warmNameIndex Dictionary[string, int32]?
+    private var utf8LiteralMembers ClrSpanTypes.Utf8LiteralMembers?
+    private var utf8LiteralResolutionCount int32
+
+    internal prop Utf8LiteralResolutionCount int32 -> Volatile.Read(&utf8LiteralResolutionCount)
+
+    internal func GetOrResolveUtf8LiteralMembers(
+        factory(ReferenceResolver) -> ClrSpanTypes.Utf8LiteralMembers
+    ) ClrSpanTypes
+        .Utf8LiteralMembers {
+        let existing = Volatile.Read(&utf8LiteralMembers)
+        if existing != nil {
+            return existing
+        }
+        let resolved = factory(this)
+        let prior = Interlocked.CompareExchange(&utf8LiteralMembers, resolved, nil)
+        if prior == nil {
+            Interlocked.Increment(&utf8LiteralResolutionCount)
+            return resolved
+        }
+        return prior
+    }
 
     /// Gets or sets the simple name of the assembly currently being compiled.
     /// When populated, imported-member lookup may honor

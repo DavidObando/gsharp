@@ -33,7 +33,7 @@ class TtlCache {
             return nil
         }
         let entry = entries[key]
-        return now() < entry.Expires ? entry.Value: nil
+        return now() < entry.Expires ? entry.Value : nil
     }
 
     func Dispose() {

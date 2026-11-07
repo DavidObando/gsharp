@@ -17,7 +17,53 @@ import System.Runtime.CompilerServices
 /// Represents a collection of code analysis diagnostics information.
 partial class DiagnosticBag : IEnumerable[Diagnostic] {
     private let diagnostics ImmutableArray[Diagnostic].Builder = ImmutableArray.CreateBuilder[Diagnostic]()
-    private let duplicateSuppressions Stack[List[Diagnostic]] = Stack[List[Diagnostic]]()
+    private let duplicateSuppressions Stack[DuplicateSuppressionFrame] = Stack[DuplicateSuppressionFrame]()
+    private var duplicateIndex Dictionary[Diagnostic, List[int32]]?
+    private var duplicateIndexCount int32
+    private var duplicateSuppressionIndexedCount int32
+
+    internal prop DuplicateSuppressionIndexedCount int32 -> duplicateSuppressionIndexedCount
+
+    private sealed class DuplicateSuppressionFrame {
+        private let upperBound int32
+        private let hasOwner bool
+        private let owner TextLocation
+        private var consumed HashSet[int32]?
+
+        init(upperBound int32, hasOwner bool, owner TextLocation) {
+            this.upperBound = upperBound
+            this.hasOwner = hasOwner
+            this.owner = owner
+        }
+
+        prop UpperBound int32 -> upperBound
+
+        func IsConsumed(index int32) bool -> consumed != nil && consumed!!.Contains(index)
+
+        func Consume(index int32) {
+            consumed ??= HashSet[int32]()
+            consumed!!.Add(index)
+        }
+
+        func MatchesOwner(diagnostic Diagnostic) bool {
+            if !hasOwner {
+                return true
+            }
+            return object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
+                diagnostic
+                .Location
+                .Span
+                .Start >= owner
+                .Span
+                .Start &&
+                diagnostic
+                .Location
+                .Span
+                .End <= owner
+                .Span
+                .End
+        }
+    }
 
     // Issue #3734: one GS0547 per (file, offset, name) — a bare imported
     // homonym is looked up many times while binding a single reference.
@@ -70,6 +116,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     }
 
     private func OnDiagnosticRemoved(removed Diagnostic) {
+        duplicateIndex = nil
+        duplicateIndexCount = 0
         reboundDiagnosticDepth.Remove(removed)
         if reboundSuppressed.Remove(removed) {
             for var i = reboundSuppressionLog.Count - 1; i >= 0; i-- {
@@ -258,29 +306,8 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// any exact duplicates emitted by the rebind.
     /// @param bind The contextual binding operation.
     /// @returns The result of [`bind`](paramref).
-    internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
-        var owner = owner
-        let existing = diagnostics.Where(
-            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && !cascadeSuppressed.Contains(
-                diagnostic
-            ) &&
-                object.ReferenceEquals(diagnostic.Location.Text, owner.Text) &&
-                diagnostic
-                .Location
-                .Span
-                .Start >= owner
-                .Span
-                .Start &&
-                diagnostic
-                .Location
-                .Span
-                .End <= owner
-                .Span
-                .End
-        )
-            .ToList()
-        return SuppressDuplicateDiagnostics(existing, bind)
-    }
+    internal func SuppressDuplicateDiagnosticsIn[T](owner TextLocation, bind() -> T) T ->
+    SuppressDuplicateDiagnostics(hasOwner: true, owner, bind)
 
     internal func ReplaceDiagnosticsIn[T](owner TextLocation, bind() -> T) T {
         RemoveDiagnosticsIn(owner)
@@ -292,20 +319,16 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param bind The analysis operation.
     /// @returns The operation result.
     internal func SuppressDuplicateDiagnostics[T](bind() -> T) T -> SuppressDuplicateDiagnostics(
-        diagnostics.Where(
-            (diagnostic Diagnostic) -> !reboundSuppressed.Contains(diagnostic) && !cascadeSuppressed.Contains(
-                diagnostic
-            )
-        )
-            .ToList(),
+        hasOwner: false,
+        default(TextLocation),
         bind
     )
 
-    private func SuppressDuplicateDiagnostics[T](existing List[Diagnostic], bind() -> T) T {
-        if existing.Count == 0 {
+    private func SuppressDuplicateDiagnostics[T](hasOwner bool, owner TextLocation, bind() -> T) T {
+        if diagnostics.Count == 0 {
             return bind()
         }
-        duplicateSuppressions.Push(existing)
+        duplicateSuppressions.Push(DuplicateSuppressionFrame(diagnostics.Count, hasOwner, owner))
         try {
             return bind()
         } finally {
@@ -383,12 +406,40 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         ) {
             cascadeSuppressed.Add(diagnostic)
         }
-        if duplicateSuppressions.TryPeek(out var existing) {
-            for var i = 0; i < existing.Count; i++ {
-                let candidate = existing[i]
-                if !reboundSuppressed.Contains(candidate) && AreEquivalent(candidate, diagnostic) {
-                    existing.RemoveAt(i)
-                    return
+        if duplicateSuppressions.TryPeek(out var frame) {
+            let targetCount = Math.Min(frame.UpperBound, diagnostics.Count)
+            if duplicateIndex == nil {
+                duplicateIndex = Dictionary[Diagnostic, List[int32]](EquivalenceComparer)
+                duplicateIndexCount = 0
+            }
+            while duplicateIndexCount < targetCount {
+                let index = duplicateIndexCount
+                let existing = diagnostics[index]
+                if !cascadeSuppressed.Contains(existing) {
+                    if !duplicateIndex!!.TryGetValue(existing, out var bucket) {
+                        bucket = List[int32](1)
+                        duplicateIndex!![existing] = bucket
+                    }
+                    bucket.Add(index)
+                }
+                duplicateIndexCount++
+                duplicateSuppressionIndexedCount++
+            }
+            if duplicateIndex!!.TryGetValue(diagnostic, out var matchingIndices) {
+                for var i = 0; i < matchingIndices.Count; i++ {
+                    let index = matchingIndices[i]
+                    if index >= targetCount {
+                        break
+                    }
+                    if frame.IsConsumed(index) {
+                        continue
+                    }
+                    let candidate = diagnostics[index]
+                    if !reboundSuppressed.Contains(candidate) && !cascadeSuppressed.Contains(candidate) &&
+                        frame.MatchesOwner(candidate) && AreEquivalent(candidate, diagnostic) {
+                        frame.Consume(index)
+                        return
+                    }
                 }
             }
         }

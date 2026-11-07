@@ -642,8 +642,42 @@ class Lexer {
             )
         }
         position += 3
-        let decoded = StringBuilder()
-        let sourceSpans = List[TextSpan]()
+        let bytes = ImmutableArray.CreateBuilder[uint8]()
+        var hasPendingHigh = false
+        var pendingHigh char = '\u0000'
+        var pendingHighSpan = default(TextSpan)
+        let FlushPendingHigh = func () {
+            if !hasPendingHigh {
+                return
+            }
+            Diagnostics.ReportInvalidUtf8StringLiteral(
+                TextLocation(text, pendingHighSpan),
+                "The decoded text contains an unpaired UTF-16 surrogate."
+            )
+            hasPendingHigh = false
+        }
+        let AppendUtf16Unit = func (unit char, unitSpan TextSpan) {
+            if hasPendingHigh {
+                if char.IsLowSurrogate(unit) {
+                    AppendUtf8Scalar(bytes, char.ConvertToUtf32(pendingHigh, unit))
+                    hasPendingHigh = false
+                    return
+                }
+                FlushPendingHigh()
+            }
+            if char.IsHighSurrogate(unit) {
+                hasPendingHigh = true
+                pendingHigh = unit
+                pendingHighSpan = unitSpan
+            } else if char.IsLowSurrogate(unit) {
+                Diagnostics.ReportInvalidUtf8StringLiteral(
+                    TextLocation(text, unitSpan),
+                    "The decoded text contains an unpaired UTF-16 surrogate."
+                )
+            } else {
+                AppendUtf8Scalar(bytes, int32(unit))
+            }
+        }
         var terminated = false
         while position < end && Current != '\r' && Current != '\n' {
             if Current == '"' {
@@ -652,35 +686,57 @@ class Lexer {
                 break
             }
             let pieceStart = position
-            var piece = Current.ToString()
+            let currentChar = Current
             position++
-            if piece == "\\" {
-                if position >= end || Current == '\r' || Current == '\n' {
-                    break
+            if currentChar != '\\' {
+                AppendUtf16Unit(currentChar, TextSpan(pieceStart, 1))
+                continue
+            }
+            if position >= end || Current == '\r' || Current == '\n' {
+                break
+            }
+            let escape = Current
+            position++
+            let pieceSpan = () -> TextSpan(pieceStart, position - pieceStart)
+            switch escape {
+                case '0' {
+                    AppendUtf16Unit('\0', pieceSpan())
                 }
-                let escape = Current
-                position++
-                piece = switch escape {
-                    case '0': "\0"
-                    case 'a': "\a"
-                    case 'b': "\b"
-                    case 'f': "\f"
-                    case 'n': "\n"
-                    case 'r': "\r"
-                    case 't': "\t"
-                    case 'v': "\v"
-                    case '\'': "'"
-                    case '"': "\""
-                    case '\\': "\\"
-                    default: ""
+                case 'a' {
+                    AppendUtf16Unit('\a', pieceSpan())
                 }
-                if escape is 'x' or 'u' or 'U' {
-                    let maximum = if escape == 'x' {
-                        4
-                    } else if escape == 'u' {
-                        4
-                    } else {
+                case 'b' {
+                    AppendUtf16Unit('\b', pieceSpan())
+                }
+                case 'f' {
+                    AppendUtf16Unit('\f', pieceSpan())
+                }
+                case 'n' {
+                    AppendUtf16Unit('\n', pieceSpan())
+                }
+                case 'r' {
+                    AppendUtf16Unit('\r', pieceSpan())
+                }
+                case 't' {
+                    AppendUtf16Unit('\t', pieceSpan())
+                }
+                case 'v' {
+                    AppendUtf16Unit('\v', pieceSpan())
+                }
+                case '\'' {
+                    AppendUtf16Unit('\'', pieceSpan())
+                }
+                case '"' {
+                    AppendUtf16Unit('"', pieceSpan())
+                }
+                case '\\' {
+                    AppendUtf16Unit('\\', pieceSpan())
+                }
+                case 'x', 'u', 'U' {
+                    let maximum = if escape == 'U' {
                         8
+                    } else {
+                        4
                     }
                     let minimum = if escape == 'x' {
                         1
@@ -694,53 +750,35 @@ class Lexer {
                         digits++
                         position++
                     }
+                    let span = pieceSpan()
                     if digits < minimum {
                         Diagnostics.ReportInvalidUtf8StringLiteral(
-                            TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
+                            TextLocation(text, span),
                             "The escape requires $minimum to $maximum hexadecimal digits."
                         )
                     } else if escape == 'U' {
                         if scalar > 0x10FFFF || (scalar >= 0xD800 && scalar <= 0xDFFF) {
                             Diagnostics.ReportInvalidUtf8StringLiteral(
-                                TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
+                                TextLocation(text, span),
                                 "Expected a Unicode scalar from U+0000 through U+10FFFF."
                             )
                         } else {
-                            piece = char.ConvertFromUtf32(int32(scalar))
+                            FlushPendingHigh()
+                            AppendUtf8Scalar(bytes, int32(scalar))
                         }
                     } else {
-                        piece = char(scalar).ToString()
+                        AppendUtf16Unit(char(scalar), span)
                     }
-                } else if piece.Length == 0 {
-                    Diagnostics.ReportInvalidUtf8StringLiteral(
-                        TextLocation(text, TextSpan(pieceStart, position - pieceStart)),
-                        "Unknown text escape."
-                    )
                 }
-            }
-            decoded.Append(piece)
-            for var index = 0; index < piece.Length; index++ {
-                sourceSpans.Add(TextSpan(pieceStart, position - pieceStart))
+                default {
+                    Diagnostics.ReportInvalidUtf8StringLiteral(TextLocation(text, pieceSpan()), "Unknown text escape.")
+                }
             }
         }
         if !terminated {
             Diagnostics.ReportUnterminatedString(TextLocation(text, TextSpan(start, 3)))
         }
-        let bytes = ImmutableArray.CreateBuilder[uint8]()
-        for var index = 0; index < decoded.Length; index++ {
-            let unit = decoded[index]
-            if char.IsHighSurrogate(unit) && index + 1 < decoded.Length && char.IsLowSurrogate(decoded[index + 1]) {
-                AppendUtf8Scalar(bytes, char.ConvertToUtf32(unit, decoded[index + 1]))
-                index++
-            } else if char.IsSurrogate(unit) {
-                Diagnostics.ReportInvalidUtf8StringLiteral(
-                    TextLocation(text, sourceSpans[index]),
-                    "The decoded text contains an unpaired UTF-16 surrogate."
-                )
-            } else {
-                AppendUtf8Scalar(bytes, int32(unit))
-            }
-        }
+        FlushPendingHigh()
         kind = SyntaxKind.Utf8StringToken
         value = bytes.ToImmutable()
     }

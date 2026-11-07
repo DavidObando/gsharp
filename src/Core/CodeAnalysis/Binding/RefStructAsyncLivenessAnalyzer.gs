@@ -68,6 +68,8 @@ import System.Linq
 /// *through* an alias (`alias = 42`) is a use of the alias, not a kill
 /// of it, unlike overwriting a by-ref-like value local outright.
 internal shared class RefStructAsyncLivenessAnalyzer {
+    internal var LastAnalyzedProgramSuppressionIndexedCount int32
+
     /// Completes deferred operand checks after inference for every function body and initializer root.
     /// @param functions The rewritten function bodies in source order.
     /// @param statement The complete top-level body, including library initializers.
@@ -130,6 +132,7 @@ internal shared class RefStructAsyncLivenessAnalyzer {
                 VisitRoot(initializer)
             }
         }
+        LastAnalyzedProgramSuppressionIndexedCount = bag.DuplicateSuppressionIndexedCount
         diagnostics.AddRange(bag.Skip(existingCount))
     }
 

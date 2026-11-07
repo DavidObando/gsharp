@@ -55,7 +55,7 @@ func Read[T I[string]](w T) int32 {
 Read(C{})`
         let output = RunSubmission(Source)
         Assert.Contains(
-            "error GS0333: Constrained static access 'sizeof' on type parameter 'T' must name a static-virtual member declared by an interface constraint (ADR-0089).",
+            "error GS0333: Constrained static access 'sizeof' on type parameter 'T' must name a static-virtual member declared by an interface constraint.",
             output,
             StringComparison.Ordinal
         )

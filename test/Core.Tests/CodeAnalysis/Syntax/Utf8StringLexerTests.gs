@@ -62,6 +62,12 @@ class Utf8StringLexerTests {
         Assert.Equal("GS0632", diagnostic.Id)
         Assert.Equal(3, diagnostic.Location.Span.Start)
         Assert.Equal(1, diagnostic.Location.Span.Length)
+
+        SyntaxTree.ParseTokens(`u8"\uD800\U0001F600"`, out var highBeforeSupplementary)
+        let highDiag = Assert.Single(highBeforeSupplementary)
+        Assert.Equal("GS0632", highDiag.Id)
+        Assert.Equal(3, highDiag.Location.Span.Start)
+        Assert.Equal(6, highDiag.Location.Span.Length)
     }
 
     @Fact

@@ -34,12 +34,17 @@ open class Issue1756Tests {
     @Theory
     @InlineData("migrate", "--help")
     @InlineData("migrate", "-h")
+    @InlineData("validate", "--help")
+    @InlineData("capture-test-oracle", "--help")
     @InlineData("report", "--help")
     @InlineData("report", "-h")
     async func VerbHelp_ExitsZero_AndPrintsUsage(verb string, helpFlag string) {
         let (exitCode, stdout, stderr) = await RunMainAsync(verb, helpFlag)
         Assert.Equal(0, exitCode)
         Assert.Contains("Usage:", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("ADR-", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("issue #", stdout, StringComparison.Ordinal)
+        Assert.DoesNotContain("nightly mode", stdout, StringComparison.Ordinal)
         Assert.Empty(stderr)
     }
 
