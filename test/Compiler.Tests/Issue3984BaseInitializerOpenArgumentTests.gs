@@ -400,7 +400,7 @@ Console.WriteLine(Seq[int32]([]int32{1, 2, 3}).Tag)`, []string{"seq:3"}}
 import System
 import Interop
 
-class Holder[K, V] : MapHolder[K, V] {
+class Holder[K notnull, V] : MapHolder[K, V] {
     init(entries map[K, V]) : base(entries) {
     }
 }
@@ -566,7 +566,7 @@ import System
 import System.Collections.Generic
 import Interop
 
-class Holder[K, V] : MapHolder[K, V] {
+class Holder[K notnull, V] : MapHolder[K, V] {
     init(entries Dictionary[K, V]) : base(entries) {
     }
 }

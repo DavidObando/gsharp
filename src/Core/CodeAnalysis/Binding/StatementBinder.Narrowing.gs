@@ -1760,7 +1760,12 @@ internal partial class StatementBinder {
             return false
         }
         if !AssignmentTypePreservesNarrowing(assign.AssignedValueType, u) &&
-            !NestedAssignmentPreservesNarrowing(assign.Expression, u) {
+            !NestedAssignmentPreservesNarrowing(assign.Expression, u) &&
+            !(
+            u is TypeParameterSymbol &&
+                assign.AssignedValueType == u &&
+                ExpressionBinder.IsProvenNonNullTypeParameterExpression(assign.Expression)
+        ) {
             return false
         }
         variable = assign.Variable
@@ -2054,7 +2059,10 @@ internal partial class StatementBinder {
     private func AssignmentPreservesNarrowing(assignment BoundAssignmentExpression, narrowedType TypeSymbol) bool {
         // Loop back-edges need stronger proof than straight-line issue #1123
         // narrowing because the assigned value feeds a later iteration.
-        return AssignmentTypePreservesNarrowing(assignment.AssignedValueType, narrowedType) &&
+        return (
+            AssignmentTypePreservesNarrowing(assignment.AssignedValueType, narrowedType) ||
+                (narrowedType is TypeParameterSymbol && assignment.AssignedValueType == narrowedType)
+        ) &&
             IsDefinitelyNonNullValue(assignment.Expression)
     }
 
@@ -2067,11 +2075,28 @@ internal partial class StatementBinder {
             case _ is BoundConstructorCallExpression: true
             case _ is BoundClrConstructorCallExpression: true
             case _ is BoundTypeParameterConstructionExpression: true
+            case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}}: true
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce:
+            binary.Right.Type == TypeSymbol.Never || IsDefinitelyNonNullValue(binary.Right)
             case literal is BoundLiteralExpression: literal.Value != nil
-            case BoundVariableExpression{NarrowedType: not nil} variable when variable
-                .Variable
-                .Type is NullableTypeSymbol &&
+            case BoundVariableExpression{NarrowedType: not nil} variable when(
+                variable.Variable.Type is NullableTypeSymbol || variable.Variable.Type is TypeParameterSymbol
+            ) &&
                 !(variable.NarrowedType is NullableTypeSymbol): true
+            case BoundFieldAccessExpression{NarrowedType: not nil} field when !(
+                field.NarrowedType is NullableTypeSymbol
+            ): true
+            case BoundPropertyAccessExpression{NarrowedType: not nil} prop when !(
+                prop.NarrowedType is NullableTypeSymbol
+            ): true
+            case BoundClrPropertyAccessExpression{NarrowedType: not nil} clrProp when !(
+                clrProp.NarrowedType is NullableTypeSymbol
+            ): true
+            case _ when SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) &&
+                path != nil &&
+                binderCtx
+                .NarrowedVariables
+                .Query(path) is {} pathNarrowed && !(pathNarrowed is NullableTypeSymbol): true
             case variable is BoundVariableExpression: IsDefinitelyNonNullVariable(variable.Variable)
             case call is BoundCallExpression: FunctionReturnsDefinitelyNonNull(call.Function)
             default: false
@@ -10290,7 +10315,8 @@ internal partial class StatementBinder {
             if assignedType == nil ||
                 assignedType == TypeSymbol.Error ||
                 assignedType == TypeSymbol.Null ||
-                assignedType is NullableTypeSymbol {
+                assignedType is NullableTypeSymbol ||
+                (assignedType is TypeParameterSymbol assignedTp && !Binder.SatisfiesNotNullConstraint(assignedTp)) {
                 return false
             }
             let conversion = Conversion.Classify(assignedType, narrowedType)
@@ -10365,7 +10391,14 @@ internal partial class StatementBinder {
             }
             if inner.Type is not NullableTypeSymbol &&
                 inner.Type is not PlatformTypeSymbol &&
-                AssignmentTypePreservesNarrowing(inner.Type, narrowedType) {
+                (
+                AssignmentTypePreservesNarrowing(inner.Type, narrowedType) ||
+                    (
+                    narrowedType is TypeParameterSymbol &&
+                        inner.Type == narrowedType &&
+                        ExpressionBinder.IsProvenNonNullTypeParameterExpression(inner)
+                )
+            ) {
                 return true
             }
             var innerValue = inner
@@ -10374,7 +10407,14 @@ internal partial class StatementBinder {
             }
             return (
                 innerValue.Type is not PlatformTypeSymbol &&
-                    AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType)
+                    (
+                    AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType) ||
+                        (
+                        narrowedType is TypeParameterSymbol &&
+                            innerValue.Type == narrowedType &&
+                            ExpressionBinder.IsProvenNonNullTypeParameterExpression(innerValue)
+                    )
+                )
             ) ||
                 NestedAssignmentPreservesNarrowing(innerValue, narrowedType)
         }

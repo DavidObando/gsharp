@@ -2214,6 +2214,28 @@ internal partial class ExpressionBinder {
 
     private func LookUpNarrowedType(path AccessPath) TypeSymbol? -> binderCtx.NarrowedVariables.Query(path)
 
+    internal func HasProvenNonNullTypeParameterReceiver(receiver BoundExpression?, tp TypeParameterSymbol) bool {
+        if Binder.SatisfiesNotNullConstraint(tp) {
+            return true
+        }
+        if IsProvenNonNullTypeParameterExpression(receiver) {
+            return true
+        }
+        var current = receiver
+        while current is BoundConversionExpression conv && StatementBinder.IsFlowTransparentConversion(conv) {
+            current = conv.Expression
+        }
+        if current is BoundVariableExpression varExpr && TryGetNarrowedType(varExpr.Variable) != nil {
+            return true
+        }
+        if current != nil && SmartCastStability.TryGetStableMemberPath(current, out var path, out _) &&
+            path != nil &&
+            LookUpNarrowedType(path) != nil {
+            return true
+        }
+        return false
+    }
+
     /// ADR-0069 addendum / issue #1180: if [`node`](paramref) reads a
     /// stable member-access path that an active smart-cast frame has narrowed,
     /// returns a copy of the read carrying the narrowed type so downstream
@@ -2350,7 +2372,7 @@ internal partial class ExpressionBinder {
             clrAccess.StaticContainerType,
             clrAccess.ConstrainedReceiverTypeParameter,
             clrAccess.ConstrainedInterfaceType
-        )
+        ){NarrowedType = narrowedType}
         return BuildNarrowedRead(clrBaseRead, clrAccess.Type, clrNarrowed, makeNarrowedClrProperty)
     }
 
@@ -5527,7 +5549,11 @@ internal partial class ExpressionBinder {
             narrowedType TypeSymbol?,
             makeNarrowedNode(TypeSymbol) -> BoundExpression
         ) BoundExpression {
-            if narrowedType == nil || narrowedType == declaredType {
+            if narrowedType == nil ||
+                (
+                narrowedType == declaredType &&
+                    !(declaredType is TypeParameterSymbol tp && !Binder.SatisfiesNotNullConstraint(tp))
+            ) {
                 return bareRead
             }
             // A value-type `Nullable<T>` narrowed to its (value-type) underlying `T`
@@ -5553,6 +5579,38 @@ internal partial class ExpressionBinder {
             let read = makeNarrowedNode(narrowedType)
             read.AnchorSyntax(bareRead.Syntax)
             return read
+        }
+
+        internal func IsProvenNonNullTypeParameterExpression(receiver BoundExpression?) bool {
+            var current = receiver
+            while current is BoundConversionExpression conv && StatementBinder.IsFlowTransparentConversion(conv) {
+                current = conv.Expression
+            }
+            if current == nil {
+                return false
+            }
+            return switch current {
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}}: true
+                case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce:
+                binary.Right.Type == TypeSymbol.Never || IsProvenNonNullTypeParameterExpression(binary.Right)
+                case varExpr is BoundVariableExpression: varExpr.NarrowedType != nil ||
+                    varExpr
+                    .Variable
+                    .HasDefinitelyNonNullValue ||
+                    (
+                    varExpr.Variable is LocalVariableSymbol local && local.Name.StartsWith(
+                        "$$ncap_",
+                        StringComparison.Ordinal
+                    )
+                )
+                case fieldAccess is BoundFieldAccessExpression: fieldAccess.NarrowedType != nil
+                case propAccess is BoundPropertyAccessExpression: propAccess.NarrowedType != nil
+                case clrAccess is BoundClrPropertyAccessExpression: clrAccess.NarrowedType != nil
+                case _ is BoundConstructorCallExpression or
+                    BoundClrConstructorCallExpression or
+                    BoundTypeParameterConstructionExpression: true
+                default: false
+            }
         }
 
         /// Issue #3705 (family 3): whether a structural function type has exactly

@@ -2381,7 +2381,10 @@ internal partial class ExpressionBinder {
             // constrained type parameter is threaded into the bound call so the
             // emitter produces a verifiable `constrained. !!T  callvirt` sequence
             // rather than a bare `callvirt` on the unboxed value.
-            if receiver != nil && receiver.Type is TypeParameterSymbol tpRecv && tpRecv.InterfaceConstraint != nil {
+            if receiver != nil &&
+                receiver.Type is TypeParameterSymbol tpRecv &&
+                tpRecv.InterfaceConstraint != nil &&
+                HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) {
                 let tpOverloads = MemberLookup.CollectSourceInstanceMethods(tpRecv, methodName)
                 if tpOverloads.Length > 0 {
                     let tpIfaceMethod FunctionSymbol? = overloads.SelectInstanceOverloadOrReport(
@@ -2416,7 +2419,9 @@ internal partial class ExpressionBinder {
             // the interface paths the method token is the class's own MethodDef
             // (resolved by EmitUserInstanceCall when the constraint type is not
             // an interface), so no interface MemberRef is produced.
-            if receiver != nil && receiver.Type is TypeParameterSymbol tpClassRecv {
+            if receiver != nil &&
+                receiver.Type is TypeParameterSymbol tpClassRecv &&
+                HasProvenNonNullTypeParameterReceiver(receiver, tpClassRecv) {
                 let tpClassConstraint StructSymbol? = tpClassRecv.ClassConstraint as StructSymbol
                 if tpClassConstraint != nil {
                     let tpClassOverloads = MemberLookup.CollectSourceInstanceMethods(tpClassRecv, methodName)
@@ -2448,6 +2453,7 @@ internal partial class ExpressionBinder {
             // constrained call because the receiver's stack type remains !!T.
             if receiver != nil &&
                 receiver.Type is TypeParameterSymbol tpClrRecv &&
+                HasProvenNonNullTypeParameterReceiver(receiver, tpClrRecv) &&
                 (tpClrRecv.ClrInterfaceConstraint != nil || tpClrRecv.ClassConstraint?.ClrType != nil) &&
                 TryBindConstrainedClrCall(
                 receiver,
@@ -2667,6 +2673,10 @@ internal partial class ExpressionBinder {
             // reference type parameters alike without a manual box.
             if receiver != nil &&
                 receiver.Type is TypeParameterSymbol tpObjRecv &&
+                (
+                !Binder.HasNullableConstraintWithoutNotNull(tpObjRecv) ||
+                    HasProvenNonNullTypeParameterReceiver(receiver, tpObjRecv)
+            ) &&
                 TryBindConstrainedObjectMemberCall(
                 receiver,
                 tpObjRecv,
@@ -2697,16 +2707,30 @@ internal partial class ExpressionBinder {
                 return ifaceObjectCall!!
             }
             let effectiveReceiverSyntax SyntaxNode? = receiverSyntax ?? receiver?.Syntax
-            if receiver?.Type is NullableTypeSymbol nullableRecvType &&
-                IsApplicableNullableUnderlyingCall(
-                receiver!!,
-                nullableRecvType.UnderlyingType,
-                methodName,
-                arguments,
-                ce,
-                argumentNames,
-                explicitTypeArgs,
-                typeArgSymbols
+            if (
+                receiver?.Type is NullableTypeSymbol nullableRecvType &&
+                    IsApplicableNullableUnderlyingCall(
+                    receiver!!,
+                    nullableRecvType.UnderlyingType,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    explicitTypeArgs,
+                    typeArgSymbols
+                ) ||
+                    receiver?.Type is TypeParameterSymbol nullableTpRecv &&
+                    !HasProvenNonNullTypeParameterReceiver(receiver!!, nullableTpRecv) &&
+                    IsApplicableNullableUnderlyingCall(
+                    receiver!!,
+                    nullableTpRecv,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    explicitTypeArgs,
+                    typeArgSymbols
+                )
             ) &&
                 effectiveReceiverSyntax != nil {
                 Diagnostics.ReportNilableReceiverCall(
@@ -3051,7 +3075,7 @@ internal partial class ExpressionBinder {
                         refinedArgs.Length,
                         recoverInstMethodGroupSlots
                     )
-                    return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                         closed,
                         typeArgSymbols,
                         refinedArgs,
@@ -3062,6 +3086,11 @@ internal partial class ExpressionBinder {
                             cast[IReadOnlyList[string?]](argumentNames)
                         },
                         recoverInstMethodGroupSlots
+                    )
+                    return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(
+                        effectiveReceiverType,
+                        closed,
+                        recovered
                     )
                 }
                 var resolution = ClrOverloadResolution.Resolve(

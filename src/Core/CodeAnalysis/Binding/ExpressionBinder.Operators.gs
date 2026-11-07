@@ -182,7 +182,8 @@ internal partial class ExpressionBinder {
             operand.Type != nil &&
             operand.Type != TypeSymbol.Error &&
             !(operand.Type is NullableTypeSymbol) &&
-            !(operand.Type is PlatformTypeSymbol) {
+            !(operand.Type is PlatformTypeSymbol) &&
+            !(operand.Type is TypeParameterSymbol tpOperand && !Binder.SatisfiesNotNullConstraint(tpOperand)) {
             Diagnostics.ReportRedundantNullAssertion(operatorToken.Location)
         }
     }

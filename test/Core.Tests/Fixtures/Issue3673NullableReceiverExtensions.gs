@@ -26,7 +26,7 @@ func (self T?) UnwrapOrThrow3673[T struct](message string) T -> self ?? throw In
 /// @param message The exception message used when the receiver is null.
 /// @returns The receiver's value when present.
 @ExtensionOwner(typeof(Issue3673NullableReceiverExtensions))
-func (self T) UnwrapOrThrow3673[T class](message string) T -> self ?? throw InvalidOperationException(message)
+func (self T?) UnwrapOrThrow3673[T class](message string) T -> self ?? throw InvalidOperationException(message)
 
 /// Returns the receiver's value, or [`fallback`](paramref); `T` is also inferable from the argument.
 /// @typeparam T The underlying value type.

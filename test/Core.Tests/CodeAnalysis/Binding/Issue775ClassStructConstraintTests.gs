@@ -174,6 +174,21 @@ func Bad[T struct init()](x T) T { return x }
     }
 
     @Fact
+    func ClassAndNullableClassCombo_RejectedAsGS0361WithoutCascadingParseErrors() {
+        let first = Evaluate("func Bad[T class class?](x T) T { return x }")
+        let firstDiag = Assert.Single(first.Diagnostics)
+        Assert.Equal("GS0361", firstDiag.Id)
+        Assert.Contains("'class'", firstDiag.Message)
+        Assert.Contains("'class?'", firstDiag.Message)
+
+        let second = Evaluate("func Bad[T class? class](x T) T { return x }")
+        let secondDiag = Assert.Single(second.Diagnostics)
+        Assert.Equal("GS0361", secondDiag.Id)
+        Assert.Contains("'class?'", secondDiag.Message)
+        Assert.Contains("'class'", secondDiag.Message)
+    }
+
+    @Fact
     func InterfaceAndClassConstraint_Combine_Accepted() {
         let source = `
 sealed interface IShape {

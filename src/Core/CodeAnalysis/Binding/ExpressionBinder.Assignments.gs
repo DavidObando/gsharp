@@ -1303,7 +1303,11 @@ internal partial class ExpressionBinder {
         // `box !!T; callvirt set_X` (properties) — mirroring the read path's
         // `box !!T; ldfld`/`callvirt get_X`.
         if assignmentReceiverType is TypeParameterSymbol tpVarType {
-            if tpVarType.ClassConstraint is StructSymbol tpClassConstraint {
+            if !HasProvenNonNullTypeParameterReceiver(assignmentReceiver, tpVarType) {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText)
+                return BoundErrorExpression(nil)
+            }
+            if tpVarType.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
                 let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
                     tpClassConstraint,
                     syntax.FieldIdentifier.ValueText,
@@ -4648,7 +4652,11 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if receiverType is TypeParameterSymbol tpReceiver {
-            if tpReceiver.ClassConstraint is StructSymbol tpClassConstraint {
+            if !HasProvenNonNullTypeParameterReceiver(receiver, tpReceiver) {
+                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
+                return BoundErrorExpression(nil)
+            }
+            if tpReceiver.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
                 let hasNearestTpProperty = TypeMemberModel.TryGetProperty(
                     tpClassConstraint,
                     fieldName,

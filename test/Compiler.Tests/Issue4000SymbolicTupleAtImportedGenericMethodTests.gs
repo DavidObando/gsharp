@@ -170,7 +170,7 @@ public static class Probes
 import System
 import Interop
 
-func countMap[K, V](entries map[K, V]) int32 {
+func countMap[K notnull, V](entries map[K, V]) int32 {
     return Probes.CountEntries[K, V](entries)
 }
 

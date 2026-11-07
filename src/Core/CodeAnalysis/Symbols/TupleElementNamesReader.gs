@@ -40,6 +40,10 @@ shared class TupleElementNamesReader {
 
     internal func ApplyNames(mapped TypeSymbol, provider ICustomAttributeProvider, layoutType Type?) TypeSymbol {
         let names = TryGetNames(provider)
+        return ApplyNames(mapped, names, layoutType)
+    }
+
+    internal func ApplyNames(mapped TypeSymbol, names ImmutableArray[string?], layoutType Type? = nil) TypeSymbol {
         if names.IsDefaultOrEmpty {
             return mapped
         }

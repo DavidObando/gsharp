@@ -3340,7 +3340,13 @@ partial class Binder {
             ApplyImportedGenericConstraints(
                 slot.GetGenericArguments(),
                 typeParameters,
-                CreateImportedMethodTypeParameterMap(slot.GetGenericArguments(), typeParameters)
+                CreateImportedMethodTypeParameterMap(
+                    slot.GetGenericArguments(),
+                    typeParameters,
+                    slot.DeclaringType,
+                    slotOwner
+                ),
+                slotOwner
             )
         }
         let parameters = slotParameters.Select(
@@ -3407,7 +3413,13 @@ partial class Binder {
             ApplyImportedGenericConstraints(
                 method.GetGenericArguments(),
                 typeParameters,
-                CreateImportedMethodTypeParameterMap(method.GetGenericArguments(), typeParameters)
+                CreateImportedMethodTypeParameterMap(
+                    method.GetGenericArguments(),
+                    typeParameters,
+                    method.DeclaringType,
+                    owner
+                ),
+                owner
             )
         }
         let parameters = method
@@ -3758,6 +3770,8 @@ partial class Binder {
     ) bool {
         if target.Constraint != source.Constraint ||
             target.HasReferenceTypeConstraint != source.HasReferenceTypeConstraint ||
+            target.HasNullableReferenceTypeConstraint != source.HasNullableReferenceTypeConstraint ||
+            target.HasNotNullConstraint != source.HasNotNullConstraint ||
             target.HasValueTypeConstraint != source.HasValueTypeConstraint ||
             target.HasDefaultConstructorConstraint != source.HasDefaultConstructorConstraint ||
             target.HasUnmanagedConstraint != source.HasUnmanagedConstraint {
@@ -3792,7 +3806,7 @@ partial class Binder {
             !AdapterParameterMetadataSupported(target.ReturnParameter) ||
             !AdapterParameterMetadataSupported(source.ReturnParameter) ||
             !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter) ||
-            !ImportedGenericConstraintsMatch(target, source) {
+            !ImportedGenericConstraintsMatch(target, source, targetOwner, sourceOwner) {
             return false
         }
         let methodTypeParameters = target
@@ -10330,9 +10344,49 @@ partial class Binder {
             return true
         }
 
-        private func ImportedGenericConstraintsMatch(target MethodInfo, source MethodInfo) bool {
+        private func ImportedGenericConstraintsMatch(
+            target MethodInfo,
+            source MethodInfo,
+            targetOwner TypeSymbol? = nil,
+            sourceOwner TypeSymbol? = nil
+        ) bool {
             let targetParameters = target.GetGenericArguments()
             let sourceParameters = source.GetGenericArguments()
+            let targetMap = Dictionary[Type, TypeSymbol]()
+            let sourceMap = Dictionary[Type, TypeSymbol]()
+            for var i = 0; i < targetParameters.Length; i++ {
+                let parameter = TypeParameterSymbol(
+                    targetParameters[i].Name,
+                    i,
+                    TypeParameterConstraint.Any,
+                    TypeParameterVariance.None
+                ){IsMethodTypeParameter = true}
+                targetMap[targetParameters[i]] = parameter
+                sourceMap[sourceParameters[i]] = parameter
+            }
+            let receiverArity = Math.Max(
+                target.DeclaringType?.GetGenericArguments().Length ?? 0,
+                source.DeclaringType?.GetGenericArguments().Length ?? 0
+            )
+            let canonicalReceivers = ImmutableArray.CreateBuilder[TypeParameterSymbol](receiverArity)
+            for var r = 0; r < receiverArity; r++ {
+                canonicalReceivers.Add(
+                    TypeParameterSymbol("TReceiver$r", r, TypeParameterConstraint.Any, TypeParameterVariance.None)
+                )
+            }
+            let receiverParameters = canonicalReceivers.ToImmutable()
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                target.DeclaringType,
+                targetOwner,
+                receiverParameters,
+                targetMap
+            )
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                source.DeclaringType,
+                sourceOwner,
+                receiverParameters,
+                sourceMap
+            )
             for var i = 0; i < targetParameters.Length; i++ {
                 const specialMask = GenericParameterAttributes.SpecialConstraintMask
                 if (targetParameters[i].GenericParameterAttributes & specialMask) != (
@@ -10345,6 +10399,20 @@ partial class Binder {
                 ) {
                     return false
                 }
+                if ClrNullability.HasNotNullConstraint(targetParameters[i]) != ClrNullability.HasNotNullConstraint(
+                    sourceParameters[i]
+                ) {
+                    return false
+                }
+                if (
+                    targetParameters[i].GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint
+                ) != 0 &&
+                    ClrNullability
+                    .GetGenericParameterTypeSymbol(targetParameters[i])
+                    .ReferenceNullability != ClrNullability
+                    .GetGenericParameterTypeSymbol(sourceParameters[i]).ReferenceNullability {
+                    return false
+                }
                 let targetConstraints = targetParameters[i].GetGenericParameterConstraints()
                 let sourceConstraints = sourceParameters[i].GetGenericParameterConstraints()
                 if targetConstraints.Length != sourceConstraints.Length {
@@ -10353,6 +10421,29 @@ partial class Binder {
                 for targetConstraint in targetConstraints {
                     if !sourceConstraints.Any(
                         (sourceConstraint Type) -> ImportedAdapterTypesMatch(targetConstraint, sourceConstraint)
+                    ) {
+                        return false
+                    }
+                }
+                let targetConstraintSymbols = GetImportedAdapterConstraintTypeSymbols(
+                    targetParameters[i],
+                    targetOwner,
+                    targetMap
+                )
+                let sourceConstraintSymbols = GetImportedAdapterConstraintTypeSymbols(
+                    sourceParameters[i],
+                    sourceOwner,
+                    sourceMap
+                )
+                if targetConstraintSymbols.Length != sourceConstraintSymbols.Length {
+                    return false
+                }
+                for targetConstraintSymbol in targetConstraintSymbols {
+                    if !sourceConstraintSymbols.Any(
+                        (sourceConstraintSymbol TypeSymbol) -> AdapterTypesMatch(
+                            targetConstraintSymbol,
+                            sourceConstraintSymbol
+                        )
                     ) {
                         return false
                     }
@@ -10482,8 +10573,21 @@ partial class Binder {
         }
 
         private func MapAdapterMethodType(type Type, typeParameters IReadOnlyDictionary[Type, TypeSymbol]) TypeSymbol {
-            if type.IsGenericParameter && typeParameters.TryGetValue(type, out var parameter) {
-                return parameter
+            if type.IsGenericParameter {
+                if typeParameters.TryGetValue(type, out var parameter) {
+                    return parameter
+                }
+                for pair in typeParameters {
+                    if pair
+                        .Key
+                        .IsGenericParameter &&
+                        (pair.Key.DeclaringMethod != nil) == (type.DeclaringMethod != nil) &&
+                        pair
+                        .Key
+                        .GenericParameterPosition == type.GenericParameterPosition {
+                        return pair.Value
+                    }
+                }
             }
             if type.IsByRef {
                 return ByRefTypeSymbol.Get(MapAdapterMethodType(RequiredAdapterElementType(type), typeParameters))
@@ -10520,22 +10624,25 @@ partial class Binder {
             typeParameters IReadOnlyDictionary[Type, TypeSymbol]
         ) TypeSymbol {
             let mapped = MapAdapterMethodType(rawType, typeParameters)
-            if annotatedType is NullableTypeSymbol && !(mapped is NullableTypeSymbol) {
-                return NullableTypeSymbol.Get(mapped)
-            }
             let expectedFlags = NullableFlagsBuilder.Build(annotatedType)
             if mapped is TypeParameterSymbol {
-                return if expectedFlags.Length > 0 && expectedFlags[0] == NullableFlagsBuilder.Annotated {
+                return if (annotatedType is NullableTypeSymbol) ||
+                    (expectedFlags.Length > 0 && expectedFlags[0] == NullableFlagsBuilder.Annotated) {
                     cast[TypeSymbol](NullableTypeSymbol.Get(mapped))
                 } else {
                     mapped
                 }
             }
             let mappedFlags = NullableFlagsBuilder.Build(mapped)
-            return if expectedFlags.SequenceEqual(mappedFlags) {
+            let withInnerFlags TypeSymbol = if expectedFlags.SequenceEqual(mappedFlags) {
                 mapped
             } else {
-                cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(mapped, expectedFlags))
+                NullabilityAnnotatedTypeSymbol(mapped, expectedFlags)
+            }
+            return if annotatedType is NullableTypeSymbol && !(withInnerFlags is NullableTypeSymbol) {
+                NullableTypeSymbol.Get(withInnerFlags)
+            } else {
+                withInnerFlags
             }
         }
 
@@ -10547,19 +10654,121 @@ partial class Binder {
 
         private func CreateImportedMethodTypeParameterMap(
             source[]Type,
-            target ImmutableArray[TypeParameterSymbol]
+            target ImmutableArray[TypeParameterSymbol],
+            declaringType Type? = nil,
+            owner TypeSymbol? = nil
         ) Dictionary[Type, TypeSymbol] {
             let map_ = Dictionary[Type, TypeSymbol]()
             for var i = 0; i < source.Length && i < target.Length; i++ {
                 map_[source[i]] = target[i]
             }
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                declaringType,
+                owner,
+                ImmutableArray[TypeParameterSymbol].Empty,
+                map_
+            )
             return map_
+        }
+
+        private func PopulateImportedAdapterReceiverTypeParameterMap(
+            declaringType Type?,
+            owner TypeSymbol?,
+            canonicalReceivers ImmutableArray[TypeParameterSymbol],
+            $map Dictionary[Type, TypeSymbol]
+        ) {
+            if declaringType == nil {
+                return
+            }
+            if owner != nil && MemberLookup.GetProjectionReceiverImportedType(owner) is {} importedOwner &&
+                MemberLookup.TryGetSymbolicDeclaringContext(
+                importedOwner,
+                declaringType,
+                out var contextDef,
+                out var declaringArgs
+            ) &&
+                contextDef != nil {
+                let openParams = contextDef.GetGenericArguments()
+                for var r = 0; r < Math.Min(openParams.Length, declaringArgs.Length); r++ {
+                    $map[openParams[r]] = declaringArgs[r]
+                }
+                if declaringType.IsGenericType {
+                    let closedArgs = declaringType.GetGenericArguments()
+                    for var r = 0; r < Math.Min(closedArgs.Length, declaringArgs.Length); r++ {
+                        if closedArgs[r].IsGenericParameter {
+                            $map[closedArgs[r]] = declaringArgs[r]
+                        }
+                    }
+                }
+                return
+            }
+            if declaringType.IsGenericType {
+                let openDef = if declaringType.IsGenericTypeDefinition {
+                    declaringType
+                } else {
+                    declaringType.GetGenericTypeDefinition()
+                }
+                let openParams = openDef.GetGenericArguments()
+                for var r = 0; r < Math.Min(openParams.Length, canonicalReceivers.Length); r++ {
+                    $map[openParams[r]] = canonicalReceivers[r]
+                }
+                let closedArgs = declaringType.GetGenericArguments()
+                for var r = 0; r < Math.Min(closedArgs.Length, canonicalReceivers.Length); r++ {
+                    if closedArgs[r].IsGenericParameter {
+                        $map[closedArgs[r]] = canonicalReceivers[r]
+                    }
+                }
+            }
+        }
+
+        private func GetImportedAdapterConstraintTypeSymbols(
+            parameter Type,
+            owner TypeSymbol?,
+            typeParameterMap IReadOnlyDictionary[Type, TypeSymbol]
+        ) ImmutableArray[TypeSymbol] {
+            var openParameter = parameter
+            if parameter.DeclaringType is {IsGenericType: true, IsGenericTypeDefinition: false} closedDeclaring &&
+                parameter.DeclaringMethod is MethodInfo declaringMethod &&
+                MemberLookup.TryGetOpenMethodOnDeclaringType(
+                closedDeclaring.GetGenericTypeDefinition(),
+                declaringMethod
+            ) is MethodInfo openMethod {
+                let openArgs = openMethod.GetGenericArguments()
+                if uint32(parameter.GenericParameterPosition) < uint32(openArgs.Length) {
+                    openParameter = openArgs[parameter.GenericParameterPosition]
+                }
+            }
+            let rawConstraints = openParameter.GetGenericParameterConstraints()
+            if rawConstraints.Length == 0 {
+                return ImmutableArray[TypeSymbol].Empty
+            }
+            var annotatedConstraints = ImmutableArray[TypeSymbol].Empty
+            try {
+                annotatedConstraints = if owner != nil {
+                    MemberLookup.GetClrGenericParameterConstraintTypeSymbols(owner, parameter)
+                } else {
+                    ClrNullability.GetGenericParameterConstraintTypeSymbols(openParameter)
+                }
+            } catch (Exception) { }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](rawConstraints.Length)
+            for var c = 0; c < rawConstraints.Length; c++ {
+                let constraint = rawConstraints[c]
+                builder.Add(
+                    if c < annotatedConstraints.Length {
+                        MapAdapterMethodTypeWithNullability(constraint, annotatedConstraints[c], typeParameterMap)
+                    } else {
+                        MapAdapterMethodType(constraint, typeParameterMap)
+                    }
+                )
+            }
+            return builder.ToImmutable()
         }
 
         private func ApplyImportedGenericConstraints(
             source[]Type,
             target ImmutableArray[TypeParameterSymbol],
-            $map IReadOnlyDictionary[Type, TypeSymbol]
+            $map IReadOnlyDictionary[Type, TypeSymbol],
+            owner TypeSymbol? = nil
         ) {
             for var i = 0; i < source.Length; i++ {
                 let attributes = source[i].GenericParameterAttributes
@@ -10573,8 +10782,17 @@ partial class Binder {
                     attributes & GenericParameterAttributes.DefaultConstructorConstraint
                 ) != 0
                 target[i].HasUnmanagedConstraint = HasAdapterUnmanagedConstraint(source[i])
-                for constraint in source[i].GetGenericParameterConstraints() {
-                    let mapped = MapAdapterMethodType(constraint, $map)
+                let rawConstraints = source[i].GetGenericParameterConstraints()
+                let parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(source[i]).ReferenceNullability
+                if target[i].HasReferenceTypeConstraint && parameterNullability == ReferenceNullabilityKind.Nullable {
+                    target[i].HasNullableReferenceTypeConstraint = true
+                } else if ClrNullability.HasNotNullConstraint(source[i]) {
+                    target[i].HasNotNullConstraint = true
+                }
+                let mappedConstraints = GetImportedAdapterConstraintTypeSymbols(source[i], owner, $map)
+                for var c = 0; c < rawConstraints.Length && c < mappedConstraints.Length; c++ {
+                    let constraint = rawConstraints[c]
+                    let mapped = mappedConstraints[c]
                     if mapped is TypeParameterSymbol dependent {
                         target[i].TypeParameterBound = dependent
                     } else if constraint.IsInterface {
@@ -12262,8 +12480,22 @@ partial class Binder {
                 failedConstraint = "unmanaged"
                 return false
             }
-            if declared.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(argument) {
-                failedConstraint = "class"
+            if declared.HasReferenceTypeConstraint {
+                if !IsReferenceTypeForConstraint(argument) {
+                    failedConstraint = if declared.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                    return false
+                }
+                if !declared.HasNullableReferenceTypeConstraint && !SatisfiesNotNullConstraint(argument) {
+                    failedConstraint = "class"
+                    return false
+                }
+            }
+            if declared.HasNotNullConstraint && !SatisfiesNotNullConstraint(argument) {
+                failedConstraint = "notnull"
                 return false
             }
             if declared.HasDefaultConstructorConstraint &&
@@ -12277,27 +12509,37 @@ partial class Binder {
                 failedConstraint = "new()"
                 return false
             }
-            if declared.Constraint == TypeParameterConstraint.Comparable && !AnyBound(parameters, IsComparable) {
+            if declared.Constraint == TypeParameterConstraint.Comparable && !AnyBound(argument, IsComparable) {
                 failedConstraint = "comparable"
                 return false
             }
-            if declared.ClassConstraint is {} classBound && !TypeSymbol.ContainsTypeParameter(classBound) &&
-                !AnyBound(parameters, (candidate TypeSymbol) -> SatisfiesClassConstraint(candidate, classBound)) {
+            if declared.EffectiveClassConstraint is {} classBound && !TypeSymbol.ContainsTypeParameter(classBound) &&
+                !AnyBound(argument, (candidate TypeSymbol) -> SatisfiesClassConstraint(candidate, classBound)) {
                 failedConstraint = SymbolDisplay.ToTypeDisplayString(classBound)
                 return false
             }
             if declared.InterfaceConstraint is {} userInterfaceBound && !TypeSymbol.ContainsTypeParameter(
                 userInterfaceBound
-            ) &&
-                !AnyBound(parameters, (candidate TypeSymbol) -> ImplementsInterface(candidate, userInterfaceBound)) {
-                failedConstraint = SymbolDisplay.ToTypeDisplayString(userInterfaceBound)
-                return false
+            ) {
+                let allowNullableInterface = declared.HasNullableInterfaceConstraint
+                if !AnyBound(
+                    argument,
+                    (candidate TypeSymbol) -> ImplementsInterface(candidate, userInterfaceBound, allowNullableInterface)
+                ) {
+                    let displayType TypeSymbol = if allowNullableInterface {
+                        NullableTypeSymbol.Get(userInterfaceBound)
+                    } else {
+                        userInterfaceBound
+                    }
+                    failedConstraint = SymbolDisplay.ToTypeDisplayString(displayType)
+                    return false
+                }
             }
             if declared.ClrInterfaceConstraint is {} clrInterfaceBound && !TypeSymbol.ContainsTypeParameter(
                 clrInterfaceBound
             ) &&
                 !AnyBound(
-                parameters,
+                argument,
                 (candidate TypeSymbol) -> SatisfiesClrInterfaceConstraint(candidate, clrInterfaceBound, declared)
             ) {
                 failedConstraint = SymbolDisplay.ToTypeDisplayString(clrInterfaceBound)
@@ -12345,6 +12587,25 @@ partial class Binder {
             return chain
         }
 
+        internal func EnumerateForwardedParameterChainWithNullability(argument TypeParameterSymbol) List[
+            (Parameter TypeParameterSymbol, CrossedNullableLink bool)
+        ] {
+            let chain = List[(Parameter TypeParameterSymbol, CrossedNullableLink bool)]{(argument, false)}
+            let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance){argument}
+            for var i = 0; i < chain.Count; i++ {
+                let (current, crossedNullable) = chain[i]
+                let nextNullable = crossedNullable ||
+                    (current.TypeParameterBound != nil && current.HasNullableClassBound)
+                if current.TypeParameterBound is {} tpBound && visited.Add(tpBound) {
+                    chain.Add((tpBound, nextNullable))
+                }
+                if current.ClassConstraint is TypeParameterSymbol classTp && visited.Add(classTp) {
+                    chain.Add((classTp, crossedNullable || current.HasNullableClassBound))
+                }
+            }
+            return chain
+        }
+
         /// Issue #4067: appends [`candidate`](paramref) to
         /// [`chain`](paramref) when it is present and not already there.
         /// @remarks This deduplication is what makes
@@ -12382,22 +12643,50 @@ partial class Binder {
         /// bound those parameters carry, answers [`predicate`](paramref). A
         /// type bound is implied by the class or interface a parameter is bounded
         /// by, which is why the concrete bounds are asked too.
-        /// @param parameters The forwarded-bound chain.
+        /// @param argument The original type parameter argument.
         /// @param predicate The relation asked of each candidate.
         /// @returns `true` when one answers.
-        private func AnyBound(parameters List[TypeParameterSymbol], predicate(TypeSymbol) -> bool) bool {
-            for parameter in parameters {
-                if predicate(parameter) {
+        private func AnyBound(argument TypeParameterSymbol, predicate(TypeSymbol) -> bool) bool {
+            let argProvesNotNull = SatisfiesNotNullConstraint(argument)
+            for (parameter, crossedNullable) in EnumerateForwardedParameterChainWithNullability(argument) {
+                let candidateParam TypeSymbol = if crossedNullable && !argProvesNotNull {
+                    NullableTypeSymbol.Get(parameter)
+                } else {
+                    parameter
+                }
+                if predicate(candidateParam) {
                     return true
                 }
-                if parameter.ClassConstraint is {} classBound && predicate(classBound) {
-                    return true
+                if parameter.EffectiveClassConstraint is {} rawClassBound {
+                    let classBound TypeSymbol = if crossedNullable && !argProvesNotNull {
+                        NullableTypeSymbol.Get(rawClassBound)
+                    } else {
+                        UnwrapTopLevelBoundForNotNullParameter(rawClassBound, argProvesNotNull)
+                    }
+                    if predicate(classBound) {
+                        return true
+                    }
                 }
-                if parameter.InterfaceConstraint is {} userInterfaceBound && predicate(userInterfaceBound) {
-                    return true
+                if parameter.InterfaceConstraint is {} userInterfaceBound {
+                    let bound TypeSymbol = if (parameter.HasNullableInterfaceConstraint || crossedNullable) &&
+                        !argProvesNotNull {
+                        NullableTypeSymbol.Get(userInterfaceBound)
+                    } else {
+                        userInterfaceBound
+                    }
+                    if predicate(bound) {
+                        return true
+                    }
                 }
-                if parameter.ClrInterfaceConstraint is {} clrInterfaceBound && predicate(clrInterfaceBound) {
-                    return true
+                if parameter.ClrInterfaceConstraint is {} rawClrInterfaceBound {
+                    let clrInterfaceBound TypeSymbol = if crossedNullable && !argProvesNotNull {
+                        NullableTypeSymbol.Get(rawClrInterfaceBound)
+                    } else {
+                        UnwrapTopLevelBoundForNotNullParameter(rawClrInterfaceBound, argProvesNotNull)
+                    }
+                    if predicate(clrInterfaceBound) {
+                        return true
+                    }
                 }
             }
             return false
@@ -12475,11 +12764,26 @@ partial class Binder {
                 return typeParameter.Name
             }
             let special = attributes & GenericParameterAttributes.SpecialConstraintMask
+            var parameterNullability = ReferenceNullabilityKind.Platform
+            try {
+                parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(typeParameter).ReferenceNullability
+            } catch (Exception) { }
             if (special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
                 return "struct"
             }
             if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
-                return "class"
+                return if parameterNullability == ReferenceNullabilityKind.Nullable {
+                    "class?"
+                } else {
+                    "class"
+                }
+            }
+            var hasNotNull = false
+            try {
+                hasNotNull = ClrNullability.HasNotNullConstraint(typeParameter)
+            } catch (Exception) { }
+            if hasNotNull {
+                return "notnull"
             }
             if (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 {
                 return "new()"
@@ -13639,7 +13943,7 @@ partial class Binder {
                     substitution
                 ) as InterfaceSymbol ??
                     tp.InterfaceConstraint!!
-                if !ImplementsInterface(typeArgument, expectedIface) {
+                if !ImplementsInterface(typeArgument, expectedIface, tp.HasNullableInterfaceConstraint) {
                     return false
                 }
             }
@@ -13659,8 +13963,13 @@ partial class Binder {
             }
             // Issue #1056 / #4744: substitute self-referential and sibling type
             // arguments into the base-class constraint before checking derivation.
-            if tp.ClassConstraint != nil {
-                let expectedClass = SubstituteConstraintType(tp.ClassConstraint!!, tp, typeArgument, substitution)
+            if tp.EffectiveClassConstraint != nil {
+                let expectedClass = SubstituteConstraintType(
+                    tp.EffectiveClassConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                )
                 if !SatisfiesClassConstraint(typeArgument, expectedClass) {
                     return false
                 }
@@ -13668,9 +13977,26 @@ partial class Binder {
             if tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument) {
                 return false
             }
-            // ADR-0097 / issue #775: enforce the `class` / `struct` / `new()`
-            // flag-style constraints introduced by the G# spelling.
-            if tp.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(typeArgument) {
+            // ADR-0097 / issue #775 / issue #4996: enforce the `class` / `class?` /
+            // `notnull` / `struct` / `new()` flag-style constraints.
+            if tp.HasReferenceTypeConstraint {
+                let candidate = if tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is NullableTypeSymbol nullableArg &&
+                    !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                    nullableArg.UnderlyingType
+                } else {
+                    typeArgument
+                }
+                if !IsReferenceTypeForConstraint(candidate) {
+                    return false
+                }
+                if !tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is TypeParameterSymbol argTp &&
+                    !SatisfiesNotNullConstraint(argTp) {
+                    return false
+                }
+            }
+            if tp.HasNotNullConstraint && !SatisfiesNotNullConstraint(typeArgument) {
                 return false
             }
             if tp.HasValueTypeConstraint && !IsNonNullableValueTypeForConstraint(typeArgument) {
@@ -13722,7 +14048,24 @@ partial class Binder {
             boundArgument TypeSymbol?,
             tp TypeParameterSymbol?
         ) bool {
+            var typeArgument = typeArgument
             if typeArgument == nil || boundArgument == nil {
+                return true
+            }
+            if (
+                ((tp == nil || !tp.HasNullableClassBound) && SatisfiesNotNullConstraint(boundArgument)) ||
+                    (tp != nil && SatisfiesNotNullConstraint(tp))
+            ) &&
+                !SatisfiesNotNullConstraint(typeArgument) {
+                return false
+            }
+            if tp != nil &&
+                tp.HasNullableClassBound &&
+                typeArgument is NullableTypeSymbol nullableArg &&
+                !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                typeArgument = nullableArg.UnderlyingType
+            }
+            if typeArgument == nil {
                 return true
             }
             if object.ReferenceEquals(typeArgument, boundArgument) ||
@@ -13926,23 +14269,58 @@ partial class Binder {
             if typeArgument == nil || classConstraint == nil {
                 return false
             }
+            let strippedArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if strippedArgument is NullableTypeSymbol &&
+                classConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
+            }
+            let effectiveClassConstraint = if classConstraint is NullableTypeSymbol nullableClassConstraint {
+                nullableClassConstraint.UnderlyingType
+            } else {
+                classConstraint
+            }
+            if strippedArgument is NullableTypeSymbol nullableTypeArg && !NullableLifting.IsAnyValueTypeNullable(
+                nullableTypeArg
+            ) {
+                typeArgument = nullableTypeArg.UnderlyingType
+            }
             // Constraint propagation: follow both ordinary class constraints and
             // #4043's separate dependent-bound slot. Reference-identity tracking
             // protects against malformed cycles without limiting valid chain depth.
             if typeArgument is TypeParameterSymbol {
+                let argProvesNotNull = SatisfiesNotNullConstraint(typeArgument)
+                if effectiveClassConstraint.ClrType is {} objConstraintClr && string.Equals(
+                    objConstraintClr.FullName,
+                    "System.Object",
+                    StringComparison.Ordinal
+                ) {
+                    return classConstraint.ReferenceNullability != ReferenceNullabilityKind.NotNull || argProvesNotNull
+                }
+                var crossedNullable = false
                 let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
                 while typeArgument is TypeParameterSymbol tpArg {
                     if !visited.Add(tpArg) {
                         return false
                     }
-                    let next TypeSymbol? = tpArg.ClassConstraint ?? tpArg.TypeParameterBound
+                    crossedNullable |= tpArg.HasNullableClassBound
+                    let next TypeSymbol? = tpArg.EffectiveClassConstraint ?? tpArg.TypeParameterBound
                     if next == nil {
                         return false
                     }
                     typeArgument = next
                 }
+                if (typeArgument is NullableTypeSymbol || crossedNullable) &&
+                    !argProvesNotNull &&
+                    classConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                    return false
+                }
+                if typeArgument is NullableTypeSymbol nullableBound && !NullableLifting.IsAnyValueTypeNullable(
+                    nullableBound
+                ) {
+                    typeArgument = nullableBound.UnderlyingType
+                }
             }
-            if classConstraint is StructSymbol classDef {
+            if effectiveClassConstraint is StructSymbol classDef {
                 let constraintDef = classDef.Definition ?? classDef
                 let constraintArgs = Conversion.GetEffectiveStructTypeArguments(classDef)
                 let checkConstructedArguments = !constraintArgs.IsDefaultOrEmpty && !constraintArgs.Any(
@@ -13951,7 +14329,7 @@ partial class Binder {
                 if typeArgument is StructSymbol argClass {
                     for current in argClass.GetHierarchy() {
                         let currentDef = current.Definition ?? current
-                        if object.ReferenceEquals(current, classConstraint) {
+                        if object.ReferenceEquals(current, effectiveClassConstraint) {
                             return true
                         }
                         if !object.ReferenceEquals(currentDef, constraintDef) {
@@ -13968,9 +14346,9 @@ partial class Binder {
             }
             // Imported reference class: use CLR assignability and compare
             // symbolic generic arguments when both project to a CLR type.
-            if classConstraint.ClrType is {} constraintClr {
+            if effectiveClassConstraint.ClrType is {} constraintClr {
                 if typeArgument!!.ClrType != nil {
-                    return SatisfiesImportedClassConstraint(typeArgument!!, classConstraint, constraintClr)
+                    return SatisfiesImportedClassConstraint(typeArgument!!, effectiveClassConstraint, constraintClr)
                 }
                 let constraintFullName = constraintClr.FullName
                 if string.Equals(constraintFullName, "System.Object", StringComparison.Ordinal) {
@@ -13993,7 +14371,7 @@ partial class Binder {
                 if typeArgument is StructSymbol sourceClass {
                     for current in sourceClass.GetHierarchy() {
                         if current.ImportedBaseType is {} importedBase &&
-                            SatisfiesImportedClassConstraint(importedBase, classConstraint, constraintClr) {
+                            SatisfiesImportedClassConstraint(importedBase, effectiveClassConstraint, constraintClr) {
                             return true
                         }
                     }
@@ -14014,7 +14392,7 @@ partial class Binder {
                 return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             let constraintPositions = GetClrSlotAlignedArguments(classConstraint)
-            if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
+            if constraintPositions.IsDefaultOrEmpty {
                 return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             return TryFindMatchingClrRelationship(
@@ -14090,28 +14468,6 @@ partial class Binder {
             return false
         }
 
-        private func IsReferenceClassConstraint(classConstraint TypeSymbol?) bool {
-            if classConstraint == nil {
-                return false
-            }
-            if classConstraint is StructSymbol structSym {
-                return structSym.IsClass
-            }
-            if classConstraint.ClrType is {} clr {
-                if !clr.IsClass || clr.IsValueType {
-                    return false
-                }
-                let fullName = clr.FullName
-                return !string.Equals(fullName, "System.Object", StringComparison.Ordinal) && !string.Equals(
-                    fullName,
-                    "System.ValueType",
-                    StringComparison.Ordinal
-                ) &&
-                    !string.Equals(fullName, "System.Enum", StringComparison.Ordinal)
-            }
-            return false
-        }
-
         /// ADR-0097: returns `true` when [`type`](paramref)
         /// satisfies a `where T : class` constraint — i.e. it is a reference
         /// type at the CLR level. Includes G# interfaces and reference-shaped
@@ -14131,6 +14487,9 @@ partial class Binder {
             }
             // ADR-0186: `T!` is a reference type exactly when `T` is.
             type = PlatformTypeSymbol.StripTopLevel(type)
+            if type is NullabilityAnnotatedTypeSymbol annotated {
+                return IsReferenceTypeForConstraint(annotated.BaseType)
+            }
             if type is TypeParameterSymbol tp {
                 // Direct `class` on `tp` itself, or a non-universal reference class
                 // bound anywhere in `tp`'s forwarded chain, proves `tp` cannot be
@@ -14138,13 +14497,7 @@ partial class Binder {
                 // parameter (`[A class, B A]`) or `System.Object`/`System.Enum`
                 // does not, because `A = object, B = int32` and `B = Color` are
                 // valid instantiations.
-                if tp.HasReferenceTypeConstraint {
-                    return true
-                }
-                return AnyParameter(
-                    EnumerateForwardedParameterChain(tp),
-                    (p TypeParameterSymbol) -> IsReferenceClassConstraint(p.ClassConstraint)
-                )
+                return tp.ProvesNonUniversalReferenceConstraint
             }
             if type is StructSymbol structSym {
                 return structSym.IsClass
@@ -14173,6 +14526,24 @@ partial class Binder {
             }
             return false
         }
+
+        internal func SatisfiesNotNullConstraint(type TypeSymbol?) bool {
+            if type == nil || object.ReferenceEquals(type, TypeSymbol.Null) {
+                return false
+            }
+            let stripped = PlatformTypeSymbol.StripTopLevel(type)
+            if stripped is NullableTypeSymbol {
+                return false
+            }
+            if stripped is TypeParameterSymbol tp {
+                return tp.ProvesNotNullConstraint
+            }
+            return true
+        }
+
+        internal func HasNullableConstraintWithoutNotNull(
+            tp TypeParameterSymbol
+        ) bool -> tp.HasNullableConstraintWithoutNotNull
 
         /// ADR-0097: returns `true` when [`type`](paramref)
         /// satisfies a `where T : struct` constraint — i.e. it is a
@@ -14242,6 +14613,12 @@ partial class Binder {
             if type == nil {
                 return false
             }
+            if type is NullableTypeSymbol nullable {
+                if NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    return false
+                }
+                return HasDefaultConstructorForConstraint(nullable.UnderlyingType)
+            }
             if IsNonNullableValueTypeForConstraint(type) {
                 return true
             }
@@ -14281,7 +14658,18 @@ partial class Binder {
             return false
         }
 
-        internal func ImplementsInterface(typeArgument TypeSymbol, iface InterfaceSymbol) bool {
+        internal func ImplementsInterface(
+            typeArgument TypeSymbol,
+            iface InterfaceSymbol,
+            allowNullableBound bool = false
+        ) bool {
+            var typeArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if typeArgument is NullableTypeSymbol nullableArg {
+                if !allowNullableBound || NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                    return false
+                }
+                typeArgument = nullableArg.UnderlyingType
+            }
             // Issue #1113: an interface constraint is satisfied when the type
             // argument implements the interface ANYWHERE in its hierarchy — directly,
             // through a base class, or via a transitively-inherited base interface
@@ -14311,17 +14699,27 @@ partial class Binder {
                 }
             }
             if typeArgument is TypeParameterSymbol tp {
+                let effectiveAllowNullable = allowNullableBound || SatisfiesNotNullConstraint(tp)
                 // Constraint propagation: follow the parameter's forwarded chain
                 // and check both interface and class constraints.
-                for chainParam in EnumerateForwardedParameterChain(tp) {
-                    if chainParam.InterfaceConstraint is {} paramIface {
+                for (chainParam, crossedNullable) in EnumerateForwardedParameterChainWithNullability(tp) {
+                    if crossedNullable && !effectiveAllowNullable {
+                        continue
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface &&
+                        (effectiveAllowNullable || !chainParam.HasNullableInterfaceConstraint) {
                         for candidate in paramIface.SelfAndAllBaseInterfaces() {
                             if candidate == iface || SameConstructedInterface(candidate, iface) {
                                 return true
                             }
                         }
                     }
-                    if chainParam.ClassConstraint is StructSymbol classBound && ImplementsInterface(classBound, iface) {
+                    let classBound = if effectiveAllowNullable || !chainParam.HasNullableClassBound {
+                        chainParam.UnwrappedClassConstraintStruct
+                    } else {
+                        nil
+                    }
+                    if classBound != nil && ImplementsInterface(classBound, iface, effectiveAllowNullable) {
                         return true
                     }
                 }
@@ -14683,7 +15081,69 @@ partial class Binder {
             constraint TypeSymbol,
             tp TypeParameterSymbol?
         ) bool {
-            if SatisfiesClrInterfaceConstraintReflectively(typeArgument, constraint, tp) {
+            var typeArgument = typeArgument
+            let strippedArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if strippedArgument is NullableTypeSymbol &&
+                constraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
+            }
+            if strippedArgument is TypeParameterSymbol argTp {
+                let argProvesNotNull = SatisfiesNotNullConstraint(argTp)
+                for (chainParam, crossedNullable) in EnumerateForwardedParameterChainWithNullability(argTp) {
+                    if chainParam.ClrInterfaceConstraint is {} paramClrIface && !object.ReferenceEquals(
+                        paramClrIface,
+                        typeArgument
+                    ) {
+                        let bound = if crossedNullable && !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramClrIface)
+                        } else {
+                            UnwrapTopLevelBoundForNotNullParameter(paramClrIface, argProvesNotNull)
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface && !object.ReferenceEquals(
+                        paramIface,
+                        typeArgument
+                    ) {
+                        let bound TypeSymbol = if (chainParam.HasNullableInterfaceConstraint || crossedNullable) &&
+                            !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramIface)
+                        } else {
+                            paramIface
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                    if chainParam.EffectiveClassConstraint is {} paramClass && !object.ReferenceEquals(
+                        paramClass,
+                        typeArgument
+                    ) {
+                        let bound = if crossedNullable && !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramClass)
+                        } else {
+                            UnwrapTopLevelBoundForNotNullParameter(paramClass, argProvesNotNull)
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let effectiveConstraint = if constraint is NullableTypeSymbol nullableConstraint {
+                nullableConstraint.UnderlyingType
+            } else {
+                constraint
+            }
+            if strippedArgument is NullableTypeSymbol nullableTypeArg && !NullableLifting.IsAnyValueTypeNullable(
+                nullableTypeArg
+            ) {
+                typeArgument = nullableTypeArg.UnderlyingType
+            }
+            if SatisfiesClrInterfaceConstraintReflectively(typeArgument, effectiveConstraint, tp) {
                 return true
             }
             // Issue #4124: the SAME blindness #4061, #4068 and #4092 each repaired
@@ -14694,8 +15154,18 @@ partial class Binder {
             // that walk already answers changes.
             return typeArgument != nil &&
                 typeArgument.ClrType == nil &&
-                constraint.ClrType is {IsInterface: true} constraintInterfaceClr &&
-                SourceSymbolImplementsImportedInterface(typeArgument, constraint, constraintInterfaceClr, tp)
+                effectiveConstraint.ClrType is {IsInterface: true} constraintInterfaceClr &&
+                SourceSymbolImplementsImportedInterface(typeArgument, effectiveConstraint, constraintInterfaceClr, tp)
+        }
+
+        private func UnwrapTopLevelBoundForNotNullParameter(bound TypeSymbol, argProvesNotNull bool) TypeSymbol {
+            return if argProvesNotNull &&
+                bound is NullableTypeSymbol nullableBound &&
+                !NullableLifting.IsAnyValueTypeNullable(nullableBound) {
+                nullableBound.UnderlyingType
+            } else {
+                bound
+            }
         }
 
         /// The reflective half of (cref:SatisfiesClrInterfaceConstraint):
@@ -14720,6 +15190,20 @@ partial class Binder {
                         typeArgument
                     ) &&
                         SatisfiesClrInterfaceConstraint(paramClrIface, constraint, tp) {
+                        return true
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface && !object.ReferenceEquals(
+                        paramIface,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramIface, constraint, tp) {
+                        return true
+                    }
+                    if chainParam.ClassConstraint is {} paramClass && !object.ReferenceEquals(
+                        paramClass,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramClass, constraint, tp) {
                         return true
                     }
                 }
@@ -15010,13 +15494,18 @@ partial class Binder {
             // human-readable description so diagnostics are unambiguous.
             let flags = List[string]()
             if tp.InterfaceConstraint != nil {
-                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.InterfaceConstraint!!))
+                let ifaceType TypeSymbol = if tp.HasNullableInterfaceConstraint {
+                    NullableTypeSymbol.Get(tp.InterfaceConstraint!!)
+                } else {
+                    tp.InterfaceConstraint!!
+                }
+                flags.Add(SymbolDisplay.ToTypeDisplayString(ifaceType))
             }
             if tp.ClrInterfaceConstraint != nil {
                 flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClrInterfaceConstraint!!))
             }
-            if tp.ClassConstraint != nil {
-                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClassConstraint!!))
+            if tp.EffectiveClassConstraint != nil {
+                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.EffectiveClassConstraint!!))
             }
             // Issue #4043: a dependent bound reads as the NAME of the bounding type
             // parameter — `TBase`, not whatever it happened to be substituted with
@@ -15029,7 +15518,16 @@ partial class Binder {
                 flags.Add("comparable")
             }
             if tp.HasReferenceTypeConstraint {
-                flags.Add("class")
+                flags.Add(
+                    if tp.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                )
+            }
+            if tp.HasNotNullConstraint {
+                flags.Add("notnull")
             }
             if tp.HasValueTypeConstraint && !tp.HasUnmanagedConstraint {
                 flags.Add("struct")
