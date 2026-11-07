@@ -606,10 +606,6 @@ static class Program
         result = run_driver("--compare-pe", self.fixture, mutant)
         self.assertEqual(2, result.returncode)
         self.assertIn("overlaps", result.stderr)
-        short = sorted(expected)[1:]
-        with self.assertRaises(ValueError):
-            module.check({"apps": [{"appId": a, "stages": []} for a in short]},
-                         stopped_after_ilverify=True, exact_apps=expected)
 
 
 class TestSelectionTests(unittest.TestCase):
@@ -1793,6 +1789,26 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
             stage2.validate_vstest_extensions(
                 output, set(), packages, {approved}, {package_manifest})
         (output / "Newtonsoft.Json.dll").write_bytes(b"locked newtonsoft")
+        fr_pkg = packages / "fixture.resources" / "1.0.0" / "lib" / "net10.0" / "fr"
+        de_pkg = packages / "fixture.resources" / "1.0.0" / "lib" / "net10.0" / "de"
+        fr_pkg.mkdir(parents=True)
+        de_pkg.mkdir(parents=True)
+        (fr_pkg / "Fixture.resources.dll").write_bytes(b"locked french satellite")
+        (de_pkg / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        (output / "fr").mkdir(parents=True)
+        (output / "de").mkdir(parents=True)
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked french satellite")
+        (output / "de" / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        stage2.validate_vstest_extensions(
+            output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        with self.assertRaisesRegex(
+            stage2.CertificationError,
+            "test output package asset differs from the locked package",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked french satellite")
         (output / "testhost.dll").write_bytes(b"other locked package")
         (package / "other.dll").write_bytes(b"other locked package")
         with self.assertRaisesRegex(

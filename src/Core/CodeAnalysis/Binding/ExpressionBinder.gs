@@ -4130,7 +4130,7 @@ internal partial class ExpressionBinder {
         if fromCore == TypeSymbol.Error || toCore == TypeSymbol.Error {
             return true
         }
-        if TypeSymbol.ContainsTypeParameter(fromCore) || TypeSymbol.ContainsTypeParameter(toCore) {
+        if fromCore is TypeParameterSymbol || toCore is TypeParameterSymbol {
             return true
         }
         if fromCore is PointerTypeSymbol || toCore is PointerTypeSymbol {
@@ -4151,31 +4151,206 @@ internal partial class ExpressionBinder {
             Conversion.HaveIdenticalTypeArgumentContracts(fromCore, toCore) {
             return true
         }
-        let fromIsValue = IsNonNullableValueType(fromCore)
-        let toIsValue = IsNonNullableValueType(toCore)
+        let hasTypeParameter = TypeSymbol.ContainsTypeParameter(fromCore) || TypeSymbol.ContainsTypeParameter(toCore)
+        let fromIsValue = fromCore.IsValueType || fromCore is TupleTypeSymbol
+        let toIsValue = toCore.IsValueType || toCore is TupleTypeSymbol
         if fromIsValue && toIsValue {
-            return false
+            return hasTypeParameter && CanOpenValueTypesMatchForAs(fromCore, toCore)
         }
         if fromIsValue {
-            return HasBoxingConversionForAs(fromCore, toCore)
+            return HasBoxingConversionForAs(fromCore, toCore, hasTypeParameter)
         }
         if toIsValue {
-            return HasBoxingConversionForAs(toCore, fromCore)
+            return HasBoxingConversionForAs(toCore, fromCore, hasTypeParameter)
         }
-        return Conversion.HasCheckedReferenceConversion(fromCore, toCore) || Conversion.HasCheckedReferenceConversion(
+        if Conversion.HasCheckedReferenceConversion(fromCore, toCore) || Conversion.HasCheckedReferenceConversion(
             toCore,
             fromCore
-        )
+        ) {
+            return true
+        }
+        return hasTypeParameter && CanOpenReferenceTypesMatchForAs(fromCore, toCore)
     }
 
-    private func HasBoxingConversionForAs(valueType TypeSymbol, referenceType TypeSymbol) bool {
+    private func HasBoxingConversionForAs(valueType TypeSymbol, referenceType TypeSymbol, hasTypeParameter bool) bool {
         if referenceType == TypeSymbol.Object || referenceType.ClrType?.FullName == "System.ValueType" {
             return true
         }
         if referenceType.ClrType?.FullName == "System.Enum" {
             return valueType is EnumSymbol || valueType.ClrType?.IsEnum == true
         }
-        return Conversion.IsInterfaceLikeType(referenceType) && Conversion.Classify(valueType, referenceType).IsImplicit
+        if !Conversion.IsInterfaceLikeType(referenceType) {
+            return false
+        }
+        if Conversion.Classify(valueType, referenceType).IsImplicit {
+            return true
+        }
+        return hasTypeParameter && ValueTypeCanImplementOpenInterface(valueType, referenceType)
+    }
+
+    private func CanOpenValueTypesMatchForAs(fromCore TypeSymbol, toCore TypeSymbol) bool {
+        if fromCore is TupleTypeSymbol fTuple && toCore is TupleTypeSymbol tTuple {
+            return fTuple.ElementTypes.Length == tTuple.ElementTypes.Length
+        }
+        if fromCore is StructSymbol fStruct && toCore is StructSymbol tStruct {
+            return (fStruct.Definition ?? fStruct) == (tStruct.Definition ?? tStruct)
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        return fOpen != nil && tOpen != nil && ClrTypeUtilities.AreSame(fOpen, tOpen)
+    }
+
+    private func ValueTypeCanImplementOpenInterface(valueType TypeSymbol, ifaceType TypeSymbol) bool {
+        if ifaceType is InterfaceSymbol userIface {
+            let userIfaceDef = userIface.Definition ?? userIface
+            if valueType is StructSymbol valStruct {
+                for implemented in valStruct.Interfaces {
+                    if (implemented.Definition ?? implemented) == userIfaceDef {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+        let openIface = OpenClrTypeDefinition(ifaceType)
+        if openIface == nil {
+            return false
+        }
+        if valueType is StructSymbol srcStruct {
+            for clrIface in srcStruct.ImplementedClrInterfaces {
+                if OpenClrTypeDefinition(clrIface) is {} candidateOpen && ClrTypeUtilities.AreSame(
+                    candidateOpen,
+                    openIface
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+        if valueType.ClrType is {} valClr {
+            for clrIface in ClrTypeUtilities.SafeGetInterfaces(valClr) {
+                let candidateOpen = if clrIface.IsGenericType {
+                    clrIface.GetGenericTypeDefinition()
+                } else {
+                    clrIface
+                }
+                if ClrTypeUtilities.AreSame(candidateOpen, openIface) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func CanOpenReferenceTypesMatchForAs(fromCore TypeSymbol, toCore TypeSymbol) bool {
+        let fromIsArray = fromCore is SliceTypeSymbol || fromCore is ArrayTypeSymbol
+        let toIsArray = toCore is SliceTypeSymbol || toCore is ArrayTypeSymbol
+        if fromIsArray && toIsArray {
+            return true
+        }
+        if fromCore is RectangularArrayTypeSymbol fRect && toCore is RectangularArrayTypeSymbol tRect {
+            return fRect.Rank == tRect.Rank
+        }
+        if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
+            return fFn.ParameterTypes.Length == tFn.ParameterTypes.Length
+        }
+        if fromCore is DelegateTypeSymbol fDel && toCore is DelegateTypeSymbol tDel {
+            return (fDel.Definition ?? fDel) == (tDel.Definition ?? tDel)
+        }
+        if Conversion.IsInterfaceLikeType(fromCore) {
+            return ValueTypeCanImplementOpenInterface(toCore, fromCore) ||
+                ArrayImplementsOpenInterface(toCore, fromCore)
+        }
+        if Conversion.IsInterfaceLikeType(toCore) {
+            return ValueTypeCanImplementOpenInterface(fromCore, toCore) ||
+                ArrayImplementsOpenInterface(fromCore, toCore)
+        }
+        if fromCore is StructSymbol fClass && toCore is StructSymbol tClass {
+            let fDef = fClass.Definition ?? fClass
+            let tDef = tClass.Definition ?? tClass
+            return StructHierarchyContainsDefinition(fClass, tDef) || StructHierarchyContainsDefinition(tClass, fDef)
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        if fOpen != nil && tOpen != nil {
+            return ClrHierarchyContainsOpenDefinition(fOpen, tOpen) || ClrHierarchyContainsOpenDefinition(tOpen, fOpen)
+        }
+        if fromCore is StructSymbol sFrom && tOpen != nil && sFrom.ImportedBaseType is {} sFromBase {
+            return ClrHierarchyContainsOpenDefinition(OpenClrTypeDefinition(sFromBase), tOpen)
+        }
+        if toCore is StructSymbol sTo && fOpen != nil && sTo.ImportedBaseType is {} sToBase {
+            return ClrHierarchyContainsOpenDefinition(OpenClrTypeDefinition(sToBase), fOpen)
+        }
+        return false
+    }
+
+    private func ArrayImplementsOpenInterface(candidate TypeSymbol, ifaceType TypeSymbol) bool {
+        if !(candidate is SliceTypeSymbol || candidate is ArrayTypeSymbol || candidate is RectangularArrayTypeSymbol) {
+            return false
+        }
+        let openIface = OpenClrTypeDefinition(ifaceType)
+        if openIface == nil {
+            return false
+        }
+        for clrIface in typeof(int32).MakeArrayType().GetInterfaces() {
+            let candidateOpen = if clrIface.IsGenericType {
+                clrIface.GetGenericTypeDefinition()
+            } else {
+                clrIface
+            }
+            if ClrTypeUtilities.AreSame(candidateOpen, openIface) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func StructHierarchyContainsDefinition(current StructSymbol, targetDefinition StructSymbol) bool {
+        for ancestor in current.GetHierarchy() {
+            if (ancestor.Definition ?? ancestor) == targetDefinition {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func ClrHierarchyContainsOpenDefinition(startClr Type?, targetOpen Type) bool {
+        var cursor = startClr
+        while cursor != nil {
+            let candidateOpen = if cursor.IsGenericType {
+                cursor.GetGenericTypeDefinition()
+            } else {
+                cursor
+            }
+            if ClrTypeUtilities.AreSame(candidateOpen, targetOpen) {
+                return true
+            }
+            cursor = cursor.BaseType
+        }
+        return false
+    }
+
+    private func OpenClrTypeDefinition(type TypeSymbol) Type? {
+        if type is ImportedTypeSymbol imp && imp.OpenDefinition is {} openDef {
+            return openDef
+        }
+        if type is SequenceTypeSymbol {
+            return typeof(IEnumerable[_])
+        }
+        if type is AsyncSequenceTypeSymbol {
+            return typeof(System.Collections.Generic.IAsyncEnumerable[_])
+        }
+        if type is MapTypeSymbol {
+            return typeof(Dictionary[_, _])
+        }
+        if type.ClrType is {} clr {
+            return if clr.IsGenericType {
+                clr.GetGenericTypeDefinition()
+            } else {
+                clr
+            }
+        }
+        return nil
     }
 
     shared {

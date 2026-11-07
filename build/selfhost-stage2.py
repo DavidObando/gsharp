@@ -468,6 +468,28 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     return actual
 
 
+def locked_package_destination_paths(rel_parts: tuple[str, ...]) -> set[str]:
+    if not rel_parts:
+        return set()
+    folded = tuple(part.casefold() for part in rel_parts)
+    destinations = {"/".join(folded)}
+    if len(folded) >= 3 and folded[0] in {"lib", "ref"}:
+        destinations.add("/".join(folded[2:]))
+    elif len(folded) >= 5 and folded[0] == "runtimes" and folded[2] in {"lib", "nativeassets"}:
+        destinations.add("/".join(folded[4:]))
+    elif len(folded) >= 4 and folded[0] == "runtimes" and folded[2] == "native":
+        destinations.add("/".join(folded[3:]))
+    elif len(folded) >= 4 and folded[0] == "contentfiles":
+        destinations.add("/".join(folded[3:]))
+    elif len(folded) >= 2 and folded[0] in {"build", "buildtransitive", "buildmultitargeting"}:
+        destinations.add("/".join(folded[1:]))
+        if len(folded) >= 3:
+            destinations.add("/".join(folded[2:]))
+        if len(folded) >= 4:
+            destinations.add("/".join(folded[3:]))
+    return {item for item in destinations if item}
+
+
 def validate_vstest_extensions(
     root: Path, allowed_hashes: set[str], package_root: Path | None = None,
     allowed_test_host_hashes: set[str] = ALLOWED_TEST_HOST_HASHES,
@@ -499,7 +521,8 @@ def validate_vstest_extensions(
     for path in package_files:
         package_by_name.setdefault(path.name.casefold(), set()).add(
             sha256_file(path))
-    locked_package_by_name: dict[str, set[str]] = {}
+    locked_package_names: set[str] = set()
+    locked_package_by_dest: dict[str, set[str]] = {}
     if package_root is not None and package_root.is_dir():
         for package_id_root in package_root.iterdir():
             if (not package_id_root.is_dir()
@@ -510,13 +533,33 @@ def validate_vstest_extensions(
                     continue
                 for path in version.rglob("*"):
                     if path.is_file():
-                        locked_package_by_name.setdefault(
-                            path.name.casefold(), set()).add(sha256_file(path))
+                        digest = sha256_file(path)
+                        locked_package_names.add(path.name.casefold())
+                        rel_parts = path.relative_to(version).parts
+                        for dest_rel in locked_package_destination_paths(rel_parts):
+                            locked_package_by_dest.setdefault(
+                                dest_rel, set()).add(digest)
+    output_directories = {
+        marker.parent
+        for marker in root.rglob("*")
+        if marker.is_file()
+        and (marker.name.casefold() == "testhost.dll"
+             or marker.name.casefold().endswith(".deps.json"))
+    } or {root}
     testhost_directories: set[Path] = set()
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         name = path.name.casefold()
+        enclosing_outputs = [
+            directory for directory in output_directories
+            if directory == path.parent or directory in path.parents
+        ]
+        output_dir = (
+            max(enclosing_outputs, key=lambda d: len(d.parts))
+            if enclosing_outputs else root
+        )
+        dest_rel = path.relative_to(output_dir).as_posix().casefold()
         if name in APPROVED_TEST_ADAPTER_CLOSURE:
             accepted_test_adapter(path, allowed_hashes)
         elif name.endswith("testadapter.dll"):
@@ -539,10 +582,11 @@ def validate_vstest_extensions(
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
-        elif (name in locked_package_by_name
-              and sha256_file(path) not in locked_package_by_name[name]):
-            raise CertificationError(
-                f"test output package asset differs from the locked package: {path}")
+        elif (dest_rel in locked_package_by_dest
+              or name in locked_package_names):
+            if sha256_file(path) not in locked_package_by_dest.get(dest_rel, set()):
+                raise CertificationError(
+                    f"test output package asset differs from the locked package: {path}")
     for directory in testhost_directories:
         deps = directory / "testhost.deps.json"
         runtimeconfig = directory / "testhost.runtimeconfig.json"

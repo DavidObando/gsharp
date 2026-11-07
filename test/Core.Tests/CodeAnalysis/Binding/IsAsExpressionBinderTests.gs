@@ -101,19 +101,43 @@ Check(nil!!)`)
 open class OpenBase {}
 class Derived : OpenBase, IFoo {}
 open class UnrelatedOpen {}
+struct UserStruct { var X int32 }
+enum UserEnum { A }
 
-func Check(o object, i IFoo, b OpenBase) bool {
-    let s = o as string
+func Check(o object, i IFoo, b OpenBase, s UserStruct, e UserEnum) bool {
+    let str = o as string
     let d1 = i as Derived
     let d2 = b as Derived
     let u = i as UnrelatedOpen
-    return s == nil && d1 != nil && d2 != nil && u == nil
+    let boxedS = s as object
+    let unboxedS = boxedS as UserStruct?
+    let boxedE = e as object
+    let unboxedE = boxedE as UserEnum?
+    return str == nil && d1 != nil && d2 != nil && u == nil && unboxedS != nil && unboxedE != nil
 }
 
 let d = Derived()
-Check(42, d, d)`)
+Check(42, d, d, UserStruct{X: 7}, UserEnum.A)`)
         Assert.Empty(result.Diagnostics)
         Assert.Equal(true, result.Value)
+    }
+
+    @Fact
+    func BindAsExpression_ConstructedGenericContainerIncompatibleWithOperand_ReportsGS0637() {
+        let rejected = Evaluate(`import System.Collections.Generic
+func Check[T](x int32) List[T]? -> x as List[T]
+Check[string](42) == nil`)
+        Assert.Single(rejected.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let allowed = Evaluate(`import System.Collections.Generic
+func Check[T](x object, xs IEnumerable[T]) bool {
+    let a = x as List[T]
+    let b = xs as List[T]
+    return a == nil && b != nil
+}
+Check[int32](42, List[int32]{1})`)
+        Assert.Empty(allowed.Diagnostics)
+        Assert.Equal(true, allowed.Value)
     }
 
     shared {
