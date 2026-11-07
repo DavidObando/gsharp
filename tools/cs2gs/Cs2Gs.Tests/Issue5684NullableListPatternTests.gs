@@ -368,6 +368,41 @@ namespace Demo
     }
 
     @Fact
+    func WholeValueAndNegatedBindings_PreserveMatchedValues() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public struct Buffer
+    {
+        public int Count => 1;
+        public int this[int index] => 1;
+    }
+    public static class P
+    {
+        static int Text(string? current)
+        {
+            if (current is ['a'] matched) { return matched.Length; }
+            return 0;
+        }
+        static int Value(Buffer? current)
+        {
+            if (current is [1] matched) { return matched.Count; }
+            return 0;
+        }
+        static int Negative(string? current)
+        {
+            if (current is not [var first]) { return 0; }
+            return first;
+        }
+        public static string Run() =>
+            Text("a") + " " + Text(null) + " " + Value(new Buffer()) + " " + Value(null) + " " +
+            Negative("a") + " " + Negative(null);
+    }
+}`, "1 0 1 0 97 0")
+    }
+
+    @Fact
     func NullableSwitchListArms_PreserveRuntimeMatches() {
         AssertRuns(`
 #nullable enable
