@@ -158,7 +158,11 @@ internal partial class ExpressionBinder {
             boundRhs
         }
         let underlying TypeSymbol? = nullableType?.UnderlyingType
-        let assignedValueType = if underlying != nil && ProvesNestedNonNil(preConversion, underlying) {
+        let assignedValueType = if underlying != nil &&
+            (
+            ProvesNestedNonNil(preConversion, underlying) ||
+                RhsArmsProveNonNil(preConversion, rhsTargetType, underlying)
+        ) {
             underlying
         } else if incomingTargetNarrowedType != nil &&
             underlying != nil &&
@@ -307,12 +311,17 @@ internal partial class ExpressionBinder {
         // (cref:ProvesNonNil). Every other right-hand side is stored and
         // yielded exactly as bound, typed `T?`, as the statement form always
         // stored it.
-        let preConversion = if boundRhs is BoundConversionExpression lift && lift.Type == rhsTargetType {
+        var preConversion = if boundRhs is BoundConversionExpression lift && lift.Type == rhsTargetType {
             lift.Expression
         } else {
             boundRhs
         }
         let underlying TypeSymbol? = nullableType?.UnderlyingType
+        if underlying != nil &&
+            !ProvesNonNil(preConversion.Type, underlying) &&
+            TryRewriteNonNilRhsToUnderlying(preConversion, rhsTargetType, underlying, out var rewrittenPreConversion) {
+            preConversion = rewrittenPreConversion!!
+        }
         let provesNonNil = underlying != nil && ProvesNonNil(preConversion.Type, underlying)
         let preStatements = ImmutableArray.CreateBuilder[BoundStatement]()
         // A throwing right-hand side (`x ??= throw E`) has no value to store:
@@ -1224,6 +1233,217 @@ internal partial class ExpressionBinder {
         return BoundVariableExpression(anchor, local)
     }
 
+    private func TryRewriteNonNilRhsToUnderlying(
+        expression BoundExpression,
+        rhsTargetType TypeSymbol,
+        underlying TypeSymbol,
+        out rewritten BoundExpression?
+    ) bool {
+        rewritten = nil
+        if expression.Type == TypeSymbol.Never {
+            rewritten = expression
+            return true
+        }
+        if expression is BoundConversionExpression lift && lift.Type == rhsTargetType {
+            if TryRewriteNonNilRhsToUnderlying(lift.Expression, rhsTargetType, underlying, out var innerRewritten) {
+                rewritten = innerRewritten
+                return true
+            }
+            if !ProvesNonNil(lift.Expression.Type, underlying) {
+                return false
+            }
+            let location = lift.Syntax?.Location ?? lift.Expression.Syntax?.Location ?? default(TextLocation)
+            var converted = conversions.BindConversion(location, lift.Expression, underlying, trackNarrowing: false)
+            if lift.IsChecked && converted is BoundConversionExpression convertedNode && !convertedNode.IsChecked {
+                converted = BoundConversionExpression(
+                    convertedNode.Syntax,
+                    convertedNode.Type,
+                    convertedNode.Expression,
+                    isChecked: true
+                )
+            }
+            rewritten = converted
+            return !(converted is BoundErrorExpression)
+        }
+        if ProvesNonNil(expression.Type, underlying) {
+            let location = expression.Syntax?.Location ?? default(TextLocation)
+            let converted = conversions.BindConversion(location, expression, underlying, trackNarrowing: false)
+            rewritten = converted
+            return !(converted is BoundErrorExpression)
+        }
+        switch expression {
+            case conditional is BoundConditionalExpression {
+                if !TryRewriteNonNilRhsToUnderlying(conditional.WhenTrue, rhsTargetType, underlying, out var trueArm) ||
+                    !TryRewriteNonNilRhsToUnderlying(
+                    conditional.WhenFalse,
+                    rhsTargetType,
+                    underlying,
+                    out var falseArm
+                ) {
+                    return false
+                }
+                rewritten = BoundConditionalExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    trueArm!!,
+                    falseArm!!,
+                    underlying
+                )
+                return true
+            }
+            case switchExpression is BoundSwitchExpression {
+                if switchExpression.Arms.IsEmpty {
+                    return false
+                }
+                let arms = ImmutableArray.CreateBuilder[BoundSwitchExpressionArm](switchExpression.Arms.Length)
+                for arm in switchExpression.Arms {
+                    if !TryRewriteNonNilRhsToUnderlying(arm.Result, rhsTargetType, underlying, out var rewrittenArm) {
+                        return false
+                    }
+                    arms.Add(BoundSwitchExpressionArm(arm.Syntax, arm.Pattern, arm.Guard, rewrittenArm!!))
+                }
+                rewritten = BoundSwitchExpression(
+                    switchExpression.Syntax,
+                    switchExpression.Discriminant,
+                    arms.MoveToImmutable(),
+                    underlying
+                )
+                return true
+            }
+            case block is BoundBlockExpression {
+                if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                    resultVar
+                    .Name
+                    .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                    TryRewriteNonNilCleanupBlockResult(
+                    block.Statements,
+                    resultVar,
+                    rhsTargetType,
+                    underlying,
+                    out var rewrittenStatements,
+                    out var newResultVar
+                ) {
+                    rewritten = BoundBlockExpression(
+                        block.Syntax,
+                        rewrittenStatements,
+                        BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                    )
+                    return true
+                }
+                if !TryRewriteNonNilRhsToUnderlying(block.Expression, rhsTargetType, underlying, out var tail) {
+                    return false
+                }
+                rewritten = BoundBlockExpression(block.Syntax, block.Statements, tail!!)
+                return true
+            }
+            case coalesce is BoundBinaryExpression when coalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                if !TryRewriteNonNilRhsToUnderlying(coalesce.Right, rhsTargetType, underlying, out var rewrittenRight) {
+                    return false
+                }
+                if BoundBinaryOperator.Bind(
+                    SyntaxKind.QuestionQuestionToken,
+                    coalesce.Left.Type,
+                    rewrittenRight!!.Type
+                ) is not{} op ||
+                    !ProvesNonNil(op.Type, underlying) {
+                    return false
+                }
+                let rightLocation = coalesce
+                    .Right
+                    .Syntax
+                    ?.Location ??
+                    coalesce
+                    .Syntax
+                    ?.Location ??
+                    default(TextLocation)
+                let convertedRight = if rewrittenRight!!.Type == op.Type || rewrittenRight!!.Type == TypeSymbol.Never {
+                    rewrittenRight!!
+                } else {
+                    conversions.BindConversion(rightLocation, rewrittenRight!!, op.Type, trackNarrowing: false)
+                }
+                let rebuilt = BoundBinaryExpression(
+                    coalesce.Syntax,
+                    coalesce.Left,
+                    op,
+                    convertedRight,
+                    coalesce.IsChecked
+                )
+                rewritten = if rebuilt.Type == underlying {
+                    cast[BoundExpression](rebuilt)
+                } else {
+                    conversions.BindConversion(rightLocation, rebuilt, underlying, trackNarrowing: false)
+                }
+                return !(rewritten is BoundErrorExpression)
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func TryRewriteNonNilCleanupBlockResult(
+        statements ImmutableArray[BoundStatement],
+        resultVar LocalVariableSymbol,
+        rhsTargetType TypeSymbol,
+        underlying TypeSymbol,
+        out rewritten ImmutableArray[BoundStatement],
+        out newResultVar LocalVariableSymbol?
+    ) bool {
+        let builder = ImmutableArray.CreateBuilder[BoundStatement](statements.Length)
+        newResultVar = nil
+        var changed = false
+        for stmt in statements {
+            if !changed && stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) &&
+                decl.Initializer is {} initializer &&
+                TryRewriteNonNilRhsToUnderlying(initializer, rhsTargetType, underlying, out var rewrittenInit) {
+                let updatedVar = LocalVariableSymbol(resultVar.Name, resultVar.IsReadOnly, underlying)
+                newResultVar = updatedVar
+                builder.Add(BoundVariableDeclaration(decl.Syntax, updatedVar, rewrittenInit!!))
+                changed = true
+            } else if !changed &&
+                stmt is BoundBlockStatement innerBlock &&
+                TryRewriteNonNilCleanupBlockResult(
+                innerBlock.Statements,
+                resultVar,
+                rhsTargetType,
+                underlying,
+                out var innerStatements,
+                out newResultVar
+            ) {
+                builder.Add(BoundBlockStatement(innerBlock.Syntax, innerStatements))
+                changed = true
+            } else if !changed &&
+                stmt is BoundTryStatement tryStmt &&
+                tryStmt.TryBlock is BoundBlockStatement tryBlock &&
+                TryRewriteNonNilCleanupBlockResult(
+                tryBlock.Statements,
+                resultVar,
+                rhsTargetType,
+                underlying,
+                out var tryStatements,
+                out newResultVar
+            ) {
+                builder.Add(
+                    BoundTryStatement(
+                        tryStmt.Syntax,
+                        BoundBlockStatement(tryBlock.Syntax, tryStatements),
+                        tryStmt.CatchClauses,
+                        tryStmt.FinallyBlock
+                    )
+                )
+                changed = true
+            } else {
+                builder.Add(stmt)
+            }
+        }
+        rewritten = if changed {
+            builder.MoveToImmutable()
+        } else {
+            statements
+        }
+        return changed
+    }
+
     shared {
         private func GetNullCoalescingReceiver(read BoundExpression) BoundExpression? -> switch read {
             case field is BoundFieldAccessExpression: field.Receiver
@@ -1255,6 +1475,81 @@ internal partial class ExpressionBinder {
             value BoundExpression?,
             underlying TypeSymbol
         ) bool -> StatementBinder.NestedAssignmentPreservesNarrowing(value, underlying)
+
+        private func RhsArmsProveNonNil(
+            expression BoundExpression?,
+            rhsTargetType TypeSymbol,
+            underlying TypeSymbol
+        ) bool {
+            if expression == nil {
+                return false
+            }
+            if expression.Type == TypeSymbol.Never {
+                return true
+            }
+            if expression is BoundConversionExpression lift && lift.Type == rhsTargetType {
+                return RhsArmsProveNonNil(lift.Expression, rhsTargetType, underlying) ||
+                    ProvesNonNil(lift.Expression.Type, underlying) ||
+                    ProvesNestedNonNil(lift.Expression, underlying)
+            }
+            if ProvesNonNil(expression.Type, underlying) || ProvesNestedNonNil(expression, underlying) {
+                return true
+            }
+            switch expression {
+                case conditional is BoundConditionalExpression {
+                    return RhsArmsProveNonNil(conditional.WhenTrue, rhsTargetType, underlying) &&
+                        RhsArmsProveNonNil(conditional.WhenFalse, rhsTargetType, underlying)
+                }
+                case switchExpression is BoundSwitchExpression {
+                    if switchExpression.Arms.IsEmpty {
+                        return false
+                    }
+                    for arm in switchExpression.Arms {
+                        if !RhsArmsProveNonNil(arm.Result, rhsTargetType, underlying) {
+                            return false
+                        }
+                    }
+                    return true
+                }
+                case block is BoundBlockExpression {
+                    if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                        resultVar
+                        .Name
+                        .StartsWith("<blockResult", StringComparison.Ordinal) {
+                        return CleanupBlockResultProvesNonNil(block.Statements, resultVar, rhsTargetType, underlying)
+                    }
+                    return RhsArmsProveNonNil(block.Expression, rhsTargetType, underlying)
+                }
+                case coalesce is BoundBinaryExpression when coalesce.Op.Kind == BoundBinaryOperatorKind.NullCoalesce {
+                    return RhsArmsProveNonNil(coalesce.Right, rhsTargetType, underlying)
+                }
+                default {
+                    return false
+                }
+            }
+        }
+
+        private func CleanupBlockResultProvesNonNil(
+            statements ImmutableArray[BoundStatement],
+            resultVar LocalVariableSymbol,
+            rhsTargetType TypeSymbol,
+            underlying TypeSymbol
+        ) bool {
+            for stmt in statements {
+                if stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) {
+                    return RhsArmsProveNonNil(decl.Initializer, rhsTargetType, underlying)
+                }
+                if stmt is BoundBlockStatement innerBlock &&
+                    CleanupBlockResultProvesNonNil(innerBlock.Statements, resultVar, rhsTargetType, underlying) {
+                    return true
+                }
+                if stmt is BoundTryStatement{TryBlock: BoundBlockStatement tryBlock} &&
+                    CleanupBlockResultProvesNonNil(tryBlock.Statements, resultVar, rhsTargetType, underlying) {
+                    return true
+                }
+            }
+            return false
+        }
 
         /// The class in [`receiverType`](paramref)'s hierarchy that declares
         /// [`property`](paramref) (instance or static).

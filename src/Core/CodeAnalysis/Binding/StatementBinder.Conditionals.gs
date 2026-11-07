@@ -3001,7 +3001,7 @@ internal partial class StatementBinder {
                     call.Arguments[0],
                     IsByRefArgument(
                         call.Arguments[0],
-                        parameters.Length > 0 ? RefCapabilities.GetParameterRefKind(parameters[0]): RefKind.None
+                        parameters.Length > 0 ? RefCapabilities.GetParameterRefKind(parameters[0]) : RefKind.None
                     ),
                     negate,
                     restrictBareVariableToLocalsAndParams,
@@ -3164,7 +3164,7 @@ internal partial class StatementBinder {
                     call,
                     call.Arguments,
                     call.Arguments[0],
-                    IsByRefArgument(call.Arguments[0], parameters.Length > 0 ? parameters[0].RefKind: RefKind.None),
+                    IsByRefArgument(call.Arguments[0], parameters.Length > 0 ? parameters[0].RefKind : RefKind.None),
                     negate,
                     restrictBareVariableToLocalsAndParams,
                     callableAliases,

@@ -28,7 +28,7 @@ func main() {
         Assert.Contains("':=' short variable declaration has been removed", d.Message)
         Assert.Contains("let x = …", d.Message)
         Assert.Contains("var x = …", d.Message)
-        Assert.Contains("ADR-0077", d.Message)
+        Assert.DoesNotContain("ADR-", d.Message)
     }
 
     @Fact

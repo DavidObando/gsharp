@@ -105,6 +105,10 @@ internal class BinderContext {
         UserLabels = Dictionary[string, BoundLabel]()
         DefinedUserLabels = HashSet[string]()
         UnresolvedGotoLabels = Dictionary[string, TextLocation]()
+        UserLabelBlockRegions = Dictionary[string, ImmutableArray[SyntaxNode]](StringComparer.Ordinal)
+        UserGotoBlockRegions = List[
+            (LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode])
+        ]()
         NarrowingFlow = NarrowingFlow()
         NarrowedVariables = NarrowingFrameStack()
         PendingPatternVariableLeaks = Dictionary[BoundIfStatement, ImmutableArray[LocalVariableSymbol]]()
@@ -269,6 +273,20 @@ internal class BinderContext {
     /// function finishes binding (`StatementBinder.FinalizeUserLabels`);
     /// any name still present is an undefined label (GS0469).
     prop UnresolvedGotoLabels Dictionary[string, TextLocation] {
+        get;
+    }
+
+    /// Issue #5588: the enclosing block-expression regions of each user-defined
+    /// `goto` label in the current function or lambda frame.
+    prop UserLabelBlockRegions Dictionary[string, ImmutableArray[SyntaxNode]] {
+        get;
+    }
+
+    /// Issue #5588: the enclosing block-expression regions at each `goto`
+    /// statement in the current function or lambda frame.
+    prop UserGotoBlockRegions List[
+        (LabelName string, Location TextLocation, SourceRegions ImmutableArray[SyntaxNode])
+    ] {
         get;
     }
 

@@ -9,6 +9,11 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.CodeModel.RoundTrip
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Linq
 import Xunit
@@ -115,23 +120,124 @@ public sealed class C
         AssertNoUnsupported(context, printed)
     }
 
-    /// A `??=` write is conditional on the target being nil and G# has no
-    /// coalescing-assignment EXPRESSION, so it keeps its existing hoisting path
-    /// rather than being emitted in place.
+    /// Issue #4979: G# now supports `??=` in value position (#4967), so
+    /// value-position `x ??= y` is emitted directly as `(x ??= y)` when the
+    /// emitted G# target is nullable, and falls back to the duplication-safe
+    /// conditional assignment when the emitted target is non-nullable in G#.
     @Fact
     func CoalesceAssignment_KeepsExistingLowering() {
-        let (printed, _) = Translate(`
+        let (printed, context) = Translate(`
 #nullable enable
+public sealed class Token
+{
+    public static implicit operator string?(Token t) => "ok";
+}
+
+public sealed class Box
+{
+    public int Value { get; }
+    public Box(int value) => Value = value;
+    public static implicit operator Box(string? value) => new Box(value?.Length ?? 0);
+}
+
 public sealed class C
 {
+    private readonly string? _name;
+    private string? _cache;
+    public C(string? name)
+    {
+        _name = name;
+        _ = this._name != null && (this._name ??= "fallback").StartsWith("x");
+    }
     public void M(string? s)
     {
         string? t = null;
         t ??= s;
-        System.Console.WriteLine(t);
+        System.Console.WriteLine(t ??= "fallback");
+    }
+    public string Load() => _cache ??= "loaded";
+    public bool ConvertedNullableRhs(bool flag) => flag && (_cache ??= new Token())!.Length > 0;
+    public bool ConvertedCastNullableRhs(bool flag, object obj) => flag && (_cache ??= (Token)obj)!.Length > 0;
+    public int ConvertedFromNullableInput(Box? cache, string? text)
+    {
+        return (cache ??= System.Threading.Volatile.Read(ref text!)).Value;
+    }
+    public string GuardedLocal(string? s)
+    {
+        if (s != null)
+        {
+            return s ??= "fallback";
+        }
+        return s ??= "fallback";
+    }
+    public string ImportedNonNullableProperty(System.Globalization.NumberFormatInfo info)
+    {
+        return info.CurrencySymbol ??= "USD";
+    }
+    public int NullableGenericParameter<T>(T? cache, T fallback, T? nullableFallback) where T : IComparable<int>
+    {
+        _ = (cache ??= nullableFallback)!.CompareTo(0);
+        return (cache ??= fallback)!.CompareTo(0);
     }
 }`)
-        Assert.Contains("??=", printed, StringComparison.Ordinal)
+        Assert.Contains("(this._name = \"fallback\")", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("this._name ??= \"fallback\"", printed, StringComparison.Ordinal)
+        Assert.Contains("t ??= s", printed, StringComparison.Ordinal)
+        Assert.Contains("(t ??= \"fallback\")", printed, StringComparison.Ordinal)
+        Assert.Contains("cache ??= \"loaded\")", printed, StringComparison.Ordinal)
+        Assert.Contains("(_cache ??= Token())!!.Length > 0", printed, StringComparison.Ordinal)
+        Assert.Contains("(_cache ??= cast[Token](obj))!!.Length > 0", printed, StringComparison.Ordinal)
+        Assert.Contains("(cache ??= Volatile.Read(&text)).Value", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("(cache ??= Volatile.Read(&text))!!.Value", printed, StringComparison.Ordinal)
+        Assert.Contains("return (s ??= \"fallback\")", printed, StringComparison.Ordinal)
+        Assert.Contains("if s == nil {", printed, StringComparison.Ordinal)
+        Assert.Contains("info.CurrencySymbol = \"USD\"", printed, StringComparison.Ordinal)
+        Assert.Contains("(cache ??= nullableFallback)!!.CompareTo(0)", printed, StringComparison.Ordinal)
+        Assert.Contains("(cache ??= fallback)!!.CompareTo(0)", printed, StringComparison.Ordinal)
+        AssertNoUnsupported(context, printed)
+    }
+
+    @Fact
+    func CoalesceAssignment_AnalyzerMode_ConvertedNullableSyntaxToNonNullBox_OmitsRedundantAssertion() {
+        let source = `#nullable enable
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Demo
+{
+    public sealed class Box
+    {
+        public int Value { get; }
+        public Box(int value) => Value = value;
+        public static implicit operator Box(SyntaxNode? node) => new Box(node == null ? 0 : 1);
+    }
+
+    public static class Helper
+    {
+        public static int Read(Box? cache, IOperation operation) => (cache ??= operation.Syntax).Value;
+    }
+}
+`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("AnalyzerHelper.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(
+            CSharpToGSharpTranslator(analyzerApiMode: true).TranslateDocument(document, context)
+        )
+        Assert.Contains("(cache ??= operation.Syntax).Value", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("(cache ??= operation.Syntax)!!.Value", printed, StringComparison.Ordinal)
+        let tree = SyntaxTree.Parse(SourceText.From(printed, "analyzer.gs"))
+        using let resolver = ReferenceResolver.WithRuntimeReferences([]string{typeof(Diagnostic).Assembly.Location})
+        let compilation = Compilation(resolver, tree){IsLibrary = true}
+        let diagnostics = tree
+            .Diagnostics
+            .Concat(compilation.GlobalScope.Diagnostics)
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError || d.Id == "GS0536")
+            .Select((d Diagnostic) -> d.Id + ": " + d.Message)
+            .ToList()
+        Assert.True(diagnostics.Count == 0, string.Join(Environment.NewLine, diagnostics) + "\n\nPrinted:\n" + printed)
     }
 
     shared {

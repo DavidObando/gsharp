@@ -22,6 +22,54 @@ import GSharp.Compiler.Tests
 /// StackUnexpected; the migrated `GSharpLanguageServerRpc.InvokeAsync`
 /// wall). Each pass now names its temps in a distinct domain.
 open class Issue3592SpillTempNameCollisionTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5842_CachedCompoundSwitchGuards_DeclareSpillLocalsAndRunOnce(blockExpression bool) {
+        let decision = `
+var components (int32, int32) = (0, 0)
+var deconstructed = false
+switch r {
+    case R first when {
+        if !deconstructed {
+            components = first.Pair()
+            deconstructed = true
+        }
+        components.Item1 == 0 && components.Item2 == 2
+    }: -1
+    case R second when {
+        if !deconstructed {
+            components = second.Pair()
+            deconstructed = true
+        }
+        components.Item1 == 1 && components.Item2 == 2
+    }: components.Item2
+    default: 0
+}`
+        let body = if blockExpression {
+            "let result = {\n" + decision.Replace("\nswitch r", "\n(switch r") + ")\n}\nreturn result"
+        } else {
+            decision.Replace("\nswitch r", "\nreturn switch r")
+        }
+        let source = (`package Issue5842
+import System
+class R {
+    shared { var Calls int32 }
+    func Pair() (int32, int32) {
+        Calls++
+        return (1, 2)
+    }
+}
+func Run() int32 {
+    let r = R()
+BODY
+}
+Console.WriteLine(Run())
+Console.WriteLine(R.Calls)
+`).Replace("BODY", body)
+        Assert.Equal("2${Environment.NewLine}1${Environment.NewLine}", CompileAndRun(source))
+    }
+
     @Fact
     func GenericAsync_ThrowingIfExpressionArm_VerifiesAndRuns() {
         const Source = `package Issue3592

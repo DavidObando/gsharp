@@ -121,6 +121,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateIdentifierName(identifier IdentifierNameSyntax) GExpression? {
+            if identifier
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                this
+                .context
+                .GetSymbolInfo(identifier)
+                .Symbol is IMethodSymbol{MethodKind: MethodKind.Ordinary} method {
+                this.ReportMetadataRecordDeconstruction(method, identifier)
+                let emitted = this.EmittedName(method, method.Name)
+                if !method.IsStatic && emitted != method.Name {
+                    return MemberAccessExpression(ThisExpression(), emitted)
+                }
+            }
             if this.TryTranslateLiftedLocalFunctionReference(identifier, out var liftedReference) {
                 return liftedReference
             }
@@ -1224,6 +1237,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateMemberAccess(member MemberAccessExpressionSyntax) GExpression? {
+            if member
+                .Name
+                .Identifier
+                .ValueText == "Deconstruct" &&
+                member.Parent is not InvocationExpressionSyntax &&
+                this
+                .context
+                .SemanticModel
+                .GetOperation(member) is IMethodReferenceOperation reference {
+                this.ReportMetadataRecordDeconstruction(reference.Method, member)
+            }
             // ADR-0169 analyzer mode: idioms that need more than a member
             // rename (e.g. name.Identifier -> expr.GetLastToken()).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerMemberAccess(member, out var analyzerIdiom) {
@@ -2632,9 +2656,10 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateReceiverWithNullForgiveness(
-            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+            recv Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedValue GExpression? = nil
         ) GExpression? {
-            var translated GExpression? = this.TranslateExpression(recv)
+            var translated GExpression? = translatedValue ?? this.TranslateExpression(recv)
             // Issue #3700: a `?.` / `?[` CONDITIONAL RECEIVER is null-guarded by
             // the seam that produced it, so an assertion there is at best
             // redundant and at worst masks the guard — and it is not even
@@ -2734,6 +2759,14 @@ partial class CSharpToGSharpTranslator {
                 case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ): OperandMayBeNull(coalesce.Right)
+                case coalesceAssignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression
+                ): !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                    OperandMayBeNull(coalesceAssignment.Right)
                 default: false
             }
         }
@@ -3068,6 +3101,15 @@ partial class CSharpToGSharpTranslator {
                     .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) {
                     return this.IsGSharpNullableAnalyzerExpression(assignment.Right)
                 }
+                case coalesceAssignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when coalesceAssignment
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.IsGSharpNullableAnalyzerExpression(coalesceAssignment.Right)
+                }
                 default {
                     return this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(expression).Symbol)
                 }
@@ -3189,7 +3231,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         // Whether gsc types the top level of [`expression`](paramref) `T!`: it reads a
-        // frozen oblivious member, or an element of one.
+        // frozen oblivious member, or an element of one (#5541, #5567).
         private func ReadsPlatformTypedImportTopLevel(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
         ) bool {
@@ -3203,13 +3245,20 @@ partial class CSharpToGSharpTranslator {
             let type ITypeSymbol? = this.context.GetTypeInfo(expression).Type
             if expression is ElementAccessExpressionSyntax elementAccess &&
                 !(elementAccess.Expression is ConditionalAccessExpressionSyntax) &&
-                this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol) &&
-                type is {IsReferenceType: true} elementType &&
-                elementType.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .None {
-                return true
+                type is {IsReferenceType: true} {
+                let positions = this.ObliviousPositionsOf(
+                    expression,
+                    this.context.SemanticModel,
+                    this.ObliviousContainerFlowState()
+                )
+                if positions != nil && positions.Platform.Contains("") && !positions.Nullable.Contains("") {
+                    return true
+                }
+            }
+            if expression is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.ReadsPlatformTypedImportTopLevel(coalesce.Right)
             }
             return this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(expression).Symbol)
         }
@@ -3491,7 +3540,7 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return false
             }
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     if this.YieldsValueNilableBeyondItsCSharpType(operand) {
                         return true
@@ -4613,7 +4662,7 @@ partial class CSharpToGSharpTranslator {
                     ) -> this.ExpressionHasAsyncLambdaOperand(leaf, activeMemo)
                 )
             }
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
                 return operands.Any(
                     (
                         operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
@@ -4827,7 +4876,7 @@ partial class CSharpToGSharpTranslator {
             if IsNullOrDefaultLiteral(unwrapped) || IsNullOrSuppressedNull(unwrapped) {
                 return true
             }
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
                 return operands.Count > 0 && operands.All(this.IsUncastAnonymousFunctionOperand)
             }
             return unwrapped is AnonymousFunctionExpressionSyntax lambda && !this.LambdaHasExplicitDelegateCast(lambda)
@@ -4988,7 +5037,7 @@ partial class CSharpToGSharpTranslator {
                 return !this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, tuplePath: path)
             }
             let activeMemo = memo ?? Dictionary[ILocalSymbol, Dictionary[string, bool]](SymbolEqualityComparer.Default)
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     if this.InitializerLambdaReturnsNilableAtTuplePath(operand, path, activeMemo) {
                         return true
@@ -5543,7 +5592,7 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
                 return !this.ImplicitArrayDelegateSlotIsDeclared(implicitArray, activeMemo)
             }
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     if this.InitializerLambdaReturnsNilableBeyondItsCSharpType(operand, activeMemo) {
                         return true
@@ -5662,7 +5711,7 @@ partial class CSharpToGSharpTranslator {
             if this.VarCaptureIsNonNull(value) == false || this.EmittedValueIsNilableBeyondItsCSharpType(value) {
                 return true
             }
-            if ComposedValueOperands(value) is {} operands {
+            if this.ComposedValueOperands(value) is {} operands {
                 for operand in operands {
                     if this.IsNilableOnlyInEmittedGSharp(operand) {
                         return true
@@ -6428,7 +6477,7 @@ partial class CSharpToGSharpTranslator {
                     activeMemo
                 )
             }
-            if ComposedValueOperands(unwrapped) is {} operands {
+            if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     if this.TupleElementYieldsNilableBeyondItsCSharpType(operand, path, activeMemo) {
                         return true
@@ -7095,6 +7144,28 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
+                    if assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+                        if UnwrapTranslatedValue(translated) is NonNullAssertionExpression ||
+                            this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                            return true
+                        }
+                        let target ISymbol? = this.GetProjectedAssignmentTarget(
+                            assignment.Left,
+                            this.context.GetSymbolInfo(assignment.Left).Symbol
+                        )
+                        let targetType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, target)
+                        return if UnwrapTranslatedValue(translated) is AssignmentExpression{
+                            Operator: "??="
+                        } translatedCoalesce {
+                            this.CoalesceAssignmentValueIsStaticallyNonNull(
+                                assignment.Right,
+                                targetType,
+                                translatedCoalesce.Value
+                            )
+                        } else {
+                            this.CoalesceAssignmentValueIsStaticallyNonNull(assignment.Right, targetType)
+                        }
+                    }
                     if !this.AssignmentResultHasNonNullStaticType(assignment) {
                         return false
                     }
@@ -7154,6 +7225,179 @@ partial class CSharpToGSharpTranslator {
                 default: this.context.GetTypeInfo(expression).Type
             }
             return this.DeclaredValueIsStaticallyNonNull(symbol, type)
+        }
+
+        private func CoalesceAssignmentResultIsStaticallyNonNull(
+            coalesceAssignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
+        ) bool {
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceAssignment) {
+                return true
+            }
+            let target ISymbol? = this.GetProjectedAssignmentTarget(
+                coalesceAssignment.Left,
+                this.context.GetSymbolInfo(coalesceAssignment.Left).Symbol
+            )
+            let targetType ITypeSymbol? = this.GetAssignmentTargetType(coalesceAssignment.Left, target)
+            return this.CoalesceAssignmentValueIsStaticallyNonNull(coalesceAssignment.Right, targetType)
+        }
+
+        // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
+        // and the right operand of `??`. `nil` for any other expression.
+        private func ComposedValueOperands(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            includeConvertedNonNullCoalesceAssignment bool = false
+        ) List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]? {
+            let operands = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            switch value {
+                case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
+                    operands.Add(conditional.WhenTrue)
+                    operands.Add(conditional.WhenFalse)
+                }
+                case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
+                    for arm in switchExpression.Arms {
+                        operands.Add(arm.Expression)
+                    }
+                }
+                case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+                ) {
+                    operands.Add(coalesce.Right)
+                }
+                case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
+                    operands.Add(checkedExpression.Expression)
+                }
+                case coalesceAssignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when coalesceAssignment
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+                    if includeConvertedNonNullCoalesceAssignment || !this.CoalesceAssignmentResultIsStaticallyNonNull(
+                        coalesceAssignment
+                    ) {
+                        operands.Add(coalesceAssignment.Right)
+                    }
+                }
+                default {
+                    return nil
+                }
+            }
+            return operands
+        }
+
+        private func CoalesceAssignmentValueIsStaticallyNonNull(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            targetType ITypeSymbol?,
+            translated GExpression? = nil
+        ) bool {
+            if value == nil {
+                return false
+            }
+            var unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = value
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
+                unwrapped = parenthesized.Expression
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                let conditionalValue GExpression? = UnwrapTranslatedValue(translated)
+                if conditionalValue is IfExpression ifExpression {
+                    return this.CoalesceAssignmentValueIsStaticallyNonNull(
+                        conditional.WhenTrue,
+                        targetType,
+                        ifExpression.ThenExpression
+                    ) &&
+                        this.CoalesceAssignmentValueIsStaticallyNonNull(
+                        conditional.WhenFalse,
+                        targetType,
+                        ifExpression.ElseExpression
+                    )
+                }
+                if conditionalValue is IfLetExpression ifLet {
+                    return this.CoalesceAssignmentValueIsStaticallyNonNull(
+                        conditional.WhenTrue,
+                        targetType,
+                        ifLet.ThenExpression
+                    ) &&
+                        this.CoalesceAssignmentValueIsStaticallyNonNull(
+                        conditional.WhenFalse,
+                        targetType,
+                        ifLet.ElseExpression
+                    )
+                }
+                return this.CoalesceAssignmentValueIsStaticallyNonNull(conditional.WhenTrue, targetType) &&
+                    this.CoalesceAssignmentValueIsStaticallyNonNull(conditional.WhenFalse, targetType)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                if UnwrapTranslatedValue(translated) is SwitchExpression translatedSwitch &&
+                    translatedSwitch
+                    .Arms
+                    .Count == switchExpression
+                    .Arms
+                    .Count {
+                    return switchExpression
+                        .Arms
+                        .Select(
+                        (arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax, index int32) -> (
+                            arm,
+                            index
+                        )
+                    )
+                        .All(
+                        (
+                            pair(arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax, index int32)
+                        ) -> this.CoalesceAssignmentValueIsStaticallyNonNull(
+                            pair.Item1.Expression,
+                            targetType,
+                            translatedSwitch.Arms[pair.Item2].Body
+                        )
+                    )
+                }
+                return switchExpression.Arms.All(
+                    (
+                        arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
+                    ) -> this.CoalesceAssignmentValueIsStaticallyNonNull(arm.Expression, targetType)
+                )
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return if UnwrapTranslatedValue(translated) is BinaryExpression{Operator: "??"} translatedBinary {
+                    this.CoalesceAssignmentValueIsStaticallyNonNull(coalesce.Right, targetType, translatedBinary.Right)
+                } else {
+                    this.CoalesceAssignmentValueIsStaticallyNonNull(coalesce.Right, targetType)
+                }
+            }
+            let effectiveTargetType ITypeSymbol? = targetType ?? this.context.GetTypeInfo(unwrapped).ConvertedType
+            let conversionOperator IMethodSymbol? = this.GetUserDefinedConversionInputOperator(
+                unwrapped,
+                effectiveTargetType,
+                out var convertsValue
+            ) ??
+                this.UserDefinedConversionOperator(unwrapped, this.context.SemanticModel)
+            if conversionOperator != nil && convertsValue {
+                if !this.IsSourceSymbol(conversionOperator) {
+                    return false
+                }
+                if this.MapDelegateLikeReturnType(conversionOperator, isAsync: false, unwrapped.GetLocation())
+                    ?.IsNullable == true ||
+                    !this.DeclaredValueIsStaticallyNonNull(conversionOperator, conversionOperator.ReturnType) {
+                    return false
+                }
+                if conversionOperator
+                    .Parameters
+                    .Length == 1 &&
+                    IsNonNullableValueType(conversionOperator.Parameters[0].Type) &&
+                    !this.GSharpExpressionIsStaticallyNonNull(unwrapped, translated) {
+                    return false
+                }
+                return true
+            }
+            if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
+                return true
+            }
+            return this.GSharpExpressionIsStaticallyNonNull(unwrapped, translated)
         }
 
         // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
@@ -7594,7 +7838,10 @@ partial class CSharpToGSharpTranslator {
             return isPatternLocal && this.IsSymbolReassigned(local, scope_)
         }
 
-        private func IsGSharpFlowNarrowedLocal(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
+        private func IsGSharpFlowNarrowedLocal(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            requireRoslynFlowNotNull bool = true
+        ) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
                 expression = parenthesized.Expression
@@ -7602,14 +7849,17 @@ partial class CSharpToGSharpTranslator {
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
             if !(expression is IdentifierNameSyntax) ||
                 !((symbol is ILocalSymbol || symbol is IParameterSymbol)) ||
-                this
-                .context
-                .GetTypeInfo(expression)
-                .Nullability
-                .FlowState != Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull {
+                (
+                requireRoslynFlowNotNull &&
+                    this
+                    .context
+                    .GetTypeInfo(expression)
+                    .Nullability
+                    .FlowState != Microsoft
+                    .CodeAnalysis
+                    .NullableFlowState
+                    .NotNull
+            ) {
                 return false
             }
             let scope_ Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? expression.Ancestors()
@@ -7904,6 +8154,22 @@ partial class CSharpToGSharpTranslator {
                     case ElementAccessExpressionSyntax {
                         continue
                     }
+                    case coalesceAssignment is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression
+                    ) &&
+                        coalesceAssignment.Left == node {
+                        continue
+                    }
+                    case postfixUnaryExpressionSyntax is PostfixUnaryExpressionSyntax when node != expression &&
+                        postfixUnaryExpressionSyntax.RawKind == int32(
+                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    ) {
+                        continue
+                    }
                     case prefixUnaryExpressionSyntax is PrefixUnaryExpressionSyntax when prefixUnaryExpressionSyntax.RawKind == int32(
                         Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalNotExpression
                     ) {
@@ -8146,16 +8412,20 @@ partial class CSharpToGSharpTranslator {
             if this.PatternLocalUsesNullableStorage(assignment.Left) {
                 return false
             }
-            let target ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
-            let targetType ITypeSymbol? = switch target {
-                case local is ILocalSymbol: local.Type
-                case parameter is IParameterSymbol: parameter.Type
-                case field is IFieldSymbol: field.Type
-                case property is IPropertySymbol: property.Type
-                default: this.context.GetTypeInfo(assignment.Left).Type
-            }
+            let target ISymbol? = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol
+            )
+            let targetType ITypeSymbol? = this.GetAssignmentTargetType(assignment.Left, target)
             if targetType != nil && targetType.IsReferenceType == true {
                 return this.TargetWillRemainNonNullableReference(targetType, target)
+            }
+            if targetType is ITypeParameterSymbol &&
+                targetType.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return false
             }
             return targetType != nil && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
         }
@@ -8505,7 +8775,10 @@ partial class CSharpToGSharpTranslator {
                             default: true
                         }
                     }
-                    return this.WritesThroughStorage(assignment.Left, isArgument: false)
+                    return this.RecordDeconstructionRunsUserCode(
+                        this.context.SemanticModel.GetDeconstructionInfo(assignment)
+                    ) ||
+                        this.WritesThroughStorage(assignment.Left, isArgument: false)
                 }
                 case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
@@ -8760,6 +9033,9 @@ partial class CSharpToGSharpTranslator {
         /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
         /// properties) except a discard, and calls a `Deconstruct` method.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
+            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) {
+                return true
+            }
             let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
             if element is INamedTypeSymbol{IsTupleType: true} {
                 return false
@@ -12473,6 +12749,9 @@ partial class CSharpToGSharpTranslator {
                 .RecursivePatternSyntax recursive {
                 return false
             }
+            if this.UserRecordPatternDeconstruct(recursive) != nil {
+                return this.RecordPatternNeedsDeconstruction(recursive)
+            }
             let positional PositionalSlots? = this.TryGetPositionalMembers(
                 recursive,
                 clause.Subpatterns.Count,
@@ -13612,6 +13891,18 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ): this.NullableReferenceValueMayBeNull(
                     coalesce.Right,
+                    respectDeclaredAnnotations,
+                    respectDeclaredCallResults
+                )
+                case coalesceAssignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression
+                ): !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                    this.NullableReferenceValueMayBeNull(
+                    coalesceAssignment.Right,
                     respectDeclaredAnnotations,
                     respectDeclaredCallResults
                 )
@@ -15258,6 +15549,15 @@ partial class CSharpToGSharpTranslator {
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
                 ) {
                     return this.ReceiverValueIsPromotedNullable(coalesce.Right)
+                }
+                case coalesceAssignment is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax when coalesceAssignment
+                    .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.ReceiverValueIsPromotedNullable(coalesceAssignment.Right)
                 }
                 case invocation is InvocationExpressionSyntax when this
                     .context
@@ -17079,37 +17379,6 @@ partial class CSharpToGSharpTranslator {
                     default: false
                 }
             )
-
-            // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
-            // and the right operand of `??`. `nil` for any other expression.
-            private func ComposedValueOperands(value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) List[
-                Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
-            ]? {
-                let operands = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
-                switch value {
-                    case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
-                        operands.Add(conditional.WhenTrue)
-                        operands.Add(conditional.WhenFalse)
-                    }
-                    case switchExpression is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax {
-                        for arm in switchExpression.Arms {
-                            operands.Add(arm.Expression)
-                        }
-                    }
-                    case coalesce is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax when coalesce.IsKind(
-                        Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
-                    ) {
-                        operands.Add(coalesce.Right)
-                    }
-                    case checkedExpression is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax {
-                        operands.Add(checkedExpression.Expression)
-                    }
-                    default {
-                        return nil
-                    }
-                }
-                return operands
-            }
 
             // Whether `value` is (through parentheses) an arm of a conditional or a
             // switch expression, the walk FindContextualValueTarget climbs.

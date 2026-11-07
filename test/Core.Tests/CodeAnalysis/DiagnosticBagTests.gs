@@ -56,6 +56,95 @@ open class DiagnosticBagTests {
     }
 
     @Fact
+    func SuppressDuplicateDiagnostics_TruncateWithinSuppression_DoesNotSuppressNewlyAddedDuplicates() {
+        let location = MakeLocation("source")
+        let a = Diagnostic(location, "GS0001", DiagnosticSeverity.Warning, "a")
+        let b1 = Diagnostic(location, "GS0002", DiagnosticSeverity.Error, "b")
+        let b2 = Diagnostic(location, "GS0002", DiagnosticSeverity.Error, "b")
+        let bag = DiagnosticBag()
+        bag.Report(a)
+        bag.SuppressDuplicateDiagnostics(
+            () -> {
+                bag.TruncateTo(0)
+                bag.Report(b1)
+                bag.Report(b2)
+                return 0
+            }
+        )
+        Assert.Equal([]Diagnostic{b1, b2}, bag)
+    }
+
+    @Fact
+    func SuppressDuplicateDiagnostics_BoundsIndexingWorkAcrossManyRoots_AndPreservesMultiplicity() {
+        let location = MakeLocation("source")
+        let bag = DiagnosticBag()
+        for var i = 0; i < 64; i++ {
+            bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg" + i.ToString()))
+        }
+        bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+        // 50 roots that report nothing do not index or copy the existing diagnostics.
+        for var root = 0; root < 50; root++ {
+            bag.SuppressDuplicateDiagnostics(() -> 0)
+        }
+        Assert.Equal(0, bag.DuplicateSuppressionIndexedCount)
+
+        // 50 roots that re-report existing diagnostics index each existing diagnostic at most once across all roots.
+        for var root = 0; root < 50; root++ {
+            bag.SuppressDuplicateDiagnostics(
+                () -> {
+                    bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                    bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                    return 0
+                }
+            )
+        }
+        Assert.Equal(65, bag.Count)
+        Assert.Equal(65, bag.DuplicateSuppressionIndexedCount)
+
+        // A third identical report in one root exceeds the existing multiplicity (2) and is kept;
+        // the next root sees that newly added third report and suppresses three copies.
+        bag.SuppressDuplicateDiagnostics(
+            () -> {
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                return 0
+            }
+        )
+        Assert.Equal(66, bag.Count)
+        bag.SuppressDuplicateDiagnostics(
+            () -> {
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                bag.Report(Diagnostic(location, "GS0002", DiagnosticSeverity.Warning, "msg0"))
+                return 0
+            }
+        )
+        Assert.Equal(66, bag.Count)
+        Assert.Equal(66, bag.DuplicateSuppressionIndexedCount)
+    }
+
+    @Fact
+    func DiagnosticDescriptors_DoNotCiteInternalAdrOrIssueNumbers() {
+        let fields = typeof(DiagnosticDescriptors).GetFields(
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Public
+        )
+        var count = 0
+        for field in fields {
+            if field.GetValue(nil) is not DiagnosticDescriptor descriptor {
+                continue
+            }
+            count++
+            Assert.DoesNotContain("ADR-", descriptor.MessageFormat, System.StringComparison.OrdinalIgnoreCase)
+            Assert.DoesNotContain("issue #", descriptor.MessageFormat, System.StringComparison.OrdinalIgnoreCase)
+            Assert.DoesNotContain("issues #", descriptor.MessageFormat, System.StringComparison.OrdinalIgnoreCase)
+        }
+        Assert.True(count > 200)
+    }
+
+    @Fact
     func Transaction_RollbackRemovesOnlyDiagnosticsAddedByTransaction() {
         let location = MakeLocation("source")
         let existing = Diagnostic(location, "GS0001", DiagnosticSeverity.Warning, "existing")

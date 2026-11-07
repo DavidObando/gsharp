@@ -540,7 +540,15 @@ shared class SpillSequenceSpiller {
 
         private func SpillSwitchGuard($guard BoundExpression) BoundExpression {
             let spilled = SpillExpression($guard)
-            return BoundBlockExpression(nil, spilled.SideEffects, spilled.Value)
+            if spilled.Locals.IsDefaultOrEmpty {
+                return BoundBlockExpression(nil, spilled.SideEffects, spilled.Value)
+            }
+            // Declare guard spill locals so the slot planner sees their storage (#5842).
+            let statements = ImmutableArray.CreateBuilder[BoundStatement](
+                spilled.Locals.Length + spilled.SideEffects.Length
+            )
+            FlushSideEffects(spilled, statements)
+            return BoundBlockExpression(nil, statements.ToImmutable(), spilled.Value)
         }
 
         private func SpillAndCaptureSelectOperand(

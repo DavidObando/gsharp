@@ -2143,7 +2143,7 @@ func Main() { Console.WriteLine(Run(true, "s", "t")) }`, "GS0158@6:17", "reject"
     })
     Console.WriteLine(x.Length)
 }
-func Main() { Run(true) }`, "GS0158@8:25", "reject", "", ""}
+func Main() { Run(true) }`, "GS0636@3:20 GS0158@8:25", "reject", "", ""}
             yield[]object{"n9_5130_finally_discharges_nullable_widening", `import System.Collections.Generic
 func Run(dict Dictionary[string, string]) int32 {
     var value string = ""
@@ -10512,7 +10512,7 @@ func Run(skip bool) {
     }
     Console.WriteLine(x.Length)
 }
-func Main() { Run(true) }`, "GS0158@14:25", "reject", "", "R6 (#5301)"}
+func Main() { Run(true) }`, "GS0636@5:14 GS0158@14:25", "reject", "", "R6 (#5301)"}
             yield[]object{"m12_5301_goto_into_if_join_condition_does_not_lift_R6", `import System
 func Run(skip bool) {
     var x string? = nil
@@ -10530,7 +10530,7 @@ func Run(skip bool) {
     }
     Console.WriteLine(x.Length)
 }
-func Main() { Run(true) }`, "GS0158@16:25", "reject", "", "R6 (#5301)"}
+func Main() { Run(true) }`, "GS0636@5:14 GS0158@16:25", "reject", "", "R6 (#5301)"}
             yield[]object{"m13_5301_nested_finally_with_break_establishes_narrowing_for_outer_goto_R6", `import System
 func Run(jump bool) int32 {
     var x string? = nil
@@ -10570,7 +10570,7 @@ func Run(cb () -> void, skip bool) {
     }
     Console.WriteLine(x.Length)
 }
-func Main() { Run(func() {}, true) }`, "GS0158@19:25", "reject", "", "R6 (#5301)"}
+func Main() { Run(func() {}, true) }`, "GS0636@6:14 GS0158@19:25", "reject", "", "R6 (#5301)"}
             yield[]object{"m15_5301_goto_into_switch_after_callable_alias_assignment_does_not_lift_R6", `import System
 func Run(cb () -> void, skip bool, flag bool, k int32) {
     var x string? = nil
@@ -10658,7 +10658,7 @@ func Run(skip bool, flag bool) {
     }
     Console.WriteLine(x.Length)
 }
-func Main() { Run(true, false) }`, "GS0158@19:25", "reject", "", "R6 (#5301)"}
+func Main() { Run(true, false) }`, "GS0636@5:14 GS0158@19:25", "reject", "", "R6 (#5301)"}
             yield[]object{"m19_5301_dead_block_bodied_arrow_lambda_label_does_not_leak_reachability_R6", `import System
 func Run() int32 {
     var x string? = nil

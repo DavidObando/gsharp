@@ -595,10 +595,14 @@ partial class CSharpToGSharpTranslator {
                 }
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
-                ) ||
-                    assignment
-                    .IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+                ) {
                     return this.InferredInitializerOriginatesFromDefault(assignment.Right, visited)
+                }
+                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.InferredInitializerOriginatesFromDefault(coalesceAssignment.Right, visited)
                 }
                 case conditional is ConditionalExpressionSyntax {
                     return this.InferredInitializerOriginatesFromDefault(
@@ -3340,6 +3344,11 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
+            if expression.Parent is IsPatternExpressionSyntax decision && this.RecordPatternRunsUserCode(
+                decision.Pattern
+            ) {
+                return false
+            }
             if !this.IsSmartCastableScrutinee(expression) || !IsTrivialPatternReceiver(expression) {
                 return false
             }
@@ -5214,7 +5223,16 @@ partial class CSharpToGSharpTranslator {
                     this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
-                            TupleDeconstructionStatement(binding, names, this.TranslateExpression(assignment.Right))
+                            TupleDeconstructionStatement(
+                                binding,
+                                names,
+                                this.RewriteRecordDeconstruction(
+                                    this.TranslateExpression(assignment.Right),
+                                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
+                                    assignment.Right,
+                                    assignment.Right
+                                )
+                            )
                         )
                     }
                 }

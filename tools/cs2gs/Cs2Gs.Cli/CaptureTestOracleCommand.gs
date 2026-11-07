@@ -237,9 +237,7 @@ internal shared class CaptureTestOracleCommand {
     }
 
     private func PrintUsage() {
-        Console.WriteLine(
-            "cs2gs capture-test-oracle - list the C# test cases per-test-name parity compares against (issue #4633)"
-        )
+        Console.WriteLine("cs2gs capture-test-oracle - list the C# test cases per-test-name parity compares against")
         Console.WriteLine()
         Console.WriteLine("Usage:")
         Console.WriteLine("  cs2gs capture-test-oracle --corpus <repo-root> --out <dir> [options]")

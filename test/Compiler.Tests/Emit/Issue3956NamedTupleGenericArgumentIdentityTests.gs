@@ -354,6 +354,80 @@ return view
         Assert.Equal(NullabilityState.NotNull, metadata.ReadState)
     }
 
+    @Fact
+    func DeepImportedConstructorTupleLiteral_CompilesVerifiesAndRunsWithinDriverBound() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        using let producer = GSharp.Core.Tests.CSharpFixture(TupleProducer, assemblyName: "TupleAssessment")
+        let contract = Path.Combine(fixture.Directory, "TupleAssessment.dll")
+        File.Copy(producer.AssemblyPath, contract)
+        let references = TupleDriverReferences()
+        var imported = "C"
+        var literal = "value"
+        var access = "item.Second"
+        for var depth = 0; depth < 37; depth++ {
+            imported = "System.ValueTuple[" + imported + ", int32]"
+            literal = "(" + literal + ", 42)"
+            access = access + ".Item1"
+        }
+        let source = `package DeepLiteral
+import System
+import TupleAssessment5413
+public class C {}
+let value = C()
+let item = ViewImpl[string, ` + imported + `]("nested", ` + literal + `)
+Console.WriteLine(item.First)
+Console.WriteLine(Object.ReferenceEquals(value, ` + access + `))
+Console.WriteLine(item.Second.Item2)
+`
+        let image = CompileTupleDriver(fixture.Directory, "DeepLiteral", source, contract, references, nil)
+        VerifyTupleDriver(image, contract, references)
+        let executed = RunTupleDriver([]string{image})
+        Assert.Equal(0, executed.Code)
+        Assert.Empty(executed.Error)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("nested\nTrue\n42\n".ReplaceLineEndings(Environment.NewLine)),
+            executed.Output
+        )
+        let overloadSource = `package MixedNullableTupleWidening
+import System
+func Pick(pair (string, int64)) string -> "non-null"
+func Pick(pair (string?, int64)) string -> "nullable"
+var text string? = nil
+let pair (string?, int32) = (text, 7)
+Console.WriteLine(Pick(pair))
+`
+        let overloadImage = CompileTupleDriver(
+            fixture.Directory,
+            "MixedNullableTupleOverload",
+            overloadSource,
+            contract,
+            references,
+            nil
+        )
+        VerifyTupleDriver(overloadImage, contract, references)
+        let overloadExecuted = RunTupleDriver([]string{overloadImage})
+        Assert.Equal(0, overloadExecuted.Code)
+        Assert.Empty(overloadExecuted.Error)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("nullable\n".ReplaceLineEndings(Environment.NewLine)),
+            overloadExecuted.Output
+        )
+        let rejected = `package MixedNullableTupleRejected
+public func Reject(pair (string?, int32)) (string, int64) {
+return pair
+}
+`
+        CompileTupleDriver(
+            fixture.Directory,
+            "MixedNullableTupleRejected",
+            rejected,
+            contract,
+            references,
+            "3,8,3,12",
+            library: true
+        )
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

@@ -234,7 +234,7 @@ internal shared class DiagnosticDescriptors {
     internal let AwaitOutsideAsyncFunction DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0132",
         DiagnosticSeverity.Error,
-        "'await' needs an enclosing function to make suspending, and there is none here (ADR-0174 D4)."
+        "'await' needs an enclosing function to make suspending, and there is none here."
     )
     internal let TypeIsNotAwaitable DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0133",
@@ -530,7 +530,7 @@ internal shared class DiagnosticDescriptors {
     internal let InterfaceMethodHasBody DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0186",
         DiagnosticSeverity.Error,
-        "Interface method '{0}' may not have a body in this version of GSharp; see ADR-0018."
+        "Interface method '{0}' may not have a body in this version of GSharp."
     )
     internal let InterfaceMethodNotImplemented DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0187",
@@ -650,7 +650,7 @@ internal shared class DiagnosticDescriptors {
     internal let DllImportNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0211",
         DiagnosticSeverity.Error,
-        "Attribute '{0}' is reserved (ADR-0086 supersedes this rejection); use '@DllImport(\"library\")' on a function with a ';' body instead."
+        "Attribute '{0}' is reserved; use '@DllImport(\"library\")' on a function with a ';' body instead."
     )
     internal let ConditionalMethodMustReturnVoid DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0212",
@@ -1091,12 +1091,12 @@ internal shared class DiagnosticDescriptors {
     internal let SwitchExpressionArmArrowDeprecated DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0302",
         DiagnosticSeverity.Warning,
-        "'->' in a switch-expression arm is deprecated; use ':' instead (ADR-0074)."
+        "'->' in a switch-expression arm is deprecated; use ':' instead."
     )
     internal let FunctionTypeClauseFuncKeywordDeprecated DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0303",
         DiagnosticSeverity.Warning,
-        "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead (ADR-0075). The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated (ADR-0122)."
+        "'func(...)' as a type clause is deprecated; use the arrow form '(...) -> R' instead. The managed function-pointer form '*func(...) R' is a distinct construct and is not deprecated."
     )
     internal let LambdaBindingTypeCannotBeInferred DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0304",
@@ -1106,47 +1106,47 @@ internal shared class DiagnosticDescriptors {
     internal let ColonEqualsRemoved DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0305",
         DiagnosticSeverity.Error,
-        "':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '{0}') (ADR-0077)."
+        "':=' short variable declaration has been removed; use 'let' (immutable) or 'var' (mutable) instead (e.g. '{0}')."
     )
     internal let OldTypeDeclarationFormRemoved DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0306",
         DiagnosticSeverity.Error,
-        "The 'type Name <kind> ...' declaration head has been removed; use the kind keyword first (e.g. '{0}') (ADR-0078)."
+        "The 'type Name <kind> ...' declaration head has been removed; use the kind keyword first (e.g. '{0}')."
     )
     internal let RecordKeywordRemoved DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0307",
         DiagnosticSeverity.Error,
-        "The 'record' keyword has been removed; use 'data class {0}' (reference equality-bearing) or 'data struct {1}' (value equality-bearing) instead (ADR-0078)."
+        "The 'record' keyword has been removed; use 'data class {0}' (reference equality-bearing) or 'data struct {1}' (value equality-bearing) instead."
     )
     internal let InlineOnlyValidOnStruct DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0308",
         DiagnosticSeverity.Error,
-        "'inline' is only valid on 'struct'; use 'inline struct Name(field T)' for a newtype wrapper (ADR-0078)."
+        "'inline' is only valid on 'struct'; use 'inline struct Name(field T)' for a newtype wrapper."
     )
     internal let OpenOnlyValidOnClass DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0309",
         DiagnosticSeverity.Error,
-        "'open' is only valid on 'class'; '{0}' cannot be marked 'open' (ADR-0078)."
+        "'open' is only valid on 'class'; '{0}' cannot be marked 'open'."
     )
     internal let SealedOnlyValidOnClassOrInterface DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0310",
         DiagnosticSeverity.Error,
-        "'sealed' is only valid on 'class' or 'interface'; '{0}' cannot be marked 'sealed' (ADR-0078)."
+        "'sealed' is only valid on 'class' or 'interface'; '{0}' cannot be marked 'sealed'."
     )
     internal let DataAndInlineCannotCombine DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0311",
         DiagnosticSeverity.Error,
-        "'data' and 'inline' cannot be combined; choose one (ADR-0078)."
+        "'data' and 'inline' cannot be combined; choose one."
     )
     internal let OpenAndSealedCannotCombine DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0312",
         DiagnosticSeverity.Error,
-        "'open' and 'sealed' cannot be combined on the same declaration (ADR-0078)."
+        "'open' and 'sealed' cannot be combined on the same declaration."
     )
     internal let SealedHierarchyMissingCase DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0313",
         DiagnosticSeverity.Warning,
-        "Switch over sealed hierarchy '{0}' is missing a case for '{1}' (ADR-0078)."
+        "Switch over sealed hierarchy '{0}' is missing a case for '{1}'."
     )
 
     // GS0314 (ReceiverClauseOnOwnedType) retired by ADR-0182: it warned
@@ -1161,188 +1161,188 @@ internal shared class DiagnosticDescriptors {
     internal let ConflictingInterfaceDefaults DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0318",
         DiagnosticSeverity.Error,
-        "{0} '{1}' inherits conflicting default implementations of method '{2}' from interfaces '{3}' and '{4}'; declare an override on '{5}' to disambiguate (ADR-0085)."
+        "{0} '{1}' inherits conflicting default implementations of method '{2}' from interfaces '{3}' and '{4}'; declare an override on '{5}' to disambiguate."
     )
 
     internal let InterfaceDefaultRemoved DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0319",
         DiagnosticSeverity.Error,
-        "{0} '{1}' relied on a default implementation of '{2}.{3}' that has been removed; declare an explicit override on '{4}' (ADR-0085)."
+        "{0} '{1}' relied on a default implementation of '{2}.{3}' that has been removed; declare an explicit override on '{4}'."
     )
     internal let InterfaceAbstractMethodHasNoDefault DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0320",
         DiagnosticSeverity.Error,
-        "{0} '{1}' does not implement abstract interface method '{2}.{3}', and the interface provides no default body (ADR-0085)."
+        "{0} '{1}' does not implement abstract interface method '{2}.{3}', and the interface provides no default body."
     )
     internal let InterfaceMethodModifierDeferred DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0321",
         DiagnosticSeverity.Error,
-        "Modifier '{0}' on interface method '{1}' is not supported in this version of GSharp; see ADR-0085 for the deferred-features list."
+        "Modifier '{0}' on interface method '{1}' is not supported in this version of GSharp."
     )
     internal let DllImportMissingLibraryName DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0322",
         DiagnosticSeverity.Error,
-        "'@DllImport' requires a non-empty string library name as the first positional argument (ADR-0086)."
+        "'@DllImport' requires a non-empty string library name as the first positional argument."
     )
     internal let PInvokeUnsupportedMarshallingType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0323",
         DiagnosticSeverity.Error,
-        "Type '{0}' is not supported for P/Invoke marshalling in v1; see ADR-0086 §2 for the supported set."
+        "Type '{0}' is not supported for P/Invoke marshalling in v1."
     )
     internal let PInvokeMustNotHaveBody DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0324",
         DiagnosticSeverity.Error,
-        "P/Invoke function '{0}' must not have a body; replace the '{{ ... }}' block with ';' (ADR-0086)."
+        "P/Invoke function '{0}' must not have a body; replace the '{{ ... }}' block with ';'."
     )
     internal let SemicolonBodyRequiresDllImport DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0325",
         DiagnosticSeverity.Error,
-        "Function '{0}' has no body; only '@DllImport'- or '@LibraryImport'-annotated functions may use a ';' body marker (ADR-0086, ADR-0092)."
+        "Function '{0}' has no body; only '@DllImport'- or '@LibraryImport'-annotated functions may use a ';' body marker."
     )
     internal let DllImportInvalidFunctionShape DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0326",
         DiagnosticSeverity.Error,
-        "'@{0}' is not valid on '{1}': {2} (ADR-0086)."
+        "'@{0}' is not valid on '{1}': {2}."
     )
     internal let DllImportInvalidCharSet DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0327",
         DiagnosticSeverity.Error,
-        "CharSet value '{0}' is not a valid 'CharSet' member (expected 'None', 'Ansi', 'Unicode', or 'Auto'). See ADR-0086."
+        "CharSet value '{0}' is not a valid 'CharSet' member (expected 'None', 'Ansi', 'Unicode', or 'Auto')."
     )
     internal let DllImportInvalidCallingConvention DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0328",
         DiagnosticSeverity.Error,
-        "CallingConvention value '{0}' is not a valid 'CallingConvention' member (expected 'Winapi', 'Cdecl', 'StdCall', 'ThisCall', or 'FastCall'). See ADR-0086."
+        "CallingConvention value '{0}' is not a valid 'CallingConvention' member (expected 'Winapi', 'Cdecl', 'StdCall', 'ThisCall', or 'FastCall')."
     )
     internal let DllImportInvalidEntryPoint DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0329",
         DiagnosticSeverity.Error,
-        "'@DllImport.EntryPoint' must be a non-empty string literal (ADR-0086)."
+        "'@DllImport.EntryPoint' must be a non-empty string literal."
     )
     internal let InterfaceSharedMemberMustBeFunc DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0330",
         DiagnosticSeverity.Error,
-        "Only 'func' members are allowed inside the 'shared' block of interface '{0}'; interface static state is not supported in this release (ADR-0089)."
+        "Only 'func' members are allowed inside the 'shared' block of interface '{0}'; interface static state is not supported in this release."
     )
     internal let StaticVirtualInterfaceMethodNotImplemented DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0331",
         DiagnosticSeverity.Error,
-        "{0} '{1}' does not implement static-virtual interface method '{2}.{3}', and the interface provides no default body (ADR-0089)."
+        "{0} '{1}' does not implement static-virtual interface method '{2}.{3}', and the interface provides no default body."
     )
     internal let NonStaticMemberForStaticVirtualSlot DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0332",
         DiagnosticSeverity.Error,
-        "{0} '{1}' declares instance method '{2}' but interface '{3}.{4}' is static-virtual; declare it inside a 'shared {{ ... }}' block (ADR-0089)."
+        "{0} '{1}' declares instance method '{2}' but interface '{3}.{4}' is static-virtual; declare it inside a 'shared {{ ... }}' block."
     )
     internal let StaticVirtualMemberNotFoundOnTypeParameter DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0333",
         DiagnosticSeverity.Error,
-        "Constrained static access '{1}' on type parameter '{0}' must name a static-virtual member declared by an interface constraint (ADR-0089)."
+        "Constrained static access '{1}' on type parameter '{0}' must name a static-virtual member declared by an interface constraint."
     )
     internal let PrivateInterfaceMemberNotAccessible DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0334",
         DiagnosticSeverity.Error,
-        "Cannot access private interface member '{0}.{1}' from outside the interface declaration (ADR-0090)."
+        "Cannot access private interface member '{0}.{1}' from outside the interface declaration."
     )
     internal let PrivateInterfaceMemberRequiresBody DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0335",
         DiagnosticSeverity.Error,
-        "Private interface method '{0}' must have a body (ADR-0090)."
+        "Private interface method '{0}' must have a body."
     )
     internal let ImplementerOverridesPrivateInterfaceMember DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0336",
         DiagnosticSeverity.Error,
-        "'{0}.{1}' clashes with private interface helper '{2}.{3}'; private interface helpers are invisible to implementers and cannot be overridden or satisfied (ADR-0090). Rename '{4}' on '{5}'."
+        "'{0}.{1}' clashes with private interface helper '{2}.{3}'; private interface helpers are invisible to implementers and cannot be overridden or satisfied. Rename '{4}' on '{5}'."
     )
     internal let PrivateInterfaceMemberKindNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0337",
         DiagnosticSeverity.Error,
-        "'private' is not supported on interface {0} '{1}'; ADR-0090 only allows 'private' on interface methods."
+        "'private' is not supported on interface {0} '{1}'; only interface methods may be 'private'."
     )
     internal let BaseInterfaceCallTypeDoesNotImplementInterface DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0338",
         DiagnosticSeverity.Error,
-        "'base[{0}]' is not valid here: enclosing type '{1}' does not implement interface '{2}' (ADR-0091). Use 'base[IFoo]' only inside an instance member of a type that lists 'IFoo' in its base-type list."
+        "'base[{0}]' is not valid here: enclosing type '{1}' does not implement interface '{2}'. Use 'base[IFoo]' only inside an instance member of a type that lists 'IFoo' in its base-type list."
     )
     internal let BaseInterfaceCallMemberNotFound DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0339",
         DiagnosticSeverity.Error,
-        "Interface '{0}' does not declare a member named '{1}' (ADR-0091)."
+        "Interface '{0}' does not declare a member named '{1}'."
     )
     internal let BaseInterfaceCallMemberIsAbstract DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0340",
         DiagnosticSeverity.Error,
-        "Interface member '{0}.{1}' is abstract and has no default body to delegate to via 'base[{2}]' (ADR-0091). Implement the method directly or delegate to a different interface that supplies a default."
+        "Interface member '{0}.{1}' is abstract and has no default body to delegate to via 'base[{2}]'. Implement the method directly or delegate to a different interface that supplies a default."
     )
     internal let BaseInterfaceCallTargetsPrivateHelper DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0341",
         DiagnosticSeverity.Error,
-        "'base[{0}].{1}' cannot target the private interface helper '{2}.{3}'; private helpers are invisible to implementers (ADR-0090 / ADR-0091)."
+        "'base[{0}].{1}' cannot target the private interface helper '{2}.{3}'; private helpers are invisible to implementers."
     )
     internal let PInvokeMixedDllAndLibraryImport DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0342",
         DiagnosticSeverity.Error,
-        "Function '{0}' carries both '@DllImport' and '@LibraryImport'; the two P/Invoke attribute shapes are mutually exclusive — choose one (ADR-0092)."
+        "Function '{0}' carries both '@DllImport' and '@LibraryImport'; the two P/Invoke attribute shapes are mutually exclusive — choose one."
     )
     internal let LibraryImportInvalidStringMarshalling DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0343",
         DiagnosticSeverity.Error,
-        "StringMarshalling value '{0}' is not a valid 'StringMarshalling' member (expected 'Utf8', 'Utf16', or 'Custom'). See ADR-0092."
+        "StringMarshalling value '{0}' is not a valid 'StringMarshalling' member (expected 'Utf8', 'Utf16', or 'Custom')."
     )
     internal let LibraryImportRequiresStringMarshalling DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0344",
         DiagnosticSeverity.Error,
-        "'@LibraryImport' function '{0}' uses a 'string' parameter or return type but does not specify 'StringMarshalling'; pass 'StringMarshalling: StringMarshalling.Utf8' (or 'Utf16') (ADR-0092)."
+        "'@LibraryImport' function '{0}' uses a 'string' parameter or return type but does not specify 'StringMarshalling'; pass 'StringMarshalling: StringMarshalling.Utf8' (or 'Utf16')."
     )
     internal let StructLayoutInvalidLayoutKind DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0346",
         DiagnosticSeverity.Error,
-        "'@StructLayout(LayoutKind.{0})' is not supported; use 'LayoutKind.Sequential' or 'LayoutKind.Explicit' (ADR-0093)."
+        "'@StructLayout(LayoutKind.{0})' is not supported; use 'LayoutKind.Sequential' or 'LayoutKind.Explicit'."
     )
     internal let FieldOffsetRequiredOnExplicitLayout DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0347",
         DiagnosticSeverity.Error,
-        "Field '{0}' of explicit-layout type '{1}' must declare an '@FieldOffset(N)' (ADR-0093)."
+        "Field '{0}' of explicit-layout type '{1}' must declare an '@FieldOffset(N)'."
     )
     internal let FieldOffsetInvalidOnNonExplicitLayout DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0348",
         DiagnosticSeverity.Error,
-        "'@FieldOffset' on field '{0}' of type '{1}' is only valid when the declaring type is declared with '@StructLayout(LayoutKind.Explicit)' (ADR-0093)."
+        "'@FieldOffset' on field '{0}' of type '{1}' is only valid when the declaring type is declared with '@StructLayout(LayoutKind.Explicit)'."
     )
     internal let PInvokeNonBlittableType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0349",
         DiagnosticSeverity.Error,
-        "Type '{0}' is not blittable and cannot appear in a P/Invoke signature in v1; declare it with '@StructLayout(LayoutKind.Sequential)' (or 'Explicit') and ensure every field has a blittable type (ADR-0093)."
+        "Type '{0}' is not blittable and cannot appear in a P/Invoke signature in v1; declare it with '@StructLayout(LayoutKind.Sequential)' (or 'Explicit') and ensure every field has a blittable type."
     )
     internal let FieldOffsetInvalidValue DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0350",
         DiagnosticSeverity.Error,
-        "'@FieldOffset' requires a non-negative 'int32' constant; got '{0}' (ADR-0093)."
+        "'@FieldOffset' requires a non-negative 'int32' constant; got '{0}'."
     )
     internal let PInvokeClassReturnNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0351",
         DiagnosticSeverity.Error,
-        "Class type '{0}' is not supported as a P/Invoke return value; only struct values (or 'nint' for opaque handles) are permitted (ADR-0093)."
+        "Class type '{0}' is not supported as a P/Invoke return value; only struct values (or 'nint' for opaque handles) are permitted."
     )
     internal let PInvokeNonBlittableByRefPointee DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0352",
         DiagnosticSeverity.Error,
-        "'ref'/'out'/'in' parameter '{0}' requires a blittable pointee; '{1}' is not blittable. Use a blittable primitive (e.g. 'int32', 'int64', 'nint'), or a struct annotated with '@StructLayout(LayoutKind.Sequential)' (ADR-0094)."
+        "'ref'/'out'/'in' parameter '{0}' requires a blittable pointee; '{1}' is not blittable. Use a blittable primitive (e.g. 'int32', 'int64', 'nint'), or a struct annotated with '@StructLayout(LayoutKind.Sequential)'."
     )
     internal let PInvokeDelegateMissingUnmanagedFunctionPointer DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0353",
         DiagnosticSeverity.Error,
-        "Delegate-typed P/Invoke parameter '{0}' of type '{1}' requires the delegate declaration to be annotated with '@UnmanagedFunctionPointer(CallingConvention.Cdecl)' (or a matching calling convention). Without that attribute the runtime cannot produce a stable function-pointer thunk (ADR-0095)."
+        "Delegate-typed P/Invoke parameter '{0}' of type '{1}' requires the delegate declaration to be annotated with '@UnmanagedFunctionPointer(CallingConvention.Cdecl)' (or a matching calling convention). Without that attribute the runtime cannot produce a stable function-pointer thunk."
     )
     internal let FunctionPointerUnknownCallingConvention DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0354",
         DiagnosticSeverity.Error,
-        "Unknown calling convention '{0}' on an 'unmanaged' function-pointer type clause: no 'System.Runtime.CompilerServices.CallConv{0}' type is available in the compilation's references. Use one of the legacy conventions (Cdecl, Stdcall, Thiscall, Fastcall) or a name with a matching CallConv type (ADR-0095 v2)."
+        "Unknown calling convention '{0}' on an 'unmanaged' function-pointer type clause: no 'System.Runtime.CompilerServices.CallConv{0}' type is available in the compilation's references. Use one of the legacy conventions (Cdecl, Stdcall, Thiscall, Fastcall) or a name with a matching CallConv type."
     )
     internal let PInvokeDelegateReturnNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0355",
         DiagnosticSeverity.Error,
-        "Returning a managed delegate '{0}' from a P/Invoke declaration is not supported. Declare the return as 'unmanaged[CC] (...) -> R' (a raw function pointer) or 'nint' and wrap manually with 'Marshal.GetDelegateForFunctionPointer' (ADR-0095)."
+        "Returning a managed delegate '{0}' from a P/Invoke declaration is not supported. Declare the return as 'unmanaged[CC] (...) -> R' (a raw function pointer) or 'nint' and wrap manually with 'Marshal.GetDelegateForFunctionPointer'."
     )
 
     // GS0356 (raw function-pointer clause missing its calling-convention
@@ -1352,28 +1352,28 @@ internal shared class DiagnosticDescriptors {
     internal let MarshalAsUnsupportedUnmanagedType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0357",
         DiagnosticSeverity.Error,
-        "'@MarshalAs' UnmanagedType '{0}' is not in the v1 supported set. Use one of: LPStr, LPWStr, LPUTF8Str, BStr, LPArray, SafeArray, I1, U1, I2, U2, I4, U4, I8, U8, Bool, VariantBool, SysInt, SysUInt, Struct, ByValTStr, ByValArray (ADR-0096)."
+        "'@MarshalAs' UnmanagedType '{0}' is not in the v1 supported set. Use one of: LPStr, LPWStr, LPUTF8Str, BStr, LPArray, SafeArray, I1, U1, I2, U2, I4, U4, I8, U8, Bool, VariantBool, SysInt, SysUInt, Struct, ByValTStr, ByValArray."
     )
 
     internal let MarshalAsIncompatibleType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0358",
         DiagnosticSeverity.Error,
-        "'@MarshalAs(UnmanagedType.{0})' is not valid on parameter '{1}' of type '{2}'. See ADR-0096 §3 for the parameter-type ↔ UnmanagedType compatibility table."
+        "'@MarshalAs(UnmanagedType.{0})' is not valid on parameter '{1}' of type '{2}'."
     )
     internal let MarshalAsMissingRequiredArgument DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0359",
         DiagnosticSeverity.Error,
-        "'@MarshalAs(UnmanagedType.{0})' on parameter '{1}' requires the '{2}' named argument (ADR-0096 §3)."
+        "'@MarshalAs(UnmanagedType.{0})' on parameter '{1}' requires the '{2}' named argument."
     )
     internal let MarshalAsRejected DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0360",
         DiagnosticSeverity.Error,
-        "'@MarshalAs' on parameter '{0}' is not supported: {1} (ADR-0096 §3)."
+        "'@MarshalAs' on parameter '{0}' is not supported: {1}."
     )
     internal let TypeParameterConstraintConflict DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0361",
         DiagnosticSeverity.Error,
-        "Type parameter '{0}' carries the mutually exclusive constraints '{1}' and '{2}' (ADR-0097)."
+        "Type parameter '{0}' carries the mutually exclusive constraints '{1}' and '{2}'."
     )
     internal let BareDefaultNoTargetType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0362",
@@ -1398,32 +1398,32 @@ internal shared class DiagnosticDescriptors {
     internal let LegacyMapTypeClauseSyntax DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0366",
         DiagnosticSeverity.Error,
-        "The 'map[K]V' type-clause spelling has been removed; use 'map[{0},{1}]' instead (ADR-0104)."
+        "The 'map[K]V' type-clause spelling has been removed; use 'map[{0},{1}]' instead."
     )
     internal let YieldInsideTryWithCatch DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0367",
         DiagnosticSeverity.Error,
-        "'yield' cannot appear inside a 'try' block that has a 'catch' clause; only 'try'/'finally' is supported around 'yield' (issue #836)."
+        "'yield' cannot appear inside a 'try' block that has a 'catch' clause; only 'try'/'finally' is supported around 'yield'."
     )
     internal let InterfaceMethodMissingSemicolon DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0368",
         DiagnosticSeverity.Error,
-        "Interface method '{0}' has no body and must be terminated with ';' (ADR-0085); a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke."
+        "Interface method '{0}' has no body and must be terminated with ';'; a bodyless 'func' uses ';' as its no-body marker, mirroring P/Invoke."
     )
     internal let TypeNotCollectionInitializable DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0369",
         DiagnosticSeverity.Error,
-        "Type '{0}' cannot be initialized with a collection initializer because it has no accessible 'Add' method or settable indexer (issue #479)."
+        "Type '{0}' cannot be initialized with a collection initializer because it has no accessible 'Add' method or settable indexer."
     )
     internal let IndexerRequiresParameter DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0370",
         DiagnosticSeverity.Error,
-        "An indexer member must declare at least one parameter, e.g. 'prop this[i int32] T {{ … }}' (issue #944)."
+        "An indexer member must declare at least one parameter, e.g. 'prop this[i int32] T {{ … }}'."
     )
     internal let IndexerRequiresAccessorBody DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0371",
         DiagnosticSeverity.Error,
-        "An indexer member must declare a 'get' and/or 'set' accessor with a body; there is no auto-indexer form (issue #944)."
+        "An indexer member must declare a 'get' and/or 'set' accessor with a body; there is no auto-indexer form."
     )
     internal let InitOnlyPropertyAssignment DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0372",
@@ -1483,42 +1483,42 @@ internal shared class DiagnosticDescriptors {
     internal let BaseClassCallHasNoBaseClass DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0383",
         DiagnosticSeverity.Error,
-        "'base' is not valid here: '{0}' must be an instance member of a class that has a base class to use 'base.Member(...)' (issue #986)."
+        "'base' is not valid here: '{0}' must be an instance member of a class that has a base class to use 'base.Member(...)'."
     )
     internal let BaseClassCallMemberNotFound DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0384",
         DiagnosticSeverity.Error,
-        "Base class '{0}' does not declare an accessible method named '{1}' to call via 'base' (issue #986)."
+        "Base class '{0}' does not declare an accessible method named '{1}' to call via 'base'."
     )
     internal let BaseClassCallSelectorNotBaseClass DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0385",
         DiagnosticSeverity.Error,
-        "'base[{0}]' is not valid: '{1}' is not a base class of '{2}'. Use the immediate base class name, or the plain 'base.Member(...)' form (issue #986)."
+        "'base[{0}]' is not valid: '{1}' is not a base class of '{2}'. Use the immediate base class name, or the plain 'base.Member(...)' form."
     )
     internal let CannotInstantiateAbstractType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0386",
         DiagnosticSeverity.Error,
-        "Cannot create an instance of the abstract type '{0}' (issue #987)."
+        "Cannot create an instance of the abstract type '{0}'."
     )
     internal let AbstractMemberNotImplemented DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0387",
         DiagnosticSeverity.Error,
-        "'{0}' does not implement inherited abstract member '{1}.{2}' (issue #987)."
+        "'{0}' does not implement inherited abstract member '{1}.{2}'."
     )
     internal let AbstractMethodRequiresOpenClass DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0388",
         DiagnosticSeverity.Error,
-        "Abstract method '{0}' must be declared 'open' inside an 'open class'; '{1}' is not open or the method omits 'open' (issue #987)."
+        "Abstract method '{0}' must be declared 'open' inside an 'open class'; '{1}' is not open or the method omits 'open'."
     )
     internal let ConstructedTypeParameterRequiresNewConstraint DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0389",
         DiagnosticSeverity.Error,
-        "Cannot construct '{0}()' because type parameter '{1}' has no 'init()' constraint; add an 'init()' constraint (e.g. '[{2} init()]') to allow construction (issue #988)."
+        "Cannot construct '{0}()' because type parameter '{1}' has no 'init()' constraint; add an 'init()' constraint (e.g. '[{2} init()]') to allow construction."
     )
     internal let PatternVariableNotAllowedUnderOrNot DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0390",
         DiagnosticSeverity.Error,
-        "A pattern variable ('{0}') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead (issue #992)."
+        "A pattern variable ('{0}') may not be declared under an 'or' or 'not' pattern; it would not be definitely assigned. Use '_' instead."
     )
     internal let InterfaceCannotHaveClassBase DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0391",
@@ -1548,72 +1548,72 @@ internal shared class DiagnosticDescriptors {
     internal let DefaultStaticInterfacePropertyNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0396",
         DiagnosticSeverity.Error,
-        "Static interface property '{0}.{1}' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop {2} T;' or '{{ get; }}') instead (ADR-0089)."
+        "Static interface property '{0}.{1}' may not have an accessor body; default-bodied static interface properties are not supported in this release — declare an abstract slot ('prop {2} T;' or '{{ get; }}') instead."
     )
     internal let StaticVirtualInterfacePropertyNotImplemented DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0397",
         DiagnosticSeverity.Error,
-        "Type '{0}' does not implement static-virtual interface property '{1}.{2}' ({3}) (ADR-0089)."
+        "Type '{0}' does not implement static-virtual interface property '{1}.{2}' ({3})."
     )
     internal let UnmanagedPointerIllegalPointee DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0398",
         DiagnosticSeverity.Error,
-        "Unmanaged pointer to '{0}' is not supported; the pointee must be a blittable primitive, a blittable value struct, or another pointer (ADR-0122)."
+        "Unmanaged pointer to '{0}' is not supported; the pointee must be a blittable primitive, a blittable value struct, or another pointer."
     )
     internal let StackAllocElementTypeNotBlittable DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0399",
         DiagnosticSeverity.Error,
-        "'stackalloc' element type '{0}' must be a blittable/unmanaged type (a primitive or pointer); managed types are not supported (ADR-0124)."
+        "'stackalloc' element type '{0}' must be a blittable/unmanaged type (a primitive or pointer); managed types are not supported."
     )
     internal let FixedRequiresUnsafeContext DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0400",
         DiagnosticSeverity.Error,
-        "A 'fixed' statement requires an 'unsafe' context (it binds a raw unmanaged pointer into the pinned buffer); place it inside an 'unsafe func', 'unsafe {{ … }}' block, or 'unsafe' type (ADR-0125)."
+        "A 'fixed' statement requires an 'unsafe' context (it binds a raw unmanaged pointer into the pinned buffer); place it inside an 'unsafe func', 'unsafe {{ … }}' block, or 'unsafe' type."
     )
     internal let FixedSourceNotPinnable DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0401",
         DiagnosticSeverity.Error,
-        "A 'fixed' statement cannot pin a value of type '{0}'; the source must be a managed array ('[]T'), a 'string', a span-like type with a public 'ref T GetPinnableReference()' (e.g. 'System.Span[T]'/'System.ReadOnlySpan[T]'), or a fixed-size buffer field of a variable, and the pointer's element type must match the buffer's (ADR-0125)."
+        "A 'fixed' statement cannot pin a value of type '{0}'; the source must be a managed array ('[]T'), a 'string', a span-like type with a public 'ref T GetPinnableReference()' (e.g. 'System.Span[T]'/'System.ReadOnlySpan[T]'), or a fixed-size buffer field of a variable, and the pointer's element type must match the buffer's."
     )
     internal let InvalidIncrementDecrementTarget DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0402",
         DiagnosticSeverity.Error,
-        "The operand of '{0}' must be writable storage or a writable ref-returning call (ADR-0126)."
+        "The operand of '{0}' must be writable storage or a writable ref-returning call."
     )
     internal let VoidPointerOperationNotAllowed DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0403",
         DiagnosticSeverity.Error,
-        "Cannot {0} a void pointer '*void'; it has no element type. Cast it to a typed pointer first (e.g. '*int32(p)') (ADR-0122 §3)."
+        "Cannot {0} a void pointer '*void'; it has no element type. Cast it to a typed pointer first (e.g. '*int32(p)')."
     )
     internal let UnmanagedPointerOutsideUnsafe DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0404",
         DiagnosticSeverity.Error,
-        "A managed function-pointer type '*func(...) R' requires an 'unsafe' context; place it inside an 'unsafe func', 'unsafe {{ … }}' block, or 'unsafe' type (ADR-0122 §9)."
+        "A managed function-pointer type '*func(...) R' requires an 'unsafe' context; place it inside an 'unsafe func', 'unsafe {{ … }}' block, or 'unsafe' type."
     )
     internal let FunctionPointerAddressOfMismatch DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0405",
         DiagnosticSeverity.Error,
-        "Cannot take the address of this method as a function pointer: {0} (ADR-0122 §9)."
+        "Cannot take the address of this method as a function pointer: {0}."
     )
     internal let FixedBufferRequiresUnsafeContext DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0406",
         DiagnosticSeverity.Error,
-        "A fixed-size buffer field 'fixed name [N]T' requires an 'unsafe' context; declare it inside an 'unsafe struct' (ADR-0122 §10)."
+        "A fixed-size buffer field 'fixed name [N]T' requires an 'unsafe' context; declare it inside an 'unsafe struct'."
     )
     internal let FixedBufferInvalidShape DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0407",
         DiagnosticSeverity.Error,
-        "Fixed-size buffer field '{0}' must have a fixed-length array element type '[N]T' (e.g. 'fixed {1} [8]int32') (ADR-0122 §10)."
+        "Fixed-size buffer field '{0}' must have a fixed-length array element type '[N]T' (e.g. 'fixed {1} [8]int32')."
     )
     internal let FixedBufferInvalidLength DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0408",
         DiagnosticSeverity.Error,
-        "Fixed-size buffer field '{0}' must have a positive length; '{1}' is not allowed (ADR-0122 §10)."
+        "Fixed-size buffer field '{0}' must have a positive length; '{1}' is not allowed."
     )
     internal let FixedBufferElementTypeNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0409",
         DiagnosticSeverity.Error,
-        "Fixed-size buffer element type '{0}' is not supported; use a blittable primitive (bool, int8…int64, uint8…uint64, char, float32, float64) (ADR-0122 §10)."
+        "Fixed-size buffer element type '{0}' is not supported; use a blittable primitive (bool, int8…int64, uint8…uint64, char, float32, float64)."
     )
 
     // GS0410 (leading from-end marker in a standalone range) retired by
@@ -1623,43 +1623,43 @@ internal shared class DiagnosticDescriptors {
     internal let StackAllocCountInferredWithoutInitializer DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0411",
         DiagnosticSeverity.Error,
-        "A count-inferred 'stackalloc []T' requires a brace-delimited initializer to determine its length (e.g. 'stackalloc []int32{{1, 2, 3}}'); supply an initializer or spell the count explicitly ('stackalloc [n]T') (ADR-0124 / issue #1041)."
+        "A count-inferred 'stackalloc []T' requires a brace-delimited initializer to determine its length (e.g. 'stackalloc []int32{{1, 2, 3}}'); supply an initializer or spell the count explicitly ('stackalloc [n]T')."
     )
 
     internal let StackAllocInitializerLengthMismatch DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0412",
         DiagnosticSeverity.Error,
-        "A 'stackalloc [{0}]T{{…}}' initializer must supply exactly {1} element(s), but {2} were given; the explicit count and the initializer length must match (ADR-0124 / issue #1041)."
+        "A 'stackalloc [{0}]T{{…}}' initializer must supply exactly {1} element(s), but {2} were given; the explicit count and the initializer length must match."
     )
     internal let BaseClassCallAbstractMember DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0413",
         DiagnosticSeverity.Error,
-        "Cannot call the abstract base member '{0}.{1}' via 'base'; it has no base implementation to delegate to (issue #1260)."
+        "Cannot call the abstract base member '{0}.{1}' via 'base'; it has no base implementation to delegate to."
     )
     internal let AmbiguousImportedStaticMember DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0414",
         DiagnosticSeverity.Error,
-        "Reference to '{0}' is ambiguous between members of two or more imported types; qualify it with the owning type name (issue #1201)."
+        "Reference to '{0}' is ambiguous between members of two or more imported types; qualify it with the owning type name."
     )
     internal let SizeOfRequiresUnmanagedType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0415",
         DiagnosticSeverity.Error,
-        "'sizeof' operand '{0}' must be an unmanaged type — a blittable primitive, an enum, a pointer, a blittable value struct, or a type parameter constrained 'unmanaged' (issue #1336)."
+        "'sizeof' operand '{0}' must be an unmanaged type — a blittable primitive, an enum, a pointer, a blittable value struct, or a type parameter constrained 'unmanaged'."
     )
     internal let MultipleSlicePatternsInListPattern DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0416",
         DiagnosticSeverity.Error,
-        "A list pattern may contain at most one slice subpattern ('..') (issue #1505)."
+        "A list pattern may contain at most one slice subpattern ('..')."
     )
     internal let NestingTooDeep DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0417",
         DiagnosticSeverity.Error,
-        "The code is nested too deeply for the compiler to parse; simplify or flatten the nesting (issue #1602)."
+        "The code is nested too deeply for the compiler to parse; simplify or flatten the nesting."
     )
     internal let UsingRequiresSingleVariableDeclaration DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0418",
         DiagnosticSeverity.Error,
-        "A 'using' statement requires a single variable declaration ('let'/'var'/'const name = …'); tuple or named deconstruction is not supported here (issue #1603)."
+        "A 'using' statement requires a single variable declaration ('let'/'var'/'const name = …'); tuple or named deconstruction is not supported here."
     )
     internal let NameOfRequiresNameReference DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0420",
@@ -1739,7 +1739,7 @@ internal shared class DiagnosticDescriptors {
     internal let AmbiguousImportedType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0471",
         DiagnosticSeverity.Error,
-        "Type '{0}' is ambiguous between two or more imported namespaces; qualify the reference to disambiguate (issue #2012)."
+        "Type '{0}' is ambiguous between two or more imported namespaces; qualify the reference to disambiguate."
     )
     internal let PrivateMemberInaccessible DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0472",
@@ -1749,12 +1749,12 @@ internal shared class DiagnosticDescriptors {
     internal let ExpressionTreeUnsupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0473",
         DiagnosticSeverity.Error,
-        "An expression-tree lambda may not contain {0} (issue #2130)."
+        "An expression-tree lambda may not contain {0}."
     )
     internal let ExpressionTreeTargetMustBeDelegate DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0474",
         DiagnosticSeverity.Error,
-        "Cannot convert a lambda expression to '{0}' because expression-tree targets must be 'System.Linq.Expressions.Expression[TDelegate]' where 'TDelegate' is a delegate type (issue #2130)."
+        "Cannot convert a lambda expression to '{0}' because expression-tree targets must be 'System.Linq.Expressions.Expression[TDelegate]' where 'TDelegate' is a delegate type."
     )
     internal let PartialModifierMissing DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0475",
@@ -1849,7 +1849,7 @@ internal shared class DiagnosticDescriptors {
     internal let AmbiguousSourceType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0496",
         DiagnosticSeverity.Error,
-        "Type '{0}' is ambiguous between two or more imported packages that each declare a same-named type; qualify the reference with its package name to disambiguate (issue #2455)."
+        "Type '{0}' is ambiguous between two or more imported packages that each declare a same-named type; qualify the reference with its package name to disambiguate."
     )
     internal let AsyncIteratorFunctionLiteralNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0497",
@@ -1869,7 +1869,7 @@ internal shared class DiagnosticDescriptors {
     internal let InvalidCompoundAssignmentOperatorShape DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0500",
         DiagnosticSeverity.Error,
-        "Compound assignment operator '{0}' must be an instance method taking exactly one parameter and returning no value; it mutates the receiver in place (issue #2834)."
+        "Compound assignment operator '{0}' must be an instance method taking exactly one parameter and returning no value; it mutates the receiver in place."
     )
     internal let AmbiguousImportedMember DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0501",
@@ -1904,7 +1904,7 @@ internal shared class DiagnosticDescriptors {
     internal let FixedBufferAlreadyFixed DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0507",
         DiagnosticSeverity.Error,
-        "A 'fixed' statement cannot pin fixed-size buffer '{0}': it is reached through a variable that is already fixed (a local, a by-value parameter, or a pointer dereference) and cannot move; use the buffer expression itself as a '*T' pointer instead of pinning it (ADR-0125)."
+        "A 'fixed' statement cannot pin fixed-size buffer '{0}': it is reached through a variable that is already fixed (a local, a by-value parameter, or a pointer dereference) and cannot move; use the buffer expression itself as a '*T' pointer instead of pinning it."
     )
     internal let UnconstrainedNullableSequenceElement DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0508",
@@ -1924,7 +1924,7 @@ internal shared class DiagnosticDescriptors {
     internal let ChannelRequiresInitializer DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0520",
         DiagnosticSeverity.Error,
-        "Channel-typed declaration '{0}' requires an explicit initializer — an auto-created channel has no sensible default (buffer size, ownership); initialize with '{1}()' (rendezvous) or '{1}(capacity)', or declare the slot as '{1}?' if the channel is genuinely optional (ADR-0159)."
+        "Channel-typed declaration '{0}' requires an explicit initializer — an auto-created channel has no sensible default (buffer size, ownership); initialize with '{1}()' (rendezvous) or '{1}(capacity)', or declare the slot as '{1}?' if the channel is genuinely optional."
     )
     internal let PointerGenericTypeArgument DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0521",
@@ -1934,22 +1934,22 @@ internal shared class DiagnosticDescriptors {
     internal let ChannelLocalUsedBeforeAssignment DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0522",
         DiagnosticSeverity.Error,
-        "Channel-typed local '{0}' may be used before it is assigned — a path can reach this use without a preceding assignment, and a bare 'chan T' slot has no zero value; assign it on every path first, e.g. '{0} = make({1})' or '{0} = make({1}, capacity)' (ADR-0159, issue #3316)."
+        "Channel-typed local '{0}' may be used before it is assigned — a path can reach this use without a preceding assignment, and a bare 'chan T' slot has no zero value; assign it on every path first, e.g. '{0} = make({1})' or '{0} = make({1}, capacity)'."
     )
     internal let NilComparisonAlwaysConstant DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0523",
         DiagnosticSeverity.Warning,
-        "Comparison of non-nullable '{0}' with 'nil' is always {1} — a bare (non-'?') collection-typed value can never be nil (ADR-0159); remove the dead comparison or declare the operand as '({0})?'."
+        "Comparison of non-nullable '{0}' with 'nil' is always {1} — a bare (non-'?') collection-typed value can never be nil; remove the dead comparison or declare the operand as '({0})?'."
     )
     internal let AssignmentArgumentWasNamedArgumentSpelling DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0524",
         DiagnosticSeverity.Warning,
-        "Argument '{0} = …' is an assignment to '{0}', not a named argument — the '=' named-argument separator was retired (ADR-0161). Write '{0}: value' for a named argument, or '({0} = value)' to assign deliberately."
+        "Argument '{0} = …' is an assignment to '{0}', not a named argument — the '=' named-argument separator was retired. Write '{0}: value' for a named argument, or '({0} = value)' to assign deliberately."
     )
     internal let PatternBindingNotAllowedInIsExpression DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0525",
         DiagnosticSeverity.Error,
-        "Pattern binding '{0}' uses the switch spelling 'name is Type', which is not allowed in an 'is' expression; write the designation after the type ('is Type {0}') to introduce a pattern variable (ADR-0166), or use 'if let' / 'guard let' / 'while let' (issues #3351, #3352, #3409)."
+        "Pattern binding '{0}' uses the switch spelling 'name is Type', which is not allowed in an 'is' expression; write the designation after the type ('is Type {0}') to introduce a pattern variable, or use 'if let' / 'guard let' / 'while let'."
     )
     internal let InvalidMultiAssignmentTarget DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0526",
@@ -1984,7 +1984,7 @@ internal shared class DiagnosticDescriptors {
     internal let PatternVariableNotDefinitelyAssigned DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0532",
         DiagnosticSeverity.Error,
-        "Pattern variable '{0}' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '||' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits (ADR-0166, issue #3409)."
+        "Pattern variable '{0}' is not definitely assigned here; it is only usable where its pattern is known to have matched — the right operand of '&&' (or of '||' after a negated test), the branches selected by the condition, and the statements after an 'if' whose other branch always exits."
     )
 
     // Issue #3510: named delegate declarations moved to the standalone
@@ -2055,83 +2055,83 @@ internal shared class DiagnosticDescriptors {
     internal let RendezvousChannelConstructed DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0548",
         DiagnosticSeverity.Warning,
-        "'chan[{0}]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[{0}]()' if an unbounded buffer was intended (ADR-0174 D12)."
+        "'chan[{0}]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[{0}]()' if an unbounded buffer was intended."
     )
 
     internal let SendOnReceiveOnlyChannel DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0549",
         DiagnosticSeverity.Error,
-        "Cannot send on the receive-only channel type '{0}'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2)."
+        "Cannot send on the receive-only channel type '{0}'; only a 'chan[T]' or 'out chan[T]' handle can send."
     )
     internal let ReceiveFromSendOnlyChannel DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0550",
         DiagnosticSeverity.Error,
-        "Cannot receive from the send-only channel type '{0}'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2)."
+        "Cannot receive from the send-only channel type '{0}'; only a 'chan[T]' or 'in chan[T]' handle can receive."
     )
     internal let ChannelBindingTargetCount DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0554",
         DiagnosticSeverity.Error,
-        "'{0}' binds exactly {1}, not {2}: a channel receive yields the element and an 'ok' flag (ADR-0174 D3)."
+        "'{0}' binds exactly {1}, not {2}: a channel receive yields the element and an 'ok' flag."
     )
     internal let SuspendingCallBlocks DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0558",
         DiagnosticSeverity.Warning,
-        "'{0}' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point."
+        "'{0}' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes. Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point."
     )
     internal let BatchOnRendezvousChannel DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0562",
         DiagnosticSeverity.Warning,
-        "'{0}' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10)."
+        "'{0}' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay."
     )
     internal let AsyncLetOutsideScope DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0551",
         DiagnosticSeverity.Error,
-        "'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15)."
+        "'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block."
     )
     internal let AsyncLetNeverAwaited DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0559",
         DiagnosticSeverity.Warning,
-        "'{0}' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15)."
+        "'{0}' is never awaited, so its work is started and then cancelled at the end of the scope."
     )
     internal let AsyncLetReadWithoutAwait DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0569",
         DiagnosticSeverity.Error,
-        "'{0}' is an 'async let' binding; read it with 'await {0}' so the suspension is visible (ADR-0174 D15)."
+        "'{0}' is an 'async let' binding; read it with 'await {0}' so the suspension is visible."
     )
     internal let SelectArmGuardIsNotBoolean DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0556",
         DiagnosticSeverity.Error,
-        "A select arm's 'when' guard must be a 'bool'; '{0}' is not (ADR-0174 D8)."
+        "A select arm's 'when' guard must be a 'bool'; '{0}' is not."
     )
     internal let SelectCancelledArmNeedsContext DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0557",
         DiagnosticSeverity.Error,
-        "'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8)."
+        "'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter."
     )
     internal let SelectChannelSentAndReceived DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0564",
         DiagnosticSeverity.Warning,
-        "'{0}' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8)."
+        "'{0}' is both sent to and received from by this select, so it can complete by talking to itself."
     )
     internal let WhileLetOverChannelNeedsReceive DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0555",
         DiagnosticSeverity.Error,
-        "'while let {0} = {1}' binds the channel itself; receive from it with 'while let {0} = <-{1}' to loop until the channel is closed (ADR-0174 D3)."
+        "'while let {0} = {1}' binds the channel itself; receive from it with 'while let {0} = <-{1}' to loop until the channel is closed."
     )
     internal let RetiredBuiltin DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0566",
         DiagnosticSeverity.Error,
-        "'{0}' has been retired (ADR-0174); {1}"
+        "'{0}' has been retired; {1}"
     )
     internal let LegacyChanTypeClauseSyntax DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0567",
         DiagnosticSeverity.Error,
-        "The 'chan T' type-clause spelling has been removed; use 'chan[{0}]' instead (ADR-0174 D2)."
+        "The 'chan T' type-clause spelling has been removed; use 'chan[{0}]' instead."
     )
     internal let AmbiguousImportedTypeReference DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0547",
         DiagnosticSeverity.Error,
-        "Type '{0}' is ambiguous between imported '{1}' and imported '{2}'; it would bind '{3}' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734)."
+        "Type '{0}' is ambiguous between imported '{1}' and imported '{2}'; it would bind '{3}' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean."
     )
 
     // ADR-0176 / issue #3897: `rethrow` emits ILOpCode.Rethrow, which the CLR
@@ -2140,13 +2140,13 @@ internal shared class DiagnosticDescriptors {
     internal let RethrowOutsideCatchHandler DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0570",
         DiagnosticSeverity.Error,
-        "'rethrow' can only appear inside a 'catch' handler — there is no exception being handled here. Use 'throw <expr>' to raise a new exception (ADR-0176)."
+        "'rethrow' can only appear inside a 'catch' handler — there is no exception being handled here. Use 'throw <expr>' to raise a new exception."
     )
 
     internal let RethrowInsideNestedFinally DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0571",
         DiagnosticSeverity.Error,
-        "'rethrow' cannot appear in a 'finally' clause nested inside the enclosing 'catch' handler — the CLR has left the handler by then. Move the 'rethrow' into the 'catch' body, or 'throw' a captured exception instead (ADR-0176)."
+        "'rethrow' cannot appear in a 'finally' clause nested inside the enclosing 'catch' handler — the CLR has left the handler by then. Move the 'rethrow' into the 'catch' body, or 'throw' a captured exception instead."
     )
 
     // ADR-0177 / issue #3897: a `when` filter is emitted as a CLR filter region,
@@ -2156,13 +2156,13 @@ internal shared class DiagnosticDescriptors {
     internal let AwaitInsideCatchFilter DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0572",
         DiagnosticSeverity.Error,
-        "Cannot 'await' inside a 'catch' filter: the filter runs in the CLR's first exception pass, which cannot suspend. Move the awaited work into the 'catch' body (ADR-0177)."
+        "Cannot 'await' inside a 'catch' filter: the filter runs in the CLR's first exception pass, which cannot suspend. Move the awaited work into the 'catch' body."
     )
 
     internal let UnreachableCatchClause DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0573",
         DiagnosticSeverity.Error,
-        "This 'catch' clause is unreachable: an earlier clause catches '{0}', which already covers '{1}'. Reorder the clauses so the more specific one comes first, or give this one a 'when' filter (ADR-0177)."
+        "This 'catch' clause is unreachable: an earlier clause catches '{0}', which already covers '{1}'. Reorder the clauses so the more specific one comes first, or give this one a 'when' filter."
     )
 
     // ADR-0174 D4 / issue #3954: `await` makes the awaiting function
@@ -2172,23 +2172,23 @@ internal shared class DiagnosticDescriptors {
     internal let AwaitAtSuspensionBoundary DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0574",
         DiagnosticSeverity.Error,
-        "'await' makes '{0}' suspending, but its signature is fixed — inference stops at an entry point, an 'open'/'override'/interface member, an accessor, a constructor, an operator, an iterator, a function literal, and an 'unsafe' or 'fixed' body (ADR-0174 D4). Move the awaited work into a 'suspend func' (implicitly awaited, 'R') or an 'async func' (an observable 'Task[R]') and call that from here; where the form allows it, declaring this one that way works too."
+        "'await' makes '{0}' suspending, but its signature is fixed — inference stops at an entry point, an 'open'/'override'/interface member, an accessor, a constructor, an operator, an iterator, a function literal, and an 'unsafe' or 'fixed' body. Move the awaited work into a 'suspend func' (implicitly awaited, 'R') or an 'async func' (an observable 'Task[R]') and call that from here; where the form allows it, declaring this one that way works too."
     )
 
     internal let AwaitInsideGoOperand DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0576",
         DiagnosticSeverity.Error,
-        "Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it (ADR-0174 D5)."
+        "Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it."
     )
     internal let AwaitInsideLockBody DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0575",
         DiagnosticSeverity.Error,
-        "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996)."
+        "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (C# spells the same rule CS1996)."
     )
     internal let ExplicitInterfaceMemberNotOnTypeSurface DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0577",
         DiagnosticSeverity.Error,
-        "Type '{0}' has no member '{1}' of its own. '{1}' is declared by the interface '{2}', which '{0}' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013)."
+        "Type '{0}' has no member '{1}' of its own. '{1}' is declared by the interface '{2}', which '{0}' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead."
     )
 
     // Issue #3879 (ADR-0060 amendment): `ref`-returning properties and indexers
@@ -2197,13 +2197,13 @@ internal shared class DiagnosticDescriptors {
     internal let RefPropertyRequiresComputedGetter DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0578",
         DiagnosticSeverity.Error,
-        "Property '{0}' cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. An auto-property's getter only copies out of its backing field, and an abstract or interface slot names no storage at all. Write 'prop {0} ref T {{ get {{ return ref <lvalue> }} }}' or 'prop {0} ref T -> <lvalue>' on a class, struct, or shared block (issue #3879)."
+        "Property '{0}' cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. An auto-property's getter only copies out of its backing field, and an abstract or interface slot names no storage at all. Write 'prop {0} ref T {{ get {{ return ref <lvalue> }} }}' or 'prop {0} ref T -> <lvalue>' on a class, struct, or shared block."
     )
 
     internal let RefPropertyCannotHaveSetter DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0579",
         DiagnosticSeverity.Error,
-        "Property '{0}' returns by reference, so it cannot declare a '{1}' accessor: a caller writes through the returned reference instead of calling a setter. Drop the '{1}' accessor, or drop the 'ref' from the declaration (issue #3879)."
+        "Property '{0}' returns by reference, so it cannot declare a '{1}' accessor: a caller writes through the returned reference instead of calling a setter. Drop the '{1}' accessor, or drop the 'ref' from the declaration."
     )
 
     // Issue #4037: an OPEN instantiation of a constrained generic. The type
@@ -2216,7 +2216,7 @@ internal shared class DiagnosticDescriptors {
     internal let TypeParameterDoesNotForwardConstraint DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0580",
         DiagnosticSeverity.Error,
-        "Type parameter '{0}' does not carry the '{2}' constraint that type parameter '{1}' requires, so this instantiation is not valid for every '{0}'. Forward the constraint onto the declaration of '{0}' (issue #4037; C# spells the same rule CS0314)."
+        "Type parameter '{0}' does not carry the '{2}' constraint that type parameter '{1}' requires, so this instantiation is not valid for every '{0}'. Forward the constraint onto the declaration of '{0}' (C# spells the same rule CS0314)."
     )
 
     // Issue #4043: a type parameter may be constrained by ANOTHER type
@@ -2236,12 +2236,12 @@ internal shared class DiagnosticDescriptors {
     internal let AttributeConstructorNotFound DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0583",
         DiagnosticSeverity.Error,
-        "Attribute '{0}' has no constructor that accepts the argument list ({1}). Change the arguments to match one of its constructors (issue #4097; C# spells the same rule CS1729 and CS1503)."
+        "Attribute '{0}' has no constructor that accepts the argument list ({1}). Change the arguments to match one of its constructors (C# spells the same rule CS1729 and CS1503)."
     )
     internal let AttributeConstructorParameterTypeNotSupported DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0584",
         DiagnosticSeverity.Error,
-        "Constructor parameter '{0}' of user-defined attribute '{1}' has type '{2}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4097; C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use)."
+        "Constructor parameter '{0}' of user-defined attribute '{1}' has type '{2}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use)."
     )
 
     // Issue #4143: the declaration-time analogue of GS0584 / C#'s CS0181.
@@ -2253,7 +2253,7 @@ internal shared class DiagnosticDescriptors {
     internal let AttributeConstructorParameterInvalidType DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0585",
         DiagnosticSeverity.Error,
-        "Attribute constructor parameter '{0}' has type '{1}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4143; C# spells the same rule CS0181)."
+        "Attribute constructor parameter '{0}' has type '{1}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (C# spells the same rule CS0181)."
     )
 
     internal let GenericLocalFunctionUnsupportedOwner DiagnosticDescriptor = DiagnosticDescriptor(
@@ -2268,7 +2268,7 @@ internal shared class DiagnosticDescriptors {
     internal let RetiredExplicitExtensionReceiverModifier DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0587",
         DiagnosticSeverity.Error,
-        "The 'extension' keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove 'extension' (ADR-0182)."
+        "The 'extension' keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove 'extension'."
     )
 
     // Issue #4219 (umbrella remainder): a `ref`-returning function literal
@@ -2401,17 +2401,17 @@ internal shared class DiagnosticDescriptors {
     internal let SharedClassCannotDeclare DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0617",
         DiagnosticSeverity.Error,
-        "Shared class '{0}' cannot declare {1}: every member of a shared class is shared, and it has no instance constructor, finalizer or nested 'shared' block (ADR-0195)."
+        "Shared class '{0}' cannot declare {1}: every member of a shared class is shared, and it has no instance constructor, finalizer or nested 'shared' block."
     )
     internal let SharedClassModifierConflict DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0618",
         DiagnosticSeverity.Error,
-        "'shared' cannot be combined with '{0}': a shared class is neither inheritable nor instantiable (ADR-0195)."
+        "'shared' cannot be combined with '{0}': a shared class is neither inheritable nor instantiable."
     )
     internal let SharedClassCannotHaveBaseTypes DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0619",
         DiagnosticSeverity.Error,
-        "Shared class '{0}' cannot declare a base class or implement interfaces (ADR-0195)."
+        "Shared class '{0}' cannot declare a base class or implement interfaces."
     )
     internal let InvalidAbstractProperty DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0620",
@@ -2602,6 +2602,11 @@ internal shared class DiagnosticDescriptors {
         "GS0635",
         DiagnosticSeverity.Error,
         "Constant value '{0}' cannot be converted to '{1}' because it is NaN or out of range. Use 'unchecked(...)' to convert it with saturation."
+    )
+    internal let GotoIntoNestedBlock DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0636",
+        DiagnosticSeverity.Error,
+        "A goto cannot enter a nested block at label '{0}'."
     )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",

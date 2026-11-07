@@ -1107,16 +1107,32 @@ open class PortablePdbPhase7Tests {
 
     @Fact
     func PdbChecksum_Algorithm_Is_SHA256_And_Matches_Pdb_Content() {
+        // Issue #4926: PdbChecksum hashes the Portable PDB with the 20-byte #Pdb ID zeroed.
+        // CodeView's GUID and Stamp equal BlobContentId.FromHash(PdbChecksum).
         let (pe, pdbBytes) = EmitWith(DebugInformationOptions{Format: DebugInformationFormat.Portable})
         using let peReader = PEReader(MemoryStream(pe.ToArray()))
+        let cv = peReader.ReadDebugDirectory().Single(
+            (e DebugDirectoryEntry) -> e.Type == DebugDirectoryEntryType.CodeView
+        )
+        let cvData = peReader.ReadCodeViewDebugDirectoryData(cv)
         let cs = peReader.ReadDebugDirectory().Single(
             (e DebugDirectoryEntry) -> e.Type == DebugDirectoryEntryType.PdbChecksum
         )
         let data = peReader.ReadPdbChecksumDebugDirectoryData(cs)
         Assert.Equal("SHA256", data.AlgorithmName)
+        using let pdbProvider = MetadataReaderProvider.FromPortablePdbStream(MemoryStream(pdbBytes))
+        let pdbReader = pdbProvider.GetMetadataReader()
+        let header = pdbReader.DebugMetadataHeader!!
+        let zeroedPdb = pdbBytes.ToArray()
+        Array.Clear(zeroedPdb, header.IdStartOffset, header.Id.Length)
         using let sha = SHA256.Create()
-        let expected = sha.ComputeHash(pdbBytes)
+        let expected = sha.ComputeHash(zeroedPdb)
+        let rawStampedHash = sha.ComputeHash(pdbBytes)
         Assert.Equal(expected, data.Checksum.ToArray())
+        Assert.NotEqual(rawStampedHash, data.Checksum.ToArray())
+        let expectedContentId = BlobContentId.FromHash(data.Checksum)
+        Assert.Equal(expectedContentId.Guid, cvData.Guid)
+        Assert.Equal(expectedContentId.Stamp, cv.Stamp)
     }
 
     @Fact

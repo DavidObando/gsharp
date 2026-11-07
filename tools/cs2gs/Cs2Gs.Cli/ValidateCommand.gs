@@ -146,7 +146,7 @@ internal shared class ValidateCommand {
         if !hasOracle && !countOnlyParity {
             Console.Error.WriteLine(
                 "cs2gs: validate requires --csharp-test-oracle <dir> (see `cs2gs capture-test-oracle`), " +
-                    "or --count-only-test-parity to knowingly skip per-test-name parity (#4633)."
+                    "or --count-only-test-parity to knowingly skip per-test-name parity."
             )
             return 1
         }
@@ -206,7 +206,7 @@ internal shared class ValidateCommand {
             // discovered afterwards from a green result.
             Console.WriteLine(
                 "cs2gs validate: test-parity failure allow-list active with " +
-                    "${options.TestParityAllowList!!.Entries!!.Count} entry/entries (#3885)."
+                    "${options.TestParityAllowList!!.Entries!!.Count} entry/entries."
             )
         }
         let pipeline = MigrationPipeline(options, ValidationStages())
@@ -336,7 +336,7 @@ internal shared class ValidateCommand {
     }
 
     private func PrintUsage() {
-        Console.WriteLine("cs2gs validate - validate an already-migrated tree for a subset of apps (issue #3668)")
+        Console.WriteLine("cs2gs validate - validate an already-migrated tree for a subset of apps")
         Console.WriteLine()
         Console.WriteLine("Usage:")
         Console.WriteLine("  cs2gs validate --corpus <repo-root> --migrated <dir> [options]")
@@ -361,10 +361,10 @@ internal shared class ValidateCommand {
         Console.WriteLine("  --sdk-version <v>  Pin Gsharp.NET.Sdk to exactly <v>. A tree whose global.json pins the")
         Console.WriteLine("                     SDK (migrate --sdk-pin global-json) is validated with that pin;")
         Console.WriteLine("                     a disagreeing --sdk-version is an error.")
-        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list (issue #3885); default:")
+        Console.WriteLine("  --test-allowlist <file>  Test-parity failure allow-list; default:")
         Console.WriteLine("                     <corpus>/" + TestParityAllowList.DefaultRelativePath + " when present.")
         Console.WriteLine("  --csharp-test-oracle <dir>  C# test-case names from `cs2gs capture-test-oracle`; every")
-        Console.WriteLine("                     mirrored test project is checked name for name (issue #4633).")
+        Console.WriteLine("                     mirrored test project is checked name for name.")
         Console.WriteLine("  --test-name-baseline <file>  Justified per-test-name differences; default:")
         Console.WriteLine(
             "                     <corpus>/" + TestNameParityBaseline.DefaultRelativePath + " when present."

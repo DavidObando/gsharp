@@ -664,6 +664,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchExpression(
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GExpression? {
+            this.BeginRecordPatternDecision(node)
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerTypeNameSwitch(node, out var analyzerTypeName) {
                 return analyzerTypeName
             }
@@ -756,7 +757,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 arms.Add(SwitchArm(nil, unmatchedThrow, nil))
             }
-            return SwitchExpression(subject, arms)
+            return this.WrapRecordPatternDecision(node, SwitchExpression(subject, arms))
         }
 
         private func NullableReferenceSwitchResultType(
@@ -1029,6 +1030,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchExpressionAsStatement(
             node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax
         ) GStatement {
+            this.BeginRecordPatternDecision(node)
             let subject GExpression? = this.TranslateExpression(node.GoverningExpression)
             let cases = List[SwitchStatementCase]()
             var hasTotalArm = false
@@ -1091,7 +1093,12 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            return SwitchStatement(subject, cases)
+            let declarations = this.RecordPatternCacheDeclarations(node)
+            if declarations.Count == 0 {
+                return SwitchStatement(subject, cases)
+            }
+            declarations.Add(SwitchStatement(subject, cases))
+            return BlockStatement(declarations)
         }
 
         private func MapSystemInvalidOperationException(location Location) GTypeReference? {
@@ -1129,6 +1136,7 @@ partial class CSharpToGSharpTranslator {
         private func TranslateSwitchStatement(node Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax) sequence[
             GStatement
         ] {
+            this.BeginRecordPatternDecision(node)
             let subject GExpression? = this.TranslateExpression(node.Expression)
             let cases = List[SwitchStatementCase]()
             let orderedBySection = this.RegisterSwitchLocalFunctionLifts(node)
@@ -1323,6 +1331,9 @@ partial class CSharpToGSharpTranslator {
                         )
                     )
                 )
+            }
+            for declaration in this.RecordPatternCacheDeclarations(node) {
+                yield declaration
             }
             yield SwitchStatement(subject, cases)
         }
@@ -1687,7 +1698,15 @@ partial class CSharpToGSharpTranslator {
             let names = List[string]()
             let extractions = List[GStatement]()
             let conversions = List[GStatement]()
-            this.CollectForEachVariableTargets(node.Variable, names, extractions, conversions)
+            let deconstruction = this.context.SemanticModel.GetDeconstructionInfo(node)
+            this.CollectForEachVariableTargets(
+                node.Variable,
+                names,
+                extractions,
+                conversions,
+                deconstruction,
+                forEachInfo.ElementType
+            )
             if names.Count >= 2 {
                 let isAwait = !node.AwaitKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
                 var body BlockStatement
@@ -1702,7 +1721,9 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
-                if !isAwait {
+                if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
+                    this.ReportMetadataRecordDeconstruction(deconstruction.Method, node, forEachInfo.ElementType)
+                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method, forEachInfo.ElementType)
                     if extractions.Count > 0 || conversions.Count > 0 {
                         let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
                         statements.AddRange(extractions)
@@ -1730,11 +1751,30 @@ partial class CSharpToGSharpTranslator {
                 let pair = this.AllocateDeconstructionTempName(node.Variable, preferredName)
                 let statements = List[GStatement](
                     body.Statements.Count + extractions.Count + conversions.Count + 1
-                ){TupleDeconstructionStatement(BindingKind.Let, names, IdentifierExpression(pair))}
+                ){TupleDeconstructionStatement(
+                        BindingKind.Let,
+                        names,
+                        this.RewriteRecordDeconstruction(
+                            IdentifierExpression(pair),
+                            deconstruction.Method,
+                            node,
+                            actualReceiverType: forEachInfo.ElementType,
+                            emittedReceiverType: if forEachInfo.ElementType == nil {
+                                nil
+                            } else {
+                                this.typeMapper.Map(
+                                    projectedElement ?? forEachInfo.ElementType,
+                                    this.context,
+                                    node.Variable.GetLocation()
+                                )
+                            }
+                        )
+                    )
+                }
                 statements.AddRange(extractions)
                 statements.AddRange(conversions)
                 statements.AddRange(body.Statements)
-                return ForInStatement(pair, iterable, BlockStatement(statements), isAwait: true)
+                return ForInStatement(pair, iterable, BlockStatement(statements), isAwait: isAwait)
             }
             for binding in nullableBindings {
                 this.state.NullableForEachBindings.Remove(binding)
@@ -1862,7 +1902,9 @@ partial class CSharpToGSharpTranslator {
             variable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             names List[string],
             extractions List[GStatement],
-            conversions List[GStatement]
+            conversions List[GStatement],
+            deconstruction DeconstructionInfo,
+            receiverType ITypeSymbol?
         ) {
             switch Unparenthesize(variable) {
                 case tuple is TupleExpressionSyntax {
@@ -1872,14 +1914,20 @@ partial class CSharpToGSharpTranslator {
                         .Any() ||
                         tuple
                         .Arguments
-                        .Any((argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax)
-                    for argument in tuple.Arguments {
+                        .Any(
+                        (argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax
+                    ) ||
+                        this.RecordDeconstructionRunsUserCode(deconstruction)
+                    for var i = 0; i < tuple.Arguments.Count; i++ {
                         this.CollectForEachTupleArgumentTarget(
-                            argument.Expression,
+                            tuple.Arguments[i].Expression,
                             names,
                             extractions,
                             conversions,
-                            hasNestedDeconstruction
+                            this.NestedDeconstructionInfo(deconstruction, i),
+                            hasNestedDeconstruction,
+                            this.DeconstructionOutputType(deconstruction, i, receiverType),
+                            this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
                     }
                 }
@@ -1888,7 +1936,9 @@ partial class CSharpToGSharpTranslator {
                         declaration.Designation,
                         names,
                         extractions,
-                        declaration.Type.IsVar
+                        deconstruction,
+                        declaration.Type.IsVar,
+                        receiverType
                     )
                 }
                 case identifier is IdentifierNameSyntax {
@@ -1908,7 +1958,10 @@ partial class CSharpToGSharpTranslator {
             names List[string],
             extractions List[GStatement],
             conversions List[GStatement],
-            hasNestedDeconstruction bool
+            deconstruction DeconstructionInfo,
+            hasNestedDeconstruction bool,
+            receiverType ITypeSymbol? = nil,
+            emittedReceiverType GTypeReference? = nil
         ) {
             let unwrapped = Unparenthesize(expression)!!
             if this.IsDeconstructionDiscard(unwrapped) {
@@ -1990,7 +2043,10 @@ partial class CSharpToGSharpTranslator {
                                 IdentifierExpression(carrier),
                                 preserveValue: false,
                                 extractions,
-                                declaration.Type.IsVar
+                                deconstruction,
+                                declaration.Type.IsVar,
+                                receiverType,
+                                emittedReceiverType
                             )
                         }
                     }
@@ -2000,17 +2056,30 @@ partial class CSharpToGSharpTranslator {
                     names.Add(carrier)
                     let nestedNames = List[string](nestedTuple.Arguments.Count)
                     let nestedExtractions = List[GStatement]()
-                    for argument in nestedTuple.Arguments {
+                    for var i = 0; i < nestedTuple.Arguments.Count; i++ {
                         this.CollectForEachTupleArgumentTarget(
-                            argument.Expression,
+                            nestedTuple.Arguments[i].Expression,
                             nestedNames,
                             nestedExtractions,
                             conversions,
-                            hasNestedDeconstruction: true
+                            this.NestedDeconstructionInfo(deconstruction, i),
+                            hasNestedDeconstruction: true,
+                            this.DeconstructionOutputType(deconstruction, i, receiverType),
+                            this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
                     }
                     extractions.Add(
-                        TupleDeconstructionStatement(BindingKind.Let, nestedNames, IdentifierExpression(carrier))
+                        TupleDeconstructionStatement(
+                            BindingKind.Let,
+                            nestedNames,
+                            this.RewriteRecordDeconstruction(
+                                IdentifierExpression(carrier),
+                                deconstruction.Method,
+                                nestedTuple,
+                                emittedReceiverType: emittedReceiverType,
+                                actualReceiverType: receiverType
+                            )
+                        )
                     )
                     extractions.AddRange(nestedExtractions)
                 }
@@ -2024,7 +2093,9 @@ partial class CSharpToGSharpTranslator {
             designation VariableDesignationSyntax,
             names List[string],
             extractions List[GStatement],
-            inferredType bool
+            deconstruction DeconstructionInfo,
+            inferredType bool,
+            receiverType ITypeSymbol?
         ) {
             switch designation {
                 case single is SingleVariableDesignationSyntax {
@@ -2034,7 +2105,8 @@ partial class CSharpToGSharpTranslator {
                     names.Add("_")
                 }
                 case parenthesized is ParenthesizedVariableDesignationSyntax {
-                    for child in parenthesized.Variables {
+                    for var i = 0; i < parenthesized.Variables.Count; i++ {
+                        let child = parenthesized.Variables[i]
                         switch child {
                             case single is SingleVariableDesignationSyntax {
                                 names.Add(this.EmittedName(single, single.Identifier)!!)
@@ -2050,7 +2122,10 @@ partial class CSharpToGSharpTranslator {
                                     IdentifierExpression(carrier),
                                     preserveValue: false,
                                     extractions,
-                                    inferredType
+                                    this.NestedDeconstructionInfo(deconstruction, i),
+                                    inferredType,
+                                    this.DeconstructionOutputType(deconstruction, i, receiverType),
+                                    this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                                 )
                             }
                         }
@@ -2622,6 +2697,16 @@ partial class CSharpToGSharpTranslator {
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]? = nil,
             treatAsUntyped bool = false
         ) GPattern {
+            if this.UserRecordPatternDeconstruct(recursive!!) != nil {
+                return this.TranslateRecordRecursivePattern(
+                    recursive!!,
+                    receiver,
+                    bindings,
+                    usedDesignators,
+                    guards,
+                    mutableBindings
+                )
+            }
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
             // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
             // maps to a type pattern whose designator is the binding receiver.

@@ -1742,6 +1742,87 @@ public static class Consumer
         }
     }
 
+    /// Issue #4933: when a dependency project (`Oahu.Cli.Server`) fails to compile,
+    /// direct and transitive dependent apps (`Oahu.Cli`, `Oahu.Cli.Tui`,
+    /// `Oahu.Cli.Tests`, `Oahu.Cli.E2E.Tests`) must become `dependency-blocked`
+    /// with zero locationless (`gsFile: null`, `csFile: null`) consumer artifacts.
+    @Fact
+    func Issue4933_FailedDependencyCascade_BlocksDirectAndTransitiveDependentsWithoutLocationlessArtifacts() {
+        let mirrorRoot = NewDirectory("issue-4933-cascade")
+        try {
+            let serverDir = Path.Combine(mirrorRoot, "src", "Oahu.Cli.Server")
+            let auditDir = Path.Combine(serverDir, "Audit")
+            let cliDir = Path.Combine(mirrorRoot, "src", "Oahu.Cli")
+            let tuiDir = Path.Combine(mirrorRoot, "src", "Oahu.Cli.Tui")
+            let testsDir = Path.Combine(mirrorRoot, "test", "Oahu.Cli.Tests")
+            let e2eDir = Path.Combine(mirrorRoot, "test", "Oahu.Cli.E2E.Tests")
+            for dir in[]string{auditDir, cliDir, tuiDir, testsDir, e2eDir} {
+                Directory.CreateDirectory(dir)
+            }
+            let serverProj = Path.Combine(serverDir, "Oahu.Cli.Server.gsproj")
+            let cliProj = Path.Combine(cliDir, "Oahu.Cli.gsproj")
+            let tuiProj = Path.Combine(tuiDir, "Oahu.Cli.Tui.gsproj")
+            let testsProj = Path.Combine(testsDir, "Oahu.Cli.Tests.gsproj")
+            let e2eProj = Path.Combine(e2eDir, "Oahu.Cli.E2E.Tests.gsproj")
+            let auditLogGs = Path.Combine(auditDir, "AuditLog.gs")
+            File.WriteAllText(serverProj, "<Project />\n")
+            File.WriteAllText(
+                cliProj,
+                "<Project>\n  <ItemGroup>\n    <ProjectReference Include=\"../Oahu.Cli.Server/Oahu.Cli.Server.gsproj\" />\n  </ItemGroup>\n</Project>\n"
+            )
+            File.WriteAllText(
+                tuiProj,
+                "<Project>\n  <ItemGroup>\n    <ProjectReference Include=\"../Oahu.Cli/Oahu.Cli.gsproj\" />\n  </ItemGroup>\n</Project>\n"
+            )
+            File.WriteAllText(
+                testsProj,
+                "<Project>\n  <ItemGroup>\n    <ProjectReference Include=\"../../src/Oahu.Cli/Oahu.Cli.gsproj\" />\n  </ItemGroup>\n</Project>\n"
+            )
+            File.WriteAllText(
+                e2eProj,
+                "<Project>\n  <ItemGroup>\n    <ProjectReference Include=\"../Oahu.Cli.Tests/Oahu.Cli.Tests.gsproj\" />\n  </ItemGroup>\n</Project>\n"
+            )
+            File.WriteAllText(auditLogGs, "package Oahu.Cli.Server.Audit\n")
+
+            let options = PipelineOptions{
+                GscPath: "/fake/gsc.dll",
+                OutputRoot: mirrorRoot,
+                SourceRoot: mirrorRoot,
+                OutputLayout: MigrationOutputLayout.Repository
+            }
+            let serverDiag = GscDiagnostic("GS0158", "dependency error", "error", auditLogGs, 39, 42)
+            for (appId, projPath, projDir) in[](string, string, string){
+                ("src/Oahu.Cli", cliProj, cliDir),
+                ("src/Oahu.Cli.Tui", tuiProj, tuiDir),
+                ("test/Oahu.Cli.Tests", testsProj, testsDir),
+                ("test/Oahu.Cli.E2E.Tests", e2eProj, e2eDir)
+            } {
+                let ownGs = Path.Combine(projDir, "Program.gs")
+                File.WriteAllText(ownGs, "package Main\n")
+                let app = CorpusApp(appId, projPath, TargetKind.Library)
+                let context = StageExecutionContext(
+                    app,
+                    options,
+                    GscInvoker(options.GscPath!!),
+                    projDir,
+                    Path.Combine(mirrorRoot, "artifacts", appId.Replace('/', '_')),
+                    TriageBuilder("run_4933", "2026-10-05T00:00:00Z", "0.5.0", app.Id)
+                )
+                context.ProjectReferences.AddRange(DeclaredProjectItems.Read(projPath, "ProjectReference"))
+                context.EmittedFiles.Add(
+                    EmittedGsFile(ownGs, appId + "/Program.gs", Path.Combine(projDir, "Program.cs"), "package Main\n")
+                )
+                Assert.True(CompileStage.IsReferencedProjectDiagnostic(context, serverDiag), appId)
+                let outcome = CompileStage.BuildFailureOutcome(context, []GscDiagnostic{serverDiag}, "synthetic")
+                Assert.Equal(StageStatus.Failed, outcome.Status)
+                Assert.Equal("dependency-blocked", outcome.FailureCategory)
+                Assert.Empty(outcome.Artifacts)
+            }
+        } finally {
+            Directory.Delete(mirrorRoot, recursive: true)
+        }
+    }
+
     private data class CliRunOutcome(ExitCode int32, RunDir string, Run RunResult, Summary ReportModel) : IEquatable[
         Issue4767ReferencedDependencyValidityTests.CliRunOutcome
     ] { }
