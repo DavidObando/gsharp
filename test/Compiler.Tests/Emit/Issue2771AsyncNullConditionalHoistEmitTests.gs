@@ -44,7 +44,7 @@ open class Issue2771AsyncNullConditionalHoistEmitTests {
             IlVerifier.Verify(outputPath)
             let loadContext = AssemblyLoadContext("Issue2771FieldShape", isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(outputPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
                 let stateMachines = assembly
                     .GetTypes()
                     .Where((type Type) -> type.Name.Contains("d__", StringComparison.Ordinal))

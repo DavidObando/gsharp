@@ -123,7 +123,7 @@ data class Settings(Retries int32 = 3, Label string = "ready")`))){IsLibrary = t
                 "Models",
                 StringComparison.Ordinal
             ) {
-                loadContext.LoadFromAssemblyPath(libraryPath)
+                loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }

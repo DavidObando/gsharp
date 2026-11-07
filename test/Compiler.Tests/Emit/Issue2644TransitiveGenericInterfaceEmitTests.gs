@@ -87,7 +87,7 @@ func Main() {
         private func VerifyInterfaceMetadata(assemblyPath string) {
             let context = AssemblyLoadContext("Issue2644", isCollectible: true)
             try {
-                let assembly = context.LoadFromAssemblyPath(assemblyPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let modal = assembly.GetType("Issue2644.Contracts.IModal", throwOnError: true)!!
                 let genericModal = assembly.GetType("Issue2644.Contracts.IModal`1", throwOnError: true)!!
                 let picker = assembly.GetType("Issue2644.Contracts.RegionPickerModal", throwOnError: true)!!

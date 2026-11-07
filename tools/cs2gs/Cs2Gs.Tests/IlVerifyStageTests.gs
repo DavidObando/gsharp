@@ -198,7 +198,7 @@ open class IlVerifyStageTests {
             Assert.Contains("ConversionView+XamlClosure_2::Build_1", result.Output, StringComparison.Ordinal)
             let loadContext = AssemblyLoadContext("issue2671-" + Guid.NewGuid().ToString("N"), isCollectible: true)
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 AssertClosureRan(assembly, "BookLibraryView+XamlClosure_1")
                 AssertClosureRan(assembly, "ConversionView+XamlClosure_2")
             } finally {

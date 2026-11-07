@@ -112,7 +112,7 @@ class Boxer2390 {
         let dllPath = CompileLibrary(source)
         let loadContext = AssemblyLoadContext("Issue2390Reflection", isCollectible: true)
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(dllPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(dllPath)))
             let colorType = assembly.GetType("i2390reflection.Color2390Reflection") ??
                 throw InvalidOperationException("Color2390Reflection type not found.")
             let boxerType = assembly.GetType("i2390reflection.Boxer2390") ??

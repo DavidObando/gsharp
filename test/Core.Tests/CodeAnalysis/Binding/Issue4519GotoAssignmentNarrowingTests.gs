@@ -7157,6 +7157,76 @@ Run(func() { })`)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Id == "GS9999")
     }
 
+    @Fact
+    func PointerArgumentStoredByCallee_UnknownCallableInvalidatesNarrowing() {
+        let result = Evaluate(`unsafe class Holder {
+    shared {
+        var stored *void
+
+        func Save(p *void) {
+            stored = p
+        }
+    }
+}
+
+unsafe func Run(choose bool) int32 {
+    var text string? = "safe"
+    let clear = func() {
+        *(*nint(Holder.stored)) = 0
+    }
+    var cb (() -> void) = func() { }
+    if choose {
+        cb = clear
+    }
+    Holder.Save(*void(&text))
+    if text != nil {
+        cb()
+        return text.Length
+    }
+    return 0
+}
+
+Run(true)`)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
+    func ByRefArgumentInUnsafeFunction_UnknownCallablePreservesNarrowing() {
+        AssertRuns(`import System
+
+unsafe class Holder {
+    shared {
+        var stored *void
+    }
+}
+
+func Touch(ref p string?) {
+}
+
+unsafe func Run(choose bool) int32 {
+    var text string? = "safe"
+    var other = nint(1)
+    Holder.stored = *void(&other)
+    let clear = func() {
+        *(*nint(Holder.stored)) = 0
+    }
+    var cb (() -> void) = func() { }
+    if choose {
+        cb = clear
+    }
+    Touch(ref text)
+    if text != nil {
+        cb()
+        return text.Length
+    }
+    return 0
+}
+
+Console.WriteLine(Run(true))`, "4")
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult -> EmittedOracle.Evaluate(source)
 

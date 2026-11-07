@@ -164,14 +164,14 @@ func Predicate(asin Asin) Expression[Func[Book, bool]] {
         IlVerifier.Verify(consumerPath, additionalReferences: []string{libraryPath})
         let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
         try {
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let asinType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Asin")
             let bookType = libraryAsm.GetTypes().Single((t Type) -> t.Name == "Book")
             let run = GetProgramMethod(consumerAsm, "Predicate")
@@ -217,7 +217,7 @@ func Predicate(asin Asin) Expression[Func[Book, bool]] {
             }
             IlVerifier.Verify(assemblyPath)
             let loadContext = AssemblyLoadContext(contextName, isCollectible: true)
-            let asm = loadContext.LoadFromAssemblyPath(assemblyPath)
+            let asm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
             return (asm, loadContext)
         }
 

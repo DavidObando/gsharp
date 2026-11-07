@@ -57,11 +57,11 @@ class Defaults {
         EmitCSharpConsumer(libraryPath, consumerPath)
         let loadContext = AssemblyLoadContext("Issue2770", isCollectible: true)
         try {
-            let library = loadContext.LoadFromAssemblyPath(libraryPath)
+            let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let defaults = library.GetType("Issue2770.Defaults", throwOnError: true)!!
             AssertReflectionDefaults(defaults.GetConstructors().Single().GetParameters())
             AssertReflectionDefaults(defaults.GetMethod("All")!!.GetParameters())
-            let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumer = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             Assert.True(
                 bool(consumer.GetType("Issue2770Consumer", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)!!)
             )

@@ -205,7 +205,7 @@ data class Pair[K, V](Key K, Value V)`
                 "Geometry.Library",
                 StringComparison.Ordinal
             ) {
-                context.LoadFromAssemblyPath(libraryPath)
+                context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }
