@@ -90,6 +90,41 @@ class Issue4633TestNameParityTests {
         Assert.Equal(1, result.Matched)
     }
 
+    /// Issue #4691: when a multi-targeted test project loses an entire framework
+    /// whose cases are only non-enumerated theories, per-framework comparison
+    /// catches the missing framework even when the surviving framework executes
+    /// enough theory rows to match the flattened bare count.
+    @Fact
+    func Compare_LostFrameworkOfOnlyNonEnumeratedTheories_IsReportedMissing() {
+        const listingOutput = `Test run for /repo/out/bin/Release/net9.0/Own.Tests.dll (.NETCoreApp,Version=v9.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /repo/out/bin/Release/net10.0/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let oracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, listingOutput)
+        Assert.NotNull(oracle.TestsByFramework)
+        Assert.Equal(2, oracle.TestsByFramework!!.Count)
+        let survivingOnly = []TestCaseOutcome{
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 1 })", "Passed", "net10.0"),
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 2 })", "Passed", "net10.0")
+        }
+        let lostResult = TestNameParity.Compare(oracle, survivingOnly)
+        Assert.False(lostResult.IsMatch)
+        Assert.Equal(1, lostResult.Matched)
+        Assert.Equal(2, lostResult.TheoryRows)
+        Assert.Equal([]string{"Own.Tests.A.Cells"}, lostResult.Missing)
+        let bothFrameworks = survivingOnly.Append(
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 1 })", "Passed", "net9.0")
+        )
+            .ToArray()
+        let fullResult = TestNameParity.Compare(oracle, bothFrameworks)
+        Assert.True(fullResult.IsMatch)
+        Assert.Equal(2, fullResult.Matched)
+        Assert.Equal(3, fullResult.TheoryRows)
+        Assert.Empty(fullResult.Missing)
+    }
+
     /// Review finding: an oracle holding an empty name is rejected, not silently shrunk.
     @Fact
     func Oracle_EmptyName_IsRejected() {

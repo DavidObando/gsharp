@@ -1409,7 +1409,8 @@ partial class CSharpToGSharpTranslator {
                         target,
                         invocation.SpanStart,
                         callableLocalFunction,
-                        HashSet[ISymbol](SymbolEqualityComparer.Default)
+                        HashSet[ISymbol](SymbolEqualityComparer.Default),
+                        enclosingExecutable
                     ) {
                         continue
                     }
@@ -1490,7 +1491,8 @@ partial class CSharpToGSharpTranslator {
                         value,
                         value!!.SpanStart,
                         escapedLocalFunction,
-                        HashSet[ISymbol](SymbolEqualityComparer.Default)
+                        HashSet[ISymbol](SymbolEqualityComparer.Default),
+                        enclosingExecutable
                     )
                 }
                 if reachesCallable {
@@ -1504,38 +1506,35 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            if anonymousFunction == nil {
-                if callable is IMethodSymbol escapedLocalFunction {
-                    for assignment in EagerExecutionNodes(executionBody)
-                        .OfType[AssignmentExpressionSyntax]()
-                        .Where((candidate AssignmentExpressionSyntax) -> this.IsNonLocalDelegateStorage(candidate.Left))
-                        .Where(
-                        (candidate AssignmentExpressionSyntax) -> this.DelegateExpressionReachesLocalFunction(
-                            candidate.Right,
-                            candidate.Right.SpanStart,
-                            escapedLocalFunction,
-                            HashSet[ISymbol](SymbolEqualityComparer.Default)
-                        )
-                    ) {
-                        for later in EagerExecutionNodes(executionBody).OfType[StatementSyntax]().Where(
-                            (statement StatementSyntax) -> statement.SpanStart >= assignment.Span.End
-                        ) {
-                            yield later.Span.End - 1
-                        }
-                    }
-                }
+            let trackedLocalFunction IMethodSymbol? = if anonymousFunction == nil {
+                callable as IMethodSymbol
+            } else {
+                default(IMethodSymbol?)
+            }
+            if anonymousFunction == nil && trackedLocalFunction == nil {
                 yield break
             }
             for assignment in EagerExecutionNodes(executionBody).OfType[AssignmentExpressionSyntax]().Where(
                 (candidate AssignmentExpressionSyntax) -> this.IsNonLocalDelegateStorage(candidate.Left)
             ) {
-                if !this.DelegateExpressionReachesAnonymousFunction(
-                    assignment.Right,
-                    assignment.Right.SpanStart,
-                    anonymousFunction,
-                    enclosingExecutable,
-                    HashSet[ISymbol](SymbolEqualityComparer.Default)
-                ) {
+                let reachesAssignedCallable = if anonymousFunction != nil {
+                    this.DelegateExpressionReachesAnonymousFunction(
+                        assignment.Right,
+                        assignment.Right.SpanStart,
+                        anonymousFunction,
+                        enclosingExecutable,
+                        HashSet[ISymbol](SymbolEqualityComparer.Default)
+                    )
+                } else {
+                    this.DelegateExpressionReachesLocalFunction(
+                        assignment.Right,
+                        assignment.Right.SpanStart,
+                        trackedLocalFunction!!,
+                        HashSet[ISymbol](SymbolEqualityComparer.Default),
+                        enclosingExecutable
+                    )
+                }
+                if !reachesAssignedCallable {
                     continue
                 }
                 for later in EagerExecutionNodes(executionBody).OfType[StatementSyntax]().Where(
@@ -1546,7 +1545,8 @@ partial class CSharpToGSharpTranslator {
                         assignment.Left,
                         position,
                         anonymousFunction,
-                        enclosingExecutable
+                        enclosingExecutable,
+                        trackedLocalFunction
                     ) {
                         yield position
                     }
@@ -1641,7 +1641,8 @@ partial class CSharpToGSharpTranslator {
             expression ExpressionSyntax?,
             usePosition int32,
             localFunction IMethodSymbol,
-            visited HashSet[ISymbol]
+            visited HashSet[ISymbol],
+            enclosingExecutable SyntaxNode? = nil
         ) bool {
             for candidate in expression!!.DescendantNodesAndSelf().OfType[ExpressionSyntax]() {
                 if candidate.SyntaxTree != this.context.SemanticModel.SyntaxTree {
@@ -1664,6 +1665,22 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     return true
                 }
+                if (
+                    symbol is IFieldSymbol ||
+                        symbol is IPropertySymbol ||
+                        symbol is IEventSymbol ||
+                        (candidate is ElementAccessExpressionSyntax && this.IsNonLocalDelegateStorage(candidate))
+                ) &&
+                    this
+                    .NonLocalDelegateMayReferenceAnonymousFunction(
+                    candidate,
+                    usePosition,
+                    anonymousFunction: nil,
+                    enclosingExecutable ?? FindEnclosingExecutable(candidate),
+                    localFunction
+                ) {
+                    return true
+                }
                 if candidate is InvocationExpressionSyntax && symbol is IMethodSymbol factory && visited.Add(
                     factory.OriginalDefinition
                 ) {
@@ -1672,7 +1689,8 @@ partial class CSharpToGSharpTranslator {
                             returned,
                             returned!!.SpanStart,
                             localFunction,
-                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default),
+                            FindEnclosingExecutable(returned)
                         ) {
                             return true
                         }
@@ -1713,6 +1731,22 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         return true
                     }
+                    if (
+                        symbol is IFieldSymbol ||
+                            symbol is IPropertySymbol ||
+                            symbol is IEventSymbol ||
+                            (expression is ElementAccessExpressionSyntax && this.IsNonLocalDelegateStorage(expression))
+                    ) &&
+                        this
+                        .NonLocalDelegateMayReferenceAnonymousFunction(
+                        expression,
+                        expression.SpanStart,
+                        anonymousFunction: nil,
+                        FindEnclosingExecutable(expression),
+                        localFunction
+                    ) {
+                        return true
+                    }
                     if expression is InvocationExpressionSyntax && symbol is IMethodSymbol factory && visited.Add(
                         factory.OriginalDefinition
                     ) {
@@ -1721,7 +1755,8 @@ partial class CSharpToGSharpTranslator {
                                 returned,
                                 returned!!.SpanStart,
                                 localFunction,
-                                HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                                HashSet[ISymbol](visited, SymbolEqualityComparer.Default),
+                                FindEnclosingExecutable(returned)
                             ) {
                                 return true
                             }
@@ -1828,7 +1863,8 @@ partial class CSharpToGSharpTranslator {
             storage ExpressionSyntax,
             usePosition int32,
             anonymousFunction AnonymousFunctionExpressionSyntax?,
-            enclosingExecutable SyntaxNode?
+            enclosingExecutable SyntaxNode?,
+            localFunction IMethodSymbol? = nil
         ) bool {
             if !this.IsNonLocalDelegateStorage(storage) {
                 return false
@@ -1883,7 +1919,8 @@ partial class CSharpToGSharpTranslator {
                             storage,
                             states,
                             anonymousFunction,
-                            usePosition
+                            usePosition,
+                            localFunction: localFunction
                         )
                     }
                     if block.BranchValue is {} branchValue {
@@ -1892,7 +1929,8 @@ partial class CSharpToGSharpTranslator {
                             storage,
                             states,
                             anonymousFunction,
-                            usePosition
+                            usePosition,
+                            localFunction: localFunction
                         )
                     }
                     if !outputs.TryGetValue(block, out var previous) || !previous.SetEquals(states) {
@@ -1913,7 +1951,8 @@ partial class CSharpToGSharpTranslator {
                     storage,
                     reaching,
                     anonymousFunction,
-                    usePosition
+                    usePosition,
+                    localFunction: localFunction
                 )
             }
             if useOperationIndex < useBlock!!.Operations.Length {
@@ -1923,7 +1962,8 @@ partial class CSharpToGSharpTranslator {
                     reaching,
                     anonymousFunction,
                     usePosition,
-                    usePosition
+                    usePosition,
+                    localFunction
                 )
             } else if useBlock!!.BranchValue is {} branchValue {
                 reaching = this.ApplyDelegateReachingOperation(
@@ -1932,7 +1972,8 @@ partial class CSharpToGSharpTranslator {
                     reaching,
                     anonymousFunction,
                     usePosition,
-                    usePosition
+                    usePosition,
+                    localFunction
                 )
             }
             return reaching.Any((count int32) -> count > 0)
@@ -1958,7 +1999,8 @@ partial class CSharpToGSharpTranslator {
             states HashSet[int32],
             anonymousFunction AnonymousFunctionExpressionSyntax?,
             storageUsePosition int32,
-            beforePosition int32 = 2147483647
+            beforePosition int32 = 2147483647,
+            localFunction IMethodSymbol? = nil
         ) HashSet[int32] {
             var states = states
             for assignment in EagerExecutionNodes(operation.Syntax)
@@ -1980,7 +2022,8 @@ partial class CSharpToGSharpTranslator {
                         state,
                         storage,
                         anonymousFunction,
-                        storageUsePosition
+                        storageUsePosition,
+                        localFunction
                     )
                     if opaqueStorage {
                         // A property's accessors may ignore or transform what is
@@ -2010,20 +2053,37 @@ partial class CSharpToGSharpTranslator {
             currentState int32,
             trackedStorage ExpressionSyntax,
             anonymousFunction AnonymousFunctionExpressionSyntax?,
-            trackedStorageUsePosition int32
+            trackedStorageUsePosition int32,
+            localFunction IMethodSymbol? = nil
         ) int32 {
             var expression = expression
             expression = Unwrap(expression)
-            if expression!!.DescendantNodesAndSelf().Any(
-                (node SyntaxNode) -> node.SyntaxTree == anonymousFunction!!.SyntaxTree &&
-                    node.Span == anonymousFunction!!.Span
+            if anonymousFunction != nil && expression!!.DescendantNodesAndSelf().Any(
+                (node SyntaxNode) -> node.SyntaxTree == anonymousFunction.SyntaxTree &&
+                    node.Span == anonymousFunction.Span
             ) {
                 return 1
             }
             if this.DelegateStorageMatches(expression, trackedStorage, trackedStorageUsePosition) {
                 return currentState
             }
-            if this
+            if localFunction != nil &&
+                expression is not ConditionalExpressionSyntax &&
+                expression is not BinaryExpressionSyntax {
+                return if this.DelegateExpressionReachesLocalFunction(
+                    expression,
+                    expression!!.SpanStart,
+                    localFunction,
+                    HashSet[ISymbol](SymbolEqualityComparer.Default),
+                    FindEnclosingExecutable(expression)
+                ) {
+                    1
+                } else {
+                    0
+                }
+            }
+            if anonymousFunction != nil &&
+                this
                 .context
                 .GetSymbolInfo(expression)
                 .Symbol is ILocalSymbol local &&
@@ -2049,14 +2109,16 @@ partial class CSharpToGSharpTranslator {
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     ),
                     this.DelegateAssignmentValueAnonymousFunctionCount(
                         conditional.WhenFalse,
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     )
                 )
                 case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.AddExpression): AddDelegateCounts(
@@ -2065,14 +2127,16 @@ partial class CSharpToGSharpTranslator {
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     ),
                     this.DelegateAssignmentValueAnonymousFunctionCount(
                         binary.Right,
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     )
                 )
                 case binary is BinaryExpressionSyntax when binary.IsKind(SyntaxKind.CoalesceExpression): Math.Max(
@@ -2081,14 +2145,16 @@ partial class CSharpToGSharpTranslator {
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     ),
                     this.DelegateAssignmentValueAnonymousFunctionCount(
                         binary.Right,
                         currentState,
                         trackedStorage,
                         anonymousFunction,
-                        trackedStorageUsePosition
+                        trackedStorageUsePosition,
+                        localFunction
                     )
                 )
                 default: 0

@@ -166,6 +166,33 @@ namespace Demo
         Assert.Equal(1, declarationCount)
     }
 
+    @Fact
+    func AnonymousObjectCreation_ToString_MatchesCSharpFormatWithoutTypeName() {
+        let printed = TranslateUnit(`
+#nullable enable
+using System;
+
+namespace Demo
+{
+    public static class C
+    {
+        public static void Run()
+        {
+            var empty = new { };
+            var single = new { X = 1 };
+            var multi = new { A = 1, B = "two", Missing = (string?)null };
+            var nested = new { Outer = new { Inner = 42 } };
+            Console.WriteLine($"{empty}|{single}|{multi}|{nested}");
+        }
+    }
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Demo.C.Run()",
+            "{ }|{ X = 1 }|{ A = 1, B = two, Missing =  }|{ Outer = { Inner = 42 } }"
+        )
+    }
+
     shared {
         private func AnonymousTypeName(printed string) string -> Regex
             .Match(printed, "data class (AnonymousType\\d+_[0-9A-F]{16})\\(")

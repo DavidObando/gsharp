@@ -52,11 +52,12 @@ class Issue3420NativeVarPatternTranslationTests {
         let printed = Translate(ReassignedSwitchSource)
         Assert.Contains("case var stableValue:", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("case var exprValue:", printed, StringComparison.Ordinal)
-        Assert.Contains("var exprValue int32 = __pattern", printed, StringComparison.Ordinal)
-        Assert.Contains("var stmtValue int32 = __pattern", printed, StringComparison.Ordinal)
-        Assert.Contains("var nestedValue int32 = __pattern", printed, StringComparison.Ordinal)
-        Assert.Contains("var listValue int32 = __pattern", printed, StringComparison.Ordinal)
+        Assert.Contains("var exprValue int32 = pattern", printed, StringComparison.Ordinal)
+        Assert.Contains("var stmtValue int32 = pattern_2", printed, StringComparison.Ordinal)
+        Assert.Contains("var nestedValue int32 = pattern_3", printed, StringComparison.Ordinal)
+        Assert.Contains("var listValue int32 = pattern_4", printed, StringComparison.Ordinal)
         Assert.Contains("var typedValue int32 =", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__pattern", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C.Run(6))", "7,8,9,10,11,6")
     }
@@ -82,7 +83,8 @@ class Issue3420NativeVarPatternTranslationTests {
                 StringComparison.Ordinal
             )
         )
-        Assert.DoesNotContain("__pattern0 =", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__pattern", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("pattern =", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 

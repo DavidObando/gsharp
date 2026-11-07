@@ -1616,6 +1616,79 @@ public static class CallbackShapes
         Assert.Matches("\\b(let|var) recursiveLeft T\\? =", printed)
     }
 
+    @Fact
+    func LocalFunctionDelegateStorage_TracksFieldOverwriteAndEventUnsubscribeBeforeDefaultWrite() {
+        let source = `#nullable enable
+
+public sealed class Probe<T>
+{
+    private System.Action? callback;
+    private event System.Action? Happened;
+
+    private static void Keep(ref T value) { }
+    private static void Fill(ref T? value, T replacement) => value = replacement;
+
+    public void CheckFieldOverwrite(T replacement)
+    {
+        var overwrittenPair = (replacement, replacement);
+        void OverwrittenLocal()
+        {
+            var (overwrittenFieldLeft, _) = overwrittenPair;
+            Keep(ref overwrittenFieldLeft);
+        }
+
+        this.callback = OverwrittenLocal;
+        this.callback = null;
+        overwrittenPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var retainedPair = (replacement, replacement);
+        void RetainedLocal()
+        {
+            var (retainedFieldLeft, _) = retainedPair;
+            Fill(ref retainedFieldLeft, replacement);
+        }
+
+        this.callback = RetainedLocal;
+        retainedPair = (default(T), replacement);
+        this.callback?.Invoke();
+    }
+
+    public void CheckEventUnsubscribe(T replacement)
+    {
+        var unsubscribedPair = (replacement, replacement);
+        void UnsubscribedLocal()
+        {
+            var (unsubscribedEventLeft, _) = unsubscribedPair;
+            Keep(ref unsubscribedEventLeft);
+        }
+
+        this.Happened += UnsubscribedLocal;
+        this.Happened -= UnsubscribedLocal;
+        unsubscribedPair = (default(T), replacement);
+        this.Happened?.Invoke();
+
+        var twiceSubscribedPair = (replacement, replacement);
+        void TwiceSubscribedLocal()
+        {
+            var (twiceSubscribedEventLeft, _) = twiceSubscribedPair;
+            Fill(ref twiceSubscribedEventLeft, replacement);
+        }
+
+        this.Happened += TwiceSubscribedLocal;
+        this.Happened += TwiceSubscribedLocal;
+        this.Happened -= TwiceSubscribedLocal;
+        twiceSubscribedPair = (default(T), replacement);
+        this.Happened?.Invoke();
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) retainedFieldLeft T\\? =", printed)
+        Assert.DoesNotMatch("\\b(let|var) unsubscribedEventLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) twiceSubscribedEventLeft T\\? =", printed)
+    }
+
     shared {
         private const Source string = `#nullable enable
 

@@ -1496,10 +1496,33 @@ class CSharpTypeMapper {
                 TranslationSeverity.Info
             )
         )
+        let toStringValue GExpression = if properties.Count == 0 {
+            cast[GExpression](LiteralExpression.String("{ }"))
+        } else {
+            let parts = List[InterpolationPart](properties.Count * 2 + 1)
+            for var index = 0; index < properties.Count; index++ {
+                let prefix = if index == 0 {
+                    "{ "
+                } else {
+                    ", "
+                }
+                parts.Add(InterpolationPart.Literal(prefix + properties[index].Name + " = "))
+                parts.Add(InterpolationPart.Hole(MemberAccessExpression(ThisExpression(), parameters[index].Name)))
+            }
+            parts.Add(InterpolationPart.Literal(" }"))
+            cast[GExpression](InterpolatedStringExpression(parts))
+        }
+        let toStringMethod = MethodDeclaration(
+            "ToString",
+            returnType: NamedTypeReference("string"),
+            isOverride: true,
+            expressionBody: ReturnStatement(toStringValue)
+        )
         let declaration = TypeDeclaration(
             TypeDeclarationKind.DataClass,
             syntheticName,
             primaryConstructorParameters: parameters,
+            members: []GMember{toStringMethod},
             visibility: Visibility.Internal
         )
         let reference = NamedTypeReference(syntheticName)

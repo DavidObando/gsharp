@@ -54,6 +54,12 @@ class CSharpTestOracle {
         }
     }
 
+    /// Gets or sets the optional per-target-framework discovered test names (#4691).
+    @JsonPropertyName("testsByFramework")
+    @JsonPropertyOrder(int32(3))
+    @JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
+    prop TestsByFramework Dictionary[string, List[string]]?
+
     /// Writes this oracle to [`directory`](paramref) under
     /// (cref:FileNameFor).
     /// @param directory The oracle directory.
@@ -96,17 +102,43 @@ class CSharpTestOracle {
         /// @param output The captured stdout of the listing.
         /// @returns The discovered display names, in output order.
         /// @exception InvalidOperationException The output has no listing header, or lists no tests.
-        func ParseListTestsOutput(output string) IReadOnlyList[string] {
+        func ParseListTestsOutput(output string) IReadOnlyList[string] -> ParseListTestsOutputCore(output, out _)
+
+        /// Parses the output of `dotnet test --list-tests` into per-framework display names (#4691).
+        /// @param output The captured stdout of the listing.
+        /// @returns The discovered display names grouped by normalized target framework when available.
+        func ParseListTestsOutputByFramework(output string) IReadOnlyDictionary[string, IReadOnlyList[string]] {
+            ParseListTestsOutputCore(output, out var byFramework)
+            return byFramework
+        }
+
+        private func ParseListTestsOutputCore(
+            output string,
+            out byFramework IReadOnlyDictionary[string, IReadOnlyList[string]]
+        ) IReadOnlyList[string] {
             let lines = (output ?? string.Empty).Replace("\r\n", "\n").Split('\n')
             let names = List[string]()
+            let frameworkGroups = Dictionary[string, List[string]](StringComparer.Ordinal)
+            var currentFramework string? = nil
+            var pendingFramework string? = nil
             var sawHeader = false
             var inBlock = false
+            var allBlocksHaveFramework = true
             // Every listing block counts: a multi-targeted project prints one
             // header and one indented block per target framework.
             for line in lines {
-                if string.Equals(line.Trim(), ListHeader, StringComparison.Ordinal) {
+                let trimmed = line.Trim()
+                if !inBlock && TryParseBannerFramework(trimmed) is {} bannerFramework {
+                    pendingFramework = bannerFramework
+                }
+                if string.Equals(trimmed, ListHeader, StringComparison.Ordinal) {
                     sawHeader = true
                     inBlock = true
+                    currentFramework = pendingFramework
+                    pendingFramework = nil
+                    if string.IsNullOrEmpty(currentFramework) {
+                        allBlocksHaveFramework = false
+                    }
                     continue
                 }
                 if !inBlock || line.Length == 0 {
@@ -116,11 +148,22 @@ class CSharpTestOracle {
                 // leading whitespace is accepted); an unindented line ends the block.
                 if !char.IsWhiteSpace(line[0]) {
                     inBlock = false
+                    currentFramework = nil
+                    if TryParseBannerFramework(trimmed) is {} nextBannerFramework {
+                        pendingFramework = nextBannerFramework
+                    }
                     continue
                 }
-                let name = line.Trim()
+                let name = trimmed
                 if name.Length > 0 {
                     names.Add(name)
+                    if !string.IsNullOrEmpty(currentFramework) {
+                        if !frameworkGroups.TryGetValue(currentFramework, out var bucket) {
+                            bucket = List[string]()
+                            frameworkGroups.Add(currentFramework, bucket)
+                        }
+                        bucket.Add(name)
+                    }
                 }
             }
             if !sawHeader {
@@ -138,17 +181,56 @@ class CSharpTestOracle {
                         "discoverable tests cannot serve as a parity oracle."
                 )
             }
+            byFramework = if allBlocksHaveFramework && frameworkGroups.Count > 0 {
+                frameworkGroups.ToDictionary(
+                    func (pair KeyValuePair[string, List[string]]) string {
+                        return pair.Key
+                    },
+                    (pair KeyValuePair[string, List[string]]) -> cast[IReadOnlyList[string]](pair.Value),
+                    StringComparer.Ordinal
+                )
+            } else {
+                Dictionary[string, IReadOnlyList[string]](StringComparer.Ordinal)
+            }
             return names
         }
 
         /// Builds an oracle from discovered names, sorted ordinally.
         /// @param appId The corpus app id.
         /// @param names The discovered display names.
+        /// @param testsByFramework Optional per-framework discovered display names.
         /// @returns The oracle.
-        func Create(appId string, names IEnumerable[string]) CSharpTestOracle {
+        func Create(
+            appId string,
+            names IEnumerable[string],
+            testsByFramework IReadOnlyDictionary[string, IReadOnlyList[string]]? = nil
+        ) CSharpTestOracle {
             let sorted = (names ?? Array.Empty[string]()).ToList()
             sorted.Sort(StringComparer.Ordinal)
-            return CSharpTestOracle{AppId: appId, TestCount: sorted.Count, Tests: sorted}
+            var normalizedByFramework Dictionary[string, List[string]]? = nil
+            if testsByFramework != nil && testsByFramework.Count > 0 {
+                normalizedByFramework = Dictionary[string, List[string]](StringComparer.Ordinal)
+                for key in testsByFramework.Keys.OrderBy((k string) -> k, StringComparer.Ordinal) {
+                    let frameworkSorted = (testsByFramework[key] ?? Array.Empty[string]()).ToList()
+                    frameworkSorted.Sort(StringComparer.Ordinal)
+                    normalizedByFramework.Add(NormalizeTargetFramework(key) ?? key, frameworkSorted)
+                }
+            }
+            return CSharpTestOracle{
+                AppId: appId,
+                TestCount: sorted.Count,
+                Tests: sorted,
+                TestsByFramework: normalizedByFramework
+            }
+        }
+
+        /// Builds an oracle directly from `dotnet test --list-tests` output, preserving per-framework groups.
+        /// @param appId The corpus app id.
+        /// @param output The captured stdout of the listing.
+        /// @returns The oracle.
+        func CreateFromListTestsOutput(appId string, output string) CSharpTestOracle {
+            let names = ParseListTestsOutputCore(output, out var byFramework)
+            return Create(appId, names, byFramework)
         }
 
         /// Loads the oracle for [`appId`](paramref) from
@@ -191,7 +273,106 @@ class CSharpTestOracle {
                     path + ": the C# test oracle describes '" + oracle.AppId + "', not '" + appId + "'."
                 )
             }
+            if oracle.TestsByFramework != nil && oracle.TestsByFramework!!.Count > 0 {
+                if oracle.TestsByFramework!!.Any(
+                    (pair KeyValuePair[string, List[string]]) -> string.IsNullOrWhiteSpace(pair.Key) ||
+                        pair.Value == nil ||
+                        pair
+                        .Value
+                        .Count == 0 ||
+                        pair
+                        .Value
+                        .Any(string.IsNullOrWhiteSpace)
+                ) {
+                    throw InvalidOperationException(
+                        path + ": the C# test oracle contains an invalid per-framework test list."
+                    )
+                }
+                let frameworkTotal = oracle.TestsByFramework!!.Values.Sum((list List[string]) -> list.Count)
+                if frameworkTotal != oracle.TestCount {
+                    throw InvalidOperationException(
+                        path + ": the C# test oracle per-framework count " + frameworkTotal.ToString() +
+                            " disagrees with testCount " +
+                            oracle
+                            .TestCount
+                            .ToString() + "."
+                    )
+                }
+            }
             return oracle
+        }
+
+        internal func NormalizeTargetFramework(raw string?) string? {
+            if string.IsNullOrWhiteSpace(raw) {
+                return nil
+            }
+            let text = raw.Trim()
+            if text.StartsWith(".NETCoreApp,Version=v", StringComparison.OrdinalIgnoreCase) {
+                return "net" + text.Substring(".NETCoreApp,Version=v".Length).ToLowerInvariant()
+            }
+            if text.StartsWith(".NETStandard,Version=v", StringComparison.OrdinalIgnoreCase) {
+                return "netstandard" + text.Substring(".NETStandard,Version=v".Length).ToLowerInvariant()
+            }
+            if text.StartsWith(".NETFramework,Version=v", StringComparison.OrdinalIgnoreCase) {
+                return "net" +
+                    text
+                    .Substring(".NETFramework,Version=v".Length)
+                    .Replace(".", string.Empty)
+                    .ToLowerInvariant()
+            }
+            let lower = text.ToLowerInvariant()
+            if lower.StartsWith("net", StringComparison.Ordinal) && lower.Length > 3 && char.IsDigit(lower[3]) {
+                if !lower.Contains('.') && int32.TryParse(lower.Substring(3), out var major) &&
+                    major >= 5 &&
+                    major < 40 {
+                    return "net$major.0"
+                }
+                return lower
+            }
+            if lower.StartsWith("netstandard", StringComparison.Ordinal) &&
+                lower.Length > "netstandard".Length &&
+                char.IsDigit(lower["netstandard".Length]) {
+                return lower
+            }
+            return nil
+        }
+
+        internal func InferTargetFrameworkFromPath(path string?) string? {
+            if string.IsNullOrWhiteSpace(path) {
+                return nil
+            }
+            for segment in path.Split('/', '\\') {
+                if NormalizeTargetFramework(segment) is {} tfm {
+                    return tfm
+                }
+            }
+            let stem = Path.GetFileNameWithoutExtension(path)
+            for token in stem.Split('_', '-') {
+                if NormalizeTargetFramework(token) is {} tfm {
+                    return tfm
+                }
+            }
+            return nil
+        }
+
+        private func TryParseBannerFramework(line string) string? {
+            if !line.StartsWith("Test run for ", StringComparison.Ordinal) {
+                return nil
+            }
+            let openParen = line.LastIndexOf('(')
+            let closeParen = line.LastIndexOf(')')
+            if openParen > 0 && closeParen > openParen {
+                let inside = line.Substring(openParen + 1, closeParen - openParen - 1)
+                if NormalizeTargetFramework(inside) is {} tfm {
+                    return tfm
+                }
+            }
+            let pathPart = if openParen > "Test run for ".Length {
+                line.Substring("Test run for ".Length, openParen - "Test run for ".Length).Trim()
+            } else {
+                line.Substring("Test run for ".Length).Trim()
+            }
+            return InferTargetFrameworkFromPath(pathPart)
         }
 
         private func Tail(output string) string {

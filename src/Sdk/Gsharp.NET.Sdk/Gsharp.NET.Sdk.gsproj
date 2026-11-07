@@ -28,6 +28,11 @@
     <!-- TFM used to publish the gsc compiler payload into the NuGet. The host
          dotnet must have a runtime for this TFM installed for the SDK to work. -->
     <GsharpCompilerPackageTargetFramework Condition="'$(GsharpCompilerPackageTargetFramework)' == ''">net10.0</GsharpCompilerPackageTargetFramework>
+    <!-- Issue #5073: this netstandard2.0 MSBuild task project must not receive the
+         pinned SDK's net10.0 runtime helper assemblies as compile references. -->
+    <GsharpNoExtensions>true</GsharpNoExtensions>
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
   </PropertyGroup>
 
   <ItemGroup>

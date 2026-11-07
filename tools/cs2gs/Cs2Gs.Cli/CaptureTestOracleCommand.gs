@@ -196,14 +196,16 @@ internal shared class CaptureTestOracleCommand {
                 "):\n" +
                 Tail(listed.Output)
         }
-        var names IReadOnlyList[string]
+        var oracle CSharpTestOracle
         try {
-            names = CSharpTestOracle.ParseListTestsOutput(listed.Stdout)
+            oracle = CSharpTestOracle.CreateFromListTestsOutput(app.Id, listed.Stdout)
         } catch (ex InvalidOperationException) {
             return ex.Message
         }
-        let path = CSharpTestOracle.Create(app.Id, names).Write(outDir)
-        Console.WriteLine("cs2gs capture-test-oracle: ${app.Id}: ${names.Count} case(s) -> ${Path.GetFileName(path)}")
+        let path = oracle.Write(outDir)
+        Console.WriteLine(
+            "cs2gs capture-test-oracle: ${app.Id}: ${oracle.TestCount} case(s) -> ${Path.GetFileName(path)}"
+        )
         return nil
     }
 

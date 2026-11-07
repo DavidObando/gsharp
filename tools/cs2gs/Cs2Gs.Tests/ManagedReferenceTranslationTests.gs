@@ -966,11 +966,12 @@ public class Probe {
 namespace ManagedArrayProjectionEligibility;
 public class Probe {
     private static int Twice(int value) => value * 2;
+    private static T Identity<T>(T value) => value;
     private static T First<T>(T[] source) => source[0];
 
     public static int Run() {
         var source = new ManagedRef<int>[1];
-        return Twice(21) + (First(source) is null ? 0 : -42);
+        return Twice(21) + Identity(0) + (First(source) is null ? 0 : -42);
     }
 }`
         let references = List[MetadataReference](
@@ -996,10 +997,17 @@ public class Probe {
             .Where((method IMethodSymbol) -> method != nil)
             .ToArray()
         let ordinaryMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "Twice")
+        let genericOrdinaryMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "Identity")
         let managedArrayMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "First")
         Assert.False(
             CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
                 ordinaryMethod,
+                project.Compilation
+            )
+        )
+        Assert.False(
+            CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                genericOrdinaryMethod,
                 project.Compilation
             )
         )

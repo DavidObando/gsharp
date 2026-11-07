@@ -41,20 +41,32 @@ shared class TrxParser {
         if !File.Exists(path) {
             throw FileNotFoundException("TRX result file not found: $path", path)
         }
-        return Parse(File.ReadAllText(path), requireNames)
+        return Parse(File.ReadAllText(path), requireNames, CSharpTestOracle.InferTargetFrameworkFromPath(path))
     }
 
     /// Parses TRX XML text into the per-test name/outcome set.
     /// @param trxXml The TRX XML text.
     /// @returns The parsed test outcomes, sorted by name.
     /// @exception InvalidOperationException The TRX XML is malformed.
-    func Parse(trxXml string) IReadOnlyList[TestCaseOutcome] -> Parse(trxXml, requireNames: false)
+    func Parse(trxXml string) IReadOnlyList[TestCaseOutcome] -> Parse(
+        trxXml,
+        requireNames: false,
+        defaultTargetFramework: nil
+    )
 
     /// Parses TRX XML text; see (cref:ParseFile(string, bool)).
     /// @param trxXml The TRX XML text.
     /// @param requireNames Whether a nameless result is an error.
     /// @returns The parsed test outcomes, sorted by name.
-    func Parse(trxXml string, requireNames bool) IReadOnlyList[TestCaseOutcome] {
+    func Parse(trxXml string, requireNames bool) IReadOnlyList[TestCaseOutcome] -> Parse(
+        trxXml,
+        requireNames,
+        defaultTargetFramework: nil
+    )
+
+    internal func Parse(trxXml string, requireNames bool, defaultTargetFramework string?) IReadOnlyList[
+        TestCaseOutcome
+    ] {
         if string.IsNullOrEmpty(trxXml) {
             return Array.Empty[TestCaseOutcome]()
         }
@@ -64,6 +76,7 @@ shared class TrxParser {
         } catch (ex XmlException) {
             throw InvalidOperationException("Malformed TRX XML: " + ex.Message, ex)
         }
+        let xmlTargetFramework = InferTargetFrameworkFromDocument(document) ?? defaultTargetFramework
         let results = List[TestCaseOutcome]()
         for element in document.Descendants().Where(
             (e XElement) -> string.Equals(e.Name.LocalName, "UnitTestResult", StringComparison.Ordinal)
@@ -76,9 +89,23 @@ shared class TrxParser {
                 }
                 continue
             }
-            results.Add(TestCaseOutcome(name, outcome))
+            let storage = string(element.Attribute(XName?("storage")!!))
+            let tfm = CSharpTestOracle.InferTargetFrameworkFromPath(storage) ?? xmlTargetFramework
+            results.Add(TestCaseOutcome(name, outcome, tfm))
         }
         results.Sort((a TestCaseOutcome, b TestCaseOutcome) -> string.CompareOrdinal(a.Name, b.Name))
         return results
+    }
+
+    private func InferTargetFrameworkFromDocument(document XDocument) string? {
+        for element in document.Descendants() {
+            if string.Equals(element.Name.LocalName, "TestMethod", StringComparison.Ordinal) {
+                let codeBase = string(element.Attribute(XName?("codeBase")!!))
+                if CSharpTestOracle.InferTargetFrameworkFromPath(codeBase) is {} tfm {
+                    return tfm
+                }
+            }
+        }
+        return nil
     }
 }
