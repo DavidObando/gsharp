@@ -490,6 +490,29 @@ class CSharpTestOracle {
             return true
         }
 
+        internal func InferTargetFrameworkFromTrxFileName(path string?) string? {
+            if path == nil || string.IsNullOrWhiteSpace(path) || !path.EndsWith(
+                ".trx",
+                StringComparison.OrdinalIgnoreCase
+            ) {
+                return nil
+            }
+            return InferTargetFrameworkFromFileNameStem(Path.GetFileNameWithoutExtension(path))
+        }
+
+        internal func MergeTargetFrameworkWithPathPlatform(explicitFramework string?, pathFramework string?) string? {
+            if explicitFramework == nil || string.IsNullOrWhiteSpace(explicitFramework) {
+                return pathFramework
+            }
+            if pathFramework != nil && !string.IsNullOrWhiteSpace(pathFramework) && pathFramework.StartsWith(
+                explicitFramework + "-",
+                StringComparison.Ordinal
+            ) {
+                return pathFramework
+            }
+            return explicitFramework
+        }
+
         internal func InferTargetFrameworkFromPath(path string?) string? {
             if string.IsNullOrWhiteSpace(path) {
                 return nil
@@ -546,16 +569,13 @@ class CSharpTestOracle {
             } else {
                 line.Substring("Test run for ".Length).Trim()
             }
-            if InferTargetFrameworkFromPath(pathPart) is {} pathTfm {
-                return pathTfm
-            }
+            let pathTfm = InferTargetFrameworkFromPath(pathPart)
+            var bannerTfm string? = nil
             if openParen > 0 && closeParen > openParen {
                 let inside = line.Substring(openParen + 1, closeParen - openParen - 1)
-                if NormalizeTargetFramework(inside) is {} tfm {
-                    return tfm
-                }
+                bannerTfm = NormalizeTargetFramework(inside)
             }
-            return nil
+            return MergeTargetFrameworkWithPathPlatform(bannerTfm, pathTfm)
         }
 
         private func Tail(output string) string {

@@ -130,6 +130,35 @@ The following Tests are available:
 The following Tests are available:
     Sample.Tests.A.Cells`)
         Assert.True(TestNameParity.Compare(windowsOracle, parsedWindows).IsMatch)
+
+        let customOutOracle = CSharpTestOracle.CreateFromListTestsOutput("Own.Tests", `Test run for /work/net9.0/artifacts/current/Own.Tests.dll (.NETCoreApp,Version=v8.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /work/net9.0/artifacts/current/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`)
+        let customOutBuckets = customOutOracle.TestsByFramework!!
+        Assert.Equal(2, customOutBuckets.Count)
+        Assert.True(customOutBuckets.ContainsKey("net8.0"))
+        Assert.True(customOutBuckets.ContainsKey("net10.0"))
+        Assert.False(customOutBuckets.ContainsKey("net9.0"))
+
+        let customOutTrx = Path.Combine(dir, "parity_net10.0.trx")
+        File.WriteAllText(customOutTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <TestDefinitions>
+    <UnitTest name="Own.Tests.A.Cells">
+      <TestMethod codeBase="/work/net9.0/artifacts/current/Own.Tests.dll" className="Own.Tests.A" name="Cells" />
+    </UnitTest>
+  </TestDefinitions>
+  <Results>
+    <UnitTestResult testName="Own.Tests.A.Cells(x: 1)" outcome="Passed" storage="/work/net9.0/artifacts/current/Own.Tests.dll" />
+    <UnitTestResult testName="Own.Tests.A.Cells(x: 2)" outcome="Passed" />
+  </Results>
+</TestRun>`)
+        let parsedCustomOutNet10 = TrxParser.ParseFile(customOutTrx, requireNames: true)
+        Assert.All(parsedCustomOutNet10, (r TestCaseOutcome) -> Assert.Equal("net10.0", r.TargetFramework))
+        Assert.False(TestNameParity.Compare(customOutOracle, parsedCustomOutNet10).IsMatch)
     }
 
     /// Exact-match parity: the G# TRX equals the baseline, so the comparison
