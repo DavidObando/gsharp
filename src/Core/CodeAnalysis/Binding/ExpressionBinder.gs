@@ -4109,6 +4109,15 @@ internal partial class ExpressionBinder {
     }
 
     private func CanConvertViaAs(fromType TypeSymbol?, targetType TypeSymbol?) bool {
+        let substitutions = Dictionary[TypeParameterSymbol, TypeSymbol](ReferenceEqualityComparer.Instance)
+        return CanConvertViaAsCore(fromType, targetType, substitutions)
+    }
+
+    private func CanConvertViaAsCore(
+        fromType TypeSymbol?,
+        targetType TypeSymbol?,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
         if fromType == nil || targetType == nil || fromType == TypeSymbol.Error || targetType == TypeSymbol.Error {
             return true
         }
@@ -4127,54 +4136,58 @@ internal partial class ExpressionBinder {
         } else {
             to
         }
-        if fromCore == TypeSymbol.Error || toCore == TypeSymbol.Error {
+        let resolvedFrom = ResolveSubstitutedType(fromCore, substitutions) ?? fromCore
+        let resolvedTo = ResolveSubstitutedType(toCore, substitutions) ?? toCore
+        if resolvedFrom == TypeSymbol.Error || resolvedTo == TypeSymbol.Error {
             return true
         }
-        if fromCore is PointerTypeSymbol || toCore is PointerTypeSymbol {
+        if resolvedFrom is PointerTypeSymbol || resolvedTo is PointerTypeSymbol {
             return false
         }
-        let substitutions = Dictionary[TypeParameterSymbol, TypeSymbol](ReferenceEqualityComparer.Instance)
-        if fromCore is TypeParameterSymbol fromTp {
-            return CanTypeParameterConvertViaAs(fromTp, toCore, substitutions)
+        if resolvedFrom is TypeParameterSymbol fromTp {
+            return CanTypeParameterConvertViaAs(fromTp, resolvedTo, substitutions)
         }
-        if toCore is TypeParameterSymbol toTp {
-            return CanTypeParameterConvertViaAs(toTp, fromCore, substitutions)
+        if resolvedTo is TypeParameterSymbol toTp {
+            return CanTypeParameterConvertViaAs(toTp, resolvedFrom, substitutions)
         }
-        if toCore is FunctionPointerTypeSymbol {
-            return fromCore is FunctionPointerTypeSymbol ||
-                fromCore == TypeSymbol.NInt ||
-                fromCore == TypeSymbol.Object ||
-                fromCore
+        if resolvedTo is FunctionPointerTypeSymbol {
+            return resolvedFrom is FunctionPointerTypeSymbol ||
+                resolvedFrom == TypeSymbol.NInt ||
+                resolvedFrom == TypeSymbol.Object ||
+                resolvedFrom
                 .ClrType
                 ?.FullName == "System.ValueType"
         }
-        if fromCore is FunctionPointerTypeSymbol {
-            return CanConvertViaAs(TypeSymbol.NInt, targetType)
+        if resolvedFrom is FunctionPointerTypeSymbol {
+            return CanConvertViaAsCore(TypeSymbol.NInt, targetType, substitutions)
         }
-        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromCore, toCore) ||
-            Conversion.HaveIdenticalTypeArgumentContracts(fromCore, toCore) {
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resolvedFrom, resolvedTo) ||
+            Conversion.HaveIdenticalTypeArgumentContracts(resolvedFrom, resolvedTo) {
             return true
         }
-        let hasTypeParameter = TypeSymbol.ContainsTypeParameter(fromCore) || TypeSymbol.ContainsTypeParameter(toCore)
-        let fromIsValue = fromCore.IsValueType || fromCore is TupleTypeSymbol
-        let toIsValue = toCore.IsValueType || toCore is TupleTypeSymbol
+        let hasTypeParameter = TypeSymbol.ContainsTypeParameter(resolvedFrom) || TypeSymbol.ContainsTypeParameter(
+            resolvedTo
+        )
+        let fromIsValue = resolvedFrom.IsValueType || resolvedFrom is TupleTypeSymbol
+        let toIsValue = resolvedTo.IsValueType || resolvedTo is TupleTypeSymbol
         if fromIsValue && toIsValue {
-            return hasTypeParameter && CanOpenValueTypesMatchForAs(fromCore, toCore, substitutions)
+            return hasTypeParameter && CanOpenValueTypesMatchForAs(resolvedFrom, resolvedTo, substitutions)
         }
         if fromIsValue {
-            return HasBoxingConversionForAs(fromCore, toCore, hasTypeParameter, substitutions)
+            return HasBoxingConversionForAs(resolvedFrom, resolvedTo, hasTypeParameter, substitutions)
         }
         if toIsValue {
-            return HasBoxingConversionForAs(toCore, fromCore, hasTypeParameter, substitutions)
+            return HasBoxingConversionForAs(resolvedTo, resolvedFrom, hasTypeParameter, substitutions)
         }
-        if HasRuntimeReferenceConversion(fromCore, toCore) || HasRuntimeReferenceConversion(toCore, fromCore) {
+        if HasRuntimeReferenceConversion(resolvedFrom, resolvedTo) ||
+            HasRuntimeReferenceConversion(resolvedTo, resolvedFrom) {
             return true
         }
-        if HasSymbolicReferenceSupertypeConversion(fromCore, toCore) ||
-            HasSymbolicReferenceSupertypeConversion(toCore, fromCore) {
+        if HasSymbolicReferenceSupertypeConversion(resolvedFrom, resolvedTo) ||
+            HasSymbolicReferenceSupertypeConversion(resolvedTo, resolvedFrom) {
             return true
         }
-        return hasTypeParameter && CanOpenReferenceTypesMatchForAs(fromCore, toCore, substitutions)
+        return hasTypeParameter && CanOpenReferenceTypesMatchForAs(resolvedFrom, resolvedTo, substitutions)
     }
 
     private func IsTypeParameterConstrainedToValueType(tp TypeParameterSymbol) bool {
@@ -4289,9 +4302,11 @@ internal partial class ExpressionBinder {
                 return true
             }
             if other.IsValueType || other is TupleTypeSymbol || other is FunctionPointerTypeSymbol {
+                let trial = CloneTypeParameterSubstitutions(substitutions)
+                trial[tp] = other
                 for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
                     let hasParam = TypeSymbol.ContainsTypeParameter(other) || TypeSymbol.ContainsTypeParameter(reqIface)
-                    if !HasBoxingConversionForAs(other, reqIface, hasParam, substitutions) {
+                    if !HasBoxingConversionForAs(other, reqIface, hasParam, trial) {
                         return false
                     }
                 }
@@ -4299,11 +4314,18 @@ internal partial class ExpressionBinder {
             }
             return Conversion.IsInterfaceLikeType(other)
         }
-        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound && !CanConvertViaAs(classBound, other) {
+        let trial = CloneTypeParameterSubstitutions(substitutions)
+        if other.IsValueType ||
+            other is TupleTypeSymbol ||
+            (Conversion.IsClassLikeReferenceType(other) && Conversion.IsSealedReferenceType(other)) {
+            trial[tp] = other
+        }
+        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound &&
+            !CanConvertViaAsCore(classBound, other, trial) {
             return false
         }
         for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
-            if !CanConvertViaAs(reqIface, other) {
+            if !CanConvertViaAsCore(reqIface, other, trial) {
                 return false
             }
         }
@@ -4315,16 +4337,23 @@ internal partial class ExpressionBinder {
         target TypeSymbol,
         substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
     ) bool {
-        if !CanSingleTypeParameterSatisfyExactSubstitution(tp, target, substitutions) {
-            return false
-        }
+        let linkedParameters = List[TypeParameterSymbol]()
         for kvp in substitutions {
             if ResolveSubstitutedType(kvp.Value, substitutions) == tp {
-                if !CanSingleTypeParameterSatisfyExactSubstitution(kvp.Key, target, substitutions) {
-                    return false
-                }
+                linkedParameters.Add(kvp.Key)
             }
         }
+        let trial = CloneTypeParameterSubstitutions(substitutions)
+        trial[tp] = target
+        if !CanSingleTypeParameterSatisfyExactSubstitution(tp, target, trial) {
+            return false
+        }
+        for linked in linkedParameters {
+            if !CanSingleTypeParameterSatisfyExactSubstitution(linked, target, trial) {
+                return false
+            }
+        }
+        CommitTypeParameterSubstitutions(substitutions, trial)
         return true
     }
 
@@ -5302,11 +5331,7 @@ internal partial class ExpressionBinder {
                 return true
             }
             if varianceMode == 0 {
-                if !CanTypeParameterSatisfyExactSubstitution(tpA, tpB, substitutions) {
-                    return false
-                }
-                substitutions[tpA] = tpB
-                return true
+                return CanTypeParameterSatisfyExactSubstitution(tpA, tpB, substitutions)
             }
             return CanTypeParameterConvertViaAs(tpA, tpB, substitutions)
         }
@@ -5316,7 +5341,6 @@ internal partial class ExpressionBinder {
                     !CanTypeParameterSatisfyExactSubstitution(paramA, b, substitutions) {
                     return false
                 }
-                substitutions[paramA] = b
                 return true
             }
             return CanTypeParameterConvertViaAs(paramA, b, substitutions)
@@ -5327,7 +5351,6 @@ internal partial class ExpressionBinder {
                     !CanTypeParameterSatisfyExactSubstitution(paramB, a, substitutions) {
                     return false
                 }
-                substitutions[paramB] = a
                 return true
             }
             return CanTypeParameterConvertViaAs(paramB, a, substitutions)

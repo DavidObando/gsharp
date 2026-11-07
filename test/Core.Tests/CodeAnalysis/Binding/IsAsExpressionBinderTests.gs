@@ -176,71 +176,97 @@ func Check[T](s S[T]) IReadOnlyList[string]? -> s as IReadOnlyList[string]
 Check[int32](S[int32]{}) == nil`)
         Assert.Single(rejectedDirectionalClrCovariantInterface.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
-        let rejectedRepeatedTypeParameter = Evaluate(`struct Pair[A, B] { var First A; var Second B }
+        let rejectedRepeatedTypeParameter = Evaluate(`struct Pair[A, B] {
+    var First A
+    var Second B
+}
 func Check[T](x Pair[T, T]) Pair[int32, string]? -> x as Pair[int32, string]?
 Check[int32](Pair[int32, int32]{First: 1, Second: 2}) == nil`)
-        Assert.Single(rejectedRepeatedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedRepeatedTypeParameter.Diagnostics).Id)
 
         let rejectedStructConstrainedTypeParameter = Evaluate(`func Check[T struct](x T) string? -> x as string
 Check[int32](42) == nil`)
-        Assert.Single(rejectedStructConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedStructConstrainedTypeParameter.Diagnostics).Id)
 
         let rejectedClassConstrainedTypeParameter = Evaluate(`open class Animal {}
 class Unrelated {}
 func Check[T Animal](x T) Unrelated? -> x as Unrelated
 Check[Animal](Animal{}) == nil`)
-        Assert.Single(rejectedClassConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedClassConstrainedTypeParameter.Diagnostics).Id)
 
         let rejectedEnclosingAndNestedStructArguments = Evaluate(`class Outer[A] {
-    struct Inner[B] { var X A; var Y B }
+    struct Inner[B] {
+        var X A
+        var Y B
+    }
 }
 func Check[T](x Outer[T].Inner[T]) Outer[int32].Inner[string]? -> x as Outer[int32].Inner[string]?
 Check[int32](Outer[int32].Inner[int32]{X: 1, Y: 2}) == nil`)
-        Assert.Single(rejectedEnclosingAndNestedStructArguments.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedEnclosingAndNestedStructArguments.Diagnostics).Id)
 
-        let rejectedTransitiveTypeParameterEquality = Evaluate(`struct Triple[A, B, C] { var First A; var Second B; var Third C }
+        let rejectedTransitiveTypeParameterEquality = Evaluate(`struct Triple[A, B, C] {
+    var First A
+    var Second B
+    var Third C
+}
 func Check[T, U](x Triple[T, T, U]) Triple[U, int32, string]? -> x as Triple[U, int32, string]?
 Check[int32, int32](Triple[int32, int32, int32]{First: 1, Second: 2, Third: 3}) == nil`)
-        Assert.Single(rejectedTransitiveTypeParameterEquality.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedTransitiveTypeParameterEquality.Diagnostics).Id)
 
         let rejectedNestedDirectionalCovariantSlot = Evaluate(`import System.Collections.Generic
 interface IBox[out U] {}
 struct S[T] : IBox[IEnumerable[T]] {}
 func Check[T](s S[T]) IBox[List[T]]? -> s as IBox[List[T]]
 Check[int32](S[int32]{}) == nil`)
-        Assert.Single(rejectedNestedDirectionalCovariantSlot.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedNestedDirectionalCovariantSlot.Diagnostics).Id)
 
         let rejectedInterfaceConstrainedTypeParameter = Evaluate(`import System
+class D : IDisposable {
+    func Dispose() {}
+}
 func Check[T IDisposable](x T) string? -> x as string
-Check[IDisposable](nil!!) == nil`)
-        Assert.Single(rejectedInterfaceConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+Check[D](D()) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedInterfaceConstrainedTypeParameter.Diagnostics).Id)
 
         let rejectedIncompatibleSlices = Evaluate(`let xs = []string{"x"}
 let ys = xs as []int32
 ys == nil`)
-        Assert.Single(rejectedIncompatibleSlices.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedIncompatibleSlices.Diagnostics).Id)
 
         let rejectedStructConstrainedInInvariantSlot = Evaluate(`struct Box[A] { var Item A }
 func Check[T struct](x Box[T]) Box[object]? -> x as Box[object]?
 Check[int32](Box[int32]{Item: 1}) == nil`)
-        Assert.Single(rejectedStructConstrainedInInvariantSlot.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedStructConstrainedInInvariantSlot.Diagnostics).Id)
 
         let rejectedRecursiveTypeParameterEquality = Evaluate(`struct Box[A] { var Item A }
 func Check[T](x Box[T]) Box[Box[T]]? -> x as Box[Box[T]]?
 Check[int32](Box[int32]{Item: 1}) == nil`)
-        Assert.Single(rejectedRecursiveTypeParameterEquality.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedRecursiveTypeParameterEquality.Diagnostics).Id)
 
         let rejectedConstructedRepeatedTypeParameter = Evaluate(`import System.Collections.Generic
-struct Pair[A, B] { var First A; var Second B }
+struct Pair[A, B] {
+    var First A
+    var Second B
+}
 func Check[T, U](x Pair[T, T]) Pair[List[U], IEnumerable[U]]? -> x as Pair[List[U], IEnumerable[U]]?
 Check[List[int32], int32](Pair[List[int32], List[int32]]{First: List[int32](), Second: List[int32]()}) == nil`)
-        Assert.Single(rejectedConstructedRepeatedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+        Assert.Equal("GS0637", Assert.Single(rejectedConstructedRepeatedTypeParameter.Diagnostics).Id)
 
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}
 class Ints : List[int32] {}
+interface INode[T] {}
+class Node : INode[Node] {}
+interface IGeneric[A] {}
+struct SGeneric[A] : IGeneric[A] {}
+struct PairGeneric[A, B] {
+    var First A
+    var Second B
+}
 func BoxGeneric[T struct, U class](x T) U? -> x as U
+func SelfRefCheck[T INode[T]](x T) Node? -> x as Node
+func LinkedConstraintCheck[U, T IGeneric[U], V IGeneric[U]](x PairGeneric[T, T]) PairGeneric[V, SGeneric[string]]? -> x as PairGeneric[V, SGeneric[string]]?
 func Check[T](x object, xs IEnumerable[T], f (S) -> S, g (object) -> object) bool {
     let a = x as List[T]
     let b = xs as List[T]
@@ -248,7 +274,10 @@ func Check[T](x object, xs IEnumerable[T], f (S) -> S, g (object) -> object) boo
     let d = xs as Ints
     let e = g as (string) -> string
     let boxed = BoxGeneric[int32, object](42)
-    return a == nil && b != nil && c != nil && d != nil && e != nil && boxed != nil
+    let selfRef = SelfRefCheck[Node](Node())
+    let pair = PairGeneric[SGeneric[string], SGeneric[string]]{First: SGeneric[string]{}, Second: SGeneric[string]{}}
+    let linked = LinkedConstraintCheck[string, SGeneric[string], SGeneric[string]](pair)
+    return a == nil && b != nil && c != nil && d != nil && e != nil && boxed != nil && selfRef != nil && linked != nil
 }
 let ints = Ints()
 ints.Add(1)
