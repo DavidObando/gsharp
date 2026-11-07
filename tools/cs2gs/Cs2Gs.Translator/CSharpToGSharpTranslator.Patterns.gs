@@ -880,7 +880,12 @@ partial class CSharpToGSharpTranslator {
                             isPattern.Pattern,
                             receiverType,
                             isPattern.Expression
-                        )
+                        ),
+                        captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
+                            this.AllocateSynthesizedLocalName("scrutinee", isPattern)
+                        } else {
+                            nil
+                        }
                     )
                 }
                 let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
@@ -900,7 +905,12 @@ partial class CSharpToGSharpTranslator {
                                 isPattern.Expression,
                                 isNestedPatternMember: true
                             )
-                        )
+                        ),
+                        captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
+                            this.AllocateSynthesizedLocalName("scrutinee", isPattern)
+                        } else {
+                            nil
+                        }
                     )
                 }
                 receiver = this.SpillOperand(
@@ -1424,8 +1434,12 @@ partial class CSharpToGSharpTranslator {
         /// @param member The member value, e.g. `o.P`.
         /// @param test Builds the test over the bound local.
         /// @returns `member is var t && test(t)`.
-        private func BindPatternMemberOnce(member GExpression?, test(GExpression) -> GExpression) GExpression {
-            let temp = this.NewSpillName()
+        private func BindPatternMemberOnce(
+            member GExpression?,
+            test(GExpression) -> GExpression,
+            captureName string? = nil
+        ) GExpression {
+            let temp = captureName ?? this.NewSpillName()
             let local = IdentifierExpression(temp)
             if this.IsGSharpNullablePatternReceiver(member) {
                 this.state.GSharpNullablePatternReceivers.Add(local)
@@ -1455,7 +1469,8 @@ partial class CSharpToGSharpTranslator {
             gsharpNullable bool,
             declarations List[GStatement],
             test(GExpression) -> GExpression,
-            emittedStorageType GTypeReference? = nil
+            emittedStorageType GTypeReference? = nil,
+            captureName string? = nil
         ) GExpression {
             var storageType GTypeReference? = emittedStorageType ?? this.typeMapper.Map(
                 memberType,
@@ -1465,7 +1480,7 @@ partial class CSharpToGSharpTranslator {
             if memberType.IsReferenceType || gsharpNullable {
                 storageType = MakeNullable(storageType)
             }
-            let temp = this.NewSpillName()
+            let temp = captureName ?? this.NewSpillName()
             let local = IdentifierExpression(temp)
             this.state.StoredPatternCaptures.Add(local)
             if gsharpNullable {

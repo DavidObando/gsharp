@@ -3060,7 +3060,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     // seen through the emitted reference of a run project. They are found by
     // documentation id in each run compilation with the same assembly identity.
     // A linked source file gives one declaration for each such compilation.
-    private func RunSourceDeclarations(symbol ISymbol, compilations IEnumerable[Compilation]) List[ISymbol] {
+    internal func RunSourceDeclarations(symbol ISymbol, compilations IEnumerable[Compilation]) List[ISymbol] {
         let sources = List[ISymbol]()
         let identity = symbol.ContainingAssembly?.Identity
         if identity == nil {

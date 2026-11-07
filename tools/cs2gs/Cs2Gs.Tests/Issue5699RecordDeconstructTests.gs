@@ -1,6 +1,7 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
@@ -12,6 +13,327 @@ import System.Reflection
 import Xunit
 
 class Issue5699RecordDeconstructTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func LiftedLocalHelpers_ReserveRecordAdapterNamesInEitherMemberOrder(helperFirst bool) {
+        let deconstruct = "public void Deconstruct(out int x, out int y) { x = 30; y = 2; }"
+        let helper = `public int Work() {
+            int deconstructTuple() { return Bounce<int>(0); }
+            int Bounce<T>(int n) { return n == 0 ? Value : deconstructTuple(); }
+            return deconstructTuple();
+        }`
+        Verify((`
+namespace RecordDeconstruction {
+    public record R {
+        public int Value = 7;
+        MEMBERS
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var (x, y) = r;
+            return $"{x},{y},{r.Work()}";
+        }
+    }
+}`).Replace(
+                "MEMBERS",
+                if helperFirst {
+                    helper + "\n" + deconstruct
+                } else {
+                    deconstruct + "\n" + helper
+                }
+            ))
+    }
+
+    @Theory
+    @InlineData("record")
+    @InlineData("record class")
+    @InlineData("record struct")
+    func MetadataConsumersOfMigratedRecords_ReportGapAtEachAffectedUse(kind string) {
+        let producer = CSharpProjectLoader.LoadInMemory([](string, string){("Producer.cs", (`
+namespace Producer {
+    public KIND R {
+        public int X, Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`).Replace("KIND", kind))}, assemblyName: "Producer" + Guid.NewGuid().ToString("N"))
+        Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(producer.Compilation.Emit(image).Success)
+        const source = `
+namespace RecordDeconstruction {
+    public static class Probe {
+        public static string Run() {
+            var r = new Producer.R { X = 2, Y = 3 };
+            var (x, y) = r;
+            r.Deconstruct(out var a, out var b);
+            return $"{x},{y},{a},{b}";
+        }
+    }
+}`
+        let references = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromImage(image.ToArray()))
+            .ToArray()
+        let consumer = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Consumer.cs", source)},
+            references,
+            assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+        )
+        Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
+        using let baseline = MemoryStream()
+        Assert.True(consumer.Compilation.Emit(baseline).Success)
+        let document = Assert.Single(consumer.Documents)
+        let context = TranslationContext(
+            consumer.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{producer.Compilation, consumer.Compilation}
+        )
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gaps = context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported).ToArray()
+        Assert.Equal(2, gaps.Length)
+        Assert.All(
+            gaps,
+            (gap TranslationDiagnostic) -> {
+                Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+                Assert.Contains("migrated producer", gap.Message)
+                Assert.Equal("Consumer.cs", gap.Location!!.SourceTree!!.FilePath)
+            }
+        )
+    }
+
+    @Theory
+    @InlineData("record", false)
+    @InlineData("record", true)
+    @InlineData("record class", false)
+    @InlineData("record class", true)
+    @InlineData("record struct", false)
+    @InlineData("record struct", true)
+    func PointerOutputs_ReportDeclarationGapWithoutEmittingAdapters(kind string, scalar bool) {
+        let source = (`
+namespace RecordDeconstruction {
+    public KIND R {
+        public unsafe void Deconstruct(PARAMETERS) { BODY }
+    }
+    public static class Probe {
+        public static string Run() { return new R().ToString(); }
+    }
+}`).Replace(
+            "KIND",
+            kind
+        ).Replace(
+            "PARAMETERS",
+            if scalar {
+                "out int* p"
+            } else {
+                "out int* p, out int n"
+            }
+        ).Replace(
+            "BODY",
+            if scalar {
+                "p = null;"
+            } else {
+                "p = null; n = 1;"
+            }
+        )
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(project.Compilation.Emit(image).Success)
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("pointer outputs", gap.Message)
+        Assert.Equal(
+            source.IndexOf("public unsafe void Deconstruct", StringComparison.Ordinal),
+            gap.Location!!.SourceSpan.Start
+        )
+        Assert.DoesNotContain("func deconstructTuple", printed)
+        Assert.DoesNotContain("func deconstructValue", printed)
+    }
+
+    @Theory
+    @InlineData("record")
+    @InlineData("class")
+    @InlineData("extension")
+    func NestedNullableOutputs_PropagateAllSelectedSignatures(outerKind string) {
+        Verify((`
+#nullable enable
+namespace RecordDeconstruction {
+    public record R(int X, int Y) {
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    OUTER
+    public static class Probe {
+        public static bool Missing() {
+            try { var ((a, b), tag) = new Outer(null, 4); return false; }
+            catch (System.NullReferenceException) { return true; }
+        }
+        public static string Run() {
+            var outer = new Outer(new R(2, 3), 4);
+            var ((x, y), tag) = outer;
+            var sum = x + y + tag;
+            foreach (var ((a, b), id) in new[] { outer }) sum += a + b + id;
+            return $"{sum},{Missing()}";
+        }
+    }
+}`).Replace(
+                "OUTER",
+                if outerKind == "record" {
+                    "public record Outer(R? Child, int Tag);"
+                } else {
+                    `public class Outer {
+                    public R? Child;
+                    public int Tag;
+                    public Outer(R? child, int tag) { Child = child; Tag = tag; }
+                    METHOD
+                }
+                EXTENSION`.Replace(
+                        "METHOD",
+                        if outerKind == "class" {
+                            "public void Deconstruct(out R? child, out int tag) { child = Child; tag = Tag; }"
+                        } else {
+                            ""
+                        }
+                    )
+                        .Replace(
+                        "EXTENSION",
+                        if outerKind == "extension" {
+                            "public static class Extensions { public static void Deconstruct(this Outer outer, out R? child, out int tag) { child = outer.Child; tag = outer.Tag; } }"
+                        } else {
+                            ""
+                        }
+                    )
+                }
+            ))
+    }
+
+    @Fact
+    func PatternAlternatives_SnapshotReceiversAcrossDeconstructMutations() {
+        Verify(`
+#nullable enable
+namespace RecordDeconstruction {
+    public record R {
+        public int Value = 3;
+        public static int Calls;
+        public static System.Action? Hook;
+        public void Deconstruct(out int x, out int y) { Calls++; x = 1; y = 2; Hook?.Invoke(); }
+    }
+    public static class Probe {
+        public static string Run() {
+            R? r = new R();
+            R.Hook = () => r = null;
+            var matched = r is R(0, _) or R(1, _);
+            return $"{matched},{r is null},{R.Calls}";
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func MixedPositionalPropertyDecision_ReportsGapInsteadOfChangingRoslynEvaluation() {
+        const source = `
+#nullable enable
+namespace RecordDeconstruction {
+    public record R {
+            public int Value = 3;
+            public static System.Action? Hook;
+            public void Deconstruct(out int x, out int y) { x = 1; y = 2; Hook?.Invoke(); }
+    }
+    public static class Probe {
+            public static string Run() {
+                R? r = new R();
+                R.Hook = () => r = null;
+                try { return (r is R(0, _) or R(1, _) { Value: 3 }).ToString(); }
+                catch (System.NullReferenceException) { return "threw"; }
+            }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(project.Compilation.WithAssemblyName("Mixed" + Guid.NewGuid().ToString("N")).Emit(image).Success)
+        Assert.Equal(
+            "threw",
+            cast[string](
+                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
+                    nil,
+                    nil
+                )
+            )
+        )
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("positional and property", gap.Message)
+        Assert.Equal(source.IndexOf("r is R(0, _)", StringComparison.Ordinal), gap.Location!!.SourceSpan.Start)
+    }
+
+    @Fact
+    func RepeatedNegatedGuardHoist_DeclaresCachesInEveryEmittedScope() {
+        Verify(`
+namespace RecordDeconstruction {
+    public record R {
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; x = 1; y = 2; }
+    }
+    public static class Probe {
+        public static string Classify(int n, R r) {
+            switch (n) {
+                case 0:
+                case 1 when true:
+                    if (r is not R(1, var x)) return "miss";
+                    return x.ToString();
+                default: return "other";
+            }
+        }
+        public static string Run() {
+            var r = new R();
+            return Classify(0, r) + "," + Classify(1, r) + "," + R.Calls;
+        }
+    }
+}`)
+    }
+
+    @Theory
+    @InlineData("record")
+    @InlineData("record class")
+    @InlineData("record struct")
+    func TypedDeclarations_PreserveTargetTypesAndUserConversions(kind string) {
+        Verify((`
+namespace RecordDeconstruction {
+    public KIND R {
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+    }
+    public class Box {
+        public int Value;
+        public static implicit operator Box(int value) { return new Box { Value = value }; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            (long x, long y) = r;
+            (double a, double b) = r;
+            (Box one, Box two) = r;
+            return $"{x.GetType().Name},{y.GetType().Name},{a.GetType().Name},{b.GetType().Name},{one.Value},{two.Value}";
+        }
+    }
+}`).Replace("KIND", kind))
+    }
+
     @Theory
     @InlineData("record", false)
     @InlineData("record", true)
@@ -894,7 +1216,7 @@ namespace RecordDeconstruction {
 
         private func CompileAndRun(printed string) string {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
-            while root != nil && !File.Exists(Path.Combine(root.FullName, "GSharp.slnx")) {
+            while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
             }
             Assert.NotNull(root)

@@ -258,6 +258,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 return
             }
+            this.BeginRecordPatternDecision(isPattern)
             let receiver GExpression? = this.TranslateExpression(isPattern.Expression)
             let scrutineeType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
             let scrutineeIsNullable = this.IsNullableIfLetReceiver(isPattern.Expression) ||
@@ -331,6 +332,7 @@ partial class CSharpToGSharpTranslator {
                     this.state.PatternBindings[binder] = idExpr
                 }
             }
+            let guards = List[GStatement]()
             this.EmitMustHoldGuards(
                 idExpr,
                 scrutineeType,
@@ -341,9 +343,11 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     mainBinder
                 },
-                into,
+                guards,
                 negated
             )
+            into.AddRange(this.RecordPatternCacheResets(isPattern))
+            into.AddRange(guards)
             if separateMainBinder && mainBinder != nil {
                 this.state.PatternBindings.Remove(mainBinder)
                 let binderName = this.EmittedName(mainBinder, mainBinder.Name)
@@ -1367,6 +1371,7 @@ partial class CSharpToGSharpTranslator {
             for var i = 0; i < patternIndex; i++ {
                 statements.Add(IfStatement(this.TranslateExpression(terms[i]), then))
             }
+            this.BeginRecordPatternDecision(isPattern!!)
             var receiver GExpression? = this.TranslateExpression(isPattern!!.Expression)
             if this.IsNativelyExpressiblePattern(positivePattern, topLevel: true) &&
                 binder
@@ -1406,7 +1411,11 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             if !this.PatternReceiverCanBeDuplicated(isPattern!!.Expression, receiver) {
-                let spillName = this.NewSpillName()
+                let spillName = if this.RecordPatternRunsUserCode(isPattern!!.Pattern) {
+                    this.AllocateSynthesizedLocalName("scrutinee", isPattern!!)
+                } else {
+                    this.NewSpillName()
+                }
                 statements.Add(LocalDeclarationStatement(BindingKind.Let, spillName, initializer: receiver))
                 receiver = IdentifierExpression(spillName)
             }
@@ -1414,12 +1423,15 @@ partial class CSharpToGSharpTranslator {
             var positiveTest GExpression
             var replacement GExpression?
             try {
-                positiveTest = this.TranslatePatternTest(
-                    receiver,
-                    positivePattern,
-                    this.context.GetTypeInfo(isPattern!!.Expression).Type,
-                    isPattern!!.Expression
-                )
+                positiveTest = this.ResetRecordPatternCaches(
+                    isPattern!!,
+                    this.TranslatePatternTest(
+                        receiver,
+                        positivePattern,
+                        this.context.GetTypeInfo(isPattern!!.Expression).Type,
+                        isPattern!!.Expression
+                    )
+                )!!
                 this.state.PatternBindings.TryGetValue(binder, out replacement)
             } finally {
                 if hadPrevious {

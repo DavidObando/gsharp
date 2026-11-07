@@ -3329,6 +3329,11 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
+            if expression.Parent is IsPatternExpressionSyntax decision && this.RecordPatternRunsUserCode(
+                decision.Pattern
+            ) {
+                return false
+            }
             if !this.IsSmartCastableScrutinee(expression) || !IsTrivialPatternReceiver(expression) {
                 return false
             }
