@@ -1762,12 +1762,31 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         ):
             (output / name).write_bytes(content)
             (package / name).write_bytes(content)
+        tp_fr = package / "lib" / "net10.0" / "fr"
+        tp_de = package / "lib" / "net10.0" / "de"
+        tp_fr.mkdir(parents=True)
+        tp_de.mkdir(parents=True)
+        tp_sat_name = "Microsoft.VisualStudio.TestPlatform.ObjectModel.resources.dll"
+        (tp_fr / tp_sat_name).write_bytes(b"locked tp french satellite")
+        (tp_de / tp_sat_name).write_bytes(b"locked tp german satellite")
+        (output / "fr").mkdir(parents=True)
+        (output / "de").mkdir(parents=True)
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp french satellite")
+        (output / "de" / tp_sat_name).write_bytes(b"locked tp german satellite")
         approved = hashlib.sha256(b"locked test host").hexdigest()
         package_manifest = hashlib.sha256(json.dumps([
             dataclasses.asdict(row) for row in stage2.directory_manifest(package)
         ], sort_keys=True).encode()).hexdigest()
         stage2.validate_vstest_extensions(
             output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp german satellite")
+        with self.assertRaisesRegex(
+            stage2.CertificationError,
+            "test output package asset differs from the locked package",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp french satellite")
         (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"forged runtime")
         with self.assertRaisesRegex(
             stage2.CertificationError, "runtime closure",
@@ -1795,8 +1814,6 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         de_pkg.mkdir(parents=True)
         (fr_pkg / "Fixture.resources.dll").write_bytes(b"locked french satellite")
         (de_pkg / "Fixture.resources.dll").write_bytes(b"locked german satellite")
-        (output / "fr").mkdir(parents=True)
-        (output / "de").mkdir(parents=True)
         (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked french satellite")
         (output / "de" / "Fixture.resources.dll").write_bytes(b"locked german satellite")
         stage2.validate_vstest_extensions(

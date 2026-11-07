@@ -129,13 +129,30 @@ func Check[T](x int32) List[T]? -> x as List[T]
 Check[string](42) == nil`)
         Assert.Single(rejected.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
-        let allowed = Evaluate(`import System.Collections.Generic
-func Check[T](x object, xs IEnumerable[T]) bool {
+        let rejectedTuple = Evaluate(`func Check[T](x (T, int32)) (T, string)? -> x as (T, string)?
+Check[bool]((true, 1)) == nil`)
+        Assert.Single(rejectedTuple.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedStructPair = Evaluate(`struct Pair[A, B] { var First A; var Second B }
+func Check[T](x Pair[T, int32]) Pair[T, string]? -> x as Pair[T, string]?
+Check[bool](Pair[bool, int32]{First: true, Second: 1}) == nil`)
+        Assert.Single(rejectedStructPair.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedClassPair = Evaluate(`class RefPair[A, B] {}
+func Check[T](x RefPair[T, int32]) RefPair[T, string]? -> x as RefPair[T, string]
+Check[bool](RefPair[bool, int32]()) == nil`)
+        Assert.Single(rejectedClassPair.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let allowed = Evaluate(`import System
+import System.Collections.Generic
+class S {}
+func Check[T](x object, xs IEnumerable[T], f (S) -> S) bool {
     let a = x as List[T]
     let b = xs as List[T]
-    return a == nil && b != nil
+    let c = f as ICloneable
+    return a == nil && b != nil && c != nil
 }
-Check[int32](42, List[int32]{1})`)
+Check[int32](42, List[int32]{1}, (s S) -> s)`)
         Assert.Empty(allowed.Diagnostics)
         Assert.Equal(true, allowed.Value)
     }

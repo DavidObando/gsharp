@@ -582,8 +582,8 @@ def validate_vstest_extensions(
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
-        elif (dest_rel in locked_package_by_dest
-              or name in locked_package_names):
+        if (dest_rel in locked_package_by_dest
+                or name in locked_package_names):
             if sha256_file(path) not in locked_package_by_dest.get(dest_rel, set()):
                 raise CertificationError(
                     f"test output package asset differs from the locked package: {path}")
