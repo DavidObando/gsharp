@@ -494,11 +494,11 @@ partial class CSharpToGSharpTranslator {
             }
             var current INamedTypeSymbol? = created.BaseType
             while current != nil {
-                Unify(current.OriginalDefinition, current, stated, bindings)
+                Unify(current.OriginalDefinition, created, stated, bindings)
                 current = current.BaseType
             }
             for iface in created.AllInterfaces {
-                Unify(iface.OriginalDefinition, iface, stated, bindings)
+                Unify(iface.OriginalDefinition, created, stated, bindings)
             }
             let projected = ObliviousPositionSet()
             Substitute(slotType, bindings, "", projected)
