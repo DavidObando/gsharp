@@ -4875,9 +4875,9 @@ partial class CSharpToGSharpTranslator {
                     !TryGetPatternNonNullPolarity(isPattern.Pattern, out var whenTrue) ||
                     !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue) ||
                     (
-                    PatternUsesNativeVariableSyntax(isPattern.Pattern) && !this.ConditionUsesNativePatternVariables(
-                        GetConditionRoot(isPattern)
-                    )
+                    PatternIntroducesBinding(isPattern.Pattern) &&
+                        PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
+                        !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern))
                 ) ||
                     !this
                     .ComputePatternFlowRegions(isPattern, whenTrue, includeWhenClauseRegion: false).Any(
@@ -12323,7 +12323,8 @@ partial class CSharpToGSharpTranslator {
             // Focus on the GS0158/GS0116 cases: nullable reference types and
             // nullable arrays. Nullable value types (`int?`) take the `.Value`/
             // `.HasValue` path and are left untouched.
-            if !(declared != nil && declared.IsReferenceType == true) {
+            // Annotated type parameters keep the mapper's nullable-reference-like spelling.
+            if !(declared != nil && (declared.IsReferenceType || declared is ITypeParameterSymbol)) {
                 return false
             }
             // A declared-nullable receiver (`T?`) flow-proven non-null needs `!!`.

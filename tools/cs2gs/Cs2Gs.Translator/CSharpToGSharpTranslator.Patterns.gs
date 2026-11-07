@@ -1514,6 +1514,49 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
+            if pattern != nil && this.NeedsNullableValueListSnapshot(pattern, receiverType) {
+                let underlyingType = cast[INamedTypeSymbol](receiverType).TypeArguments[0]
+                let matchesNil = this.PatternMatchesNil(pattern)
+                // Guard the captured value, not the original nullable storage whose type controls overload selection.
+                return this.BindPatternMemberOnce(
+                    receiver,
+                    (nullableValue GExpression) -> {
+                        let temp = this.NewSpillName()
+                        let local = IdentifierExpression(temp)
+                        let test = this.TranslatePatternTest(
+                            local,
+                            pattern,
+                            underlyingType,
+                            receiverSyntax: nil,
+                            isNestedPatternMember,
+                            receiverIsNonNull: true
+                        )
+                        let captured = BlockExpression(
+                            List[GStatement]{
+                                LocalDeclarationStatement(BindingKind.Var, temp, initializer: nullableValue)
+                            },
+                            test
+                        )
+                        return BinaryExpression(
+                            BinaryExpression(
+                                nullableValue,
+                                if matchesNil {
+                                    "=="
+                                } else {
+                                    "!="
+                                },
+                                LiteralExpression.Null()
+                            ),
+                            if matchesNil {
+                                "||"
+                            } else {
+                                "&&"
+                            },
+                            captured
+                        )
+                    }
+                )
+            }
             switch pattern {
                 case paramsNull is ConstantPatternSyntax when paramsNull.Expression.IsKind(
                     SyntaxKind.NullLiteralExpression
@@ -1775,10 +1818,20 @@ partial class CSharpToGSharpTranslator {
                 receiver,
                 this.EmittedName(lengthSymbol, lengthSymbol?.Name ?? "Length")
             )
-            var test GExpression = if sliceIndex < 0 {
-                BinaryExpression(lengthAccess, "==", LiteralExpression.Int(elements.Count.ToString()))
+            let lengthCapture = if sliceIndex >= 0 && sliceIndex < elements.Count - 1 {
+                this.NewSpillName()
             } else {
-                BinaryExpression(lengthAccess, ">=", LiteralExpression.Int((elements.Count - 1).ToString()))
+                default(string?)
+            }
+            let lengthValue GExpression = if lengthCapture != nil {
+                cast[GExpression](IdentifierExpression(lengthCapture))
+            } else {
+                cast[GExpression](lengthAccess)
+            }
+            var test GExpression = if sliceIndex < 0 {
+                BinaryExpression(lengthValue, "==", LiteralExpression.Int(elements.Count.ToString()))
+            } else {
+                BinaryExpression(lengthValue, ">=", LiteralExpression.Int((elements.Count - 1).ToString()))
             }
             for var i = 0; i < elements.Count; i++ {
                 let element = elements[i]
@@ -1801,7 +1854,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let elementReceiver = this.BuildListElementReceiver(
                     receiver,
-                    lengthAccess,
+                    lengthValue,
                     i,
                     elements.Count,
                     sliceIndex
@@ -1814,13 +1867,16 @@ partial class CSharpToGSharpTranslator {
                 )
                 test = BinaryExpression(test, "&&", elementTest)
             }
+            if lengthCapture != nil {
+                test = BinaryExpression(PatternTestExpression(lengthAccess, VarPattern(lengthCapture)), "&&", test)
+            }
             // A list pattern never matches nil. Guard nullable receivers before reading their length or elements.
             if !receiverIsNonNull &&
                 (
                 this.IsGSharpNullablePatternReceiver(guardedReceiver) ||
                     (
                     receiverType != nil &&
-                        receiverType.IsReferenceType == true &&
+                        (receiverType.IsReferenceType || receiverType is ITypeParameterSymbol) &&
                         receiverType.NullableAnnotation == Microsoft
                         .CodeAnalysis
                         .NullableAnnotation
@@ -1832,6 +1888,27 @@ partial class CSharpToGSharpTranslator {
             }
             return test
         }
+
+        private func PatternMatchesNil(pattern PatternSyntax) bool -> switch pattern {
+            case parenthesized is ParenthesizedPatternSyntax: this.PatternMatchesNil(parenthesized.Pattern)
+            case unary is UnaryPatternSyntax: !this.PatternMatchesNil(unary.Pattern)
+            case binary is BinaryPatternSyntax: if binary.IsKind(SyntaxKind.AndPattern) {
+                this.PatternMatchesNil(binary.Left) && this.PatternMatchesNil(binary.Right)
+            } else {
+                this.PatternMatchesNil(binary.Left) || this.PatternMatchesNil(binary.Right)
+            }
+            case constant is ConstantPatternSyntax: this.IsNullPatternValue(constant.Expression)
+            case VarPatternSyntax, DiscardPatternSyntax: true
+            default: false
+        }
+
+        private func NeedsNullableValueListSnapshot(pattern PatternSyntax, receiverType ITypeSymbol?) bool ->
+        IsNullableValueType(receiverType) &&
+            !PatternIntroducesBinding(pattern) &&
+            pattern
+            .DescendantNodesAndSelf()
+            .OfType[ListPatternSyntax]()
+            .Any()
 
         // gsc's native list binder accepts non-null arrays and imported indexables, but not strings or nullable inputs.
         private func PatternRequiresLoweredListTest(
@@ -1848,7 +1925,9 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableAnnotation
                     .Annotated ||
-                    IsNullableValueType(inputType)
+                    IsNullableValueType(inputType) ||
+                    inputType is ITypeParameterSymbol ||
+                    (inputType is INamedTypeSymbol named && named.DeclaringSyntaxReferences.Length > 0)
             }
         )
 

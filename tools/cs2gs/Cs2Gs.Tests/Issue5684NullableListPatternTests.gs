@@ -134,6 +134,113 @@ namespace Demo
     }
 
     @Fact
+    func ParenthesizedSubjects_KeepAssertionsOnTheOriginalLocal() {
+        let printed = AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Positive(string? current) { if ((current) is ['a']) { return current.Length; } return 0; }
+        static int Negative(string? current) { if ((current) is not ['a']) { return 0; } return current.Length; }
+        static int NilGuard(string? current) { if ((current) is not null) { return current.Length; } return 0; }
+        public static string Run() =>
+            Positive("a") + " " + Positive(null) + " " + Negative("a") + " " + Negative(null) + " " + NilGuard("bb");
+    }
+}`, "1 0 1 0 2")
+        Assert.Contains("return current!!.Length", printed)
+    }
+
+    @Fact
+    func VarDiscards_UseTheSameListEligibilityAsOtherBooleanPatterns() {
+        let printed = AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int Positive(string? current) { if (current is ['a', var _]) { return current.Length; } return 0; }
+        static int Negative(string? current) { if (current is not ['a', var _]) { return 0; } return current.Length; }
+        public static string Run() => Positive("ab") + " " + Positive(null) + " " + Negative("ab") + " " + Negative(null);
+    }
+}`, "2 0 2 0")
+        Assert.DoesNotContain("current is ['a'", printed)
+        Assert.DoesNotContain("current!!", printed)
+    }
+
+    @Fact
+    func NullableGenericListInputs_AreGuardedInBooleanAndSwitchTests() {
+        AssertRuns(`
+#nullable enable
+using System.Collections.Generic;
+namespace Demo
+{
+    public static class P
+    {
+        static int Positive<T>(T? current) where T : IReadOnlyList<int> { if (current is [1]) { return current.Count; } return 0; }
+        static int Arm<T>(T? current) where T : IReadOnlyList<int> => current switch { [1] => current.Count, _ => 0 };
+        public static string Run() =>
+            Positive<List<int>>(new List<int> { 1 }) + " " + Positive<List<int>>(null) + " " +
+            Arm<List<int>>(new List<int> { 1 }) + " " + Arm<List<int>>(null);
+    }
+}`, "1 0 1 0")
+    }
+
+    @Fact
+    func NullableValueListPatterns_KeepOneMutableMatchedValue() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public struct Buffer
+    {
+        private int reads;
+        public int Count { get { reads++; return 1; } }
+        public int this[int index] => reads;
+    }
+    public static class P
+    {
+        static bool Matches(Buffer? current) => current is [1];
+        static bool Plain(Buffer current) => current is [1];
+        static string Pick(Buffer? current) => "nullable";
+        static string Pick(Buffer current) => "plain";
+        static string Body(Buffer? current)
+        {
+            if (current is [1]) { return Pick(current) + " " + current.HasValue + " " + current.Value[0]; }
+            return "nil";
+        }
+        public static string Run() =>
+            Matches(new Buffer()) + " " + Matches(null) + " " + Plain(new Buffer()) + " " + Body(new Buffer()) + " " + Body(null);
+    }
+}`, "True False True nullable True 0 nil")
+    }
+
+    @Fact
+    func LoweredSlicePatterns_ReadTheBoundCountOnce() {
+        AssertRuns(`
+#nullable enable
+namespace Demo
+{
+    public sealed class Buffer
+    {
+        public int Reads;
+        public int Count { get { Reads++; return Reads == 1 ? 3 : 100; } }
+        public int this[int index] => index == 0 ? 1 : index == 2 ? 3 : 0;
+    }
+    public static class P
+    {
+        static bool Matches(Buffer? current) => current is [1, .., 3];
+        public static string Run()
+        {
+            var buffer = new Buffer();
+            bool matches = Matches(buffer);
+            return matches + " " + buffer.Reads + " " + Matches(null);
+        }
+    }
+}`, "True 1 False")
+    }
+
+    @Fact
     func NullableSwitchListArms_PreserveRuntimeMatches() {
         AssertRuns(`
 #nullable enable

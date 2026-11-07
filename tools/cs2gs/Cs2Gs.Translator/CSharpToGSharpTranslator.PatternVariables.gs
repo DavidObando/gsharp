@@ -688,7 +688,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsPatternQualifiesForNativeVariables(isPattern IsPatternExpressionSyntax) bool {
-            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) {
+            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) || this.PatternRequiresLoweredListTest(
+                isPattern.Pattern
+            ) {
                 return false
             }
             let regions = this.ComputeNativePatternVariableRegions(isPattern)
@@ -799,6 +801,20 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.UsesNativeBooleanPatternTest(isPattern)
+            if !native && !PatternReadsScrutineeAtMostOnce(isPattern.Pattern) && !this.PatternReceiverCanBeDuplicated(
+                isPattern.Expression
+            ) {
+                return false
+            }
+            if !native && this.NeedsNullableValueListSnapshot(
+                isPattern.Pattern,
+                this.ResolveDeclaredReceiverType(
+                    this.context.GetTypeInfo(isPattern.Expression).Type,
+                    isPattern.Expression
+                )
+            ) {
+                return false
+            }
             return if native {
                 this.GetNativePatternNarrowedType(isPattern.Pattern, underlyingType, whenTrue) != nil
             } else {
