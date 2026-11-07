@@ -156,6 +156,41 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("fixed-field")
+    @InlineData("array")
+    @InlineData("ref-return")
+    func RefStorageBoundaries_CoalescingAliasMatchesCSharp(storage string) {
+        let source = switch storage {
+            case "fixed-field": `#nullable enable
+public class Holder { public string Text = "x"; }
+#nullable disable
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref readonly string alias = ref holder.Text;
+        return alias ?? "fallback";
+    }
+}`
+            case "array": `public static class Obj {
+    public static string Run() {
+        var xs = new[] { "x" };
+        ref string alias = ref xs[0];
+        return alias ?? "fallback";
+    }
+}`
+            default: `public static class Obj {
+    private static string text = "x";
+    public static ref string Borrow() => ref text;
+    public static string Run() {
+        ref string alias = ref Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        }
+        AssertParity(source, Translate(source), "x")
+    }
+
+    @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
     @InlineData("default(string)")
@@ -230,7 +265,7 @@ public static class Obj {
                 context.Unload()
             }
             Assert.Equal(expected, oracle)
-            let root = GsharpTestProjectRunner.FindRepoRoot()
+            let root = GsharpTestProjectRunner.FindRepoRootAbove(AppContext.BaseDirectory)
             Assert.NotNull(root)
             let compiler = Path.Combine(root!!, "out", "bin", "Release", "Compiler", "gsc.dll")
             Assert.True(File.Exists(compiler), "Build gsc before running this test.")

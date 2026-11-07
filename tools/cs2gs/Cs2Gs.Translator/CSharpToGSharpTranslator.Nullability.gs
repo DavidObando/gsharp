@@ -2055,7 +2055,7 @@ partial class CSharpToGSharpTranslator {
             return named
         }
 
-        private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
+        private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
             if !(declared != nil && declared.IsReferenceType == true) ||
                 declared.NullableAnnotation == Microsoft
@@ -2072,6 +2072,10 @@ partial class CSharpToGSharpTranslator {
             // reference type the type argument substitutes, so a maybe-null
             // value stored into it keeps its bridge.
             if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
+                return false
+            }
+            if checkRefStorage && ObliviousNullabilityAnalyzer.IsRefStorageSymbol(symbol) &&
+                this.RefStorageHasFixedNonNullContract(symbol, HashSet[ISymbol](SymbolEqualityComparer.Default)) {
                 return false
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
@@ -2271,6 +2275,34 @@ partial class CSharpToGSharpTranslator {
                 symbol,
                 this.GetNullabilityScope(symbol)
             )
+        }
+
+        private func RefStorageHasFixedNonNullContract(symbol ISymbol?, visited HashSet[ISymbol]) bool {
+            if symbol == nil || !visited.Add(symbol) {
+                return false
+            }
+            for initializer in ObliviousNullabilityAnalyzer.RefStorageInitializers(symbol) {
+                if !this.context.Compilation.ContainsSyntaxTree(initializer.SyntaxTree) {
+                    continue
+                }
+                using let modelScope = this.context.UseSemanticModelFor(initializer.SyntaxTree)
+                let storage = UnwrapParenthesesAndSuppressions(initializer)!!
+                let source = this.context.GetSymbolInfo(storage).Symbol
+                if ObliviousNullabilityAnalyzer.SymbolValueType(source) is {
+                    IsReferenceType: true,
+                    NullableAnnotation: Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                } &&
+                    !this.ShouldPromoteToNullableReference(source, checkRefStorage: false) {
+                    return true
+                }
+                if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(source) && this.RefStorageHasFixedNonNullContract(
+                    source,
+                    visited
+                ) {
+                    return true
+                }
+            }
+            return false
         }
 
         // Issue #3501: file paths that appear in MORE THAN ONE repository

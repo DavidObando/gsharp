@@ -4591,17 +4591,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if declared is ILocalSymbol{RefKind: not RefKind.None} &&
                         Unwrap(declarator.Initializer!!.Value) is RefExpressionSyntax reference {
                         // A ref initializer names storage. Guards narrow reads, not the shared declaration contract.
-                        let storage = Unwrap(reference.Expression, unwrapSuppressions: true)
-                        CollectScalarValueFlow(Canonical(declared), storage, model, tainted, edges, scalarTupleEdges)
-                        for source in ResolveSources(storage, model) {
-                            if !IsEligibleScalarTarget(source) {
-                                continue
-                            }
-                            if IsDeclaredNullablePosition(SymbolValueType(declared)) {
-                                tainted.Add(source!!)
-                            }
-                            edges.Add((source!!, Canonical(declared)!!))
-                        }
+                        CollectRefStorageFlow(
+                            Canonical(declared),
+                            reference.Expression,
+                            model,
+                            tainted,
+                            edges,
+                            scalarTupleEdges
+                        )
                         break
                     }
                     CollectScalarValueFlow(
@@ -7133,10 +7130,63 @@ internal shared class ObliviousNullabilityAnalyzer {
         transitive bool,
         $scope SourceScope = SourceScope.AllSources
     ) {
-        if IsDirectlyNullable(value, model) {
+        if value is RefExpressionSyntax reference {
+            CollectRefStorageFlow(returnSymbol, reference.Expression, model, tainted, edges, scalarTupleEdges)
+        } else if IsDirectlyNullable(value, model) {
             tainted.Add(returnSymbol!!)
         } else if transitive {
             CollectScalarValueFlow(returnSymbol, value, model, tainted, edges, scalarTupleEdges, $scope)
+        }
+    }
+
+    private func CollectRefStorageFlow(
+        target ISymbol?,
+        value ExpressionSyntax,
+        model SemanticModel,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+    ) {
+        let storage = Unwrap(value, unwrapSuppressions: true)
+        CollectScalarValueFlow(target, storage, model, tainted, edges, scalarTupleEdges)
+        for source in ResolveSources(storage, model) {
+            if !IsEligibleScalarTarget(source) {
+                continue
+            }
+            if IsDeclaredNullablePosition(SymbolValueType(target)) {
+                tainted.Add(source!!)
+            }
+            edges.Add((source!!, Canonical(target)!!))
+        }
+    }
+
+    internal func IsRefStorageSymbol(symbol ISymbol?) bool -> symbol is ILocalSymbol{RefKind: not RefKind.None} ||
+        symbol is IMethodSymbol{ReturnsByRef: true} or
+        IMethodSymbol{ReturnsByRefReadonly: true}
+
+    internal func RefStorageInitializers(symbol ISymbol) sequence[ExpressionSyntax] {
+        for reference in symbol.DeclaringSyntaxReferences {
+            let declaration = reference.GetSyntax()
+            if declaration is VariableDeclaratorSyntax{Initializer: {Value: RefExpressionSyntax initializer}} &&
+                symbol is ILocalSymbol{RefKind: not RefKind.None} {
+                yield initializer.Expression
+                continue
+            }
+            let (arrow, body) = switch declaration {
+                case method is MethodDeclarationSyntax when IsRefStorageSymbol(symbol):
+                (method.ExpressionBody?.Expression, method.Body)
+                case function is LocalFunctionStatementSyntax when IsRefStorageSymbol(symbol):
+                (function.ExpressionBody?.Expression, function.Body)
+                default: (default(ExpressionSyntax?), default(BlockSyntax?))
+            }
+            if arrow is RefExpressionSyntax arrowReference {
+                yield arrowReference.Expression
+            }
+            for statement in EnumerateOwnReturns(body) {
+                if statement.Expression is RefExpressionSyntax returned {
+                    yield returned.Expression
+                }
+            }
         }
     }
 
