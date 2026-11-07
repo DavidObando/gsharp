@@ -6325,10 +6325,16 @@ partial class CSharpToGSharpTranslator {
                         let write Microsoft.CodeAnalysis.SyntaxNode? = use.AncestorsAndSelf().FirstOrDefault(
                             (node Microsoft.CodeAnalysis.SyntaxNode) -> this.SyntaxNodeWritesSymbol(node, local)
                         )
-                        if write != nil {
-                            if write is not Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment {
-                                continue
-                            }
+                        if write is Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .AssignmentExpressionSyntax assignment &&
+                            (
+                            this.BindsTo(assignment.Left, local) ||
+                                assignment.Left is TupleExpressionSyntax or
+                                DeclarationExpressionSyntax
+                        ) {
                             if !assignment.IsKind(
                                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
                             ) ||
@@ -6361,11 +6367,14 @@ partial class CSharpToGSharpTranslator {
                         }
                         if !this.ProjectedResultMatchesDestination(use, projectedType, out _) ||
                             (
-                            this
-                                .state
-                                .ManagedReferenceArrayNullable
-                                .ProjectedBaseTypesInProgress
-                                .Count > 0 &&
+                            (
+                                this
+                                    .state
+                                    .ManagedReferenceArrayNullable
+                                    .ProjectedBaseTypesInProgress
+                                    .Count > 0 ||
+                                    !IsImplicitlyTypedLocal(local)
+                            ) &&
                                 !this.ProjectedValueFitsConsumerDestination(use, local.Type, projectedType)
                         ) {
                             matches = false
@@ -8716,16 +8725,17 @@ partial class CSharpToGSharpTranslator {
             let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
             let originalElementType ITypeSymbol? = forEachInfo.ElementType
             var projectedElementType ITypeSymbol? = nil
-            if projectedCollectionType is INamedTypeSymbol projectedNamed &&
-                forEachInfo.GetEnumeratorMethod is {} getEnumerator &&
-                this.GetProjectedMember(projectedNamed, getEnumerator) is IMethodSymbol projectedGetEnumerator &&
-                projectedGetEnumerator.ReturnType is INamedTypeSymbol projectedEnumerator &&
-                forEachInfo.CurrentProperty is {} current &&
-                this.GetProjectedMember(projectedEnumerator, current) is IPropertySymbol projectedCurrent {
-                projectedElementType = this.SubstituteProjectedContainingTypeParameter(
+            if projectedCollectionType is INamedTypeSymbol projectedNamed {
+                if this.TryGetProjectedForEachEnumeratorElementType(
                     projectedNamed,
-                    projectedCurrent.Type
-                )
+                    forEachInfo,
+                    out var enumeratorElement,
+                    out var enumeratorConflict
+                ) {
+                    projectedElementType = enumeratorElement
+                } else if enumeratorConflict {
+                    return false
+                }
             }
             projectedElementType ??= this.GetProjectedEnumerableElementType(
                 projectedCollectionType,
@@ -9562,7 +9572,11 @@ partial class CSharpToGSharpTranslator {
             collection CollectionExpressionSyntax,
             projectedBase INamedTypeSymbol
         ) bool {
-            let projectedElementType ITypeSymbol? = this.GetProjectedEnumerableElementType(projectedBase)
+            var projectedElementType ITypeSymbol? = nil
+            if this.GetCollectionProjectionElementType(collection, projectedBase) is {} openElement {
+                projectedElementType = this.SubstituteProjectedContainingTypeParameter(projectedBase, openElement)
+            }
+            projectedElementType ??= this.GetProjectedEnumerableElementType(projectedBase)
             if projectedElementType == nil {
                 return true
             }
@@ -9574,20 +9588,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     case spread is SpreadElementSyntax {
-                        var spreadElementType ITypeSymbol? = this.GetMappedArrayElementType(spread.Expression) ??
-                            this.GetProjectedEnumerableElementType(
-                            this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)
-                        )
-                        if spreadElementType != nil &&
-                            !(spreadElementType is IArrayTypeSymbol) &&
-                            (
-                            this.ArrayExpressionHasNullableElement(spread.Expression) ||
-                                this.IsNullableArrayElementAccess(spread.Expression)
-                        ) {
-                            spreadElementType = spreadElementType.WithNullableAnnotation(
-                                Microsoft.CodeAnalysis.NullableAnnotation.Annotated
-                            )
-                        }
+                        let spreadElementType ITypeSymbol? = this.GetProjectedSpreadElementType(spread)
                         if spreadElementType != nil && !this.ProjectionTypeFitsCompositeDestination(
                             spreadElementType,
                             projectedElementType
@@ -10634,8 +10635,30 @@ partial class CSharpToGSharpTranslator {
                         !ValidatePatternLocal(local, originalInputType, projectedInputType) {
                         return false
                     }
+                    var effectiveOriginalInputType ITypeSymbol? = originalInputType
+                    var effectiveProjectedInputType ITypeSymbol? = projectedInputType
+                    if recursive.Type != nil &&
+                        this
+                        .context
+                        .GetTypeInfo(recursive.Type)
+                        .Type is INamedTypeSymbol recursiveTarget {
+                        effectiveOriginalInputType = recursiveTarget
+                        effectiveProjectedInputType = if UnwrapNamedOrConstrainedClassType(
+                            projectedInputType
+                        ) is {} projectedNamed {
+                            this.GetReceiverTypeHierarchy(projectedNamed).FirstOrDefault(
+                                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate,
+                                    recursiveTarget
+                                )
+                            ) ??
+                                recursiveTarget
+                        } else {
+                            recursiveTarget
+                        }
+                    }
                     if recursive.PropertyPatternClause != nil &&
-                        UnwrapNamedOrConstrainedClassType(projectedInputType) is {} projectedReceiverNamed {
+                        UnwrapNamedOrConstrainedClassType(effectiveProjectedInputType) is {} projectedReceiverNamed {
                         for sub in recursive.PropertyPatternClause!!.Subpatterns {
                             var subMember ISymbol? = nil
                             if sub.NameColon != nil {
@@ -10660,24 +10683,32 @@ partial class CSharpToGSharpTranslator {
                             }
                         }
                     }
-                    if recursive.PositionalPatternClause != nil &&
-                        originalInputType is INamedTypeSymbol{IsTupleType: true} originalTuple &&
-                        projectedInputType is INamedTypeSymbol{IsTupleType: true} projectedTuple &&
-                        recursive.PositionalPatternClause!!
-                        .Subpatterns
-                        .Count == originalTuple
-                        .TupleElements
-                        .Length &&
-                        originalTuple
-                        .TupleElements
-                        .Length == projectedTuple
-                        .TupleElements
-                        .Length {
-                        for var i = 0; i < recursive.PositionalPatternClause!!.Subpatterns.Count; i++ {
-                            if !this.PatternMatchesProjectedInput(
-                                recursive.PositionalPatternClause!!.Subpatterns[i].Pattern,
-                                GetEffectiveTupleElementType(originalTuple, i),
-                                GetEffectiveTupleElementType(projectedTuple, i)
+                    if recursive.PositionalPatternClause != nil {
+                        let subs = recursive.PositionalPatternClause!!.Subpatterns
+                        let positional PositionalSlots? = this.TryGetPositionalMembers(
+                            recursive,
+                            subs.Count,
+                            out var positionalFailure
+                        )
+                        for var i = 0; i < subs.Count; i++ {
+                            let originalSubType ITypeSymbol? = this.GetProjectedPositionalSubpatternType(
+                                recursive,
+                                i,
+                                positional,
+                                positionalFailure,
+                                effectiveOriginalInputType
+                            )
+                            let projectedSubType ITypeSymbol? = this.GetProjectedPositionalSubpatternType(
+                                recursive,
+                                i,
+                                positional,
+                                positionalFailure,
+                                effectiveProjectedInputType
+                            )
+                            if originalSubType != nil && projectedSubType != nil && !this.PatternMatchesProjectedInput(
+                                subs[i].Pattern,
+                                originalSubType,
+                                projectedSubType
                             ) {
                                 return false
                             }
@@ -11064,8 +11095,8 @@ partial class CSharpToGSharpTranslator {
             }
             for var i = 0; i < parameterNamed.TypeArguments.Length && i < matchingArgument.TypeArguments.Length; i++ {
                 this.CollectProjectedTypeArguments(
-                    parameterNamed.TypeArguments[i],
-                    matchingArgument.TypeArguments[i],
+                    GetEffectiveTypeArgument(parameterNamed, i),
+                    GetEffectiveTypeArgument(matchingArgument, i),
                     target,
                     compilation,
                     projectedArguments,

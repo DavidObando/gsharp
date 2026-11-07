@@ -174,13 +174,21 @@ partial class CSharpToGSharpTranslator {
                     // `GetTypeInfo(declaration.Type)` reports the bare type and
                     // silently drops the `?`, so a nullable-enabled local would
                     // be rendered non-nullable and later `= nil`/`== nil` fail.
-                    let declaredType ITypeSymbol? = (
-                        this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
-                    )?.Type ??
+                    let declaredLocal ILocalSymbol? = this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
+                    var declaredType ITypeSymbol? = declaredLocal?.Type ??
                         this
                         .context
                         .GetTypeInfo(declaration!!.Type)
                         .Type
+                    if declaredLocal != nil &&
+                        this
+                        .state
+                        .ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType
+                        .TryGetValue(declaredLocal, out var projectedDeclaredLocalType) &&
+                        projectedDeclaredLocalType != nil {
+                        declaredType = projectedDeclaredLocalType
+                    }
                     if !emitType && initializer != nil && declaredType != nil {
                         // Preserve the explicit type only when it differs from the
                         // initializer's natural type (an implicit conversion). When

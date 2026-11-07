@@ -117,7 +117,7 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func RewriteRecordDeconstruction(value GExpression?, method IMethodSymbol?) GExpression? {
+        private func ReportUnsupportedRecordExtensionDeconstruction(method IMethodSymbol?) {
             let extension = method?.ReducedFrom ?? method
             if extension != nil && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
                 let receiverType = (
@@ -141,8 +141,12 @@ partial class CSharpToGSharpTranslator {
                             custom.DeclaringSyntaxReferences[0].GetSyntax(),
                             "extension Deconstruct calls on records with user-declared Deconstruct methods need explicit call lowering."
                         )
-                        return value
+                        return
                     }
+        }
+
+        private func RewriteRecordDeconstruction(value GExpression?, method IMethodSymbol?) GExpression? {
+                    this.ReportUnsupportedRecordExtensionDeconstruction(method)
                 }
             }
             if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {

@@ -180,8 +180,41 @@ namespace RecordDeconstruction {
     }
 
     @Fact
-    func UserRecordWithSelectedExtensionDeconstruct_ReportsGapInsteadOfReadingDataFields() {
-        const source = `
+    func NestedForEach_UserRecordOutputs_PreserveSelectedMethodsAndOuterArity() {
+        Verify(`
+namespace RecordDeconstruction {
+    public record R {
+        public int X;
+        public int Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public record Outer(R Child, int Tag) {
+        public void Deconstruct(out R child, out int tag) { child = Child; tag = Tag * 10; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var r = new R { X = 2, Y = 3 };
+            var total = 0;
+            foreach (var ((a, b), c) in new[] { (r, 4) }) total += a + b + c;
+            foreach (var ((a, b), c) in new[] { new Outer(r, 4) }) total += a + b + c;
+            foreach (((int a, int b), int c) in new[] { (r, 4) }) total += a + b + c;
+            return total.ToString();
+        }
+    }
+}`)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func UserRecordWithSelectedExtensionDeconstruct_ReportsGapInsteadOfReadingDataFields(forEach bool) {
+        let body = if forEach {
+            `int x = 0, y = 0, z = 0;
+            foreach (var (a, b, c) in new[] { new R { X = 2, Y = 3, Z = 4 } }) { x = a; y = b; z = c; }`
+        } else {
+            "var (x, y, z) = new R { X = 2, Y = 3, Z = 4 };"
+        }
+        let source = (`
 namespace RecordDeconstruction {
     public record R {
         public int X;
@@ -196,11 +229,11 @@ namespace RecordDeconstruction {
     }
     public static class Probe {
         public static string Run() {
-            var (x, y, z) = new R { X = 2, Y = 3, Z = 4 };
+            BODY
             return $"{x},{y},{z}";
         }
     }
-}`
+}`).Replace("BODY", body)
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
         using let image = MemoryStream()
