@@ -7193,6 +7193,43 @@ Run(true)`)
     }
 
     @Fact
+    func PointerArgumentStoredByCallee_LoopBackwardEdgeInvalidatesNarrowing() {
+        let result = Evaluate(`unsafe class Holder {
+    shared {
+        var stored *void
+
+        func Save(p *void) {
+            stored = p
+        }
+    }
+}
+
+unsafe func Run(choose bool) int32 {
+    var text string? = "safe"
+    let clear = func() {
+        *(*nint(Holder.stored)) = 0
+    }
+    var cb (() -> void) = func() { }
+    if choose {
+        cb = clear
+    }
+    for var i = 0; i < 2; i++ {
+        if i > 0 && text != nil {
+            cb()
+            return text.Length
+        }
+        Holder.Save(*void(&text))
+    }
+    return 0
+}
+
+Run(true)`)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Fact
     func ByRefArgumentInUnsafeFunction_UnknownCallablePreservesNarrowing() {
         AssertRuns(`import System
 

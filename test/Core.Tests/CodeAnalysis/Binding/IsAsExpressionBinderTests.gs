@@ -252,6 +252,44 @@ func Check[T, U](x Pair[T, T]) Pair[List[U], IEnumerable[U]]? -> x as Pair[List[
 Check[List[int32], int32](Pair[List[int32], List[int32]]{First: List[int32](), Second: List[int32]()}) == nil`)
         Assert.Equal("GS0637", Assert.Single(rejectedConstructedRepeatedTypeParameter.Diagnostics).Id)
 
+        let rejectedUnmanagedTypeParameterAgainstManagedStruct = Evaluate(`struct Managed {
+    var Text string?
+}
+func Check[T unmanaged](x T) Managed? -> x as Managed?
+Check[int32](1) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedUnmanagedTypeParameterAgainstManagedStruct.Diagnostics).Id)
+
+        let rejectedUnmanagedInInvariantSlot = Evaluate(`struct Managed {
+    var Text string?
+}
+struct Box[A] {
+    var Item A
+}
+func Check[T unmanaged](x Box[T]) Box[Managed]? -> x as Box[Managed]?
+Check[int32](Box[int32]{Item: 1}) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedUnmanagedInInvariantSlot.Diagnostics).Id)
+
+        let rejectedDefaultConstructorInInvariantSlot = Evaluate(`struct Box[A] {
+    var Item A
+}
+func Check[T init()](x Box[T]) Box[string]? -> x as Box[string]?
+Check[int32](Box[int32]{Item: 1}) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedDefaultConstructorInInvariantSlot.Diagnostics).Id)
+
+        let rejectedStructConstrainedInVariantSlot = Evaluate(`interface IBox[out U] {}
+struct S[T struct] : IBox[T] {}
+func Check[T struct](s S[T]) IBox[object]? -> s as IBox[object]
+Check[int32](S[int32]{}) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedStructConstrainedInVariantSlot.Diagnostics).Id)
+
+        let rejectedNullableStructTypeParameterMismatch = Evaluate(`struct Pair[A, B] {
+    var First A
+    var Second B
+}
+func Check[T struct](x Pair[T?, T]) Pair[int32?, int64]? -> x as Pair[int32?, int64]?
+Check[int32](Pair[int32?, int32]{First: 1, Second: 2}) == nil`)
+        Assert.Equal("GS0637", Assert.Single(rejectedNullableStructTypeParameterMismatch.Diagnostics).Id)
+
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}

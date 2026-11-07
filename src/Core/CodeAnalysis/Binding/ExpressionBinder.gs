@@ -4210,6 +4210,40 @@ internal partial class ExpressionBinder {
         return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType
     }
 
+    private func IsTypeParameterConstrainedToUnmanaged(tp TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasUnmanagedConstraint {
+                return true
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return false
+    }
+
+    private func IsTypeParameterConstrainedToDefaultConstructor(tp TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasDefaultConstructorConstraint ||
+                current.HasValueTypeConstraint ||
+                current.HasUnmanagedConstraint {
+                return true
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return false
+    }
+
     private func TryGetTypeParameterEffectiveClassBound(tp TypeParameterSymbol) TypeSymbol? {
         var current TypeParameterSymbol? = tp
         var visited HashSet[TypeParameterSymbol]? = nil
@@ -4302,6 +4336,10 @@ internal partial class ExpressionBinder {
                 return true
             }
             if other.IsValueType || other is TupleTypeSymbol || other is FunctionPointerTypeSymbol {
+                if IsTypeParameterConstrainedToUnmanaged(tp) && !TypeSymbol.ContainsTypeParameter(other) &&
+                    !Binder.IsUnmanagedTypeForConstraint(other) {
+                    return false
+                }
                 let trial = CloneTypeParameterSubstitutions(substitutions)
                 trial[tp] = other
                 for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
@@ -4388,6 +4426,10 @@ internal partial class ExpressionBinder {
             if !targetIsNonNullValue {
                 return false
             }
+            if IsTypeParameterConstrainedToUnmanaged(tp) && !TypeSymbol.ContainsTypeParameter(target) &&
+                !Binder.IsUnmanagedTypeForConstraint(target) {
+                return false
+            }
             for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
                 let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(reqIface)
                 if !HasBoxingConversionForAs(target, reqIface, hasParam, substitutions) {
@@ -4395,6 +4437,12 @@ internal partial class ExpressionBinder {
                 }
             }
             return true
+        }
+        if IsTypeParameterConstrainedToDefaultConstructor(tp) && !TypeSymbol.ContainsTypeParameter(target) &&
+            target != TypeSymbol.Object &&
+            !targetIsNonNullValue &&
+            !Binder.HasDefaultConstructorForConstraint(target) {
+            return false
         }
         if IsTypeParameterConstrainedToReferenceType(tp) {
             if target.IsValueType || target is TupleTypeSymbol || target is FunctionPointerTypeSymbol {
@@ -5290,7 +5338,8 @@ internal partial class ExpressionBinder {
         while current != nil {
             if current is PlatformTypeSymbol platform {
                 current = platform.UnderlyingType
-            } else if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+            } else if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) &&
+                !(nullable.UnderlyingType is TypeParameterSymbol tp && IsTypeParameterConstrainedToValueType(tp)) {
                 current = nullable.UnderlyingType
             } else {
                 return current
@@ -5330,13 +5379,20 @@ internal partial class ExpressionBinder {
             if tpA == tpB {
                 return true
             }
-            if varianceMode == 0 {
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(tpA) ||
+                IsTypeParameterConstrainedToValueType(tpB) {
                 return CanTypeParameterSatisfyExactSubstitution(tpA, tpB, substitutions)
             }
             return CanTypeParameterConvertViaAs(tpA, tpB, substitutions)
         }
         if a is TypeParameterSymbol paramA {
-            if varianceMode == 0 {
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(paramA) ||
+                b.IsValueType ||
+                b is TupleTypeSymbol ||
+                b is FunctionPointerTypeSymbol ||
+                b is NullableTypeSymbol {
                 if TypeContainsTypeParameterWithSubstitutions(b, paramA, substitutions) ||
                     !CanTypeParameterSatisfyExactSubstitution(paramA, b, substitutions) {
                     return false
@@ -5346,7 +5402,12 @@ internal partial class ExpressionBinder {
             return CanTypeParameterConvertViaAs(paramA, b, substitutions)
         }
         if b is TypeParameterSymbol paramB {
-            if varianceMode == 0 {
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(paramB) ||
+                a.IsValueType ||
+                a is TupleTypeSymbol ||
+                a is FunctionPointerTypeSymbol ||
+                a is NullableTypeSymbol {
                 if TypeContainsTypeParameterWithSubstitutions(a, paramB, substitutions) ||
                     !CanTypeParameterSatisfyExactSubstitution(paramB, a, substitutions) {
                     return false
@@ -5355,9 +5416,16 @@ internal partial class ExpressionBinder {
             }
             return CanTypeParameterConvertViaAs(paramB, a, substitutions)
         }
-        if a is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} ||
-            b is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol} {
-            return true
+        if a is NullableTypeSymbol aNull && b is NullableTypeSymbol bNull {
+            return CanSingleTypePositionMatchForAs(
+                aNull.UnderlyingType,
+                bNull.UnderlyingType,
+                varianceMode: 0,
+                substitutions
+            )
+        }
+        if a is NullableTypeSymbol || b is NullableTypeSymbol {
+            return false
         }
         if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b) ||
             Conversion.HaveIdenticalTypeArgumentContracts(a, b) {
@@ -5377,14 +5445,6 @@ internal partial class ExpressionBinder {
                 return Conversion.Classify(b, a).IsImplicit
             }
             return CanConvertViaAs(a, b)
-        }
-        if a is NullableTypeSymbol aNull && b is NullableTypeSymbol bNull {
-            return CanSingleTypePositionMatchForAs(
-                aNull.UnderlyingType,
-                bNull.UnderlyingType,
-                varianceMode: 0,
-                substitutions
-            )
         }
         if aIsValue || bIsValue {
             return aIsValue && bIsValue && CanOpenValueTypesMatchForAs(a, b, substitutions)
