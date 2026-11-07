@@ -546,6 +546,7 @@ partial class CSharpToGSharpTranslator {
                 forceRealTemps: false,
                 statements,
                 captured,
+                this.GetDeconstructionInfo(right),
                 this.context.GetTypeInfo(right).Type as INamedTypeSymbol
             )
             return statements
@@ -675,6 +676,7 @@ partial class CSharpToGSharpTranslator {
                 forceRealTemps: true,
                 statements,
                 captured,
+                this.GetDeconstructionInfo(right),
                 this.context.GetTypeInfo(right).Type as INamedTypeSymbol
             )
             let value GExpression = TupleLiteralExpression(values)
@@ -745,6 +747,7 @@ partial class CSharpToGSharpTranslator {
             forceRealTemps bool,
             statements List[GStatement],
             captured Dictionary[ExpressionSyntax, GExpression],
+            deconstruction DeconstructionInfo,
             rhsTupleType INamedTypeSymbol? = nil
         ) List[GExpression] {
             let count = pattern.Arguments.Count
@@ -817,7 +820,13 @@ partial class CSharpToGSharpTranslator {
             // also permits mutable `var (...)`. This is exactly the mechanism the
             // declaration form (`var (a, b) = e`) already uses, so it inherits
             // the same RHS-shape support for free.
-            statements.Add(TupleDeconstructionStatement(BindingKind.Let, temps, rhsValue))
+            statements.Add(
+                TupleDeconstructionStatement(
+                    BindingKind.Let,
+                    temps,
+                    this.RewriteRecordDeconstruction(rhsValue, deconstruction.Method)
+                )
+            )
             let values = List[GExpression](count)
             for var i = 0; i < count; i++ {
                 let targetExpr = pattern.Arguments[i].Expression
@@ -855,6 +864,7 @@ partial class CSharpToGSharpTranslator {
                         forceRealTemps,
                         statements,
                         captured,
+                        this.NestedDeconstructionInfo(deconstruction, i),
                         nestedRhsTupleType
                     )
                     values.Add(
@@ -872,6 +882,7 @@ partial class CSharpToGSharpTranslator {
                         tempRead,
                         forceRealTemps,
                         statements,
+                        this.NestedDeconstructionInfo(deconstruction, i),
                         declaration.Type.IsVar
                     )
                     if declaredValue != nil {
@@ -1063,6 +1074,7 @@ partial class CSharpToGSharpTranslator {
             value GExpression,
             preserveValue bool,
             statements List[GStatement],
+            deconstruction DeconstructionInfo,
             inferredType bool
         ) GExpression? {
             if designation is DiscardDesignationSyntax {
@@ -1117,7 +1129,13 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
             }
-            statements.Add(TupleDeconstructionStatement(BindingKind.Let, temps, value))
+            statements.Add(
+                TupleDeconstructionStatement(
+                    BindingKind.Let,
+                    temps,
+                    this.RewriteRecordDeconstruction(value, deconstruction.Method)
+                )
+            )
             let values = List[GExpression](parenthesized.Variables.Count)
             for var i = 0; i < parenthesized.Variables.Count; i++ {
                 if temps[i] == "_" {
@@ -1133,6 +1151,7 @@ partial class CSharpToGSharpTranslator {
                     IdentifierExpression(temps[i]),
                     preserveValue,
                     statements,
+                    this.NestedDeconstructionInfo(deconstruction, i),
                     inferredType
                 )
                 if declaredValue != nil {
@@ -1163,6 +1182,7 @@ partial class CSharpToGSharpTranslator {
                         this.TranslateExpression(right)!!,
                         preserveValue: false,
                         statements,
+                        this.GetDeconstructionInfo(right),
                         inferredType
                     )
                     return statements

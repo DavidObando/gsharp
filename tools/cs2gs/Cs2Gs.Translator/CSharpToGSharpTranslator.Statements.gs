@@ -5195,7 +5195,14 @@ partial class CSharpToGSharpTranslator {
                     this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
-                            TupleDeconstructionStatement(binding, names, this.TranslateExpression(assignment.Right))
+                            TupleDeconstructionStatement(
+                                binding,
+                                names,
+                                this.RewriteRecordDeconstruction(
+                                    this.TranslateExpression(assignment.Right),
+                                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method
+                                )
+                            )
                         )
                     }
                 }

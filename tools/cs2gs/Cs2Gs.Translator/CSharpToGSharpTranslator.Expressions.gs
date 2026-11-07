@@ -5726,7 +5726,10 @@ partial class CSharpToGSharpTranslator {
                             default: true
                         }
                     }
-                    return this.WritesThroughStorage(assignment.Left, isArgument: false)
+                    return this.RecordDeconstructionRunsUserCode(
+                        this.context.SemanticModel.GetDeconstructionInfo(assignment)
+                    ) ||
+                        this.WritesThroughStorage(assignment.Left, isArgument: false)
                 }
                 case prefix is Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax when prefix.IsKind(
                     Microsoft.CodeAnalysis.CSharp.SyntaxKind.PreIncrementExpression
@@ -9636,6 +9639,9 @@ partial class CSharpToGSharpTranslator {
                 .Syntax
                 .RecursivePatternSyntax recursive {
                 return false
+            }
+            if this.UserRecordPatternDeconstruct(recursive) != nil {
+                return this.RecordPatternNeedsDeconstruction(recursive)
             }
             let positional PositionalSlots? = this.TryGetPositionalMembers(
                 recursive,

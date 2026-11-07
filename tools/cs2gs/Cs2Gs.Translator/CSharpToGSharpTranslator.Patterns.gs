@@ -854,7 +854,10 @@ partial class CSharpToGSharpTranslator {
                 receiver = this.SpillOperand(receiver!!, isPattern.Expression)
             }
             let test = this.TranslatePatternTest(receiver, isPattern.Pattern, receiverType, isPattern.Expression)
-            return this.MaterializeFallbackPatternBindings(isPattern, receiver, test)
+            return this.ResetRecordPatternCaches(
+                isPattern,
+                this.MaterializeFallbackPatternBindings(isPattern, receiver, test)
+            )
         }
 
         // Issue #4356: true when a property subpattern reads a member whose
@@ -2109,7 +2112,8 @@ partial class CSharpToGSharpTranslator {
             recursive RecursivePatternSyntax,
             receiverSyntax ExpressionSyntax? = nil,
             receiverType ITypeSymbol? = nil,
-            isNestedPatternMember bool = false
+            isNestedPatternMember bool = false,
+            receiverAlreadyMatched bool = false
         ) GExpression {
             // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
             // receiver so later references read the matched value (ADR-0069 smart
@@ -2181,7 +2185,8 @@ partial class CSharpToGSharpTranslator {
             // <see cref="TranslateMemberAccess"/>'s `Value`/`HasValue` rewrite)
             // and relies on the same Kotlin-style smart-cast a reference-type
             // receiver does, so the guard is the same `!= nil` test.
-            var receiverIsNullableValueType = recursive.Type == nil &&
+            var receiverIsNullableValueType = !receiverAlreadyMatched &&
+                recursive.Type == nil &&
                 patternOperation is IPatternOperation recursiveOperation &&
                 recursiveOperation
                 .InputType
@@ -2206,7 +2211,9 @@ partial class CSharpToGSharpTranslator {
                 receiverIsValueType = false
                 receiverIsNullableValueType = false
             }
-            var test GExpression? = if recursive.Type != nil {
+            var test GExpression? = if receiverAlreadyMatched {
+                nil
+            } else if recursive.Type != nil {
                 this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
             } else {
                 cast[GExpression?](
@@ -2274,6 +2281,19 @@ partial class CSharpToGSharpTranslator {
             if recursive.Type != nil && isNestedPatternMember && this.state.StoredPatternCaptures.Contains(receiver!!) {
                 memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
             }
+            let userDeconstruct = this.UserRecordPatternDeconstruct(recursive)
+            if userDeconstruct != nil {
+                let positionalTest = this.TranslateRecordPositionalPatternTest(
+                    memberReceiver,
+                    recursive,
+                    userDeconstruct
+                )
+                test = if test == nil {
+                    positionalTest
+                } else {
+                    BinaryExpression(test, "&&", positionalTest)
+                }
+            }
             if recursive.PropertyPatternClause != nil {
                 for sub in recursive.PropertyPatternClause!!.Subpatterns {
                     if sub.NameColon == nil && sub.ExpressionColon == nil {
@@ -2321,7 +2341,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            if recursive.PositionalPatternClause != nil {
+            if recursive.PositionalPatternClause != nil && userDeconstruct == nil {
                 // Issue #1887: `x is (0, 0)` / `x is Point(0, 0)` deconstructs `x`
                 // positionally. G# has no positional-pattern syntax, but a
                 // positional subpattern against a tuple or a record's

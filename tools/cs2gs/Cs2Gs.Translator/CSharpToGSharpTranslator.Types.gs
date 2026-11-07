@@ -743,7 +743,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 arms.Add(SwitchArm(nil, unmatchedThrow, nil))
             }
-            return SwitchExpression(subject, arms)
+            return this.WrapRecordPatternDecision(node, SwitchExpression(subject, arms))
         }
 
         private func NullableReferenceSwitchResultType(
@@ -1077,7 +1077,12 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            return SwitchStatement(subject, cases)
+            let declarations = this.RecordPatternCacheDeclarations(node)
+            if declarations.Count == 0 {
+                return SwitchStatement(subject, cases)
+            }
+            declarations.Add(SwitchStatement(subject, cases))
+            return BlockStatement(declarations)
         }
 
         private func MapSystemInvalidOperationException(location Location) GTypeReference? {
@@ -1352,6 +1357,9 @@ partial class CSharpToGSharpTranslator {
                         )
                     )
                 )
+            }
+            for declaration in this.RecordPatternCacheDeclarations(node) {
+                yield declaration
             }
             yield SwitchStatement(subject, cases)
         }
@@ -1729,7 +1737,8 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
-                if !isAwait {
+                let deconstruction = this.context.SemanticModel.GetDeconstructionInfo(node)
+                if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
                     return ForTupleInStatement(names, iterable, body)
                 }
                 let firstName string? = names.FirstOrDefault((name string) -> name != "_")
@@ -1742,11 +1751,11 @@ partial class CSharpToGSharpTranslator {
                 let statements = List[GStatement](body.Statements.Count + 1){TupleDeconstructionStatement(
                         BindingKind.Let,
                         names,
-                        IdentifierExpression(pair)
+                        this.RewriteRecordDeconstruction(IdentifierExpression(pair), deconstruction.Method)
                     )
                 }
                 statements.AddRange(body.Statements)
-                return ForInStatement(pair, iterable, BlockStatement(statements), isAwait: true)
+                return ForInStatement(pair, iterable, BlockStatement(statements), isAwait: isAwait)
             }
             for binding in nullableBindings {
                 this.state.NullableForEachBindings.Remove(binding)
@@ -2266,6 +2275,16 @@ partial class CSharpToGSharpTranslator {
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]? = nil,
             treatAsUntyped bool = false
         ) GPattern {
+            if this.UserRecordPatternDeconstruct(recursive!!) != nil {
+                return this.TranslateRecordRecursivePattern(
+                    recursive!!,
+                    receiver,
+                    bindings,
+                    usedDesignators,
+                    guards,
+                    mutableBindings
+                )
+            }
             // A pure property pattern (`{ A: 0, B: 0 }`) with no type maps to the
             // G# property pattern; a typed recursive pattern (`Circle { Radius: var r }`)
             // maps to a type pattern whose designator is the binding receiver.

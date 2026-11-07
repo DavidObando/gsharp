@@ -68,6 +68,18 @@ internal class EmittedNameAllocator {
             // neighbor. Locals and other body-scoped names without a CLR
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
+            // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
+            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
+                let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
+                var renamed = "__cs2gsDeconstruct"
+                for var suffix = 2; taken.Contains(renamed); suffix++ {
+                    renamed = "__cs2gsDeconstruct_" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }
+                for member in contract {
+                    this.emittedNames[member] = renamed
+                }
+                return renamed
+            }
             if contract.Any(IsMetadataVisible) && GSharpSyntaxFacts.IsReservedIdentifier(sourceName, context) {
                 let escaped = "$$" + sourceName
                 for member in contract {
@@ -639,10 +651,21 @@ internal class EmittedNameAllocator {
     }
 
     shared {
+        func IsUserRecordDeconstruct(method IMethodSymbol?) bool -> method != nil &&
+            method.Name == "Deconstruct" &&
+            method
+            .ContainingType
+            .IsRecord &&
+            !method.IsImplicitlyDeclared &&
+            !method
+            .DeclaringSyntaxReferences
+            .IsDefaultOrEmpty
+
         private let Cache ConditionalWeakTable[Compilation, EmittedNameAllocator] = ConditionalWeakTable[
             Compilation,
             EmittedNameAllocator
         ]()
+
         func For(compilation Compilation) EmittedNameAllocator -> Cache.GetValue(
             compilation,
             (value Compilation) -> EmittedNameAllocator(value)
