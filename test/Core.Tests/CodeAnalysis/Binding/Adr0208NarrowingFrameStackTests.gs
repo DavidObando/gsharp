@@ -6,6 +6,7 @@ package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System
@@ -19,6 +20,32 @@ import Xunit
 /// Every push, pop and frame write must update it, and
 /// (cref:NarrowingFrameStack.AssertParity) compares it with a fresh projection.
 open class Adr0208NarrowingFrameStackTests {
+    @Fact
+    func WideFrameQueries_UseIndexedLookup() {
+        let Count = func (count int32) int64 {
+            let paths = Enumerable
+                .Range(0, count)
+                .Select((i int32) -> AccessPath.ForVariable(Local("value${i}")))
+                .ToArray()
+            let facts = Dictionary[AccessPath, TypeSymbol]()
+            for path in paths {
+                facts.Add(path, TypeSymbol.String)
+            }
+            let stack = NarrowingFrameStack()
+            stack.Push(facts)
+            using let measurements = CompilationMeasurements.Start("issue5130-query")
+            for path in paths {
+                Assert.Equal(TypeSymbol.String, stack.Query(path))
+            }
+            return measurements.GetCounter("narrowing.path-lookup-work")
+        }
+        let small = Count(32)
+        let large = Count(64)
+        Assert.True(small >= 32)
+        Assert.True(large >= 64)
+        Assert.True(large <= small * 2 + 16, "Query lookup work must scale linearly: ${small} -> ${large}.")
+    }
+
     @Fact
     func ScopeChanges_PreserveTheCallableFactsInTheState() {
         let callable = Local("callable")

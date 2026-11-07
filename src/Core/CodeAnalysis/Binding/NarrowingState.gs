@@ -4,6 +4,7 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import System
 import System.Collections.Generic
@@ -23,18 +24,21 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
     private let paths ImmutableArray[AccessPath]
     private let types ImmutableArray[TypeSymbol]
     private let callables ImmutableArray[VariableSymbol]
+    private let pathIndices ImmutableDictionary[AccessPath, int32]
     private let unreachable bool
 
     private init(
         paths ImmutableArray[AccessPath],
         types ImmutableArray[TypeSymbol],
         callables ImmutableArray[VariableSymbol],
-        unreachable bool
+        unreachable bool,
+        pathIndices ImmutableDictionary[AccessPath, int32]? = nil
     ) {
         this.paths = paths
         this.types = types
         this.callables = callables
         this.unreachable = unreachable
+        this.pathIndices = pathIndices ?? CreatePathIndex(paths)
     }
 
     prop IsUnreachable bool -> unreachable
@@ -71,12 +75,18 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         }
         let index = IndexOf(path)
         if index < 0 {
-            return NarrowingState(paths.Add(path), types.Add(narrowedType), callables, false)
+            return NarrowingState(
+                paths.Add(path),
+                types.Add(narrowedType),
+                callables,
+                false,
+                pathIndices.Add(path, paths.Length)
+            )
         }
         if object.Equals(types[index], narrowedType) {
             return this
         }
-        return NarrowingState(paths, types.SetItem(index, narrowedType), callables, false)
+        return NarrowingState(paths, types.SetItem(index, narrowedType), callables, false, pathIndices)
     }
 
     func WithAll(facts IReadOnlyDictionary[AccessPath, TypeSymbol]) NarrowingState {
@@ -91,7 +101,7 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         if unreachable || callables.Contains(variable) {
             return this
         }
-        return NarrowingState(paths, types, callables.Add(variable), false)
+        return NarrowingState(paths, types, callables.Add(variable), false, pathIndices)
     }
 
     /// Replaces the callable facts without copying an unchanged set.
@@ -105,7 +115,7 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             return this
         }
         let next = variables.ToImmutableArray()
-        return NarrowingState(paths, types, next, false)
+        return NarrowingState(paths, types, next, false, pathIndices)
     }
 
     /// Removes the fact of one path.
@@ -251,12 +261,12 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
         if unreachable {
             return -1
         }
-        for var i = 0; i < paths.Length; i++ {
-            if paths[i].Equals(path) {
-                return i
-            }
+        CompilationMeasurements.Count("narrowing.path-lookup-work")
+        return if pathIndices.TryGetValue(path, out var index) {
+            index
+        } else {
+            -1
         }
-        return -1
     }
 
     private func Without(dropPath(AccessPath) -> bool, dropCallable(VariableSymbol) -> bool) NarrowingState {
@@ -309,11 +319,24 @@ internal sealed class NarrowingState : IEquatable[NarrowingState] {
             } else {
                 keptCallables.ToImmutable()
             },
-            false
+            false,
+            if keptPaths == nil {
+                pathIndices
+            } else {
+                default(ImmutableDictionary[AccessPath, int32]?)
+            }
         )
     }
 
     shared {
+        private func CreatePathIndex(paths ImmutableArray[AccessPath]) ImmutableDictionary[AccessPath, int32] {
+            let index = ImmutableDictionary.CreateBuilder[AccessPath, int32]()
+            for var i = 0; i < paths.Length; i++ {
+                index.Add(paths[i], i)
+            }
+            return index.ToImmutable()
+        }
+
         /// Whether a closure that escaped can assign [`root`](paramref) by its own name: a mutable local or
         /// parameter that owns its storage. A by-reference parameter or local names caller-owned or aliased
         /// storage, which the alias class decides (ADR-0208 R12, amendment A3). The one definition of the
