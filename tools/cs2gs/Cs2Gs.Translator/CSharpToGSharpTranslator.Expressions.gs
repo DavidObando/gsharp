@@ -3439,8 +3439,7 @@ partial class CSharpToGSharpTranslator {
             }
             let includePromotedLambdaArm = IsBranchArm(value) &&
                 targetSymbol is IMethodSymbol methodTarget &&
-                this.ResultLambda(methodTarget, value) != nil &&
-                this.SlotTypeIsDeclared(targetSymbol, value)
+                this.ResultLambda(methodTarget, value) != nil && this.SlotTypeIsDeclared(targetSymbol, value)
             return this.ForgiveNullableReferenceValue(
                 value,
                 translated,

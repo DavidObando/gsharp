@@ -646,8 +646,7 @@ internal partial class OverloadResolver {
                             argument = if argumentSyntax != nil &&
                                 (
                                 !(argumentSyntax is LambdaExpressionSyntax) ||
-                                    MemberLookup
-                                    .TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
+                                    MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
                             ) {
                                 bindExpressionWithTargetType(argumentSyntax, parameter.Type)
                             } else {
@@ -729,8 +728,7 @@ internal partial class OverloadResolver {
                 argument = if argumentSyntax != nil &&
                     (
                     !(argumentSyntax is LambdaExpressionSyntax) ||
-                        MemberLookup
-                        .TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
+                        MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(parameter.Type, out _)
                 ) {
                     bindExpressionWithTargetType(argumentSyntax, parameter.Type)
                 } else {

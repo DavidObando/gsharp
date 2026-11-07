@@ -4187,7 +4187,10 @@ internal partial class ExpressionBinder {
                     } else {
                         cast[ExpressionSyntax](staticLambda)
                     }
-                    if idx < method!!.Parameters.Length && TryBindLambdaExpressionWithTargetType(
+                    if idx < method!!
+                        .Parameters
+                        .Length &&
+                        TryBindLambdaExpressionWithTargetType(
                         sourceArgSyntax,
                         method!!.Parameters[idx].Type,
                         out var boundStaticLambda
