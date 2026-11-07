@@ -1700,8 +1700,6 @@ partial class CSharpToGSharpTranslator {
             // hidden temp variable plus a separate `let (a, b) = tmp` (ADR-0115
             // §B's older form). G# has no first-class `await for (a, b) in`
             // form, so `await foreach` keeps the older temp+let lowering.
-            let names = List[string]()
-            CollectForEachVariableNames(node.Variable, names)
             let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(node)
             let projectedElement ITypeSymbol? = this.GetProjectedForEachElementType(node, forEachInfo)
             let nullableBindings = List[ISymbol]()
@@ -1715,6 +1713,10 @@ partial class CSharpToGSharpTranslator {
                     projectedBindings
                 )
             }
+            let names = List[string]()
+            let extractions = List[GStatement]()
+            let conversions = List[GStatement]()
+            this.CollectForEachVariableTargets(node.Variable, names, extractions, conversions)
             if names.Count >= 2 {
                 let isAwait = !node.AwaitKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
                 var body BlockStatement
@@ -1730,21 +1732,36 @@ partial class CSharpToGSharpTranslator {
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
                 if !isAwait {
+                    if extractions.Count > 0 || conversions.Count > 0 {
+                        let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
+                        statements.AddRange(extractions)
+                        statements.AddRange(conversions)
+                        statements.AddRange(body.Statements)
+                        body = BlockStatement(statements)
+                    }
                     return ForTupleInStatement(names, iterable, body)
                 }
-                let firstName string? = names.FirstOrDefault((name string) -> name != "_")
+                let firstLeaf SingleVariableDesignationSyntax? = node
+                    .Variable
+                    .DescendantNodesAndSelf()
+                    .OfType[SingleVariableDesignationSyntax]()
+                    .FirstOrDefault()
+                let firstName string? = if firstLeaf != nil {
+                    this.EmittedName(firstLeaf, firstLeaf.Identifier)
+                } else {
+                    names.FirstOrDefault((name string) -> name != "_")
+                }
                 let preferredName = if firstName != nil {
                     firstName + "Item"
                 } else {
                     "deconstructedItem"
                 }
                 let pair = this.AllocateDeconstructionTempName(node.Variable, preferredName)
-                let statements = List[GStatement](body.Statements.Count + 1){TupleDeconstructionStatement(
-                        BindingKind.Let,
-                        names,
-                        IdentifierExpression(pair)
-                    )
-                }
+                let statements = List[GStatement](
+                    body.Statements.Count + extractions.Count + conversions.Count + 1
+                ){TupleDeconstructionStatement(BindingKind.Let, names, IdentifierExpression(pair))}
+                statements.AddRange(extractions)
+                statements.AddRange(conversions)
                 statements.AddRange(body.Statements)
                 return ForInStatement(pair, iterable, BlockStatement(statements), isAwait: true)
             }
@@ -1870,18 +1887,161 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func CollectForEachVariableNames(
+        private func CollectForEachVariableTargets(
             variable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
-            names List[string]
+            names List[string],
+            extractions List[GStatement],
+            conversions List[GStatement]
         ) {
-            switch variable {
+            switch Unparenthesize(variable) {
                 case tuple is TupleExpressionSyntax {
+                    let hasNestedDeconstruction = tuple
+                        .DescendantNodes()
+                        .OfType[ParenthesizedVariableDesignationSyntax]()
+                        .Any() ||
+                        tuple
+                        .Arguments
+                        .Any((argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax)
                     for argument in tuple.Arguments {
-                        CollectForEachVariableNames(argument.Expression, names)
+                        this.CollectForEachTupleArgumentTarget(
+                            argument.Expression,
+                            names,
+                            extractions,
+                            conversions,
+                            hasNestedDeconstruction
+                        )
                     }
                 }
                 case declaration is DeclarationExpressionSyntax {
-                    CollectDesignationNames(declaration.Designation, names)
+                    this.CollectForEachDesignationTargets(
+                        declaration.Designation,
+                        names,
+                        extractions,
+                        declaration.Type.IsVar
+                    )
+                }
+                case identifier is IdentifierNameSyntax {
+                    names.Add(
+                        if this.IsDeconstructionDiscard(identifier) {
+                            "_"
+                        } else {
+                            this.EmittedName(identifier, identifier.Identifier)!!
+                        }
+                    )
+                }
+            }
+        }
+
+        private func CollectForEachTupleArgumentTarget(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            names List[string],
+            extractions List[GStatement],
+            conversions List[GStatement],
+            hasNestedDeconstruction bool
+        ) {
+            let unwrapped = Unparenthesize(expression)!!
+            if this.IsDeconstructionDiscard(unwrapped) {
+                names.Add("_")
+                return
+            }
+            switch unwrapped {
+                case declaration is DeclarationExpressionSyntax {
+                    switch declaration.Designation {
+                        case single is SingleVariableDesignationSyntax {
+                            if !declaration.Type.IsVar && this.context.GetDeclaredSymbol(
+                                single
+                            ) is ILocalSymbol local &&
+                                this.TryGetDeconstructionSlotInfo(
+                                declaration,
+                                out var slotConversion,
+                                out var slotSourceType
+                            ) &&
+                                !slotConversion.IsIdentity &&
+                                (
+                                hasNestedDeconstruction ||
+                                    slotConversion.IsTupleConversion ||
+                                    local.Type is INamedTypeSymbol{IsTupleType: true}
+                            ) {
+                                let carrier = this.AllocateDeconstructionTempName(declaration)
+                                names.Add(carrier)
+                                let targetTypeSymbol ITypeSymbol = if this
+                                    .state
+                                    .ManagedReferenceArrayNullable
+                                    .ManagedReferenceArrayProjectedLocalType
+                                    .TryGetValue(local, out var projectedLocalType) &&
+                                    projectedLocalType != nil {
+                                    projectedLocalType
+                                } else {
+                                    local.Type
+                                }
+                                var mappedType GTypeReference? = this.typeMapper.Map(
+                                    targetTypeSymbol,
+                                    this.context,
+                                    declaration.Type.GetLocation()
+                                )
+                                mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
+                                if this.state.NullableForEachBindings.Contains(local) {
+                                    mappedType = MakeNullable(mappedType)
+                                }
+                                let carrierExpr = cast[GExpression](IdentifierExpression(carrier))
+                                let initializerExpr = this.BuildConvertedDeconstructionValue(
+                                    carrierExpr,
+                                    slotSourceType,
+                                    targetTypeSymbol,
+                                    mappedType,
+                                    slotConversion,
+                                    declaration.Type.GetLocation()
+                                )
+                                conversions.Add(
+                                    LocalDeclarationStatement(
+                                        if this.IsLocalReassigned(local) {
+                                            BindingKind.Var
+                                        } else {
+                                            BindingKind.Let
+                                        },
+                                        this.EmittedName(single, single.Identifier),
+                                        mappedType,
+                                        initializer: initializerExpr
+                                    )
+                                )
+                            } else {
+                                names.Add(this.EmittedName(single, single.Identifier)!!)
+                            }
+                        }
+                        case DiscardDesignationSyntax {
+                            names.Add("_")
+                        }
+                        case parenthesized is ParenthesizedVariableDesignationSyntax {
+                            let carrier = this.AllocateDeconstructionTempName(parenthesized)
+                            names.Add(carrier)
+                            this.LowerDeconstructionDeclaration(
+                                parenthesized,
+                                IdentifierExpression(carrier),
+                                preserveValue: false,
+                                extractions,
+                                declaration.Type.IsVar
+                            )
+                        }
+                    }
+                }
+                case nestedTuple is TupleExpressionSyntax {
+                    let carrier = this.AllocateDeconstructionTempName(nestedTuple)
+                    names.Add(carrier)
+                    let nestedNames = List[string](nestedTuple.Arguments.Count)
+                    let nestedExtractions = List[GStatement]()
+                    for argument in nestedTuple.Arguments {
+                        this.CollectForEachTupleArgumentTarget(
+                            argument.Expression,
+                            nestedNames,
+                            nestedExtractions,
+                            conversions,
+                            hasNestedDeconstruction: true
+                        )
+                    }
+                    extractions.Add(
+                        TupleDeconstructionStatement(BindingKind.Let, nestedNames, IdentifierExpression(carrier))
+                    )
+                    extractions.AddRange(nestedExtractions)
                 }
                 case identifier is IdentifierNameSyntax {
                     names.Add(this.EmittedName(identifier, identifier.Identifier)!!)
@@ -1889,7 +2049,12 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        private func CollectDesignationNames(designation VariableDesignationSyntax, names List[string]) {
+        private func CollectForEachDesignationTargets(
+            designation VariableDesignationSyntax,
+            names List[string],
+            extractions List[GStatement],
+            inferredType bool
+        ) {
             switch designation {
                 case single is SingleVariableDesignationSyntax {
                     names.Add(this.EmittedName(single, single.Identifier)!!)
@@ -1899,10 +2064,214 @@ partial class CSharpToGSharpTranslator {
                 }
                 case parenthesized is ParenthesizedVariableDesignationSyntax {
                     for child in parenthesized.Variables {
-                        CollectDesignationNames(child, names)
+                        switch child {
+                            case single is SingleVariableDesignationSyntax {
+                                names.Add(this.EmittedName(single, single.Identifier)!!)
+                            }
+                            case DiscardDesignationSyntax {
+                                names.Add("_")
+                            }
+                            case nested is ParenthesizedVariableDesignationSyntax {
+                                let carrier = this.AllocateDeconstructionTempName(nested)
+                                names.Add(carrier)
+                                this.LowerDeconstructionDeclaration(
+                                    nested,
+                                    IdentifierExpression(carrier),
+                                    preserveValue: false,
+                                    extractions,
+                                    inferredType
+                                )
+                            }
+                        }
                     }
                 }
             }
+        }
+
+        private func TupleConversionRequiresExplicitLowering(sourceType ITypeSymbol?, targetType ITypeSymbol?) bool {
+            if sourceType is not INamedTypeSymbol{IsTupleType: true} sourceTuple ||
+                targetType is not INamedTypeSymbol{IsTupleType: true} targetTuple ||
+                sourceTuple
+                .TupleElements
+                .Length != targetTuple
+                .TupleElements
+                .Length {
+                return false
+            }
+            for var i = 0; i < sourceTuple.TupleElements.Length; i++ {
+                let sourceElem = GetEffectiveTupleElementType(sourceTuple, i)
+                let targetElem = GetEffectiveTupleElementType(targetTuple, i)
+                if sourceElem.IsTupleType && targetElem.IsTupleType {
+                    if this.TupleConversionRequiresExplicitLowering(sourceElem, targetElem) {
+                        return true
+                    }
+                    continue
+                }
+                let elemConversion = this.context.Compilation.ClassifyConversion(sourceElem, targetElem)
+                if !elemConversion.IsIdentity && !elemConversion.IsReference && !elemConversion.IsBoxing {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func BuildConvertedDeconstructionValue(
+            carrierExpr GExpression,
+            sourceType ITypeSymbol?,
+            targetTypeSymbol ITypeSymbol,
+            mappedType GTypeReference?,
+            slotConversion Conversion,
+            location Location
+        ) GExpression {
+            if targetTypeSymbol is INamedTypeSymbol{IsTupleType: true} targetTuple &&
+                sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
+                targetTuple
+                .TupleElements
+                .Length == sourceTuple
+                .TupleElements
+                .Length &&
+                this
+                .TupleConversionRequiresExplicitLowering(sourceTuple, targetTuple) {
+                let elements = List[GExpression](targetTuple.TupleElements.Length)
+                for var i = 0; i < targetTuple.TupleElements.Length; i++ {
+                    let sourceElem = GetEffectiveTupleElementType(sourceTuple, i)
+                    let targetElem = GetEffectiveTupleElementType(targetTuple, i)
+                    let mappedElem = this.typeMapper.Map(targetElem, this.context, location)
+                    let elemConv = this.context.Compilation.ClassifyConversion(sourceElem, targetElem)
+                    let itemAccess = MemberAccessExpression(
+                        carrierExpr,
+                        "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)
+                    )
+                    elements.Add(
+                        this.BuildConvertedDeconstructionValue(
+                            itemAccess,
+                            sourceElem,
+                            targetElem,
+                            mappedElem,
+                            elemConv,
+                            location
+                        )
+                    )
+                }
+                return TupleLiteralExpression(elements)
+            }
+            if targetTypeSymbol is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: [{} underlyingTarget]
+            } &&
+                slotConversion
+                .IsNullable {
+                let mappedUnderlying = this.typeMapper.Map(underlyingTarget, this.context, location)
+                if sourceType is INamedTypeSymbol{
+                    OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                    TypeArguments: [{} underlyingSource]
+                } {
+                    if !SymbolEqualityComparer.Default.Equals(underlyingSource, underlyingTarget) &&
+                        IsPrimitiveNumeric(underlyingTarget) {
+                        return IfExpression(
+                            BinaryExpression(carrierExpr, "!=", LiteralExpression.Null()),
+                            ConversionExpression(mappedUnderlying, carrierExpr),
+                            DefaultValueExpression(mappedType)
+                        )
+                    }
+                    return carrierExpr
+                }
+                if sourceType == nil ||
+                    (
+                    !SymbolEqualityComparer.Default.Equals(sourceType, underlyingTarget) &&
+                        IsPrimitiveNumeric(underlyingTarget)
+                ) {
+                    return ConversionExpression(mappedUnderlying, carrierExpr)
+                }
+                return carrierExpr
+            }
+            if IsPrimitiveNumeric(targetTypeSymbol) ||
+                slotConversion.IsNumeric ||
+                slotConversion.IsExplicit ||
+                slotConversion.IsEnumeration {
+                return ConversionExpression(mappedType, carrierExpr)
+            }
+            return carrierExpr
+        }
+
+        private func TryGetDeconstructionSlotInfo(
+            target Microsoft.CodeAnalysis.SyntaxNode,
+            out conversion Conversion,
+            out sourceType ITypeSymbol?
+        ) bool {
+            conversion = default(Conversion)
+            sourceType = nil
+            let indexes = List[int32]()
+            var current Microsoft.CodeAnalysis.SyntaxNode = target
+            var climbing = true
+            while climbing {
+                switch current.Parent {
+                    case nested is ParenthesizedVariableDesignationSyntax when current is VariableDesignationSyntax variable {
+                        indexes.Insert(0, nested.Variables.IndexOf(variable))
+                        current = nested
+                    }
+                    case declaration is DeclarationExpressionSyntax {
+                        current = declaration
+                    }
+                    case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                        indexes.Insert(0, tuple.Arguments.IndexOf(argument))
+                        current = tuple
+                    }
+                    default {
+                        climbing = false
+                    }
+                }
+            }
+            var info DeconstructionInfo
+            var currentSourceType ITypeSymbol? = nil
+            if current.Parent is ForEachVariableStatementSyntax forEach && forEach.Variable == current {
+                info = this.context.SemanticModel.GetDeconstructionInfo(forEach)
+                let forEachInfo = this.context.SemanticModel.GetForEachStatementInfo(forEach)
+                currentSourceType = this.GetProjectedForEachElementType(forEach, forEachInfo) ?? forEachInfo.ElementType
+            } else if current.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                assignment.Left == current {
+                info = this.context.SemanticModel.GetDeconstructionInfo(assignment)
+                currentSourceType = this.context.GetTypeInfo(assignment.Right).Type
+            } else {
+                return false
+            }
+            for var level = 0; level < indexes.Count; level++ {
+                let position = indexes[level]
+                if position < 0 || position >= info.Nested.Length {
+                    return false
+                }
+                if info.Method is IMethodSymbol deconstructMethod {
+                    let ordinal = if deconstructMethod.IsExtensionMethod && deconstructMethod.ReducedFrom == nil {
+                        position + 1
+                    } else {
+                        position
+                    }
+                    currentSourceType = if ordinal >= 0 && ordinal < deconstructMethod.Parameters.Length {
+                        deconstructMethod.Parameters[ordinal].Type
+                    } else {
+                        default(ITypeSymbol?)
+                    }
+                } else if currentSourceType is INamedTypeSymbol{IsTupleType: true} tupleType &&
+                    position >= 0 &&
+                    position < tupleType
+                    .TupleElements
+                    .Length {
+                    currentSourceType = GetEffectiveTupleElementType(tupleType, position)
+                } else {
+                    currentSourceType = nil
+                }
+                info = info.Nested[position]
+            }
+            if info.Conversion is not{} resolvedConversion {
+                return false
+            }
+            conversion = resolvedConversion
+            sourceType = currentSourceType
+            return true
         }
 
         private func TranslatePattern(
@@ -3032,6 +3401,14 @@ partial class CSharpToGSharpTranslator {
             anchor Microsoft.CodeAnalysis.SyntaxNode
         ) ITypeSymbol? {
             let mappedArrayElement ITypeSymbol? = this.GetMappedArrayElementType(source)
+            let projectedSource ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(source) ??
+                this.GetProjectedReceiverType(source)
+            var projectedElement ITypeSymbol? = this.GetProjectedEnumerableElementType(projectedSource)
+            if projectedElement != nil && this.ArrayExpressionHasNullableReferenceLikeElement(source) {
+                projectedElement = projectedElement.WithNullableAnnotation(
+                    Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+                )
+            }
             if anchor is FromClauseSyntax{Parent: QueryBodySyntax} additionalFrom &&
                 this
                 .context
@@ -3039,21 +3416,27 @@ partial class CSharpToGSharpTranslator {
                 .GetQueryClauseInfo(additionalFrom)
                 .OperationInfo
                 .Symbol is IMethodSymbol selectMany {
-                let resultSelector IMethodSymbol? = selectMany
-                    .Parameters
+                let selectManyParameters IEnumerable[IParameterSymbol] = if selectMany.IsExtensionMethod &&
+                    selectMany.ReducedFrom == nil {
+                    selectMany.Parameters.Skip(1)
+                } else {
+                    selectMany.Parameters
+                }
+                let resultSelector IMethodSymbol? = selectManyParameters
                     .Select((parameter IParameterSymbol) -> GetDelegateInvokeMethod(parameter.Type))
                     .Where((invoke IMethodSymbol) -> invoke != nil)
                     .Skip(1)
                     .FirstOrDefault()
                 if resultSelector != nil && resultSelector.Parameters.Length >= 2 {
                     let selectorElement = resultSelector.Parameters[1].Type
+                    let effectiveProjected ITypeSymbol? = mappedArrayElement ?? projectedElement
                     // Preserve a custom provider contract; replace only the
                     // original managed-array element with its projected form.
-                    return if mappedArrayElement != nil && SymbolEqualityComparer.Default.Equals(
-                        mappedArrayElement,
+                    return if effectiveProjected != nil && SymbolEqualityComparer.Default.Equals(
+                        effectiveProjected,
                         selectorElement
                     ) {
-                        mappedArrayElement
+                        effectiveProjected
                     } else {
                         selectorElement
                     }
@@ -3061,15 +3444,6 @@ partial class CSharpToGSharpTranslator {
             }
             if mappedArrayElement != nil {
                 return mappedArrayElement
-            }
-            let projectedSource ITypeSymbol? = this.GetManagedReferenceArrayProjectedExpressionType(source)
-            let projectedElement ITypeSymbol? = GetEnumerableElementType(projectedSource)
-            if projectedElement != nil {
-                return if this.ArrayExpressionHasNullableReferenceLikeElement(source) {
-                    projectedElement.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
-                } else {
-                    projectedElement
-                }
             }
             let sourceType ITypeSymbol? = this
                 .context
@@ -3079,10 +3453,6 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetTypeInfo(source)
                 .ConvertedType
-            if this.ArrayExpressionHasNullableReferenceLikeElement(source) &&
-                GetEnumerableElementType(sourceType) is {} nullableElement {
-                return nullableElement.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
-            }
             if anchor is FromClauseSyntax{Parent: QueryExpressionSyntax} initialFrom {
                 let query QueryExpressionSyntax? = cast[QueryExpressionSyntax](initialFrom.Parent)
                 let queryOperator IMethodSymbol? = this
@@ -3098,27 +3468,166 @@ partial class CSharpToGSharpTranslator {
                         this.context.GetSymbolInfo(query!!.Body.SelectOrGroup).Symbol as IMethodSymbol
                     }
                 )
-                for parameter in queryOperator?.Parameters ?? ImmutableArray[IParameterSymbol].Empty {
-                    if parameter.Type is INamedTypeSymbol{
-                        DelegateInvokeMethod: {Parameters: [{Type: {} rangeType}, ..]}
-                    } {
-                        return rangeType
+                if queryOperator != nil && this.TryGetQueryOperatorRangeType(
+                    projectedSource as INamedTypeSymbol,
+                    queryOperator
+                ) is {} rangeType {
+                    return if projectedElement != nil && SymbolEqualityComparer.Default.Equals(
+                        projectedElement,
+                        rangeType
+                    ) {
+                        projectedElement
+                    } else {
+                        rangeType
                     }
                 }
+            }
+            if projectedElement != nil {
+                return projectedElement
+            }
+            if this.ArrayExpressionHasNullableReferenceLikeElement(source) &&
+                GetEnumerableElementType(sourceType) is {} nullableElement {
+                return nullableElement.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
             }
             let enumerableElement ITypeSymbol? = GetEnumerableElementType(sourceType)
             if enumerableElement != nil {
                 return enumerableElement
             }
-            return if sourceType is INamedTypeSymbol queryProvider &&
+            return if (projectedSource ?? sourceType) is INamedTypeSymbol queryProvider &&
                 queryProvider.IsGenericType &&
                 queryProvider
                 .TypeArguments
                 .Length == 1 {
-                queryProvider.TypeArguments[0]
+                GetEffectiveTypeArgument(queryProvider, 0)
             } else {
                 default(ITypeSymbol?)
             }
+        }
+
+        private func TryGetQueryOperatorRangeType(
+            projectedSource INamedTypeSymbol?,
+            queryOperator IMethodSymbol
+        ) ITypeSymbol? {
+            var methodReplacements Dictionary[ITypeParameterSymbol, ITypeSymbol]? = nil
+            var parameterSource IMethodSymbol = queryOperator
+            if projectedSource != nil {
+                if (
+                    queryOperator.ReducedFrom ??
+                        (
+                        if queryOperator.IsExtensionMethod {
+                            queryOperator
+                        } else {
+                            default(IMethodSymbol?)
+                        }
+                    )
+                ) is {} reducedFrom &&
+                    reducedFrom
+                    .Parameters
+                    .Length > 0 {
+                    let constructedMethod = if queryOperator.ReducedFrom != nil {
+                        queryOperator
+                    } else {
+                        reducedFrom
+                    }
+                    if reducedFrom.IsGenericMethod {
+                        let openExtension = reducedFrom.OriginalDefinition
+                        let openReceiverType = openExtension.Parameters[0].Type
+                        methodReplacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](
+                            SymbolEqualityComparer.Default
+                        )
+                        for var i = 0;
+                            i < openExtension
+                            .TypeParameters
+                            .Length &&
+                            i < constructedMethod
+                            .TypeArguments
+                            .Length;
+                            i++ {
+                            var effectiveArg = this.GetEffectiveMethodTypeArgument(constructedMethod, i)
+                            if this.TryGetProjectedTypeArgument(
+                                openReceiverType,
+                                projectedSource,
+                                openExtension.TypeParameters[i],
+                                this.context.Compilation,
+                                out var inferredTypeArg,
+                                out var conflict
+                            ) {
+                                if conflict {
+                                    return nil
+                                }
+                                if inferredTypeArg != nil {
+                                    effectiveArg = inferredTypeArg
+                                }
+                            }
+                            methodReplacements[openExtension.TypeParameters[i]] = effectiveArg
+                        }
+                        parameterSource = openExtension
+                    } else {
+                        parameterSource = reducedFrom
+                    }
+                } else if this.GetProjectedMember(projectedSource, queryOperator) is IMethodSymbol projectedInstance {
+                    if projectedInstance.IsGenericMethod {
+                        let openInstance = projectedInstance.OriginalDefinition
+                        methodReplacements = Dictionary[ITypeParameterSymbol, ITypeSymbol](
+                            SymbolEqualityComparer.Default
+                        )
+                        for var i = 0;
+                            i < openInstance
+                            .TypeParameters
+                            .Length &&
+                            i < queryOperator
+                            .TypeArguments
+                            .Length;
+                            i++ {
+                            methodReplacements[openInstance.TypeParameters[i]] = this.GetEffectiveMethodTypeArgument(
+                                queryOperator,
+                                i
+                            )
+                        }
+                        parameterSource = openInstance
+                    } else {
+                        parameterSource = projectedInstance.OriginalDefinition
+                    }
+                }
+            }
+            let startParameterIndex = if parameterSource.IsExtensionMethod && parameterSource.ReducedFrom == nil {
+                1
+            } else {
+                0
+            }
+            for var paramIndex = startParameterIndex; paramIndex < parameterSource.Parameters.Length; paramIndex++ {
+                let parameter = parameterSource.Parameters[paramIndex]
+                var parameterType ITypeSymbol = parameter.Type
+                if methodReplacements != nil {
+                    parameterType = this.SubstituteTypeParameters(parameterType, methodReplacements)
+                }
+                if projectedSource != nil {
+                    parameterType = this.SubstituteProjectedContainingTypeParameter(projectedSource, parameterType) ??
+                        parameterType
+                }
+                var delegateType = parameterType as INamedTypeSymbol
+                if delegateType != nil &&
+                    delegateType
+                    .OriginalDefinition
+                    .MetadataName == "Expression`1" &&
+                    delegateType
+                    .TypeArguments
+                    .Length == 1 &&
+                    delegateType.DelegateInvokeMethod == nil &&
+                    delegateType
+                    .ContainingNamespace
+                    ?.ToDisplayString() == "System.Linq.Expressions" {
+                    delegateType = GetEffectiveTypeArgument(delegateType, 0) as INamedTypeSymbol
+                }
+                if delegateType?.DelegateInvokeMethod is {Parameters: {Length: > 0}} invoke {
+                    let rawRangeType = invoke.OriginalDefinition.Parameters[0].Type
+                    return this.SubstituteProjectedContainingTypeParameter(delegateType!!, rawRangeType) ??
+                        invoke
+                        .Parameters[0]
+                        .Type
+                }
+            }
+            return nil
         }
 
         private func LowerQueryBody(

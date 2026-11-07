@@ -1683,7 +1683,7 @@ partial class CSharpToGSharpTranslator {
                             }
                             return projectedLocalType
                         }
-                        if IsImplicitlyTypedLocal(local) {
+                        if IsImplicitlyTypedLocal(local) || Unparenthesize(initializer) is CollectionExpressionSyntax {
                             projectedLocalType = this.GetManagedReferenceArrayProjectedExpressionType(initializer)
                             if projectedLocalType != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
                                 local.Type,
@@ -2034,7 +2034,15 @@ partial class CSharpToGSharpTranslator {
                             parameter.Ordinal < current
                             .TypeArguments
                             .Length {
-                            return current.TypeArguments[parameter.Ordinal]
+                            let substituted = GetEffectiveTypeArgument(current, parameter.Ordinal)
+                            return if memberType.NullableAnnotation == Microsoft
+                                .CodeAnalysis
+                                .NullableAnnotation
+                                .Annotated {
+                                substituted.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                            } else {
+                                substituted
+                            }
                         }
                     }
                 }
@@ -2052,20 +2060,21 @@ partial class CSharpToGSharpTranslator {
                     .WithNullableAnnotation(array.NullableAnnotation)
             }
             if memberType is INamedTypeSymbol{IsTupleType: true} tuple {
-                let elements = tuple
-                    .TupleElements
-                    .Select(
-                    (element IFieldSymbol) -> this.SubstituteProjectedContainingTypeParameter(
-                        receiverType,
-                        element.Type
-                    )!!
-                )
-                    .ToImmutableArray()
+                let elements = ImmutableArray.CreateBuilder[ITypeSymbol](tuple.TupleElements.Length)
+                for var i = 0; i < tuple.TupleElements.Length; i++ {
+                    elements.Add(
+                        this.SubstituteProjectedContainingTypeParameter(
+                            receiverType,
+                            GetEffectiveTupleElementType(tuple, i)
+                        )!!
+                    )
+                }
+                let immutableElements = elements.ToImmutable()
                 return this
                     .context
                     .Compilation
                     .CreateTupleTypeSymbol(
-                    elements,
+                    immutableElements,
                     tuple
                         .TupleElements
                         .Select(
@@ -2077,8 +2086,9 @@ partial class CSharpToGSharpTranslator {
                     )
                         .ToImmutableArray(),
                     default(ImmutableArray[Location?]),
-                    elements.Select((element ITypeSymbol) -> element.NullableAnnotation).ToImmutableArray()
+                    immutableElements.Select((element ITypeSymbol) -> element.NullableAnnotation).ToImmutableArray()
                 )
+                    .WithNullableAnnotation(tuple.NullableAnnotation)
             }
             if memberType is INamedTypeSymbol named && (named.Arity > 0 || named.ContainingType != nil) {
                 var definition = named.ConstructedFrom
@@ -2097,15 +2107,19 @@ partial class CSharpToGSharpTranslator {
                 if named.Arity == 0 {
                     return definition.WithNullableAnnotation(named.NullableAnnotation)
                 }
-                let arguments = named
-                    .TypeArguments
-                    .Select(
-                    (argument ITypeSymbol) -> this.SubstituteProjectedContainingTypeParameter(receiverType, argument)!!
-                )
-                    .ToImmutableArray()
+                let arguments = ImmutableArray.CreateBuilder[ITypeSymbol](named.TypeArguments.Length)
+                for var i = 0; i < named.TypeArguments.Length; i++ {
+                    arguments.Add(
+                        this.SubstituteProjectedContainingTypeParameter(
+                            receiverType,
+                            GetEffectiveTypeArgument(named, i)
+                        )!!
+                    )
+                }
+                let immutableArguments = arguments.ToImmutable()
                 return definition.Construct(
-                    arguments,
-                    arguments.Select((argument ITypeSymbol) -> argument.NullableAnnotation).ToImmutableArray()
+                    immutableArguments,
+                    immutableArguments.Select((argument ITypeSymbol) -> argument.NullableAnnotation).ToImmutableArray()
                 )
                     .WithNullableAnnotation(named.NullableAnnotation)
             }
@@ -2299,6 +2313,10 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             let matchingSource INamedTypeSymbol? = this.GetReceiverTypeHierarchy(sourceNamed).FirstOrDefault(
+                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(candidate, destinationNamed)
+            ) ??
+                this
+                .GetReceiverTypeHierarchy(sourceNamed).FirstOrDefault(
                 (candidate INamedTypeSymbol) -> SameTypeDefinition(candidate, destinationNamed)
             )
             if matchingSource == nil {
