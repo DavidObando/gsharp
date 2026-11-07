@@ -3802,6 +3802,24 @@ partial class CSharpToGSharpTranslator {
             .Default
             .Equals(this.GetArrayAllocationOwner(local, HashSet[ILocalSymbol](SymbolEqualityComparer.Default)), owner)
 
+        private func ArrayAccessMatchesStorage(
+            access ElementAccessExpressionSyntax,
+            owner ISymbol,
+            position string
+        ) bool {
+            var target ExpressionSyntax = access
+            var accessPosition = ""
+            while target is ElementAccessExpressionSyntax current &&
+                this
+                .context
+                .GetTypeInfo(current.Expression)
+                .Type is IArrayTypeSymbol {
+                accessPosition = JoinPosition("0", accessPosition)
+                target = Unparenthesize(current.Expression)!!
+            }
+            return accessPosition == position && this.IsArrayStorageAlias(target, owner)
+        }
+
         private func HasConcreteReferenceArrayPosition(owner ISymbol, position string) bool {
             var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(owner)
             for _ in position.Split('.') {
@@ -3850,6 +3868,19 @@ partial class CSharpToGSharpTranslator {
             }
             for node in scope_.DescendantNodes() {
                 switch node {
+                    case reference is RefExpressionSyntax when reference.Parent is EqualsValueClauseSyntax{
+                        Parent: VariableDeclaratorSyntax declaration
+                    } &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(declaration) is ILocalSymbol alias &&
+                        UnwrapParenthesesAndSuppressions(
+                        reference.Expression
+                    ) is ElementAccessExpressionSyntax access &&
+                        this.ArrayAccessMatchesStorage(access, normalizedOwner, position) &&
+                        this.ShouldPromoteToNullableReference(alias) {
+                        return true
+                    }
                     case argument is ArgumentSyntax {
                         if (
                             argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) || argument.RefKindKeyword.IsKind(
@@ -3857,17 +3888,7 @@ partial class CSharpToGSharpTranslator {
                             )
                         ) &&
                             Unparenthesize(argument.Expression) is ElementAccessExpressionSyntax elementAccess {
-                            var target ExpressionSyntax = elementAccess
-                            var accessPosition = ""
-                            while target is ElementAccessExpressionSyntax currentAccess &&
-                                this
-                                .context
-                                .GetTypeInfo(currentAccess.Expression)
-                                .Type is IArrayTypeSymbol {
-                                accessPosition = JoinPosition("0", accessPosition)
-                                target = Unparenthesize(currentAccess.Expression)!!
-                            }
-                            if accessPosition == position && this.IsArrayStorageAlias(target, normalizedOwner) &&
+                            if this.ArrayAccessMatchesStorage(elementAccess, normalizedOwner, position) &&
                                 this
                                 .context
                                 .SemanticModel
