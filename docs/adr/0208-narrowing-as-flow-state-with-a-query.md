@@ -1005,7 +1005,13 @@ Details per row:
   removes it by the member symbol that `AssignedRootsCollector` records (`AssignsRoot`, #5835). The collector has
   no second write classification for implicit members. An increment or a decrement of a named member (`x.f++`) binds to a member write, so the
   bound effects classify it like `x.f = v` (and a compound assignment `x.f += v` already did); the syntax walk
-  (`SyntaxMayMutateMemberPaths`) keeps its conservative answer only for an increment of any other target. The tests that pinned the old rule,
+  (`SyntaxMayMutateMemberPaths`) keeps its conservative answer only for an increment of any other target. A write in an operand of a condition uses the same overlap rule as a statement
+  (`OperandKillsStableMemberPath`, shared by `ClearOperandFacts` and `ClearAssignedRootsForConditionOperand`): a
+  member write that is not separate, or a separate write through another by-reference root, removes the fact on a
+  stable member path of the earlier operand (`b.a.x != nil && (u.y = nil) == nil` where `u` names a field that
+  overlaps `a`). A call in an operand still removes such a fact only when it can replace the root; a call that
+  writes a field overlapping a `let` link in a type with explicit layout is
+  [#5843](https://github.com/DavidObando/gsharp/issues/5843). The tests that pinned the old rule,
   `Issue1180SmartCastMembersBinderTests.InterveningMemberAssignment_InvalidatesMemberPathNarrowing` and
   `Issue1639NarrowingInvalidationFastPathTests.ActiveMemberPathNarrowing_InterveningMemberAssignment_StillInvalidates`,
   now pin R21 (`InterveningVarFieldWrite_KeepsMemberPathNarrowing`) and an index write. New sibling cases

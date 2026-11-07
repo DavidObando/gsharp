@@ -2674,11 +2674,7 @@ internal partial class StatementBinder {
                 continue
             }
             if path.HasMembers && !IsExternalStorageAlias(path.Root) {
-                if collector.AssignsRoot(path.Root) ||
-                    MayBeMutatedByUnknownWrite(collector, rootPath) ||
-                    (
-                    (syntaxMutatesMembers || collector.MayMutateMemberPaths) && MayBeMutatedByUnknownCallable(rootPath)
-                ) {
+                if OperandKillsStableMemberPath(collector, path, syntaxMutatesMembers) {
                     state.Remove(path)
                 }
                 continue
@@ -2693,6 +2689,24 @@ internal partial class StatementBinder {
                 state.Remove(path)
             }
         }
+    }
+
+    // ADR-0208 R5, R12, R20 and R21 (#5832): the one rule for a fact on a member path whose root names no external
+    // storage, at an operand of a condition. Its links are stable, so a call replaces the fact only by replacing the
+    // root. A member write that is not separate (a type with explicit layout, an imported type, a `let` link, an
+    // index, indirect or imported write: `HasMemberStorageWrite`) or a separate write through another
+    // by-reference root (`ByReferenceWritesReach`) can store into a link, as in a statement (`StatementKillsPath`).
+    private func OperandKillsStableMemberPath(
+        collector AssignedRootsCollector,
+        path AccessPath,
+        syntaxMutatesMembers bool
+    ) bool {
+        let rootPath = AccessPath.ForVariable(path.Root)
+        return collector.AssignsRoot(path.Root) || collector.HasMemberStorageWrite || collector.ByReferenceWritesReach(
+            path
+        ) ||
+            MayBeMutatedByUnknownWrite(collector, rootPath) ||
+            ((syntaxMutatesMembers || collector.MayMutateMemberPaths) && MayBeMutatedByUnknownCallable(rootPath))
     }
 
     // An unknown callable can reach a member path, a global or an implicit
@@ -4366,14 +4380,10 @@ internal partial class StatementBinder {
             }
             for entry in memberPaths {
                 let path = entry.Key
-                let rootPath = AccessPath.ForVariable(path.Root)
                 let killedByFilter = filterWrites != nil &&
                     (FilterWritesVariable(filterWrites, path.Root) || MayBeMutatedByUnknownCallable(path))
-                let killed = killedByFilter || collector.AssignsRoot(path.Root) ||
-                    collector.HasMemberStorageWrite ||
-                    collector.ByReferenceWritesReach(path) ||
-                    MayBeMutatedByUnknownWrite(collector, rootPath) ||
-                    (collector.MayMutateMemberPaths && MayBeMutatedByUnknownCallable(rootPath))
+                let killed = killedByFilter ||
+                    OperandKillsStableMemberPath(collector, path, syntaxMutatesMembers: false)
                 if !killed {
                     state[path] = entry.Value
                 }

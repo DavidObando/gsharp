@@ -584,6 +584,97 @@ Holder{tok: Token()}.Run()
         Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
     }
 
+    /// #5832 review: a write in a condition operand goes through the same overlap rule as a statement
+    /// (`OperandKillsStableMemberPath`). `u` is a `ref` local of the field `c`, which overlaps the `let` link `a` in
+    /// an explicit-layout struct, so `u.y = nil` replaces `b.a.x` in `&&`, `||`, `?:` and `if`-expression conditions.
+    /// A direct write of `b.c.y` is not separate (explicit layout), so it replaces `b.a.x` too.
+    @Theory
+    @InlineData(
+        "    let ref u U = b.c\n    if b.a.x != nil && (u.y = nil) == nil {\n        return b.a.x.Length // READ\n    }\n    return 0"
+    )
+    @InlineData(
+        "    let ref u U = b.c\n    let reset = func() { b = E(T(nil)) }\n    if b.a.x != nil && (u.y = nil) == nil {\n        return b.a.x.Length // READ\n    }\n    reset()\n    return 0"
+    )
+    @InlineData(
+        "    let ref u U = b.c\n    if b.a.x == nil || (u.y = nil) != nil {\n        return 0\n    }\n    return b.a.x.Length // READ"
+    )
+    @InlineData(
+        "    let ref u U = b.c\n    return if b.a.x == nil || ((u.y = nil) == nil && b.a.x.Length > 0) { 1 } else { 0 } // READ"
+    )
+    @InlineData("    let ref u U = b.c\n    return b.a.x != nil && (u.y = nil) == nil ? b.a.x.Length : 0 // READ")
+    @InlineData(
+        "    let ref u U = b.c\n    return if b.a.x != nil && (u.y = nil) == nil { b.a.x.Length } else { 0 } // READ"
+    )
+    @InlineData(
+        "    if b.a.x != nil && (b.c.y = nil) == nil {\n        return b.a.x.Length // READ\n    }\n    return 0"
+    )
+    func ConditionOperandWriteOverAnOverlappingLink_RemovesFact(body string) {
+        let source = `import System
+import System.Runtime.InteropServices
+
+struct T {
+    let x string?
+    init(x string?) {
+        this.x = x
+    }
+}
+struct U {
+    var y string?
+}
+@StructLayout(LayoutKind.Explicit)
+struct E {
+    @FieldOffset(0)
+    let a T
+    @FieldOffset(0)
+    var c U
+    init(a T) {
+        this.a = a
+    }
+}
+func Run() int32 {
+    var b = E(T("abc"))
+` + body + `
+}
+Run()
+`
+        let result = EmittedOracle.Evaluate(source)
+        let diagnostic = Assert.Single(result.Diagnostics)
+        Assert.Equal("GS0158", diagnostic.Id)
+        Assert.Equal(MarkedLine(source), diagnostic.Location.StartLine + 1)
+    }
+
+    /// The same condition shapes over a struct without explicit layout keep the fact, as on `main`.
+    @Theory
+    @InlineData("class")
+    @InlineData("struct")
+    func ConditionOperandSeparateWrite_KeepsFact(kind string) {
+        let result = EmittedOracle.Evaluate(`import System
+
+class Owner {
+    var A bool
+}
+` + kind + ` Box {
+    let owner Owner?
+    var count int32
+    init(owner Owner?) {
+        this.owner = owner
+        this.count = 0
+    }
+}
+func Run() int32 {
+    var b = Box(Owner())
+    if b.owner != nil && (b.count = 2) > 0 {
+        b.owner.A = true
+        return b.count
+    }
+    return 0
+}
+Run()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("2", result.ValueText)
+    }
+
     shared {
         private func EmitLibrary(caseName string) string {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5786FieldWrite", caseName)
