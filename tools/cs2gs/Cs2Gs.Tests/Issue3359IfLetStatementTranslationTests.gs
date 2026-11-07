@@ -212,6 +212,33 @@ public sealed class C
         Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
     }
 
+    @Fact
+    func StatementIfLetPath_WithGuardAndElse_EmitsGuardInHeaderAndSingleElse() {
+        // Issue #4972: when the native pattern-variable path declines the
+        // condition (here because the guard conjunct uses a positional pattern
+        // with a var discard) and TryBuildIfLetGuard runs, it emits the
+        // statement-form `if let name = receiver && guard { ... } else { ... }`.
+        let printed = Translate(NodeType + `
+public readonly record struct Pair(int A, int B);
+public sealed class C
+{
+    public int M(Node node, Pair pair)
+    {
+        if (node.StartTag is { } tag && tag.X > 0 && pair is (var _, 2))
+        {
+            return tag.X;
+        }
+        else
+        {
+            return -1;
+        }
+    }
+}`)
+        Assert.Contains("if let tag = node.StartTag && tag.X > 0", printed, StringComparison.Ordinal)
+        Assert.Contains("} else {", printed, StringComparison.Ordinal)
+        Assert.Equal(1, printed.Split("return -1").Length - 1)
+    }
+
     shared {
         private const NodeType string = `
 public sealed class Node

@@ -180,6 +180,13 @@ fi
 grep -Fq 'lines>300(raw)=1 reducible' <<< "$output"
 grep -Fq 'GATE: reducible raw >300-char line count 1 exceeded ceiling 0.' <<< "$output"
 
+corpus_manifest="$repo_root/tools/cs2gs/external/gsharp-csharp.json"
+corpus_commit=$(jq -er '.commit' "$corpus_manifest")
+if ! git -C "$repo_root" cat-file -e "$corpus_commit^{commit}" 2>/dev/null; then
+  corpus_repo=$(jq -er '.repository' "$corpus_manifest")
+  corpus_branch=$(jq -er '.branch' "$corpus_manifest")
+  git -C "$repo_root" fetch --quiet "$corpus_repo" "+refs/heads/$corpus_branch:refs/cs2gs-corpus/$corpus_branch"
+fi
 python3 "$repo_root/build/test-check-selfmig-stage-floor.py"
 
 cat > "$scratch/stage-baseline.json" <<'JSON'

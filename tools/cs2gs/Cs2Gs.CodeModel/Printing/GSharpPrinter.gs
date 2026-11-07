@@ -1839,13 +1839,13 @@ shared class GSharpPrinter {
     private func RenderIfLet(ifLet IfLetStatement, indent int32) string {
         let pad = Indent(indent)
         let bindings = RenderLetBindings(ifLet.Bindings, indent)
-        // No guard clause: cs2gs output must compile with the pinned previous
-        // release, whose statement grammar has none (see IfLetStatement).
-        // Initializers are still printed at IfLetInitializerPrecedence because
-        // gsc ends every binding initializer at a top-level `&&` / `||`
-        // (ADR-0201).
+        let guard_ = if ifLet.Guard == nil {
+            string.Empty
+        } else {
+            " && ${RenderExpression(ifLet.Guard, indent)}"
+        }
         let sb = StringBuilder()
-        sb.Append("${pad}if $bindings ${RenderBlock(ifLet.Then, indent)}")
+        sb.Append("${pad}if $bindings$guard_ ${RenderBlock(ifLet.Then, indent)}")
         if ifLet.Else is IfStatement elseIf {
             sb.Append(" else ")
             sb.Append(RenderIf(elseIf, indent).TrimStart())

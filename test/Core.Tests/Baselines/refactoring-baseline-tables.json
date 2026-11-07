@@ -4,6 +4,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=10 sha256=D3E49AA02F8C4730"
+    ],
     "FieldDef": [
       "rows=9 sha256=800FFBB82CF71E88"
     ],
@@ -30,6 +33,9 @@
       "System.Memory, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=25 sha256=EFD86029CF3C5BFC"
+    ],
     "FieldDef": [
       "rows=14 sha256=90CC9C87404133CE"
     ],
@@ -53,6 +59,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=A6F80CAFACBF54E4"
     ],
     "FieldDef": [
       "rows=2 sha256=EFCD763D0DFFA711"
@@ -78,6 +87,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
+    ],
     "FieldDef": [
       "rows=1 sha256=C7AA2C7873EAA4EA"
     ],
@@ -101,6 +113,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=0922E4BC292B0E64"
     ],
     "FieldDef": [
       "rows=3 sha256=802B88FB142A48BC"
@@ -126,6 +141,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=12 sha256=996A6B5851502631"
+    ],
     "FieldDef": [
       "rows=11 sha256=0B33F622A8A10F11"
     ],
@@ -149,6 +167,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=F32298A77C9E1E99"
     ],
     "FieldDef": [
       "rows=7 sha256=75F8B126605154A2"
@@ -174,6 +195,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=6 sha256=2204FFFA61C012D5"
+    ],
     "FieldDef": [
       "rows=4 sha256=0BA3D004E6D7B414"
     ],
@@ -197,6 +221,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=18FD81C0FA8783EA"
     ],
     "FieldDef": [
       "rows=5 sha256=FBA404C96F5621C6"
@@ -222,6 +249,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=16 sha256=AE66E30BFCD2D75F"
+    ],
     "FieldDef": [
       "rows=17 sha256=86B5FDDC91550BE4"
     ],
@@ -246,6 +276,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=7 sha256=D3921BE2BD76207C"
     ],
     "FieldDef": [
       "rows=3 sha256=D1E76268F06CCAB4"
@@ -273,6 +306,9 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=17 sha256=944C3B978D7A9DE1"
+    ],
     "FieldDef": [
       "rows=35 sha256=1F7A0897B74DD9D3"
     ],
@@ -296,6 +332,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=438A6FB4E9E7BD22"
     ],
     "FieldDef": [
       "rows=4 sha256=0BA3D004E6D7B414"
@@ -322,6 +361,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=10 sha256=C12753B2AC53AAC4"
+    ],
     "FieldDef": [
       "rows=11 sha256=AC9A4A7AE4819B35"
     ],
@@ -347,6 +389,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=16 sha256=57B631B927922A51"
+    ],
     "FieldDef": [
       "rows=20 sha256=01044DC4FD60864E"
     ],
@@ -370,6 +415,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=11 sha256=11E60E52AB536DC5"
     ],
     "FieldDef": [
       "rows=7 sha256=503F58CB8602766D"
@@ -397,6 +445,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=A979ABB02465A2CF"
+    ],
     "FieldDef": [
       "rows=14 sha256=4E4519AFDD40AC69"
     ],
@@ -423,6 +474,9 @@
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=C819BBCF23A687CF"
+    ],
     "FieldDef": [
       "rows=5 sha256=CA4D3C5EBD605421"
     ],
@@ -447,6 +501,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=16 sha256=67C976D87909580F"
+    ],
     "FieldDef": [
       "rows=16 sha256=DF0B557F3EF1178B"
     ],
@@ -470,6 +527,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=E3EB5B38A11F4A88"
     ],
     "FieldDef": [
       "rows=4 sha256=C7363DB663E5F97C"
@@ -496,6 +556,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=1566ABC5BC6097A4"
+    ],
     "FieldDef": [
       "rows=7 sha256=38B8B86A57968132"
     ],
@@ -519,6 +582,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=CECC691861DB5E0B"
     ],
     "FieldDef": [
       "rows=6 sha256=FCDCD87116C8A0F9"
@@ -545,6 +611,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=97680C317B5C9693"
+    ],
     "FieldDef": [
       "rows=2 sha256=408B4EFCB6334D6E"
     ],
@@ -569,6 +638,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=14 sha256=999328CC9DB8DF18"
     ],
     "FieldDef": [
       "rows=6 sha256=475CFC8A87A7C07A"
@@ -595,6 +667,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=BAFFDE50B6CC3EDF"
+    ],
     "FieldDef": [
       "rows=11 sha256=47F0DF8931F45DF2"
     ],
@@ -619,6 +694,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=370BCD14FAFAE042"
+    ],
     "FieldDef": [
       "rows=4 sha256=E06CE79358FA8500"
     ],
@@ -642,6 +720,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=8 sha256=872E2B9671401F36"
     ],
     "FieldDef": [
       "rows=3 sha256=9FC1275305C15982"
@@ -668,6 +749,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=DF608D716A4090AD"
+    ],
     "FieldDef": [
       "rows=1 sha256=5579EC743EC78BCA"
     ],
@@ -691,6 +775,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=7 sha256=E4ABB9DED52A011B"
     ],
     "FieldDef": [
       "rows=2 sha256=7589787677A250EF"
@@ -716,6 +803,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=32A019C40D69FE82"
+    ],
     "FieldDef": [
       "rows=4 sha256=FEE7FFD0D7373B41"
     ],
@@ -739,6 +829,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=11 sha256=DC9E68882BFF7878"
     ],
     "FieldDef": [
       "rows=5 sha256=42DCB762A0F4E9FF"
@@ -764,6 +857,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=4 sha256=19690855FEF0CE6A"
+    ],
     "FieldDef": [
       "rows=6 sha256=1FE4B8AC08D78D24"
     ],
@@ -787,6 +883,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=A67D9CE3FBDCD02F"
     ],
     "FieldDef": [
       "rows=1 sha256=63779E84ABA530D3"
@@ -812,6 +911,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=0D51AEA14BCF6003"
+    ],
     "FieldDef": [
       "rows=3 sha256=EEC478C891F4D673"
     ],
@@ -835,6 +937,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=4 sha256=BDC2441388024628"
     ],
     "FieldDef": [
       "rows=6 sha256=1FE4B8AC08D78D24"
@@ -860,6 +965,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=13 sha256=E79D8553F461F42A"
+    ],
     "FieldDef": [
       "rows=10 sha256=F9B258CDEA43EFD7"
     ],
@@ -884,6 +992,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=10 sha256=BF456D9B6BD90638"
+    ],
     "FieldDef": [
       "rows=6 sha256=057A3C5E07D2B2D1"
     ],
@@ -907,6 +1018,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=904C36567348FB4B"
     ],
     "FieldDef": [
       "rows=2 sha256=B942D45541E34A6B"
@@ -934,6 +1048,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=20 sha256=8BD3180DA7205E29"
+    ],
     "FieldDef": [
       "rows=49 sha256=CC82ED29DAD399B3"
     ],
@@ -959,6 +1076,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=7 sha256=523C07B96B8A41E4"
+    ],
     "FieldDef": [
       "rows=5 sha256=819132A0C3E54F96"
     ],
@@ -982,6 +1102,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=25F5AE57C68942AA"
     ],
     "FieldDef": [
       "rows=5 sha256=E46D99B2A76C9D6C"
@@ -1007,6 +1130,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=F29B539420FE4F40"
+    ],
     "FieldDef": [
       "rows=5 sha256=E0DE7608C727E7A1"
     ],
@@ -1030,6 +1156,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=1BF8A75A7B68A167"
     ],
     "FieldDef": [
       "rows=3 sha256=59A78E9E57F28991"
@@ -1056,6 +1185,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=8A751A85EE6975C0"
+    ],
     "FieldDef": [
       "rows=6 sha256=950F7CE6F3195DCF"
     ],
@@ -1079,6 +1211,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=CA6AE7C7491F70CB"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -1104,6 +1239,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=6 sha256=5E6187F2E42CF02A"
+    ],
     "FieldDef": [
       "rows=1 sha256=7A4EF08644AE82B4"
     ],
@@ -1128,6 +1266,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=7 sha256=374CF13D8A9CE06A"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -1151,6 +1292,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=4C07EBAF38E53600"
     ],
     "FieldDef": [
       "rows=3 sha256=00CB465A3344916B"
@@ -1178,6 +1322,9 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=4 sha256=F044CF5CF1690A5B"
+    ],
     "FieldDef": [
       "rows=6 sha256=7C8A18F5562E1587"
     ],
@@ -1201,6 +1348,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=17A7E187503E42AB"
     ],
     "FieldDef": [
       "rows=4 sha256=9A8FE943DFF4B99B"
@@ -1226,6 +1376,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=9 sha256=ECB917730795BCEE"
+    ],
     "FieldDef": [
       "rows=3 sha256=2216A35BE26D52AC"
     ],
@@ -1249,6 +1402,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=36A9DE3912936C81"
     ],
     "FieldDef": [
       "rows=4 sha256=F22C70ADBBD2DF4A"
@@ -1275,6 +1431,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=843F6D018E0443C2"
+    ],
     "FieldDef": [
       "rows=4 sha256=6EE6139831FBD66B"
     ],
@@ -1299,6 +1458,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=11 sha256=20122010C9FC0E73"
     ],
     "FieldDef": [
       "rows=6 sha256=0FA5DE3BE29535F2"
@@ -1326,6 +1488,9 @@
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=10 sha256=83BF3736C1121E65"
+    ],
     "FieldDef": [
       "rows=16 sha256=3B89FBD620BC89EC"
     ],
@@ -1349,6 +1514,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -1374,6 +1542,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=E2E15D8743AF3F26"
+    ],
     "FieldDef": [
       "rows=8 sha256=A5F78F954A7C263C"
     ],
@@ -1397,6 +1568,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=7 sha256=1798D9907F71CA80"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -1422,6 +1596,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -1445,6 +1622,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -1470,6 +1650,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=7 sha256=031677FF9FB8F0EB"
+    ],
     "FieldDef": [
       "rows=3 sha256=C861371CF2BD8AFF"
     ],
@@ -1493,6 +1676,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=954D7EA376E34A9B"
     ],
     "FieldDef": [
       "rows=2 sha256=86374AA0225D1FEA"
@@ -1518,6 +1704,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=6 sha256=43D1C115153E14D5"
+    ],
     "FieldDef": [
       "rows=10 sha256=E0A04734017A3A57"
     ],
@@ -1541,6 +1730,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=25 sha256=DE3791AD7AD603FF"
     ],
     "FieldDef": [
       "rows=8 sha256=DEA0D9CCBA79E57D"
@@ -1566,6 +1758,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=10 sha256=1E10881FCA04B8C3"
+    ],
     "FieldDef": [
       "rows=4 sha256=C402C9A4C958C992"
     ],
@@ -1589,6 +1784,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=8 sha256=D2F11161C61E0C74"
     ],
     "FieldDef": [
       "rows=3 sha256=799A9D668B4EDC92"
@@ -1614,6 +1812,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=1AEB186D12AE1153"
+    ],
     "FieldDef": [
       "rows=2 sha256=078627EED1AB18AE"
     ],
@@ -1637,6 +1838,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=D7EB7DD66F668A06"
     ],
     "FieldDef": [
       "rows=3 sha256=313382D22EA23D84"
@@ -1662,6 +1866,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=EF08538A42624005"
+    ],
     "FieldDef": [
       "rows=3 sha256=00E861296E3698B9"
     ],
@@ -1686,6 +1893,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=CE4899658820C31D"
+    ],
     "FieldDef": [
       "rows=1 sha256=7A4EF08644AE82B4"
     ],
@@ -1709,6 +1919,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=1A8273BE1984A9D2"
     ],
     "FieldDef": [
       "rows=9 sha256=073420EE9CD0F29A"
@@ -1736,6 +1949,9 @@
       "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=A2CBD0EFACB74439"
+    ],
     "FieldDef": [
       "rows=3 sha256=BD1E9EB8BB4CE33E"
     ],
@@ -1759,6 +1975,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=1AEB186D12AE1153"
     ],
     "FieldDef": [
       "rows=1 sha256=2770AE9E92B50881"
@@ -1785,6 +2004,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=FD1BDAA04506DC21"
+    ],
     "FieldDef": [
       "rows=4 sha256=DA1F9FAF9CAEAB41"
     ],
@@ -1809,6 +2031,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=B9C09A5E297381B1"
+    ],
     "FieldDef": [
       "rows=3 sha256=F2F3277982659B8C"
     ],
@@ -1832,6 +2057,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=4B24E865EADA1D3F"
     ],
     "FieldDef": [
       "rows=3 sha256=46630DF90F6562D8"
@@ -1858,6 +2086,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=9B41022552A2D2F3"
+    ],
     "FieldDef": [
       "rows=6 sha256=47CB122C604C0CA3"
     ],
@@ -1881,6 +2112,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=16 sha256=B3A9F2EFAC2C53E1"
     ],
     "FieldDef": [
       "rows=13 sha256=D432841F2B0D2AD9"
@@ -1906,6 +2140,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=CBFEAC27842665A0"
+    ],
     "FieldDef": [
       "rows=4 sha256=382D71C12D24A9C8"
     ],
@@ -1930,6 +2167,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=1658EB8519F7719E"
+    ],
     "FieldDef": [
       "rows=2 sha256=B1956B3658494364"
     ],
@@ -1953,6 +2193,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=14 sha256=EC93D2D0A1C8B98E"
     ],
     "FieldDef": [
       "rows=5 sha256=DDCC3CA2ADFA72BC"
@@ -1979,6 +2222,9 @@
       "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=7 sha256=6D4A288AE41F7F93"
+    ],
     "FieldDef": [
       "rows=2 sha256=6C5DC09FD69C17BE"
     ],
@@ -2004,6 +2250,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=4BE9C4F1F4535BEA"
+    ],
     "FieldDef": [
       "rows=6 sha256=B5CED5E23900D5F2"
     ],
@@ -2027,6 +2276,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=8 sha256=5869AD21BAD6DC8D"
     ],
     "FieldDef": [
       "rows=6 sha256=25310F205A27844A"
@@ -2053,6 +2305,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=46C34A176754158B"
+    ],
     "FieldDef": [
       "rows=1 sha256=611AFB3315A813B2"
     ],
@@ -2077,6 +2332,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=D86A76F02D6D1438"
+    ],
     "FieldDef": [
       "rows=2 sha256=8DA85BB1ACEF48C0"
     ],
@@ -2100,6 +2358,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=44148B3EFC9A3699"
     ],
     "FieldDef": [
       "rows=6 sha256=A130B73B87EBF7DA"
@@ -2127,6 +2388,9 @@
       "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=4 sha256=D42CE41BE0717114"
+    ],
     "FieldDef": [
       "rows=2 sha256=59E2DBEF36704949"
     ],
@@ -2150,6 +2414,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2176,6 +2443,9 @@
       "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=6 sha256=70629615680E24F1"
+    ],
     "FieldDef": [
       "rows=3 sha256=C9A641ECB294B56F"
     ],
@@ -2200,6 +2470,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=D601D95D1980C5AF"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2226,6 +2499,9 @@
       "System.Runtime.InteropServices, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=064D0AE25E8F780C"
+    ],
     "FieldDef": [
       "rows=1 sha256=B66D1FF11CA79F12"
     ],
@@ -2249,6 +2525,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2274,6 +2553,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=4 sha256=F4D482725C2D5A9F"
+    ],
     "FieldDef": [
       "rows=6 sha256=E565996F236CAA65"
     ],
@@ -2298,6 +2580,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=5 sha256=AC29098DA9B5CF65"
+    ],
     "FieldDef": [
       "rows=7 sha256=DEA0154EFA5C8943"
     ],
@@ -2321,6 +2606,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6016328CBDC99B7D"
     ],
     "FieldDef": [
       "rows=4 sha256=9A2EEC3C01BC3E77"
@@ -2347,6 +2635,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=20 sha256=0452D1ED2E910F01"
+    ],
     "FieldDef": [
       "rows=5 sha256=0D7F5786CDCBAEA2"
     ],
@@ -2370,6 +2661,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6016328CBDC99B7D"
     ],
     "FieldDef": [
       "rows=4 sha256=75618A53FC91197E"
@@ -2396,6 +2690,9 @@
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=13 sha256=BA75274E27D2440F"
     ],
     "FieldDef": [
       "rows=25 sha256=17A7629216B9B03A"
@@ -2424,6 +2721,9 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=11 sha256=6BB2F19B201CAFAE"
+    ],
     "FieldDef": [
       "rows=19 sha256=E089F9EE82D19C79"
     ],
@@ -2449,6 +2749,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=44 sha256=A3368603EBA5F79F"
+    ],
     "FieldDef": [
       "rows=14 sha256=F6064DD17146AC07"
     ],
@@ -2473,6 +2776,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=A080499503CCFAF8"
+    ],
     "FieldDef": [
       "rows=2 sha256=A29374C5E2C02BEB"
     ],
@@ -2496,6 +2802,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2522,6 +2831,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=999328CC9DB8DF18"
+    ],
     "FieldDef": [
       "rows=6 sha256=475CFC8A87A7C07A"
     ],
@@ -2546,6 +2858,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=6EF3EE7D925C65EA"
+    ],
     "FieldDef": [
       "rows=1 sha256=7A4EF08644AE82B4"
     ],
@@ -2569,6 +2884,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=7 sha256=21149A31C784AAFF"
     ],
     "FieldDef": [
       "rows=1 sha256=C71ADE01A1D3F1F6"
@@ -2595,6 +2913,9 @@
       "System.Memory, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=5D4DE3B6A4D3E30B"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -2619,6 +2940,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=25 sha256=4D4F5B0F92B09B9C"
     ],
     "FieldDef": [
       "rows=9 sha256=CB004FA27ED39B6E"
@@ -2646,6 +2970,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=3091B6F5BEA948B6"
+    ],
     "FieldDef": [
       "rows=30 sha256=1B5C5FEF605266F5"
     ],
@@ -2669,6 +2996,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=9 sha256=496428E2339E7F61"
     ],
     "FieldDef": [
       "rows=4 sha256=FBDF8E49A01E785C"
@@ -2697,6 +3027,9 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Threading.Thread, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=8F6D99B9EE07A1B6"
+    ],
     "FieldDef": [
       "rows=12 sha256=EA629FA6B4079C0E"
     ],
@@ -2723,6 +3056,9 @@
       "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=3371B7BA4FE1405E"
+    ],
     "FieldDef": [
       "rows=5 sha256=B89EE1B0D55C133F"
     ],
@@ -2746,6 +3082,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=5D4DE3B6A4D3E30B"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2772,6 +3111,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=DEFBBF84875E9EBC"
+    ],
     "FieldDef": [
       "rows=4 sha256=8A1641ED36D29664"
     ],
@@ -2795,6 +3137,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=9 sha256=39C6AF1532B24DAD"
     ],
     "FieldDef": [
       "rows=3 sha256=31CFA13C53D5C362"
@@ -2820,6 +3165,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=9 sha256=12C6A5F225F9CA2A"
+    ],
     "FieldDef": [
       "rows=3 sha256=31CFA13C53D5C362"
     ],
@@ -2843,6 +3191,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=BB710D101CA1FE4C"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -2868,6 +3219,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=1FB851082472A7FA"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -2892,6 +3246,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=A080499503CCFAF8"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -2915,6 +3272,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=4 sha256=D6A5175AA28172A8"
     ],
     "FieldDef": [
       "rows=5 sha256=A232E203DF3A73CB"
@@ -2941,6 +3301,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=20 sha256=715AE2B5D45EA1A7"
+    ],
     "FieldDef": [
       "rows=10 sha256=7BCEE9D9122D1559"
     ],
@@ -2964,6 +3327,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=012C8D505752315C"
     ],
     "FieldDef": [
       "rows=2 sha256=7EF020F471879A8A"
@@ -2989,6 +3355,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=11 sha256=5279E1FBE5754C6C"
+    ],
     "FieldDef": [
       "rows=11 sha256=99250FF3006659C1"
     ],
@@ -3012,6 +3381,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=8 sha256=3277690B518230A5"
     ],
     "FieldDef": [
       "rows=4 sha256=99BEA94A0BB7A8F6"
@@ -3037,6 +3409,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=13 sha256=58E5962B9947AC56"
+    ],
     "FieldDef": [
       "rows=19 sha256=1E7F7F05459E5E99"
     ],
@@ -3060,6 +3435,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=9 sha256=73B711D665417D23"
     ],
     "FieldDef": [
       "rows=3 sha256=4BD4DA59D0845D98"
@@ -3085,6 +3463,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=4F364FF67368AAD1"
+    ],
     "FieldDef": [
       "rows=5 sha256=62168CA051C785DE"
     ],
@@ -3108,6 +3489,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=56AB8D00DF052EC0"
     ],
     "FieldDef": [
       "rows=3 sha256=FE9FA3171FE35EA1"
@@ -3134,6 +3518,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=0E091CA26CA61BE4"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -3157,6 +3544,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=70142C2D1DA961D2"
     ],
     "FieldDef": [
       "rows=1 sha256=3936FB503565973E"
@@ -3182,6 +3572,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=18 sha256=77D61CB9FDD893F6"
+    ],
     "FieldDef": [
       "rows=12 sha256=532BE8678B82B1BE"
     ],
@@ -3205,6 +3598,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=668891165734E5A8"
     ],
     "FieldDef": [
       "rows=2 sha256=7FFCC6D7602BC9B9"
@@ -3232,6 +3628,9 @@
       "System.Threading.Channels, 10.0.0.0, CC7B13FFCD2DDD51, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=9 sha256=7EC419D6DC820C77"
+    ],
     "FieldDef": [
       "rows=11 sha256=C1D9ED486D156E9C"
     ],
@@ -3257,6 +3656,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=24 sha256=7914BCD60BB55D53"
+    ],
     "FieldDef": [
       "rows=4 sha256=945BF3E98F83737D"
     ],
@@ -3280,6 +3682,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=0A92E2E8886C8580"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -3307,6 +3712,9 @@
       "System.Linq, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=E886F13B20F5DC31"
+    ],
     "FieldDef": [
       "rows=2 sha256=EA98DA15C21C4774"
     ],
@@ -3331,6 +3739,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=25 sha256=5D9064A146599DEB"
     ],
     "FieldDef": [
       "rows=4 sha256=622A39F24309CED9"
@@ -3357,6 +3768,9 @@
       "Gsharp.Runtime.Values, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=6 sha256=F47A4A1E8B1DA5C7"
+    ],
     "FieldDef": [
       "rows=3 sha256=E1B2430CD824A642"
     ],
@@ -3380,6 +3794,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=4 sha256=74F7E68227CACFA9"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
@@ -3407,6 +3824,9 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "Gsharp.Extensions, 1.0.0.0, , flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=9 sha256=6EDF591863770451"
+    ],
     "FieldDef": [
       "rows=6 sha256=C4FD0CA23D368D1C"
     ],
@@ -3432,6 +3852,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=488946AEAAAE5C10"
+    ],
     "FieldDef": [
       "rows=4 sha256=08912E7C988DD285"
     ],
@@ -3455,6 +3878,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=1AEB186D12AE1153"
     ],
     "FieldDef": [
       "rows=4 sha256=BE267BD582EC796C"
@@ -3482,6 +3908,9 @@
       "Gsharp.Runtime.Channels, 0.5.0.0, , flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=8 sha256=0CE8E7C440A5FC03"
+    ],
     "FieldDef": [
       "rows=23 sha256=78130D3DE2F2A255"
     ],
@@ -3505,6 +3934,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=1AEB186D12AE1153"
     ],
     "FieldDef": [
       "rows=3 sha256=3EEBA9B462BC0E16"
@@ -3530,6 +3962,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=11 sha256=641A23B6C29D8E6D"
+    ],
     "FieldDef": [
       "rows=9 sha256=2BB8666F01F6E14E"
     ],
@@ -3553,6 +3988,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=9 sha256=8BD4A9EB197F4420"
     ],
     "FieldDef": [
       "rows=11 sha256=9D80A2C58202FD40"
@@ -3578,6 +4016,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=9 sha256=6FB2FC24BBEFF7CD"
+    ],
     "FieldDef": [
       "rows=8 sha256=6C3F8540BA48BA38"
     ],
@@ -3601,6 +4042,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=0F3DC4B6EEB18ECE"
     ],
     "FieldDef": [
       "rows=3 sha256=E6EA4BD1C56B2A64"
@@ -3627,6 +4071,9 @@
       "System.Collections, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=F340F4BB165B8B62"
+    ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
@@ -3650,6 +4097,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=5 sha256=032EC5EC8BEC0F49"
     ],
     "FieldDef": [
       "rows=3 sha256=B794E61DDEA18AEA"
@@ -3675,6 +4125,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=3F361145DB8A8CAA"
+    ],
     "FieldDef": [
       "rows=1 sha256=23A46168D442B022"
     ],
@@ -3698,6 +4151,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=4 sha256=B121E8FEE178C09B"
     ],
     "FieldDef": [
       "rows=2 sha256=0F870B97F564D1AB"
@@ -3723,6 +4179,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=14 sha256=AD5D208EB12F1CF5"
+    ],
     "FieldDef": [
       "rows=2 sha256=23BC4B60C857065B"
     ],
@@ -3746,6 +4205,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=6 sha256=6DCB6C730688E476"
     ],
     "FieldDef": [
       "rows=1 sha256=9D10D6B502E1F090"
@@ -3771,6 +4233,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=789A71C9EFACE8F6"
+    ],
     "FieldDef": [
       "rows=1 sha256=5579EC743EC78BCA"
     ],
@@ -3794,6 +4259,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=3 sha256=CA6AE7C7491F70CB"
     ],
     "FieldDef": [
       "rows=3 sha256=2212C0B3270D3103"
@@ -3819,6 +4287,9 @@
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
+    "CustomAttribute": [
+      "rows=3 sha256=CA6AE7C7491F70CB"
+    ],
     "FieldDef": [
       "rows=3 sha256=2212C0B3270D3103"
     ],
@@ -3842,6 +4313,9 @@
     "AssemblyRef": [
       "System.Runtime, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash=",
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
+    ],
+    "CustomAttribute": [
+      "rows=4 sha256=656CAF84AB1DB858"
     ],
     "FieldDef": [
       "rows=3 sha256=2232BDBE2240E555"

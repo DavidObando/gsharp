@@ -802,6 +802,11 @@ partial class CSharpToGSharpTranslator {
         )
 
         private func TranslateIsPattern(isPattern IsPatternExpressionSyntax) GExpression? {
+            this.BeginRecordPatternDecision(isPattern)
+            return this.ResetRecordPatternCaches(isPattern, this.TranslateIsPatternCore(isPattern))
+        }
+
+        private func TranslateIsPatternCore(isPattern IsPatternExpressionSyntax) GExpression? {
             // ADR-0169 analyzer mode: the C# base-call detection idiom has no
             // direct G# counterpart (#3536).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerBaseCallCheck(isPattern, out var analyzerBaseCall) {
@@ -880,7 +885,12 @@ partial class CSharpToGSharpTranslator {
                             isPattern.Pattern,
                             receiverType,
                             isPattern.Expression
-                        )
+                        ),
+                        captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
+                            this.AllocateRecordScopedLocalName("scrutinee", isPattern)
+                        } else {
+                            nil
+                        }
                     )
                 }
                 let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
@@ -900,7 +910,12 @@ partial class CSharpToGSharpTranslator {
                                 isPattern.Expression,
                                 isNestedPatternMember: true
                             )
-                        )
+                        ),
+                        captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
+                            this.AllocateRecordScopedLocalName("scrutinee", isPattern)
+                        } else {
+                            nil
+                        }
                     )
                 }
                 receiver = this.SpillOperand(
@@ -1427,8 +1442,12 @@ partial class CSharpToGSharpTranslator {
         /// @param member The member value, e.g. `o.P`.
         /// @param test Builds the test over the bound local.
         /// @returns `member is var t && test(t)`.
-        private func BindPatternMemberOnce(member GExpression?, test(GExpression) -> GExpression) GExpression {
-            let temp = this.NewSpillName()
+        private func BindPatternMemberOnce(
+            member GExpression?,
+            test(GExpression) -> GExpression,
+            captureName string? = nil
+        ) GExpression {
+            let temp = captureName ?? this.NewSpillName()
             let local = IdentifierExpression(temp)
             if this.IsGSharpNullablePatternReceiver(member) {
                 this.state.GSharpNullablePatternReceivers.Add(local)
@@ -1457,13 +1476,19 @@ partial class CSharpToGSharpTranslator {
             memberType ITypeSymbol,
             gsharpNullable bool,
             declarations List[GStatement],
-            test(GExpression) -> GExpression
+            test(GExpression) -> GExpression,
+            emittedStorageType GTypeReference? = nil,
+            captureName string? = nil
         ) GExpression {
-            var storageType GTypeReference? = this.typeMapper.Map(memberType, this.context, location: nil)
+            var storageType GTypeReference? = emittedStorageType ?? this.typeMapper.Map(
+                memberType,
+                this.context,
+                location: nil
+            )
             if memberType.IsReferenceType || gsharpNullable {
                 storageType = MakeNullable(storageType)
             }
-            let temp = this.NewSpillName()
+            let temp = captureName ?? this.NewSpillName()
             let local = IdentifierExpression(temp)
             if storageType?.IsNullable == true {
                 this.state.StoredPatternCaptures.Add(local)
@@ -2272,7 +2297,8 @@ partial class CSharpToGSharpTranslator {
             recursive RecursivePatternSyntax,
             receiverSyntax ExpressionSyntax? = nil,
             receiverType ITypeSymbol? = nil,
-            isNestedPatternMember bool = false
+            isNestedPatternMember bool = false,
+            receiverAlreadyMatched bool = false
         ) GExpression {
             // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
             // receiver so later references read the matched value (ADR-0069 smart
@@ -2344,7 +2370,8 @@ partial class CSharpToGSharpTranslator {
             // <see cref="TranslateMemberAccess"/>'s `Value`/`HasValue` rewrite)
             // and relies on the same Kotlin-style smart-cast a reference-type
             // receiver does, so the guard is the same `!= nil` test.
-            var receiverIsNullableValueType = recursive.Type == nil &&
+            var receiverIsNullableValueType = !receiverAlreadyMatched &&
+                recursive.Type == nil &&
                 patternOperation is IPatternOperation recursiveOperation &&
                 recursiveOperation
                 .InputType
@@ -2369,7 +2396,9 @@ partial class CSharpToGSharpTranslator {
                 receiverIsValueType = false
                 receiverIsNullableValueType = false
             }
-            var test GExpression? = if recursive.Type != nil {
+            var test GExpression? = if receiverAlreadyMatched {
+                nil
+            } else if recursive.Type != nil {
                 this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
             } else {
                 cast[GExpression?](
@@ -2430,6 +2459,32 @@ partial class CSharpToGSharpTranslator {
                 // narrows it, so its reads below the guard assert too.
                 memberReceiver = EnsureNonNullAssertion(receiver)
             }
+            let userDeconstruct = this.UserRecordPatternDeconstruct(recursive)
+            // The typed form of the same hazard (`Outer(Inner(var a, _))`): a
+            // stored capture's type test narrows it only inside the test
+            // block, but a descendant binding reads it after the test, so
+            // member reads go through the narrowed `(t as Inner)!!`.
+            if userDeconstruct != nil &&
+                recursive.Type != nil &&
+                isNestedPatternMember &&
+                this
+                .state
+                .StoredPatternCaptures
+                .Contains(receiver!!) {
+                memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
+            }
+            if userDeconstruct != nil {
+                let positionalTest = this.TranslateRecordPositionalPatternTest(
+                    memberReceiver,
+                    recursive,
+                    userDeconstruct
+                )
+                test = if test == nil {
+                    positionalTest
+                } else {
+                    BinaryExpression(test, "&&", positionalTest)
+                }
+            }
             if recursive.PropertyPatternClause != nil {
                 let sharedPrefixes Dictionary[string, GExpression]? = if recursive.PropertyPatternClause!!
                     .Subpatterns
@@ -2485,7 +2540,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            if recursive.PositionalPatternClause != nil {
+            if recursive.PositionalPatternClause != nil && userDeconstruct == nil {
                 // Issue #1887: `x is (0, 0)` / `x is Point(0, 0)` deconstructs `x`
                 // positionally. G# has no positional-pattern syntax, but a
                 // positional subpattern against a tuple or a record's
@@ -2869,6 +2924,10 @@ partial class CSharpToGSharpTranslator {
             // matches the pattern, so only its shape is checked here.
             if operation.DeconstructSymbol is not IMethodSymbol deconstruct {
                 failureReason = "no Deconstruct method was bound for '${operation.MatchedType?.Name}'"
+                return nil
+            }
+            if this.HasRenamedNonRecordDeconstructContract(deconstruct) {
+                failureReason = "deconstruction through a renamed interface or non-record contract needs dispatch-preserving lowering"
                 return nil
             }
             if deconstruct.IsExtensionMethod || deconstruct.ReducedFrom != nil {
@@ -4361,19 +4420,20 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        // ADR-0161 / issue #3350: translates a C# assignment used in VALUE position
+        // ADR-0161 / issue #3350, issue #4979: translates a C# assignment used in VALUE position
         // into G#'s assignment expression, preserving the write where C# put it.
         //
         // A deconstruction assignment (`(a, b) = …`) has no single target and is
-        // left to the existing tuple lowering. G# has no `??=` expression, so
-        // that one uses a native block/if expression below.
+        // left to the existing tuple lowering.
         private func TranslateAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {
             if assignment.Left is TupleExpressionSyntax {
                 // Unchanged fallback: still better than nothing, and these shapes
                 // are handled by their own lowerings when a seam is available.
                 return this.TranslateExpression(assignment.Right)
             }
-            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) {
+            if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) && !this.CanEmitNativeCoalesceAssignment(
+                assignment
+            ) {
                 return this.TranslateCoalescingAssignmentAsExpression(assignment)
             }
             // Issue #3640: a true-discard assignment (`_ = e`) in VALUE position —
@@ -4399,7 +4459,8 @@ partial class CSharpToGSharpTranslator {
             // A materialized non-null reference binder uses nullable storage
             // because its declaration precedes the guard. Its assignment result
             // still has the binder's non-null C# type.
-            if assignment.Left is IdentifierNameSyntax identifier &&
+            if !assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                assignment.Left is IdentifierNameSyntax identifier &&
                 this
                 .context
                 .GetSymbolInfo(identifier)
@@ -4412,6 +4473,28 @@ partial class CSharpToGSharpTranslator {
                 result = EnsureNonNullAssertion(result)
             }
             return result
+        }
+
+        private func CanEmitNativeCoalesceAssignment(assignment AssignmentExpressionSyntax) bool {
+            let left ExpressionSyntax? = Unparenthesize(assignment.Left)
+            if left == nil {
+                return false
+            }
+            if left is ElementAccessExpressionSyntax {
+                return true
+            }
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                return false
+            }
+            let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
+            if this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
+                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
+                (
+                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
+            ) {
+                return false
+            }
+            return true
         }
 
         private func TranslateCoalescingAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {
@@ -4427,6 +4510,13 @@ partial class CSharpToGSharpTranslator {
                 AssignmentExpression(target, this.TranslateAssignmentValue(assignment)),
                 current
             )
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                return if statements.Count == 0 {
+                    cast[GExpression](value)
+                } else {
+                    cast[GExpression](BlockExpression(statements, value))
+                }
+            }
             // Issue #3774: G# `!!` is a CHECKED assertion that THROWS on nil, not
             // C#'s erased `!`, so an assertion here is faithful only when the
             // `??=` expression's value genuinely cannot be nil — and its value is

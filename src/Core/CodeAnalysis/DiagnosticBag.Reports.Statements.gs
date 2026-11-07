@@ -923,6 +923,15 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         labelName
     )
 
+    /// Issue #5588: reports a goto that enters a nested block from outside that block.
+    /// @param location The source location of the goto label identifier.
+    /// @param labelName The target label name.
+    internal func ReportGotoIntoNestedBlock(location TextLocation, labelName string) -> Report(
+        location,
+        DiagnosticDescriptors.GotoIntoNestedBlock,
+        labelName
+    )
+
     /// ADR-0070 / issue #707: GS0295 (warning) — a loop label shadows an
     /// enclosing live loop label of the same name. The inner label wins for
     /// nested `break` / `continue` resolution.

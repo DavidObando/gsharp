@@ -168,7 +168,7 @@ An unmatched binding can leave a nullable local unchanged.
 
 Row `n12_5130` preserves the joined state of a label inside an unbraced declaration's initializer.
 The fallback must not replay a pre-statement proof after such a join removes it.
-The separate unsupported-jump diagnostic gap remains tracked in [#5588](https://github.com/DavidObando/gsharp/issues/5588).
+The unsupported jump into the nested block also reports `GS0636` ([#5588](https://github.com/DavidObando/gsharp/issues/5588)).
 Cleanup facts do not overwrite stronger facts that survived its effects; assignment summaries preserve execution order.
 
 `Issue2159IfJoinNarrowingTests` and `Issue5498And5502NarrowingTests` cover assignments nested inside property, field, and index writes.

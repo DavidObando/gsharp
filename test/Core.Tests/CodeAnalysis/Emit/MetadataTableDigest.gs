@@ -23,6 +23,7 @@ import System.Text
 /// A hash change that moves no tracked table means this digest has a gap.
 internal shared class MetadataTableDigest {
     internal const AssemblyRef string = "AssemblyRef"
+    internal const CustomAttribute string = "CustomAttribute"
     internal const MethodBodies string = "MethodBodies"
 
     /// Summarises the metadata tables and method bodies of a PE image.
@@ -88,6 +89,14 @@ internal shared class MetadataTableDigest {
                 (h FieldDefinitionHandle) -> {
                     let f = md.GetFieldDefinition(h)
                     return "${md.GetString(f.Name)}|${int32(f.Attributes)}|${Hex(md.GetBlobBytes(f.Signature))}|decl=${MetadataTableDigest.Token(f.GetDeclaringType())}"
+                }
+            )
+        )
+        tables[CustomAttribute] = Summarise(
+            md.CustomAttributes.Select(
+                (h CustomAttributeHandle) -> {
+                    let a = md.GetCustomAttribute(h)
+                    return "parent=${MetadataTableDigest.Token(a.Parent)}|ctor=${ConstructorIdentity(md, a.Constructor)}|value=${Hex(md.GetBlobBytes(a.Value))}"
                 }
             )
         )
@@ -165,6 +174,18 @@ internal shared class MetadataTableDigest {
         case HandleKind.TypeReference: "nested:" + md.GetString(md.GetTypeReference(TypeReferenceHandle($scope)).Name)
         case HandleKind.ModuleReference: "module"
         default: $scope.Kind.ToString()
+    }
+
+    private func ConstructorIdentity(md MetadataReader, constructor EntityHandle) string -> switch constructor.Kind {
+        case HandleKind.MemberReference: {
+            let mr = md.GetMemberReference(MemberReferenceHandle(constructor))
+            "${MetadataTableDigest.Token(constructor)}:${MetadataTableDigest.Token(mr.Parent)}.${md.GetString(mr.Name)}:${Hex(md.GetBlobBytes(mr.Signature))}"
+        }
+        case HandleKind.MethodDefinition: {
+            let m = md.GetMethodDefinition(MethodDefinitionHandle(constructor))
+            "${MetadataTableDigest.Token(constructor)}:${MetadataTableDigest.Token(m.GetDeclaringType())}.${md.GetString(m.Name)}:${Hex(md.GetBlobBytes(m.Signature))}"
+        }
+        default: MetadataTableDigest.Token(constructor)
     }
 
     private func Token(handle EntityHandle) string -> if handle.IsNil {

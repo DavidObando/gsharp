@@ -37,6 +37,17 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 case method is MethodDeclarationSyntax {
+                    if this.context.GetDeclaredSymbol(method) is IMethodSymbol importedContractMethod &&
+                        EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
+                        this
+                        .nameAllocator
+                        .HasImportedDeconstructionContract(importedContractMethod) {
+                        this.context.ReportUnsupported(
+                            method,
+                            "record methods implementing an imported Deconstruct contract need a dispatch-preserving bridge."
+                        )
+                        break
+                    }
                     let preservedOwnedExtension = ownedExtensionTarget == nil && this.context.GetDeclaredSymbol(
                         method
                     ) is IMethodSymbol ownedMethod &&
@@ -57,6 +68,12 @@ partial class CSharpToGSharpTranslator {
                     )
                     if methodMember != nil {
                         yield(methodMember, methodIsStatic)
+                    }
+                    if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
+                        let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
+                        if adapter != nil {
+                            yield(adapter, false)
+                        }
                     }
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
                         method

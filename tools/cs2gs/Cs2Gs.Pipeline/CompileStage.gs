@@ -423,7 +423,7 @@ class CompileStage : IMigrationStage {
                 .EvaluatedProjectReferences!!.TryGetValue(appProjectPath, out var evaluated) {
                 return evaluated
             }
-            return context
+            let direct = context
                 .ProjectReferences
                 .Where(
                 (reference DeclaredProjectItem) -> !string.IsNullOrEmpty(reference.SourceInclude) &&
@@ -431,8 +431,42 @@ class CompileStage : IMigrationStage {
                     !HasCondition(reference)
             )
                 .Select((reference DeclaredProjectItem) -> Path.GetFullPath(reference.SourceInclude!!))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            let results = List[string]()
+            let seen = HashSet[string](StringComparer.OrdinalIgnoreCase)
+            let queue = Queue[string]()
+            for rawPath in direct {
+                if !string.IsNullOrEmpty(rawPath) {
+                    let fullPath = Path.GetFullPath(rawPath)
+                    if seen.Add(fullPath) {
+                        results.Add(fullPath)
+                        queue.Enqueue(fullPath)
+                    }
+                }
+            }
+            while queue.Count > 0 {
+                let current = queue.Dequeue()
+                if !File.Exists(current) {
+                    continue
+                }
+                let transitive = DeclaredProjectItems
+                    .Read(current, "ProjectReference")
+                    .Where(
+                    (reference DeclaredProjectItem) -> !string.IsNullOrEmpty(reference.SourceInclude) &&
+                        !IsBuildOrderingOnlyReference(reference) &&
+                        !HasCondition(reference)
+                )
+                    .Select((reference DeclaredProjectItem) -> Path.GetFullPath(reference.SourceInclude!!))
+                for childPath in transitive {
+                    if !string.IsNullOrEmpty(childPath) {
+                        let fullChildPath = Path.GetFullPath(childPath)
+                        if seen.Add(fullChildPath) {
+                            results.Add(fullChildPath)
+                            queue.Enqueue(fullChildPath)
+                        }
+                    }
+                }
+            }
+            return results
         }
 
         private func HasCondition(reference DeclaredProjectItem) bool {

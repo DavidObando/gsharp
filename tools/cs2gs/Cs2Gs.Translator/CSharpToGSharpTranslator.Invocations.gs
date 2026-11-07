@@ -92,6 +92,10 @@ partial class CSharpToGSharpTranslator {
             invocation InvocationExpressionSyntax,
             snapshotDelegateTarget bool = false
         ) GExpression? {
+            this.ReportMetadataRecordDeconstruction(
+                this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol,
+                invocation
+            )
             if (invocation.Expression is IdentifierNameSyntax and {Identifier: {ValueText: "nameof"}}) &&
                 this
                 .context

@@ -834,6 +834,12 @@ partial class CSharpToGSharpTranslator {
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.InitializerHoldsPromotedValue(coalesce.Right)
                 }
+                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.InitializerHoldsPromotedValue(coalesceAssignment.Right)
+                }
                 case conditional is ConditionalExpressionSyntax {
                     return this.InitializerHoldsPromotedValue(conditional.WhenTrue) ||
                         this.InitializerHoldsPromotedValue(conditional.WhenFalse)
@@ -1281,6 +1287,12 @@ partial class CSharpToGSharpTranslator {
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.IsNullableInitializer(coalesce.Right)
                 }
+                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.IsNullableInitializer(coalesceAssignment.Right)
+                }
                 case ternary is ConditionalExpressionSyntax {
                     return this.IsNullableInitializer(ternary.WhenTrue) || this.IsNullableInitializer(ternary.WhenFalse)
                 }
@@ -1354,6 +1366,12 @@ partial class CSharpToGSharpTranslator {
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                     return this.IsNullableInitializer(coalesce.Right)
+                }
+                case coalesceAssignment is AssignmentExpressionSyntax when coalesceAssignment.IsKind(
+                    SyntaxKind.CoalesceAssignmentExpression
+                ) {
+                    return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                        this.IsNullableInitializer(coalesceAssignment.Right)
                 }
                 case ternary is ConditionalExpressionSyntax {
                     return this.IsNullableInitializer(ternary.WhenTrue) || this.IsNullableInitializer(ternary.WhenFalse)
@@ -1514,6 +1532,16 @@ partial class CSharpToGSharpTranslator {
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
             ) {
                 return this.EmittedExpandedParamsElementMayBeNull(coalesce.Right)
+            }
+            if current is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax coalesceAssignment &&
+                coalesceAssignment
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
+                return !this.CoalesceAssignmentResultIsStaticallyNonNull(coalesceAssignment) &&
+                    this.EmittedExpandedParamsElementMayBeNull(coalesceAssignment.Right)
             }
             if this.GetExpressionNullablePositions(current) is {} positions &&
                 (positions.Nullable.Contains("") || positions.Platform.Contains("")) {
@@ -2620,7 +2648,15 @@ partial class CSharpToGSharpTranslator {
             }
             let targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
-            ) == true
+            ) == true ||
+                (
+                targetSymbol is IFieldSymbol{AssociatedSymbol: {} associatedSymbol} &&
+                    associatedSymbol
+                    .DeclaringSyntaxReferences
+                    .Any(
+                    (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+                )
+            )
             // Issue #5508: a member another project of THIS run emits, seen here
             // through that project's reference assembly, carries the widening the
             // producer decided from the same run-wide evidence.
@@ -2632,6 +2668,22 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(targetSymbol))
+        }
+
+        private func CoalesceAssignmentTargetIsNonNullInGSharp(assignment AssignmentExpressionSyntax) bool {
+            let left ExpressionSyntax? = Unparenthesize(assignment.Left)
+            if left == nil || left is ElementAccessExpressionSyntax {
+                return false
+            }
+            let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
+            if target is ILocalSymbol local &&
+                this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) {
+                return !acceptsNil
+            }
+            return this.AssignmentResultHasNonNullStaticType(assignment)
         }
 
         // Issue #4843: whether <paramref name="parameter"/> is declared as one of
