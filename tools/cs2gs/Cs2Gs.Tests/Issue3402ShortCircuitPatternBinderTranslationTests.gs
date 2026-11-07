@@ -224,7 +224,7 @@ namespace Demo
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
         let rendered = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
         Assert.Contains("UseObject(value!!)", rendered, StringComparison.Ordinal)
-        Assert.Contains("value is A or 5", rendered, StringComparison.Ordinal)
+        Assert.Contains("value is A || object.Equals(5, value)", rendered, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(rendered)
     }
 

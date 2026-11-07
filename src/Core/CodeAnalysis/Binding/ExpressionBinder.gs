@@ -2596,7 +2596,6 @@ internal partial class ExpressionBinder {
         if SmartCastStability.TryClassifyNilGuardLeaf(
             condition,
             restrictBareVariableToLocalsAndParams,
-            referenceNullableOnly: false,
             out var nilTarget,
             out var nilUnderlying,
             out var nonNilWhenTrue

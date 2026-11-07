@@ -1536,11 +1536,51 @@ internal partial class OverloadResolver {
         // and property symbols must first become real member loads rather than
         // non-existent local slots.
         let fpVar VariableSymbol? = symbol as VariableSymbol
-        let fpSym FunctionPointerTypeSymbol? = (narrowedCallTargetType ?? fpVar?.Type) as FunctionPointerTypeSymbol
+        let fpSym FunctionPointerTypeSymbol? = ((narrowedCallTargetType ?? fpVar?.Type) as FunctionPointerTypeSymbol) ??
+            (
+            if syntax.NullableQuestionToken != nil &&
+                fpVar?.Type is NullableTypeSymbol{UnderlyingType: FunctionPointerTypeSymbol nullableFp} {
+                nullableFp
+            } else {
+                default(FunctionPointerTypeSymbol?)
+            }
+        )
         if fpVar != nil && fpSym != nil {
             // Issue #4943: a narrowed `(unmanaged[CC] () -> R)?` callee must be
             // unwrapped from its `Nullable<nint>` storage before `calli`.
-            let pointer = BuildCalleeLoad(fpVar, syntax.Identifier, narrowedCallTargetType)
+            let pointer = BuildCalleeLoad(
+                fpVar,
+                syntax.Identifier,
+                if syntax.NullableQuestionToken != nil && fpVar.Type is NullableTypeSymbol {
+                    default(TypeSymbol?)
+                } else {
+                    narrowedCallTargetType
+                }
+            )
+            if syntax.NullableQuestionToken != nil {
+                if pointer is BoundErrorExpression {
+                    return pointer
+                }
+                let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
+                    CultureInfo.InvariantCulture
+                )
+                let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: fpSym)
+                let invocation = BindFunctionPointerInvocation(
+                    syntax,
+                    BoundVariableExpression(nil, capture),
+                    fpSym,
+                    fpVar.Name,
+                    syntax.Identifier.Location,
+                    boundArguments.ToImmutable(),
+                    argumentNames,
+                    fpVar.CallableParameterNames
+                )
+                return if invocation is BoundErrorExpression {
+                    invocation
+                } else {
+                    BuildNullConditionalDelegateResult(syntax, pointer, capture, invocation, fpSym.ReturnType)
+                }
+            }
             return BindFunctionPointerInvocation(
                 syntax,
                 pointer,

@@ -1405,7 +1405,7 @@ partial class CSharpToGSharpTranslator {
                 result = statements
                 return true
             }
-            if !IsTrivialOperand(receiver!!) {
+            if !this.PatternReceiverCanBeDuplicated(isPattern!!.Expression, receiver) {
                 let spillName = this.NewSpillName()
                 statements.Add(LocalDeclarationStatement(BindingKind.Let, spillName, initializer: receiver))
                 receiver = IdentifierExpression(spillName)

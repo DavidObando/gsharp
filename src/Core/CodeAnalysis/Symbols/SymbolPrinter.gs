@@ -18,13 +18,18 @@ shared class SymbolPrinter {
     func WriteTo(symbol Symbol, writer TextWriter) {
         switch symbol.Kind {
             case SymbolKind.Function {
-                WriteFunctionTo(cast[FunctionSymbol](symbol), writer)
+                if symbol is FunctionSymbol function {
+                    WriteFunctionTo(function, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
             }
-            case SymbolKind.GlobalVariable {
-                WriteGlobalVariableTo(cast[GlobalVariableSymbol](symbol), writer)
-            }
-            case SymbolKind.LocalVariable {
-                WriteLocalVariableTo(cast[LocalVariableSymbol](symbol), writer)
+            case SymbolKind.GlobalVariable, SymbolKind.LocalVariable {
+                if symbol is VariableSymbol variable {
+                    WriteVariableTo(variable, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
             }
             case SymbolKind.Parameter {
                 WriteParameterTo(cast[ParameterSymbol](symbol), writer)
@@ -41,11 +46,44 @@ shared class SymbolPrinter {
             case SymbolKind.Import {
                 WriteImportTo(cast[ImportSymbol](symbol), writer)
             }
+            case SymbolKind.ImportedClass {
+                WriteImportedClassTo(cast[ImportedClassSymbol](symbol), writer)
+            }
+            case SymbolKind.ImportedFunction {
+                WriteImportedFunctionTo(cast[ImportedFunctionSymbol](symbol), writer)
+            }
+            case SymbolKind.Field {
+                if symbol is FieldSymbol field {
+                    WriteFieldTo(field, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
+            }
+            case SymbolKind.Property {
+                if symbol is PropertySymbol property {
+                    WritePropertyTo(property, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
+            }
+            case SymbolKind.Event {
+                if symbol is EventSymbol event_ {
+                    WriteEventTo(event_, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
+            }
             case SymbolKind.TypeAlias {
-                WriteTypeAliasTo(cast[TypeAliasSymbol](symbol), writer)
+                if symbol is TypeAliasSymbol typeAlias {
+                    WriteTypeAliasTo(typeAlias, writer)
+                } else if symbol is ImportSymbol importAlias {
+                    WriteImportTo(importAlias, writer)
+                } else {
+                    writer.WriteIdentifier(symbol.Name)
+                }
             }
             default {
-                throw Exception("Unexpected symbol: ${symbol.Kind}")
+                writer.WriteIdentifier(symbol.Name)
             }
         }
     }
@@ -69,7 +107,33 @@ shared class SymbolPrinter {
         }
     }
 
-    private func WriteGlobalVariableTo(symbol GlobalVariableSymbol, writer TextWriter) {
+    private func WriteImportedFunctionTo(symbol ImportedFunctionSymbol, writer TextWriter) {
+        writer.WriteKeyword(SyntaxKind.FuncKeyword)
+        writer.WriteSpace()
+        writer.WriteIdentifier(symbol.Name)
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken)
+        let parameters = ImportedFunctionSymbol.GetLogicalParameters(symbol.Method)
+        for var i = 0; i < parameters.Length; i++ {
+            if i > 0 {
+                writer.WritePunctuation(SyntaxKind.CommaToken)
+                writer.WriteSpace()
+            }
+            writer.WriteIdentifier(parameters[i].Name ?? string.Empty)
+            writer.WriteSpace()
+            writer.WriteIdentifier(SymbolDisplay.ToTypeDisplayString(parameters[i].ParameterType, qualifyNames: false))
+        }
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken)
+        if symbol.Type != nil && symbol.Type != TypeSymbol.Void {
+            writer.WriteSpace()
+            symbol.Type.WriteTo(writer)
+        }
+    }
+
+    private func WriteImportedClassTo(symbol ImportedClassSymbol, writer TextWriter) {
+        writer.WriteIdentifier(SymbolDisplay.ToTypeDisplayString(symbol.ClassType))
+    }
+
+    private func WriteVariableTo(symbol VariableSymbol, writer TextWriter) {
         writer.WriteKeyword(
             if symbol.IsReadOnly {
                 SyntaxKind.ConstKeyword
@@ -85,14 +149,36 @@ shared class SymbolPrinter {
         }
     }
 
-    private func WriteLocalVariableTo(symbol LocalVariableSymbol, writer TextWriter) {
+    private func WriteFieldTo(symbol FieldSymbol, writer TextWriter) {
         writer.WriteKeyword(
-            if symbol.IsReadOnly {
+            if symbol.IsConst {
                 SyntaxKind.ConstKeyword
+            } else if symbol.IsReadOnly {
+                SyntaxKind.LetKeyword
             } else {
                 SyntaxKind.VarKeyword
             }
         )
+        writer.WriteSpace()
+        writer.WriteIdentifier(symbol.Name)
+        if symbol.Type != nil {
+            writer.WriteSpace()
+            symbol.Type.WriteTo(writer)
+        }
+    }
+
+    private func WritePropertyTo(symbol PropertySymbol, writer TextWriter) {
+        writer.WriteIdentifier("prop")
+        writer.WriteSpace()
+        writer.WriteIdentifier(symbol.Name)
+        if symbol.Type != nil {
+            writer.WriteSpace()
+            symbol.Type.WriteTo(writer)
+        }
+    }
+
+    private func WriteEventTo(symbol EventSymbol, writer TextWriter) {
+        writer.WriteIdentifier("event")
         writer.WriteSpace()
         writer.WriteIdentifier(symbol.Name)
         if symbol.Type != nil {

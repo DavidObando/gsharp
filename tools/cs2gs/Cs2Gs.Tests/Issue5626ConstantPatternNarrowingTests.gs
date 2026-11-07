@@ -382,7 +382,7 @@ namespace Demo
 
     shared {
         // Runs `P.Run()` of the C# and of its translation, compares the output, and returns the translation.
-        private func AssertRunsLikeCSharp(source string) string {
+        internal func AssertRunsLikeCSharp(source string, expectedOutput string? = nil) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
             Assert.True(
                 project.BoundWithoutErrors,
@@ -402,6 +402,9 @@ namespace Demo
                 )
             } finally {
                 loadContext.Unload()
+            }
+            if expectedOutput != nil {
+                Assert.Equal(expectedOutput, expected)
             }
             let document = Assert.Single(project.Documents)
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)

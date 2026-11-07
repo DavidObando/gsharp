@@ -647,11 +647,30 @@ internal partial class ExpressionBinder {
         ) {
             Diagnostics.ReportMemberInaccessible(ce.Identifier.Location, methodName, declaringOwner.Name, accessibility)
         }
-        if ce.NullableQuestionToken == nil &&
-            ce.TypeArgumentList == nil &&
-            effectiveMemberType is FunctionPointerTypeSymbol functionPointerType {
+        if ce.TypeArgumentList == nil && callableType is FunctionPointerTypeSymbol functionPointerType {
             if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
                 result = BoundErrorExpression(nil)
+                return true
+            }
+            if ce.NullableQuestionToken != nil {
+                let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
+                    CultureInfo.InvariantCulture
+                )
+                let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: functionPointerType)
+                let invoke = overloads.BindFunctionPointerInvocation(
+                    ce,
+                    BoundVariableExpression(nil, capture),
+                    functionPointerType,
+                    methodName,
+                    ce.Identifier.Location,
+                    arguments,
+                    argumentNames
+                )
+                result = if invoke is BoundErrorExpression {
+                    invoke
+                } else {
+                    BuildNullConditionalDelegateInvocation(ce, memberLoad, capture, invoke)
+                }
                 return true
             }
             result = overloads.BindFunctionPointerInvocation(
@@ -1010,9 +1029,34 @@ internal partial class ExpressionBinder {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type
         }
-        if ce.NullableQuestionToken == nil &&
-            ce.TypeArgumentList == nil &&
-            initialEffectiveType is FunctionPointerTypeSymbol functionPointerType {
+        let initialCallableType = if ce.NullableQuestionToken != nil &&
+            initialEffectiveType is NullableTypeSymbol nullableInitial {
+            nullableInitial.UnderlyingType
+        } else {
+            initialEffectiveType
+        }
+        if ce.TypeArgumentList == nil && initialCallableType is FunctionPointerTypeSymbol functionPointerType {
+            if ce.NullableQuestionToken != nil {
+                let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
+                    CultureInfo.InvariantCulture
+                )
+                let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: functionPointerType)
+                let invoke = overloads.BindFunctionPointerInvocation(
+                    ce,
+                    BoundVariableExpression(nil, capture),
+                    functionPointerType,
+                    methodName,
+                    ce.Identifier.Location,
+                    arguments,
+                    argumentNames
+                )
+                result = if invoke is BoundErrorExpression {
+                    invoke
+                } else {
+                    BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invoke)
+                }
+                return true
+            }
             result = overloads.BindFunctionPointerInvocation(
                 ce,
                 delegateLoad,
@@ -1182,9 +1226,34 @@ internal partial class ExpressionBinder {
             case unwrap is BoundUnaryExpression when unwrap.Op.Kind == BoundUnaryOperatorKind.NullAssertion: unwrap.Type
             default: delegateLoad.Type
         }
-        if ce.NullableQuestionToken == nil &&
-            ce.TypeArgumentList == nil &&
-            initialEffectiveType is FunctionPointerTypeSymbol functionPointerType {
+        let initialStaticCallableType = if ce.NullableQuestionToken != nil &&
+            initialEffectiveType is NullableTypeSymbol nullableStaticInitial {
+            nullableStaticInitial.UnderlyingType
+        } else {
+            initialEffectiveType
+        }
+        if ce.TypeArgumentList == nil && initialStaticCallableType is FunctionPointerTypeSymbol functionPointerType {
+            if ce.NullableQuestionToken != nil {
+                let captureName = "$$ncap_" + (binderCtx.NullConditionalCaptureCounter += 1).ToString(
+                    CultureInfo.InvariantCulture
+                )
+                let capture = LocalVariableSymbol(captureName, isReadOnly: true, type: functionPointerType)
+                let invoke = overloads.BindFunctionPointerInvocation(
+                    ce,
+                    BoundVariableExpression(nil, capture),
+                    functionPointerType,
+                    methodName,
+                    ce.Identifier.Location,
+                    arguments,
+                    argumentNames
+                )
+                result = if invoke is BoundErrorExpression {
+                    invoke
+                } else {
+                    BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invoke)
+                }
+                return true
+            }
             result = overloads.BindFunctionPointerInvocation(
                 ce,
                 delegateLoad,

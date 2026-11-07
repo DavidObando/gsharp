@@ -830,6 +830,11 @@ class Conversion {
                     return Conversion.Implicit
                 }
                 if from is FunctionPointerTypeSymbol fromFp &&
+                    to is NullableTypeSymbol{UnderlyingType: FunctionPointerTypeSymbol toNullableFp} &&
+                    fromFp.SignatureEquals(toNullableFp, HaveIdenticalTypeArgumentContracts) {
+                    return Conversion.Implicit
+                }
+                if from is FunctionPointerTypeSymbol fromFp &&
                     to is FunctionPointerTypeSymbol toFp &&
                     fromFp.SignatureEquals(toFp, HaveIdenticalTypeArgumentContracts) {
                     return Conversion.Identity

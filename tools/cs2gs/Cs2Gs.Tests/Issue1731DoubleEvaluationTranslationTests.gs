@@ -163,7 +163,7 @@ namespace Demo
     }
 
     @Fact
-    func PatternScrutinee_SimpleLocal_NoUnnecessaryTemp() {
+    func PatternScrutinee_SimpleLocal_CapturesOnlyReusedMember() {
         let printed = TranslateUnit(`
 namespace Demo
 {
@@ -189,7 +189,10 @@ namespace Demo
         }
     }
 }`)
-        Assert.DoesNotContain("__spill", printed)
+        Assert.DoesNotContain("a is var", printed)
+        Assert.Contains("a.B is var __spill0", printed)
+        Assert.Equal(1, CountOccurrences(printed, "a.B"))
+        Assert.Contains("__spill0.X == 1 && __spill0.Y == 2", printed)
     }
 
     @Fact

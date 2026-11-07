@@ -1241,6 +1241,7 @@ class ReferenceResolver : IDisposable {
         private let WellKnownBclAssemblyNames[]string = []string{
             "System.Runtime",
             "System.Console",
+            "System.Linq.Expressions",
             "System.Private.CoreLib",
             "mscorlib"
         }
