@@ -59,6 +59,11 @@ internal class ManagedReferenceArrayNullableState {
         get;
         set;
     }
+
+    prop ProjectedMethodQueryCount int32 {
+        get;
+        set;
+    }
 }
 
 internal class ProjectedBaseCompilationIndex {

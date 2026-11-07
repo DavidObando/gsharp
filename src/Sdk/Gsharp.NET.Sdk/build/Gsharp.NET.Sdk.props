@@ -85,18 +85,17 @@
        assembly participates in the ResolveAssemblyReference closure the same
        way (and consequently shows up under @(ReferencePathWithRefAssemblies)
        that BuildTask sends via /r:). -->
-  <ItemGroup Condition=" '$(GsharpNoExtensions)' != 'true' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp' and Exists('$(GsharpExtensionsAssemblyFullPath)') ">
+  <ItemGroup Condition=" '$(GsharpNoExtensions)' != 'true' and Exists('$(GsharpExtensionsAssemblyFullPath)') ">
     <_ExplicitReference Include="$(GsharpExtensionsAssemblyFullPath)" />
   </ItemGroup>
 
   <!-- ADR-0174 D1: same channel for the channel runtime. -->
-  <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp' and Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') ">
+  <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') ">
     <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
   </ItemGroup>
-  <ItemGroup Condition=" '$(GsharpNoValuesRuntime)' != 'true' and $([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) == '.NETCoreApp' and Exists('$(GsharpValuesRuntimeAssemblyFullPath)') ">
+  <ItemGroup Condition=" '$(GsharpNoValuesRuntime)' != 'true' and Exists('$(GsharpValuesRuntimeAssemblyFullPath)') ">
     <_ExplicitReference Include="$(GsharpValuesRuntimeAssemblyFullPath)" />
   </ItemGroup>
-
 
   <!-- ADR-0207: the known ReadyToRun compiler pack, in the shape of KnownCrossgen2Pack in the .NET SDK.
        The PackageDownload is for the host RID only, with an exact version. A host outside the list

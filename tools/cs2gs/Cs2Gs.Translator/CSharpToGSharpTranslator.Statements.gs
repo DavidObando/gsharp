@@ -2860,6 +2860,139 @@ partial class CSharpToGSharpTranslator {
             return states
         }
 
+        private func GetInvokedCallableTargets(
+            invocation InvocationExpressionSyntax,
+            enclosingExecutable SyntaxNode?,
+            out isDynamicOrAmbiguous bool
+        ) IReadOnlyList[SyntaxNode] {
+            isDynamicOrAmbiguous = true
+            if invocation.SyntaxTree != this
+                .context
+                .SemanticModel
+                .SyntaxTree ||
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is not IMethodSymbol callee {
+                return Array.Empty[SyntaxNode]()
+            }
+            if callee.MethodKind != MethodKind.DelegateInvoke {
+                isDynamicOrAmbiguous = DelegateCalleeMayDispatchDynamically(invocation, callee)
+                let directDeclarations = List[SyntaxNode]()
+                for reference in callee.OriginalDefinition.DeclaringSyntaxReferences {
+                    let declaration = reference.GetSyntax()
+                    if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                        directDeclarations.Add(declaration)
+                    }
+                }
+                return directDeclarations
+            }
+            var target ExpressionSyntax? = invocation.Expression
+            if target is MemberAccessExpressionSyntax invoke && invoke.Name.Identifier.ValueText == "Invoke" {
+                target = invoke.Expression
+            } else if target is MemberBindingExpressionSyntax binding &&
+                binding
+                .Name
+                .Identifier
+                .ValueText == "Invoke" &&
+                invocation.Parent is ConditionalAccessExpressionSyntax conditional {
+                target = conditional.Expression
+            }
+            target = Unwrap(target)
+            if target is AnonymousFunctionExpressionSyntax directAnon {
+                isDynamicOrAmbiguous = false
+                return []SyntaxNode{directAnon}
+            }
+            if target != nil && target.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                let targetSymbol = this.context.GetSymbolInfo(target).Symbol
+                if targetSymbol is IMethodSymbol directMethod {
+                    isDynamicOrAmbiguous = DelegateCalleeMayDispatchDynamically(nil, directMethod)
+                    let directMethodDeclarations = List[SyntaxNode]()
+                    for reference in directMethod.OriginalDefinition.DeclaringSyntaxReferences {
+                        let declaration = reference.GetSyntax()
+                        if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                            directMethodDeclarations.Add(declaration)
+                        }
+                    }
+                    return directMethodDeclarations
+                }
+                if targetSymbol is ILocalSymbol delegateLocal {
+                    let reachingValues = this.GetReachingLocalValues(
+                        delegateLocal,
+                        invocation.SpanStart,
+                        preserveDelegateCompoundAssignments: true
+                    )
+                    let resolvedDeclarations = List[SyntaxNode]()
+                    var allDefinite = reachingValues.Count == 1 && !this.LocalHasNonDirectWrite(
+                        delegateLocal,
+                        enclosingExecutable ?? FindEnclosingExecutable(invocation)
+                    )
+                    for value in reachingValues {
+                        let unwrappedValue = Unwrap(value)
+                        if unwrappedValue is AnonymousFunctionExpressionSyntax anonValue {
+                            resolvedDeclarations.Add(anonValue)
+                            continue
+                        }
+                        if unwrappedValue != nil &&
+                            unwrappedValue.SyntaxTree == this
+                            .context
+                            .SemanticModel
+                            .SyntaxTree &&
+                            this
+                            .context
+                            .GetSymbolInfo(unwrappedValue)
+                            .Symbol is IMethodSymbol methodValue {
+                            if DelegateCalleeMayDispatchDynamically(nil, methodValue) {
+                                allDefinite = false
+                            }
+                            for reference in methodValue.OriginalDefinition.DeclaringSyntaxReferences {
+                                let declaration = reference.GetSyntax()
+                                if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                                    resolvedDeclarations.Add(declaration)
+                                }
+                            }
+                            continue
+                        }
+                        allDefinite = false
+                        for subNode in value.DescendantNodesAndSelf() {
+                            if subNode is AnonymousFunctionExpressionSyntax subAnon {
+                                resolvedDeclarations.Add(subAnon)
+                            } else if subNode is ExpressionSyntax subExpr &&
+                                subExpr.SyntaxTree == this
+                                .context
+                                .SemanticModel
+                                .SyntaxTree &&
+                                this
+                                .context
+                                .GetSymbolInfo(subExpr)
+                                .Symbol is IMethodSymbol subMethod {
+                                for reference in subMethod.OriginalDefinition.DeclaringSyntaxReferences {
+                                    let declaration = reference.GetSyntax()
+                                    if declaration.SyntaxTree == this.context.SemanticModel.SyntaxTree {
+                                        resolvedDeclarations.Add(declaration)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    isDynamicOrAmbiguous = !allDefinite || resolvedDeclarations.Count != 1
+                    if resolvedDeclarations.Count > 0 {
+                        return resolvedDeclarations
+                    }
+                }
+            }
+            let searchRoot = enclosingExecutable ?? FindEnclosingExecutable(invocation)
+            if searchRoot == nil {
+                return Array.Empty[SyntaxNode]()
+            }
+            return searchRoot
+                .DescendantNodes()
+                .Where(
+                (node SyntaxNode) -> node is AnonymousFunctionExpressionSyntax || node is LocalFunctionStatementSyntax
+            )
+                .ToList()
+        }
+
         private func ApplyInvocationLocalDelegateWrites(
             invocation InvocationExpressionSyntax,
             local ILocalSymbol,
@@ -2874,20 +3007,8 @@ partial class CSharpToGSharpTranslator {
             completedQueries Dictionary[string, HashSet[int32]],
             cycleFlags List[bool]
         ) HashSet[int32] {
-            if invocation.SyntaxTree != this
-                .context
-                .SemanticModel
-                .SyntaxTree ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol callee ||
-                callee.MethodKind != MethodKind.LocalFunction {
-                return states
-            }
-            let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-            if !nextVisited.Add(callee.OriginalDefinition) {
-                cycleFlags.Add(true)
+            let targets = this.GetInvokedCallableTargets(invocation, enclosingExecutable, out var isDynamicOrAmbiguous)
+            if targets.Count == 0 {
                 return states
             }
             var currentStates = states
@@ -2897,14 +3018,29 @@ partial class CSharpToGSharpTranslator {
                 invocation.SpanStart,
                 invocation
             )
-            for reference in callee.OriginalDefinition.DeclaringSyntaxReferences {
-                let declaration = reference.GetSyntax()
+            for declaration in targets {
                 if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                    continue
+                }
+                let declCallKey = "${this.GetSyntaxTreeCacheId(declaration.SyntaxTree)}:localcall:${declaration.SpanStart}"
+                let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
+                if !nextVisitedStorage.Add(declCallKey) {
+                    cycleFlags.Add(true)
+                    continue
+                }
+                let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                if this
+                    .context
+                    .SemanticModel
+                    .GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
+                    !nextVisited.Add(declaredMethod.OriginalDefinition) {
+                    cycleFlags.Add(true)
                     continue
                 }
                 let body SyntaxNode? = switch declaration {
                     case LocalFunctionStatementSyntax{Body: {} b}: cast[SyntaxNode](b)
                     case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
+                    case AnonymousFunctionExpressionSyntax{Body: {} b}: cast[SyntaxNode](b)
                     default: declaration
                 }
                 if body == nil || !body.DescendantNodesAndSelf().Any(
@@ -2948,7 +3084,7 @@ partial class CSharpToGSharpTranslator {
                                 enclosingExecutable: declaration,
                                 localFunction: localFunction,
                                 visited: nextVisited,
-                                visitedStorage: visitedStorage,
+                                visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 completedQueries: completedQueries,
                                 cycleFlags: cycleFlags
@@ -2964,7 +3100,7 @@ partial class CSharpToGSharpTranslator {
                                 enclosingExecutable: declaration,
                                 localFunction: localFunction,
                                 visited: nextVisited,
-                                visitedStorage: visitedStorage,
+                                visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 completedQueries: completedQueries,
                                 cycleFlags: cycleFlags
@@ -2981,10 +3117,25 @@ partial class CSharpToGSharpTranslator {
                 )
                 if exitBlock != nil && computedOutputs.TryGetValue(exitBlock, out var exitStates) &&
                     exitStates.Count > 0 {
-                    currentStates = exitStates
+                    if isDynamicOrAmbiguous || DeclarationMaySuspendAsync(declaration) {
+                        let mergedStates = HashSet[int32](currentStates)
+                        mergedStates.UnionWith(exitStates)
+                        currentStates = mergedStates
+                    } else {
+                        currentStates = exitStates
+                    }
                 }
             }
             return currentStates
+        }
+
+        private func DeclarationMaySuspendAsync(declaration SyntaxNode) bool -> switch declaration {
+            case localFn is LocalFunctionStatementSyntax when localFn.Modifiers.Any(SyntaxKind.AsyncKeyword): true
+            case methodDecl is BaseMethodDeclarationSyntax when methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword): true
+            case anonFn is AnonymousFunctionExpressionSyntax when anonFn.AsyncKeyword.IsKind(
+                SyntaxKind.AsyncKeyword
+            ): true
+            default: declaration.DescendantNodesAndSelf().OfType[AwaitExpressionSyntax]().Any()
         }
 
         private func IsNonLocalDelegateStorage(expression ExpressionSyntax?) bool {
@@ -3057,6 +3208,24 @@ partial class CSharpToGSharpTranslator {
                         this.DelegateStorageMatches(assignment.Left, storage, storageUsePosition, receiverOverride)
                     }
                     if matchesStorage {
+                        let definiteMatch = !opaqueStorage && if calleeContext is {} activeCalleeForDefinite {
+                            this.DelegateStorageMatches(
+                                assignment.Left,
+                                storage,
+                                storageUsePosition,
+                                rightReceiverOverride: receiverOverride,
+                                leftReceiverOverride: leftReceiverOverride,
+                                requireDefinite: true
+                            )
+                        } else {
+                            this.DelegateStorageMatches(
+                                assignment.Left,
+                                storage,
+                                storageUsePosition,
+                                receiverOverride,
+                                requireDefinite: true
+                            )
+                        }
                         let next = HashSet[int32]()
                         for state in states {
                             for rightCount in this.DelegateAssignmentValueAnonymousFunctionCounts(
@@ -3078,9 +3247,9 @@ partial class CSharpToGSharpTranslator {
                                 completedQueries: activeCompleted,
                                 cycleFlags: activeCycleFlags
                             ) {
-                                if opaqueStorage {
-                                    // A property's or custom event's accessors may ignore or transform what is
-                                    // stored, so a write never proves the earlier delegate
+                                if !definiteMatch {
+                                    // A property's or custom event's accessors, or a write through a receiver
+                                    // that may alias another instance, never proves the earlier delegate
                                     // is gone: keep the prior state beside the written one.
                                     next.Add(state)
                                 }
@@ -3144,20 +3313,8 @@ partial class CSharpToGSharpTranslator {
             completedQueries Dictionary[string, HashSet[int32]],
             cycleFlags List[bool]
         ) HashSet[int32] {
-            if invocation.SyntaxTree != this
-                .context
-                .SemanticModel
-                .SyntaxTree ||
-                this
-                .context
-                .GetSymbolInfo(invocation)
-                .Symbol is not IMethodSymbol callee ||
-                callee.MethodKind == MethodKind.DelegateInvoke {
-                return states
-            }
-            let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-            if !nextVisited.Add(callee.OriginalDefinition) {
-                cycleFlags.Add(true)
+            let targets = this.GetInvokedCallableTargets(invocation, enclosingExecutable, out var isDynamicOrAmbiguous)
+            if targets.Count == 0 {
                 return states
             }
             var currentStates = states
@@ -3167,9 +3324,23 @@ partial class CSharpToGSharpTranslator {
                 invocation.SpanStart,
                 invocation
             )
-            for reference in callee.OriginalDefinition.DeclaringSyntaxReferences {
-                let declaration = reference.GetSyntax()
+            for declaration in targets {
                 if declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree {
+                    continue
+                }
+                let declCallKey = "${this.GetSyntaxTreeCacheId(declaration.SyntaxTree)}:storagecall:${declaration.SpanStart}"
+                let nextVisitedStorage = HashSet[string](visitedStorage, StringComparer.Ordinal)
+                if !nextVisitedStorage.Add(declCallKey) {
+                    cycleFlags.Add(true)
+                    continue
+                }
+                let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                if this
+                    .context
+                    .SemanticModel
+                    .GetDeclaredSymbol(declaration) is IMethodSymbol declaredMethod &&
+                    !nextVisited.Add(declaredMethod.OriginalDefinition) {
+                    cycleFlags.Add(true)
                     continue
                 }
                 let body SyntaxNode? = switch declaration {
@@ -3177,6 +3348,7 @@ partial class CSharpToGSharpTranslator {
                     case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
                     case BaseMethodDeclarationSyntax{Body: {} b}: cast[SyntaxNode](b)
                     case MethodDeclarationSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
+                    case AnonymousFunctionExpressionSyntax{Body: {} b}: cast[SyntaxNode](b)
                     default: declaration
                 }
                 if body == nil || !body.DescendantNodesAndSelf().Any(
@@ -3218,7 +3390,7 @@ partial class CSharpToGSharpTranslator {
                                 enclosingExecutable: declaration,
                                 localFunction: localFunction,
                                 visited: nextVisited,
-                                visitedStorage: visitedStorage,
+                                visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 receiverOverride: receiverOverride,
                                 completedQueries: completedQueries,
@@ -3236,7 +3408,7 @@ partial class CSharpToGSharpTranslator {
                                 enclosingExecutable: declaration,
                                 localFunction: localFunction,
                                 visited: nextVisited,
-                                visitedStorage: visitedStorage,
+                                visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 receiverOverride: receiverOverride,
                                 completedQueries: completedQueries,
@@ -3255,7 +3427,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 if exitBlock != nil && computedOutputs.TryGetValue(exitBlock, out var exitStates) &&
                     exitStates.Count > 0 {
-                    if DelegateCalleeMayDispatchDynamically(invocation, callee) {
+                    if isDynamicOrAmbiguous || DeclarationMaySuspendAsync(declaration) {
                         let mergedStates = HashSet[int32](currentStates)
                         mergedStates.UnionWith(exitStates)
                         currentStates = mergedStates
@@ -3326,7 +3498,8 @@ partial class CSharpToGSharpTranslator {
                 expression,
                 trackedStorage,
                 trackedStorageUsePosition,
-                trackedStorageReceiverOverride
+                trackedStorageReceiverOverride,
+                requireDefinite: true
             ) {
                 return HashSet[int32]{currentState}
             }
@@ -3533,6 +3706,9 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetSymbolInfo(Unwrap(expression))
                     .Symbol is IPropertySymbol{GetMethod: {} getter} property {
+                    if DelegateCalleeMayDispatchDynamically(expression, getter) {
+                        return HashSet[int32]{0, 1, 2}
+                    }
                     let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                     if !nextVisited.Add(property.OriginalDefinition) {
                         cycleFlags?.Add(true)
@@ -3600,6 +3776,9 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(expression)
                 .Symbol is IMethodSymbol factory {
+                if DelegateCalleeMayDispatchDynamically(invocationExpr, factory) {
+                    return HashSet[int32]{0, 1, 2}
+                }
                 let nextVisited = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                 if !nextVisited.Add(factory.OriginalDefinition) {
                     cycleFlags?.Add(true)
@@ -4218,7 +4397,8 @@ partial class CSharpToGSharpTranslator {
             right ExpressionSyntax?,
             rightUsePosition int32? = nil,
             rightReceiverOverride ExpressionSyntax? = nil,
-            leftReceiverOverride ExpressionSyntax? = nil
+            leftReceiverOverride ExpressionSyntax? = nil,
+            requireDefinite bool = false
         ) bool {
             var left = left
             var right = right
@@ -4229,7 +4409,7 @@ partial class CSharpToGSharpTranslator {
                     right is not ElementAccessExpressionSyntax rightElement {
                     return false
                 }
-                return this.IndexedDelegateStorageMatches(leftElement, rightElement, rightUsePosition)
+                return this.IndexedDelegateStorageMatches(leftElement, rightElement, rightUsePosition, requireDefinite)
             }
             let leftSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(left)
             let rightSymbol ISymbol? = this.GetNormalizedDelegateStorageSymbol(right)
@@ -4250,13 +4430,14 @@ partial class CSharpToGSharpTranslator {
             if leftReceiver is ThisExpressionSyntax || rightReceiver is ThisExpressionSyntax {
                 return leftReceiver is ThisExpressionSyntax && rightReceiver is ThisExpressionSyntax
             }
-            return this.DelegateReceiverMatches(leftReceiver, rightReceiver, rightUsePosition)
+            return this.DelegateReceiverMatches(leftReceiver, rightReceiver, rightUsePosition, requireDefinite)
         }
 
         private func DelegateReceiverMatches(
             left ExpressionSyntax?,
             right ExpressionSyntax?,
-            rightUsePosition int32? = nil
+            rightUsePosition int32? = nil,
+            requireDefinite bool = false
         ) bool {
             var left = left
             var right = right
@@ -4278,9 +4459,17 @@ partial class CSharpToGSharpTranslator {
                     rightUsePosition
                 )
                 if leftOrigins.Count == 0 || rightOrigins.Count == 0 {
-                    return SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol)
+                    if !SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol) {
+                        return false
+                    }
+                    if requireDefinite && leftSymbol is ILocalSymbol localReceiver && this.IsLocalReassigned(
+                        localReceiver
+                    ) {
+                        return false
+                    }
+                    return true
                 }
-                return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins)
+                return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins, requireDefinite)
             }
             if left is ThisExpressionSyntax || right is ThisExpressionSyntax {
                 return left is ThisExpressionSyntax && right is ThisExpressionSyntax
@@ -4290,11 +4479,16 @@ partial class CSharpToGSharpTranslator {
                     this.context.GetSymbolInfo(leftMember).Symbol,
                     this.context.GetSymbolInfo(rightMember).Symbol
                 ) &&
-                    this.DelegateReceiverMatches(leftMember.Expression, rightMember.Expression, rightUsePosition)
+                    this.DelegateReceiverMatches(
+                    leftMember.Expression,
+                    rightMember.Expression,
+                    rightUsePosition,
+                    requireDefinite
+                )
             }
             if left is ElementAccessExpressionSyntax leftElement &&
                 right is ElementAccessExpressionSyntax rightElement {
-                return this.IndexedDelegateStorageMatches(leftElement, rightElement, rightUsePosition)
+                return this.IndexedDelegateStorageMatches(leftElement, rightElement, rightUsePosition, requireDefinite)
             }
             return leftSymbol != nil && SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol)
         }
@@ -4302,7 +4496,8 @@ partial class CSharpToGSharpTranslator {
         private func IndexedDelegateStorageMatches(
             left ElementAccessExpressionSyntax,
             right ElementAccessExpressionSyntax,
-            rightUsePosition int32? = nil
+            rightUsePosition int32? = nil,
+            requireDefinite bool = false
         ) bool {
             if left.ArgumentList.Arguments.Count != right.ArgumentList.Arguments.Count {
                 return false
@@ -4336,7 +4531,7 @@ partial class CSharpToGSharpTranslator {
                     HashSet[ISymbol](SymbolEqualityComparer.Default),
                     rightUsePosition
                 )
-                if !this.DelegateOriginSetsMatch(leftIndexOrigins, rightIndexOrigins) {
+                if !this.DelegateOriginSetsMatch(leftIndexOrigins, rightIndexOrigins, requireDefinite) {
                     return false
                 }
             }
@@ -4349,14 +4544,28 @@ partial class CSharpToGSharpTranslator {
                 HashSet[ISymbol](SymbolEqualityComparer.Default),
                 rightUsePosition
             )
-            return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins)
+            return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins, requireDefinite)
         }
 
         private func DelegateOriginSetsMatch(
             left IReadOnlyList[ExpressionSyntax],
-            right IReadOnlyList[ExpressionSyntax]
+            right IReadOnlyList[ExpressionSyntax],
+            requireDefinite bool = false
         ) bool {
-            return left.Count > 0 && right.Count > 0 && left.Any(
+            if left.Count == 0 || right.Count == 0 {
+                return false
+            }
+            if requireDefinite {
+                return left.All(
+                    (leftOrigin ExpressionSyntax) -> right.All(
+                        (rightOrigin ExpressionSyntax) -> this.IndexedDelegateReceiverOriginMatches(
+                            leftOrigin,
+                            rightOrigin
+                        )
+                    )
+                )
+            }
+            return left.Any(
                 (leftOrigin ExpressionSyntax) -> right.Any(
                     (rightOrigin ExpressionSyntax) -> this.IndexedDelegateReceiverOriginMatches(leftOrigin, rightOrigin)
                 )
@@ -7703,7 +7912,7 @@ partial class CSharpToGSharpTranslator {
             )
 
             private func DelegateCalleeMayDispatchDynamically(
-                invocation InvocationExpressionSyntax?,
+                callOrMemberAccess ExpressionSyntax?,
                 method IMethodSymbol?
             ) bool {
                 if method == nil ||
@@ -7716,10 +7925,16 @@ partial class CSharpToGSharpTranslator {
                     (method.IsAbstract == false && method.IsVirtual == false && method.IsOverride == false) {
                     return false
                 }
-                return invocation is not(
-                    InvocationExpressionSyntax and
-                        {Expression: MemberAccessExpressionSyntax and {Expression: BaseExpressionSyntax}}
-                )
+                let unwrapped = Unwrap(callOrMemberAccess)
+                if unwrapped is InvocationExpressionSyntax{
+                    Expression: MemberAccessExpressionSyntax and {Expression: BaseExpressionSyntax}
+                } {
+                    return false
+                }
+                if unwrapped is MemberAccessExpressionSyntax and {Expression: BaseExpressionSyntax} {
+                    return false
+                }
+                return true
             }
 
             private func DelegateParameterUseIsInvocation(use IdentifierNameSyntax) bool {

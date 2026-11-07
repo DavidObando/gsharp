@@ -2053,6 +2053,104 @@ public sealed class Probe<T>
         this.callback = null;
         argSideEffectPair = (default(T), replacement);
         this.secondCallback?.Invoke();
+
+        var mayAliasHolderPair = (replacement, replacement);
+        void MayAliasHolderLocal()
+        {
+            var (mayAliasHolderLeft, _) = mayAliasHolderPair;
+            Fill(ref mayAliasHolderLeft, replacement);
+        }
+        var holderA = new Probe<T>();
+        var holderB = new Probe<T>();
+        holderA.callback = MayAliasHolderLocal;
+        Probe<T> chosenHolder;
+        if (skip)
+        {
+            chosenHolder = holderA;
+        }
+        else
+        {
+            chosenHolder = holderB;
+        }
+        chosenHolder.callback = null;
+        mayAliasHolderPair = (default(T), replacement);
+        holderA.callback?.Invoke();
+
+        var lambdaFieldRestorePair = (replacement, replacement);
+        void LambdaFieldRestoreLocal()
+        {
+            var (lambdaFieldRestoreLeft, _) = lambdaFieldRestorePair;
+            Fill(ref lambdaFieldRestoreLeft, replacement);
+        }
+        System.Action restoreFieldViaLambda = () => this.callback = LambdaFieldRestoreLocal;
+        this.callback = LambdaFieldRestoreLocal;
+        this.callback = null;
+        restoreFieldViaLambda();
+        lambdaFieldRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var lambdaLocalRestorePair = (replacement, replacement);
+        void LambdaLocalRestoreLocal()
+        {
+            var (lambdaLocalRestoreLeft, _) = lambdaLocalRestorePair;
+            Fill(ref lambdaLocalRestoreLeft, replacement);
+        }
+        System.Action? capturedDelegateLocal = LambdaLocalRestoreLocal;
+        System.Action restoreLocalViaLambda = () => capturedDelegateLocal = LambdaLocalRestoreLocal;
+        capturedDelegateLocal = null;
+        restoreLocalViaLambda();
+        this.callback = capturedDelegateLocal;
+        lambdaLocalRestorePair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var asyncClearFieldPair = (replacement, replacement);
+        void AsyncClearFieldLocal()
+        {
+            var (asyncClearFieldLeft, _) = asyncClearFieldPair;
+            Fill(ref asyncClearFieldLeft, replacement);
+        }
+        async System.Threading.Tasks.Task ClearFieldAsync()
+        {
+            await System.Threading.Tasks.Task.Yield();
+            this.callback = null;
+        }
+        this.callback = AsyncClearFieldLocal;
+        _ = ClearFieldAsync();
+        asyncClearFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var asyncDelegateClearFieldPair = (replacement, replacement);
+        void AsyncDelegateClearFieldLocal()
+        {
+            var (asyncDelegateClearFieldLeft, _) = asyncDelegateClearFieldPair;
+            Fill(ref asyncDelegateClearFieldLeft, replacement);
+        }
+        System.Func<System.Threading.Tasks.Task> clearFieldViaAsyncDelegate = async () =>
+        {
+            await System.Threading.Tasks.Task.Yield();
+            this.callback = null;
+        };
+        this.callback = AsyncDelegateClearFieldLocal;
+        _ = clearFieldViaAsyncDelegate();
+        asyncDelegateClearFieldPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var asyncClearLocalPair = (replacement, replacement);
+        void AsyncClearLocalFn()
+        {
+            var (asyncClearLocalLeft, _) = asyncClearLocalPair;
+            Fill(ref asyncClearLocalLeft, replacement);
+        }
+        System.Action? asyncClearedLocal = AsyncClearLocalFn;
+        async System.Threading.Tasks.Task ClearLocalDelegateAsync()
+        {
+            await System.Threading.Tasks.Task.Yield();
+            asyncClearedLocal = null;
+        }
+        _ = ClearLocalDelegateAsync();
+        this.callback = asyncClearedLocal;
+        asyncClearLocalPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 
     private System.Action? Saved => this.secondCallback;
@@ -2071,6 +2169,10 @@ public class VirtualClearBase<T>
         this.callback = null;
     }
 
+    protected virtual System.Action? GetSavedVirtual() => null;
+
+    protected virtual System.Action? SavedVirtual => null;
+
     public void CheckVirtualClear(T replacement)
     {
         var virtualClearPair = (replacement, replacement);
@@ -2084,6 +2186,30 @@ public class VirtualClearBase<T>
         this.Clear();
         virtualClearPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var virtualFactoryPair = (replacement, replacement);
+        void VirtualFactoryLocal()
+        {
+            var (virtualFactoryLeft, _) = virtualFactoryPair;
+            Fill(ref virtualFactoryLeft, replacement);
+        }
+
+        this.callback = VirtualFactoryLocal;
+        this.callback = this.GetSavedVirtual();
+        virtualFactoryPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var virtualGetterPair = (replacement, replacement);
+        void VirtualGetterLocal()
+        {
+            var (virtualGetterLeft, _) = virtualGetterPair;
+            Fill(ref virtualGetterLeft, replacement);
+        }
+
+        this.callback = VirtualGetterLocal;
+        this.callback = this.SavedVirtual;
+        virtualGetterPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
 }
 
@@ -2092,6 +2218,10 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
     protected override void Clear()
     {
     }
+
+    protected override System.Action? GetSavedVirtual() => this.callback;
+
+    protected override System.Action? SavedVirtual => this.callback;
 }`
         let printed = Translate(source)
         Assert.DoesNotMatch("\\b(let|var) overwrittenFieldLeft T\\? =", printed)
@@ -2122,6 +2252,14 @@ public sealed class VirtualClearDerived<T> : VirtualClearBase<T>
         Assert.Matches("\\b(let|var) secondSiblingLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) argSideEffectLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) virtualClearLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) mayAliasHolderLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) lambdaFieldRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) lambdaLocalRestoreLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualFactoryLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) virtualGetterLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncDelegateClearFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) asyncClearLocalLeft T\\? =", printed)
 
         let part1 = `#nullable enable
 public sealed partial class SplitProbe<T>

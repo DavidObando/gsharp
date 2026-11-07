@@ -288,6 +288,20 @@ class CSharpTestOracle {
                         path + ": the C# test oracle contains an invalid per-framework test list."
                     )
                 }
+                let seenNormalizedFrameworks = HashSet[string](StringComparer.Ordinal)
+                for pair in oracle.TestsByFramework!! {
+                    let normalizedFramework = NormalizeTargetFramework(pair.Key)
+                    if string.IsNullOrWhiteSpace(normalizedFramework) || !seenNormalizedFrameworks.Add(
+                        normalizedFramework!!
+                    ) {
+                        throw InvalidOperationException(
+                            path +
+                                ": the C# test oracle contains duplicate or unrecognized target framework '" +
+                                pair.Key +
+                                "'."
+                        )
+                    }
+                }
                 let frameworkTotal = oracle.TestsByFramework!!.Values.Sum((list List[string]) -> list.Count)
                 if frameworkTotal != oracle.TestCount {
                     throw InvalidOperationException(

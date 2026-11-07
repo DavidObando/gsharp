@@ -142,6 +142,11 @@ open class Issue4612StoreBridgeInventoryTests {
         ]{
             ["AssertFlowNarrowedNullableReference"] = (1, "C# flow analysis proved the value non-null here"),
             ["BridgeDeconstructedElementStore"] = (3, "deconstructed element store into a non-nullable target"),
+            ["BuildBridgedTupleLeaf"] = (
+                1,
+                "converted tuple element handed to ReportStoreBridge on the next statement"
+            ),
+            ["BuildBridgedTupleLiteral"] = (1, "nested nullable value-tuple unwrap before rebuilding elements"),
             ["BuildNegatedPatternBindingValue"] = (3, "pattern binding narrowed by the enclosing test"),
             ["BuildNullConditionalStaticExtensionHelper"] = (1, "receiver of a ?. helper, guarded by its nil test"),
             ["BuildPatternNarrowingReplacement"] = (6, "pattern binding narrowed by the enclosing test"),
@@ -168,7 +173,7 @@ open class Issue4612StoreBridgeInventoryTests {
             ["TranslateRecursivePatternTest"] = (3, "pattern subject narrowed by the test"),
             ["TranslateVoidConditionalAccessWithLocalAssignmentSeam"] = (1, "receiver of a ?. access"),
             ["TranslateYieldStatement"] = (1, "C# flow analysis proved the yielded value non-null"),
-            ["TryBuildNestedNegatedGuardHoist"] = (1, "value narrowed by the hoisted guard"),
+            ["TryBridgeTupleValue"] = (1, "nullable value-tuple unwrap before rebuilding elements"),
             ["TryBuildPositiveGuardHoist"] = (1, "value narrowed by the hoisted guard"),
             ["TryTranslateAnalyzerMemberAccess"] = (1, "analyzer-API member-access receiver"),
             ["TryTranslateAnalyzerTypeNameSwitch"] = (1, "analyzer-API switch subject")
