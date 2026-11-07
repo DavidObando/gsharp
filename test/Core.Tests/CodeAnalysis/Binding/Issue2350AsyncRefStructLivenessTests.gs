@@ -135,9 +135,19 @@ async func Pick(n int32, pending Task[bool]) int32 {
     }
 
     @Theory
-    @InlineData("pending Task[int32]", "await pending")
-    @InlineData("ch chan[int32]", "<-ch")
-    func SpillTemporaryDiagnosticRetainsSuspensionSourceRange(parameter string, suspension string) {
+    @InlineData("pending Task[int32]", "await pending", "await pending")
+    @InlineData("ch chan[int32]", "<-ch", "<-ch")
+    @InlineData(
+        "stream System.Collections.Generic.IAsyncEnumerable[int32]",
+        "{ await for x in stream { break }; 0 }",
+        "await for x in stream { break }"
+    )
+    @InlineData("disp IAsyncDisposable", "{ await using let d = disp; 0 }", "await using let d = disp")
+    func SpillTemporaryDiagnosticRetainsSuspensionSourceRange(
+        parameter string,
+        suspension string,
+        expectedAnchor string
+    ) {
         let source = `
 import System
 import System.Threading.Tasks
@@ -148,10 +158,16 @@ async func Read(PARAMETER) Task[int32] -> Consume(ReadOnlySpan[byte]([]byte{65})
         let tree = SyntaxTree.Parse(text)
         let compilation = Compilation(tree)
         let program = Binder.BindProgram(compilation.GlobalScope, compilation.References)
-        let diagnostic = Assert.Single(program.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0219"))
-        Assert.Same(text, diagnostic.Location.Text)
-        Assert.Equal(source.IndexOf(suspension, StringComparison.Ordinal), diagnostic.Location.Span.Start)
-        Assert.Equal(suspension.Length, diagnostic.Location.Span.Length)
+        let diagnostics = program.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0219").ToArray()
+        Assert.NotEmpty(diagnostics)
+        Assert.All(
+            diagnostics,
+            (diagnostic Diagnostic) -> {
+                Assert.Same(text, diagnostic.Location.Text)
+                Assert.Equal(source.IndexOf(expectedAnchor, StringComparison.Ordinal), diagnostic.Location.Span.Start)
+                Assert.Equal(expectedAnchor.Length, diagnostic.Location.Span.Length)
+            }
+        )
     }
 
     // The exact shape reported against Oahu.Diagnostics.PipelineProbeCheck:

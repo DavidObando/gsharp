@@ -212,6 +212,39 @@ public class NoCopy {
     }
 
     @Fact
+    func IntermediaryClassOverImportedBaseWithoutAccessibleCopy_AnchorsAtDeclaration() {
+        using let contract = CSharpFixture(`namespace ImportedCopy;
+public class NoCopy {
+    public NoCopy(int tag) { }
+}`)
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let reference = Path.Combine(fixture.Directory, "Rejected.ref.dll")
+        let pdb = Path.Combine(fixture.Directory, "Rejected.pdb")
+        let (code, output) = fixture.TryCompile(
+            "package ImportedCopy\nopen class Middle(tag int32) : NoCopy(tag)\npublic data class Rejected(Value int32) : Middle(0)",
+            "Rejected",
+            executable: false,
+            "/r:" + contract.AssemblyPath,
+            "/refout:" + reference,
+            "/pdb:" + pdb
+        )
+        Assert.NotEqual(0, code)
+        let errors = output
+            .Split([]char{'\r', '\n'}, StringSplitOptions.RemoveEmptyEntries)
+            .Where((line string) -> line.Contains("error GS", StringComparison.Ordinal))
+            .ToArray()
+        Assert.Single(errors)
+        let source = Path.Combine(fixture.Directory, "Rejected.gs")
+        Assert.Equal(
+            "$source(2,1,2,43): error GS9998: InvalidOperationException: Class 'Middle' has no accessible copy constructor for imported direct base 'ImportedCopy.NoCopy'.",
+            errors[0]
+        )
+        Assert.False(File.Exists(Path.Combine(fixture.Directory, "Rejected.dll")))
+        Assert.False(File.Exists(reference))
+        Assert.False(File.Exists(pdb))
+    }
+
+    @Fact
     func SameNamedForeignParameter_IsNotTheDirectBaseCopyContract() {
         using let foreign = CSharpFixture("namespace ImportedEq;\npublic record Root<T> { public Root(int tag) { } }")
         using let contract = CSharpFixture(`extern alias foreign;

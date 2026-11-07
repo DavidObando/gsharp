@@ -219,7 +219,7 @@ Runner.Launch(e)`
                 let csDir = Path.Combine(tempDir, "csref")
                 Directory.CreateDirectory(csDir)
                 File.WriteAllText(Path.Combine(csDir, "Lib.cs"), csSource)
-                File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
+                DefaultInterfaceMethodsEmitTests.WriteIsolatedCsProject(Path.Combine(csDir, "Lib.csproj"), (`<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>

@@ -111,6 +111,10 @@ class StructSymbol : TypeSymbol {
     private var dataClassCloneMethod FunctionSymbol?
     private var dataEqualsSelf FunctionSymbol?
     private var dataEqualsObject FunctionSymbol?
+    private var dataGetHashCode FunctionSymbol?
+    private var dataToString FunctionSymbol?
+    private var dataToStringMethods ImmutableArray[FunctionSymbol]
+    private var dataToStringComputed bool
     private var dataDeconstruct FunctionSymbol?
     private var dataPrintMembers FunctionSymbol?
     private var dataPrintMembersMethods ImmutableArray[FunctionSymbol]
@@ -332,7 +336,14 @@ class StructSymbol : TypeSymbol {
         } else {
             fieldsStore
         }
-        private set -> fieldsStore = value
+        private set {
+            fieldsStore = value
+            if !value.IsDefaultOrEmpty {
+                for field in value {
+                    field.AnchorContainingType(this)
+                }
+            }
+        }
     }
 
     /// Gets the struct CLR accessibility.
@@ -523,7 +534,14 @@ class StructSymbol : TypeSymbol {
         } else {
             propertiesStore
         }
-        private set -> propertiesStore = value
+        private set {
+            propertiesStore = value
+            if !value.IsDefaultOrEmpty {
+                for property in value {
+                    property.AnchorContainingType(this)
+                }
+            }
+        }
     }
 
     /// Gets the events declared on this type (ADR-0052). Populated by the binder after the symbol is
@@ -1108,6 +1126,54 @@ class StructSymbol : TypeSymbol {
         }
     )!!
 
+    /// Gets the compiler-owned `GetHashCode()` override on this exact construction.
+    internal prop DataGetHashCode FunctionSymbol -> (
+        if dataGetHashCode == nil {
+            (
+                dataGetHashCode = FunctionSymbol(
+                    "GetHashCode",
+                    ImmutableArray[ParameterSymbol].Empty,
+                    TypeSymbol.Int32,
+                    declaration: nil,
+                    $package: nil,
+                    accessibility: Accessibility.Public,
+                    receiverType: this,
+                    isOpen: IsClass && (IsOpen || IsSealedHierarchy),
+                    isOverride: IsClass
+                )
+            )
+        } else {
+            dataGetHashCode
+        }
+    )!!
+
+    /// Gets the compiler-owned `ToString()` override on this exact construction, or
+    /// null when this type declares its own `ToString` override.
+    internal prop DataToString FunctionSymbol? {
+        get {
+            if !dataToStringComputed || !dataToStringMethods.Equals(Methods) {
+                dataToString = if !Methods.IsDefaultOrEmpty && Methods.Any((m FunctionSymbol) -> m.Name == "ToString") {
+                    default(FunctionSymbol?)
+                } else {
+                    FunctionSymbol(
+                        "ToString",
+                        ImmutableArray[ParameterSymbol].Empty,
+                        TypeSymbol.String,
+                        declaration: nil,
+                        $package: nil,
+                        accessibility: Accessibility.Public,
+                        receiverType: this,
+                        isOpen: IsClass && (IsOpen || IsSealedHierarchy),
+                        isOverride: IsClass
+                    )
+                }
+                dataToStringMethods = Methods
+                dataToStringComputed = true
+            }
+            return dataToString
+        }
+    }
+
     /// Gets the compiler-owned override of a direct data base's typed equality slot.
     internal prop DataEqualsBase FunctionSymbol? {
         get {
@@ -1417,6 +1483,9 @@ class StructSymbol : TypeSymbol {
         inheritedPositionalPropertiesStore = if properties.IsDefault {
             ImmutableArray[PropertySymbol].Empty
         } else {
+            for property in properties {
+                property.AnchorContainingType(this)
+            }
             properties
         }
     }
@@ -1680,9 +1749,21 @@ class StructSymbol : TypeSymbol {
                 }
             }
         }
-        if IsData && ClrType == nil && name == "Equals" {
-            method = DataEqualsSelf
-            return true
+        if (IsData || IsInline) && ClrType == nil {
+            if name == "Equals" {
+                method = DataEqualsSelf
+                return true
+            }
+            if !IsClass {
+                if name == "GetHashCode" {
+                    method = DataGetHashCode
+                    return true
+                }
+                if name == "ToString" && DataToString is {} toString {
+                    method = toString
+                    return true
+                }
+            }
         }
         method = nil
         return false
@@ -2005,16 +2086,22 @@ class StructSymbol : TypeSymbol {
     /// Gets declared source or imported instance methods, including compiler-owned data slots.
     /// @returns The declared instance method set.
     internal func GetDeclaredInstanceMethods() ImmutableArray[FunctionSymbol] {
-        if !IsData || ClrType != nil {
+        if (!IsData && !IsInline) || ClrType != nil {
             return Methods
         }
         let builder = Methods.ToBuilder()
         builder.Add(DataEqualsSelf)
-        if DataEqualsBase is {} baseEquals {
+        if IsData && DataEqualsBase is {} baseEquals {
             builder.Add(baseEquals)
         }
         builder.Add(DataEqualsObject)
-        if DataPrintMembers is {} printMembers {
+        if !IsClass {
+            builder.Add(DataGetHashCode)
+            if DataToString is {} toString {
+                builder.Add(toString)
+            }
+        }
+        if IsData && DataPrintMembers is {} printMembers {
             builder.Add(printMembers)
         }
         return builder.ToImmutable()
@@ -2306,6 +2393,7 @@ class StructSymbol : TypeSymbol {
                         f.FixedBufferLength
                     )
                 }
+                substituted.AnchorContainingType(this)
                 builder.Add(substituted)
             }
             result = builder.MoveToImmutable()
@@ -3033,6 +3121,9 @@ class StructSymbol : TypeSymbol {
                 }
                 let substituted = p.WithSignature(newType, newParams)
                 substituted.BackingFieldDeclaringType = newBackingOwner
+                if p.ContainingType is {} containingType {
+                    substituted.AnchorContainingType(containingType)
+                }
                 builder.Add(substituted)
             }
             return builder.MoveToImmutable()

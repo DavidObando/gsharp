@@ -308,6 +308,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.cache.MethodHandles[structSym.DataEqualsObject] = synthesizedMethod
     }
 
     private func EmitInlineEqualsTyped(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -368,6 +369,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.cache.MethodHandles[structSym.DataEqualsSelf] = synthesizedMethod
     }
 
     private func EmitInlineGetHashCode(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -400,6 +402,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.cache.MethodHandles[structSym.DataGetHashCode] = synthesizedMethod
     }
 
     private func EmitInlineToString(structSym StructSymbol, field FieldSymbol, fieldHandle EntityHandle) {
@@ -436,6 +439,9 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        if structSym.DataToString is {} toString {
+            this.cache.MethodHandles[toString] = synthesizedMethod
+        }
     }
 
     private func EmitInlineEqualityOperator(
@@ -559,6 +565,7 @@ internal class DataStructSynthesizer {
             synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        this.cache.MethodHandles[structSym.DataDeconstruct] = synthesizedMethod
     }
 
     /// Issue #410 / ADR-0029: emits the synthesized members for a
@@ -950,8 +957,11 @@ internal class DataStructSynthesizer {
         }
         let baseDefinition = baseClass.Definition ?? baseClass
         if !this.cache.DataClassCopyConstructorHandles.TryGetValue(baseDefinition, out var baseCopyConstructor) {
-            throw InvalidOperationException(
-                "Class '${structSym.Name}' has no planned copy constructor for direct base '${baseClass.Name}'."
+            EmitDiagnosticException.Wrap(
+                structSym.Declaration,
+                InvalidOperationException(
+                    "Class '${structSym.Name}' has no planned copy constructor for direct base '${baseClass.Name}'."
+                )
             )
         }
         if !ReflectionMetadataEmitter.IsUserGenericTypeReference(baseClass) {
@@ -1464,6 +1474,9 @@ internal class DataStructSynthesizer {
             parameterList: synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        if !structSym.IsClass {
+            this.cache.MethodHandles[structSym.DataGetHashCode] = synthesizedMethod
+        }
     }
 
     /// ADR-0199: emits the C#-record `PrintMembers(StringBuilder)`: it
@@ -1827,6 +1840,9 @@ internal class DataStructSynthesizer {
             parameterList: synthesizedRows.First
         )
         this.StampSynthesized(synthesizedMethod, synthesizedRows)
+        if !structSym.IsClass && structSym.DataToString is {} toString {
+            this.cache.MethodHandles[toString] = synthesizedMethod
+        }
     }
 
     /// Issue #410 / ADR-0029: emits
