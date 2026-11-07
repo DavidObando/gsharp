@@ -10,8 +10,8 @@
   [#5230](https://github.com/DavidObando/gsharp/pull/5230),
   [#5247](https://github.com/DavidObando/gsharp/pull/5247), and
   [#5812](https://github.com/DavidObando/gsharp/pull/5812);
-  section 19 cleanup is tracked by
-  [#5130](https://github.com/DavidObando/gsharp/issues/5130))
+  section 19 cleanup ships in
+  [#5852](https://github.com/DavidObando/gsharp/pull/5852))
 - **Date**: 2026-10-22 (accepted 2026-10-23)
 - **Amendments**: A1 (join fallback, #5206) and A2 (property reads, row
   R14, #5215) of section 19a, found by PR 1 of #5130 (#5212) and accepted by
