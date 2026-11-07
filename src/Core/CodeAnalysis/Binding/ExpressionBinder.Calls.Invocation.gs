@@ -387,6 +387,22 @@ internal partial class ExpressionBinder {
         }
         let candidates = MemberLookup.CollectSourceInstanceMethods(receiver!!.Type, methodName)
         if candidates.IsDefaultOrEmpty {
+            let receiverStruct = receiver!!.Type as StructSymbol
+            if (receiverStruct != nil || receiver!!.Type is InterfaceSymbol) &&
+                (
+                (
+                    receiverStruct != nil && receiverStruct.GetHierarchy().Any(
+                        (current StructSymbol) -> current.TryGetField(methodName, out _)
+                    )
+                ) ||
+                    (
+                    TypeMemberModel.TryGetPropertyWithOwner(receiver!!.Type, methodName, out var prop, out _) &&
+                        prop != nil &&
+                        prop.HasGetter
+                )
+            ) {
+                deferredIndices.Clear()
+            }
             return
         }
         for idx in deferredIndices.ToArray() {
@@ -394,6 +410,7 @@ internal partial class ExpressionBinder {
                 continue
             }
             var target FunctionTypeSymbol? = nil
+            var isExpressionTreeTarget = false
             var disagree = false
             for candidate in candidates {
                 let offset = if candidate.ExplicitReceiverParameter == nil {
@@ -405,13 +422,11 @@ internal partial class ExpressionBinder {
                 if paramPos < 0 || paramPos >= candidate.Parameters.Length {
                     continue
                 }
-                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
-                    candidate.Parameters[paramPos].Type,
-                    out var fn
-                ) ||
-                    fn == nil {
+                let paramType = candidate.Parameters[paramPos].Type
+                if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var fn) || fn == nil {
                     continue
                 }
+                isExpressionTreeTarget |= MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(paramType, out _)
                 if target == nil {
                     target = fn
                 } else if !object.ReferenceEquals(target, fn) && !target.Equals(fn) {
@@ -420,7 +435,11 @@ internal partial class ExpressionBinder {
                 }
             }
             if target != nil && !disagree {
-                boundArgs[idx] = lambdas.BindLambdaExpression(lambdaSyntax, target)
+                boundArgs[idx] = lambdas.BindLambdaExpression(
+                    lambdaSyntax,
+                    target,
+                    isExpressionTreeTarget: isExpressionTreeTarget
+                )
                 deferredIndices.Remove(idx)
             }
         }
@@ -669,10 +688,9 @@ internal partial class ExpressionBinder {
             ) {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                    if inner is LambdaExpressionSyntax lambdaSyntax && symbolicTargets!!.TryGetValue(
-                        idx,
-                        out var target
-                    ) {
+                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
+                        symbolicTargets!!
+                        .TryGetValue(idx, out var target) {
                         // Issue #2345: when this slot's return type was fully
                         // recovered (e.g. `void` for an Action-shaped
                         // parameter), bind against the real target so the
@@ -789,24 +807,26 @@ internal partial class ExpressionBinder {
                     break
                 }
                 let parameterType = ConversionClassifier.GetPlainValueClrParameterType(parameters[paramIndex])
-                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionType(
-                    parameterType,
+                // The delegate slot's bare shape: a function literal is never
+                // nil, so the slot's own top-level nullability does not apply.
+                let parameterTypeSymbol = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                let delegateType = StripTopLevelNullability(parameterTypeSymbol)
+                if parameterType.ContainsGenericParameters || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    parameterTypeSymbol,
                     out var fn
                 ) ||
                     fn == nil {
                     allMapped = false
                     break
                 }
-                // The delegate slot's bare shape: a function literal is never
-                // nil, so the slot's own top-level nullability does not apply.
-                targets[idx] = (fn, ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape())
+                targets[idx] = (fn, delegateType)
             }
             if !allMapped {
                 continue
             }
             for idx in deferredIndices {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                if inner is LambdaExpressionSyntax lambdaSyntax {
+                if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax {
                     let target = targets[idx]
                     let slotIndex = idx
                     boundArgs[idx] = BindLambdaWithCandidateTarget(
@@ -846,10 +866,9 @@ internal partial class ExpressionBinder {
             ) {
                 for idx in deferredIndices {
                     let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-                    if inner is LambdaExpressionSyntax lambdaSyntax && partialTargets!!.TryGetValue(
-                        idx,
-                        out var target
-                    ) {
+                    if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax &&
+                        partialTargets!!
+                        .TryGetValue(idx, out var target) {
                         boundArgs[idx] = lambdas.BindLambdaExpression(
                             lambdaSyntax,
                             target,
@@ -899,7 +918,7 @@ internal partial class ExpressionBinder {
         let argIndexByParamIndex = Dictionary[int32, int32]()
         for idx in deferredIndices {
             let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             let paramIndex = idx + offset
@@ -1044,7 +1063,7 @@ internal partial class ExpressionBinder {
         let arityByIndex = Dictionary[int32, int32]()
         for idx in deferredIndices {
             let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[idx])
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             arityByIndex[idx] = lambda.Parameters.Count
@@ -1149,6 +1168,7 @@ internal partial class ExpressionBinder {
                 // infer it), but it does prove the reflected CLR target would be
                 // erased, so this symbolic path must win over the CLR probe.
                 var returnGroundedInReceiver = false
+                var returnHasInferredMethodTypeParameter = false
                 if openParameterType.IsGenericParameter {
                     if !TryBuildSymbolicDelegateTarget(
                         openParameterType,
@@ -1266,7 +1286,7 @@ internal partial class ExpressionBinder {
                         )
                     }
                     let returnClrType Type? = invoke.ReturnType
-                    let mappedReturnType = if returnClrType != nil && returnClrType.IsSameAs(typeof(Void)) {
+                    var mappedReturnType = if returnClrType != nil && returnClrType.IsSameAs(typeof(Void)) {
                         TypeSymbol.Void
                     } else {
                         MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
@@ -1277,9 +1297,30 @@ internal partial class ExpressionBinder {
                             methodTypeArgs
                         )
                     }
-                    functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), mappedReturnType)
+                    var resolvedParameterTypes = parameterTypes.ToImmutable()
+                    if MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                        MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                            openParameters[paramIndex],
+                            receiverOpenDefinition,
+                            receiverTypeArguments,
+                            openMethod,
+                            methodTypeArgs
+                        ),
+                        out var mergedFunctionType
+                    ) {
+                        if mergedFunctionType.ParameterTypes.Length == resolvedParameterTypes.Length {
+                            resolvedParameterTypes = mergedFunctionType.ParameterTypes
+                        }
+                        if mappedReturnType != TypeSymbol.Void {
+                            mappedReturnType = mergedFunctionType.ReturnType
+                        }
+                    }
+                    functionType = FunctionTypeSymbol.Get(resolvedParameterTypes, mappedReturnType)
                     returnGroundedInReceiver = returnClrType != nil &&
                         AllMethodTypeParametersResolved(returnClrType, openMethod, inferred)
+                    returnHasInferredMethodTypeParameter = explicitTypeArgSymbols.IsDefaultOrEmpty &&
+                        returnClrType != nil &&
+                        !AllMethodTypeParametersResolved(returnClrType, openMethod, Array.Empty[TypeSymbol?]())
                 }
                 for parameterType in functionType.ParameterTypes {
                     if TypeSymbol.RequiresSymbolicProjection(parameterType) {
@@ -1295,9 +1336,12 @@ internal partial class ExpressionBinder {
                 // the pre-existing placeholder + inferReturnTypeFromBody
                 // behavior for that slot.
                 let mappedReturn TypeSymbol? = functionType.ReturnType
-                if mappedReturn != nil && mappedReturn != TypeSymbol.Error && !TypeSymbol.ContainsTypeParameter(
-                    mappedReturn
-                ) {
+                if !MemberLookup.TryGetExpressionTreeDelegateType(openParameterType, out _) &&
+                    !returnHasInferredMethodTypeParameter &&
+                    mappedReturn != nil &&
+                    mappedReturn != TypeSymbol.Error &&
+                    !TypeSymbol
+                    .ContainsTypeParameter(mappedReturn) {
                     slotReturnTypes[idx] = mappedReturn
                     if TypeSymbol.RequiresSymbolicProjection(mappedReturn) {
                         candidateHasSymbolicType = true
@@ -1721,8 +1765,8 @@ internal partial class ExpressionBinder {
                     )
                 } else if IsUntypedArrowLambda(inner) {
                     deferredArrowLambdaIndices.Add(argSlot)
-                    boundArguments.Add(BoundErrorExpression(inner))
-                } else if inner is LambdaExpressionSyntax {
+                    boundArguments.Add(BoundErrorExpression(OverloadResolver.GetLambdaArgumentSyntax(inner) ?? inner))
+                } else if OverloadResolver.GetLambdaArgumentSyntax(inner) is {} lambdaSyntax {
                     let argName = if argumentNames.IsDefault {
                         default(string?)
                     } else {
@@ -1746,7 +1790,7 @@ internal partial class ExpressionBinder {
                         .TypeArguments
                         .Any(TypeSymbol.RequiresSymbolicProjection) {
                         deferredArrowLambdaIndices.Add(argSlot)
-                        boundArguments.Add(BoundErrorExpression(inner))
+                        boundArguments.Add(BoundErrorExpression(lambdaSyntax))
                         lambdaHandled = true
                     }
                     if !lambdaHandled && UserExtensionHasFunctionTypedParameterAt(receiver, methodName, argSlot) {
@@ -1772,14 +1816,13 @@ internal partial class ExpressionBinder {
                             blockedByOpenGenericParameter: out var blocked,
                             sawOpenGenericParameter: out var sawOpen
                         )
-                        let lambdaSyntax LambdaExpressionSyntax? = inner as LambdaExpressionSyntax
-                        if (lambdaSyntax?.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
+                        if (lambdaSyntax.Body is BlockExpressionSyntax && !hasClosedTarget && blocked) ||
                             (hasClosedTarget && sawOpen) {
                             deferredArrowLambdaIndices.Add(argSlot)
-                            boundArguments.Add(BoundErrorExpression(inner))
+                            boundArguments.Add(BoundErrorExpression(lambdaSyntax))
                             lambdaHandled = true
                         }
-                        if !lambdaHandled && lambdaSyntax != nil && hasClosedTarget {
+                        if !lambdaHandled && hasClosedTarget {
                             let slotIndex = argSlot
                             boundArguments.Add(
                                 BindLambdaWithCandidateTarget(
@@ -4305,7 +4348,7 @@ internal partial class ExpressionBinder {
         /// lambda with at least one parameter whose type is omitted, so its
         /// parameter type(s) must be inferred from a target delegate.
         private func IsUntypedArrowLambda(inner ExpressionSyntax) bool {
-            if inner is not LambdaExpressionSyntax lambda {
+            if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                 return false
             }
             for var i = 0; i < lambda.Parameters.Count; i++ {
@@ -4468,6 +4511,25 @@ internal partial class ExpressionBinder {
             type
         }
 
+        private func StripTopLevelNullability(type TypeSymbol) TypeSymbol {
+            var current = type
+            while true {
+                switch current {
+                    case platform is PlatformTypeSymbol {
+                        current = platform.UnderlyingType
+                        continue
+                    }
+                    case nullable is NullableTypeSymbol when !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                        current = nullable.UnderlyingType
+                        continue
+                    }
+                    default {
+                        return current
+                    }
+                }
+            }
+        }
+
         private func UnwrapExpressionTreeDelegate(
             type TypeSymbol
         ) TypeSymbol -> if MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType) {
@@ -4479,7 +4541,7 @@ internal partial class ExpressionBinder {
         private func IsCanonicalFunctionDelegate(type TypeSymbol) bool {
             var type = type
             type = UnwrapExpressionTreeDelegate(type)
-            if type is ImportedTypeSymbol imported {
+            if type.StripToBareShape() is ImportedTypeSymbol imported {
                 var definition Type? = imported.OpenDefinition ?? imported.ClrType
                 if definition?.IsGenericType == true && !definition!!.IsGenericTypeDefinition {
                     definition = definition!!.GetGenericTypeDefinition()
@@ -4532,8 +4594,8 @@ internal partial class ExpressionBinder {
         private func SameDelegateIdentity(left TypeSymbol, right TypeSymbol) bool {
             var left = left
             var right = right
-            left = UnwrapExpressionTreeDelegate(left)
-            right = UnwrapExpressionTreeDelegate(right)
+            left = UnwrapExpressionTreeDelegate(left).StripToBareShape()
+            right = UnwrapExpressionTreeDelegate(right).StripToBareShape()
             if object.ReferenceEquals(left, right) {
                 return true
             }
@@ -4748,7 +4810,7 @@ internal partial class ExpressionBinder {
             let arities = [deferredIndices.Count]int32
             for var i = 0; i < deferredIndices.Count; i++ {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[deferredIndices[i]])
-                if inner is not LambdaExpressionSyntax lambda {
+                if OverloadResolver.GetLambdaArgumentSyntax(inner) is not{} lambda {
                     return methods
                 }
                 arities[i] = lambda.Parameters.Count

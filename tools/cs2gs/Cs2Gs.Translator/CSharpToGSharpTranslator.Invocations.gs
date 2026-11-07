@@ -2567,9 +2567,13 @@ partial class CSharpToGSharpTranslator {
             return GetLambdaResultExpressions(lambda).Any(
                 (result Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax) -> {
                     let resultType ITypeSymbol? = this.context.GetTypeInfo(result).Type
-                    return resultType != nil && !SymbolEqualityComparer.IncludeNullability.Equals(
-                        resultType,
-                        targetResult
+                    return resultType != nil &&
+                        (
+                        !SymbolEqualityComparer.Default.Equals(resultType, targetResult) ||
+                            (
+                            !SymbolEqualityComparer.IncludeNullability.Equals(resultType, targetResult) &&
+                                this.SlotTypeIsDeclared(invoke, result)
+                        )
                     )
                 }
             )
@@ -4334,6 +4338,26 @@ partial class CSharpToGSharpTranslator {
             }
             if targetSymbol is INamedTypeSymbol delegateTarget && delegateTarget.TypeKind == TypeKind.Delegate {
                 targetType = this.typeMapper.MapNominalDelegate(delegateTarget, this.context, cast.Type.GetLocation())
+                if this.IsObliviousCompilation() &&
+                    IsSystemFuncDelegate(delegateTarget) &&
+                    Unparenthesize(cast.Expression) is AnonymousFunctionExpressionSyntax castLambda &&
+                    !this.LambdaBodyReturnsNilableBeyondItsCSharpType(castLambda) &&
+                    this.LambdaResultFlowsToNullableSink(castLambda, ignoreExplicitDelegateCast: true) &&
+                    targetType is NamedTypeReference{TypeArguments: {Count: > 0} delegateTypeArgs} namedDelegateRef &&
+                    delegateTarget.DelegateInvokeMethod is {ReturnsVoid: false} delegateInvoke &&
+                    delegateInvoke
+                    .ReturnType
+                    .IsReferenceType &&
+                    !delegateTypeArgs[delegateTypeArgs.Count - 1]
+                    .IsNullable {
+                    let widenedArgs = List[GTypeReference](delegateTypeArgs)
+                    widenedArgs[widenedArgs.Count - 1] = MakeNullable(widenedArgs[widenedArgs.Count - 1])!!
+                    targetType = NamedTypeReference(
+                        namedDelegateRef.Name,
+                        widenedArgs,
+                        namedDelegateRef.ContainingType
+                    ){IsNullable = namedDelegateRef.IsNullable}
+                }
             }
             if StripParentheses(cast.Expression).IsKind(
                 Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression
@@ -6197,11 +6221,12 @@ partial class CSharpToGSharpTranslator {
 
         private func GetFixedElementDestinationType(
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            sink ISymbol?
+            sink ISymbol?,
+            sinkTypeOverride ITypeSymbol? = nil
         ) ITypeSymbol? {
             let tupleIndices = List[int32]()
             let node Microsoft.CodeAnalysis.SyntaxNode? = OutermostTransparentNode(value, tupleIndices)
-            var sinkType ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(sink)
+            var sinkType ITypeSymbol? = sinkTypeOverride ?? ObliviousNullabilityAnalyzer.SymbolValueType(sink)
             sinkType ??= if node is TupleExpressionSyntax containingTuple {
                 this.context.GetTypeInfo(containingTuple).ConvertedType
             } else {

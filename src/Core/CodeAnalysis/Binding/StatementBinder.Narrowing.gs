@@ -7111,8 +7111,9 @@ internal partial class StatementBinder {
                 isFormattableStringTargetType(type) {
                 variableType = type
                 convertedInitializer = bindInterpolatedStringAsFormattable(interpolatedInit, type)
-            } else if type != nil &&
-                syntax.Initializer is LambdaExpressionSyntax targetTypedLambda &&
+            } else if type != nil && OverloadResolver.GetLambdaArgumentSyntax(
+                syntax.Initializer
+            ) is {} targetTypedLambda &&
                 bindLambdaWithTargetType != nil &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(type, out var targetFnType) {
@@ -7130,8 +7131,7 @@ internal partial class StatementBinder {
                 // `let f Func[int32, int32] = (x) -> x + 1`), not just the
                 // canonical `(int32) -> int32` function-type clause.
                 variableType = type
-                let lambda = bindLambdaWithTargetType!!(targetTypedLambda, targetFnType!!)
-                convertedInitializer = conversions.BindConversion(syntax.Initializer!!.Location, lambda, variableType)
+                convertedInitializer = bindExpressionWithTargetType(syntax.Initializer!!, variableType)
             } else if type is PointerTypeSymbol && syntax.Initializer is StackAllocExpressionSyntax {
                 // ADR-0124 / issue #1024: `var p *T = stackalloc [n]T` inside
                 // an unsafe context yields the raw `T*` pointer. The target
@@ -7161,7 +7161,8 @@ internal partial class StatementBinder {
                     syntax.Initializer is ConditionalExpressionSyntax ||
                     syntax.Initializer is SwitchExpressionSyntax ||
                     syntax.Initializer is BlockExpressionSyntax ||
-                    IsNullCoalescingExpression(syntax.Initializer)
+                    IsNullCoalescingExpression(syntax.Initializer) ||
+                    conversions.ContainsNestedLambdaSyntax(syntax.Initializer!!)
             ) {
                 // Issue #1158: when a typed local is initialised with an
                 // if-/conditional-/switch-expression, thread the declared type

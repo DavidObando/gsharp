@@ -148,6 +148,9 @@ internal partial class ExpressionBinder {
     private var expressionScopes Dictionary[BoundExpression, BoundScope] = Dictionary[BoundExpression, BoundScope](
         ReferenceEqualityComparer.Instance
     )
+    private let lambdaSyntaxScopes Dictionary[SyntaxNode, BoundScope] = Dictionary[SyntaxNode, BoundScope](
+        ReferenceEqualityComparer.Instance
+    )
     private var expressionExitSnapshots Dictionary[
         BoundExpression,
         List[(Id int32, Frame NarrowingFrame?, Entries NarrowingFrameSnapshot?, Aliases HashSet[VariableSymbol])]?
@@ -1439,10 +1442,33 @@ internal partial class ExpressionBinder {
     }
 
     private func BindExpressionWithTargetTypeCore(syntax ExpressionSyntax, targetType TypeSymbol) BoundExpression {
+        if IsNestedLambdaExpression(syntax) {
+            if lambdaSyntaxScopes.TryGetValue(syntax, out var savedLambdaScope) &&
+                IsStrictDescendantScope(savedLambdaScope, $scope) {
+                let outerScope = $scope
+                $scope = savedLambdaScope
+                try {
+                    return BindExpressionWithTargetTypeCoreInCurrentScope(syntax, targetType)
+                } finally {
+                    $scope = outerScope
+                }
+            }
+            lambdaSyntaxScopes[syntax] = $scope
+        }
+        return BindExpressionWithTargetTypeCoreInCurrentScope(syntax, targetType)
+    }
+
+    private func BindExpressionWithTargetTypeCoreInCurrentScope(
+        syntax ExpressionSyntax,
+        targetType TypeSymbol
+    ) BoundExpression {
         // Issue #3355: parentheses do not erase the expected type of a
         // general block expression or its trailing value.
         if syntax is ParenthesizedExpressionSyntax parenthesized {
             return BindExpression(parenthesized.Expression, targetType)
+        }
+        if syntax is CheckedExpressionSyntax checkedExpression {
+            return BindCheckedExpression(checkedExpression, targetType)
         }
         // ADR-0124 / issue #1024: a `stackalloc [n]T` initialising an
         // unmanaged-pointer target (`*T`, only spellable in an unsafe context)
@@ -1453,8 +1479,11 @@ internal partial class ExpressionBinder {
         if syntax is StackAllocExpressionSyntax stackAlloc && targetType is PointerTypeSymbol {
             return BindStackAllocExpression(stackAlloc, targetType)
         }
-        if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
-            return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
+        if syntax is LambdaExpressionSyntax {
+            if TryBindLambdaExpressionWithTargetType(syntax, targetType, out var targetTypedLambda) {
+                return ConvertTargetTypedValue(syntax, targetTypedLambda!!, targetType)
+            }
+            return ConvertTargetTypedValue(syntax, BindExpression(syntax), targetType)
         }
         // Issue #3355: prefix statements bind normally; the expected type
         // flows into the trailing expression.
@@ -1521,6 +1550,42 @@ internal partial class ExpressionBinder {
         return conversions.BindConversion(syntax.Location, value, targetType)
     }
 
+    private func TryGetTargetTupleType(type TypeSymbol?, @NotNullWhen(true) out tupleType TupleTypeSymbol?) bool {
+        tupleType = nil
+        var current = type
+        while true {
+            if current is NullableTypeSymbol nullable {
+                current = nullable.UnderlyingType
+                continue
+            }
+            if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+                continue
+            }
+            if current is NullabilityAnnotatedTypeSymbol annotated {
+                current = annotated.BaseType
+                continue
+            }
+            break
+        }
+        tupleType = current as TupleTypeSymbol
+        return tupleType != nil
+    }
+
+    private func IsStrictDescendantScope(candidate BoundScope?, ancestor BoundScope?) bool {
+        if candidate == nil || ancestor == nil || object.ReferenceEquals(candidate, ancestor) {
+            return false
+        }
+        var current = candidate.Parent
+        while current != nil {
+            if object.ReferenceEquals(current, ancestor) {
+                return true
+            }
+            current = current.Parent
+        }
+        return false
+    }
+
     private func TryBindLambdaExpressionWithTargetType(
         syntax ExpressionSyntax,
         targetType TypeSymbol?,
@@ -1531,26 +1596,33 @@ internal partial class ExpressionBinder {
         // Preserve the regular conversion diagnostic for nullable delegate
         // targets instead of replacing it with target-parameter diagnostics.
         bound = nil
+        if syntax is ParenthesizedExpressionSyntax parenthesized {
+            return TryBindLambdaExpressionWithTargetType(parenthesized.Expression, targetType, out bound)
+        }
+        if syntax is CheckedExpressionSyntax checkedExpression {
+            using let scope_ = binderCtx.PushCheckedContext(checkedExpression.IsChecked)
+            return TryBindLambdaExpressionWithTargetType(checkedExpression.Expression, targetType, out bound)
+        }
         let lambda LambdaExpressionSyntax? = syntax as LambdaExpressionSyntax
         if lambda == nil || targetType == nil {
             return false
         }
-        if targetType is NullableTypeSymbol {
-            var allParametersTyped = true
-            for parameter in lambda.Parameters {
-                allParametersTyped &= parameter.Type != nil
-            }
-            if allParametersTyped {
-                return false
-            }
-        }
         if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(targetType, out var targetFunctionType) {
             return false
         }
-        bound = lambdas.BindLambdaExpression(
+        let isExpressionTreeTarget = MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
+        let mark = Diagnostics.Count
+        let candidate = lambdas.BindLambdaExpression(
             Invariant.Required(lambda, "lambda target typing requires lambda syntax", expression: "lambda"),
-            targetFunctionType
+            targetFunctionType,
+            isExpressionTreeTarget: isExpressionTreeTarget
         )
+        if targetType is NullableTypeSymbol &&
+            (candidate is BoundErrorExpression || lambda.Parameters.Count != targetFunctionType.Arity) {
+            Diagnostics.TruncateTo(mark)
+            return false
+        }
+        bound = candidate
         return true
     }
 
@@ -1574,6 +1646,9 @@ internal partial class ExpressionBinder {
             PushExpressionNarrowingFrame(nil)
         }
         try {
+            if IsNestedLambdaExpression(syntax) {
+                lambdaSyntaxScopes[syntax] = $scope
+            }
             expressionBindStep++
             let entryStep = expressionBindStep
             let entryAliases = GetCurrentExpressionCallableAliases()
@@ -1848,6 +1923,11 @@ internal partial class ExpressionBinder {
     private func BindCheckedExpression(syntax CheckedExpressionSyntax, canBeVoid bool) BoundExpression {
         using let scope_ = binderCtx.PushCheckedContext(syntax.IsChecked)
         return BindExpression(syntax.Expression, canBeVoid)
+    }
+
+    private func BindCheckedExpression(syntax CheckedExpressionSyntax, targetType TypeSymbol) BoundExpression {
+        using let scope_ = binderCtx.PushCheckedContext(syntax.IsChecked)
+        return BindExpression(syntax.Expression, targetType)
     }
 
     private func BindNameExpression(syntax NameExpressionSyntax) BoundExpression {

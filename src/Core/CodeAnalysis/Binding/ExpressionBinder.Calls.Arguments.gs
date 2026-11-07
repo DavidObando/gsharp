@@ -817,10 +817,19 @@ internal partial class ExpressionBinder {
                 ce.Location
             }
             var argument = permutedArgs[i]
-            if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} &&
-                MemberLookup
-                .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var target) {
-                argument = lambdas.BindLambdaExpression(lambda, target)
+            if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} {
+                let sourceArgSyntax = if i < ce.Arguments.Count {
+                    OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[i])
+                } else {
+                    cast[ExpressionSyntax](lambda)
+                }
+                if TryBindLambdaExpressionWithTargetType(
+                    sourceArgSyntax,
+                    functionType.ParameterTypes[i],
+                    out var boundCallableArgLambda
+                ) {
+                    argument = boundCallableArgLambda!!
+                }
             }
             convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
         }
@@ -2550,7 +2559,8 @@ internal partial class ExpressionBinder {
                 method,
                 symbolicMethodTypeArgs,
                 receiverType,
-                parameterTypeOverrides
+                parameterTypeOverrides,
+                call
             )
         } else {
             RebindNumericReturnWideningDelegateArguments(handlerArgs, parameters, parameterMapping)
@@ -2598,7 +2608,8 @@ internal partial class ExpressionBinder {
         method MethodInfo? = nil,
         symbolicMethodTypeArgs ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?]),
         receiverType TypeSymbol? = nil,
-        parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil
+        parameterTypeOverrides IReadOnlyDictionary[int32, TypeSymbol]? = nil,
+        call CallExpressionSyntax? = nil
     ) ImmutableArray[BoundExpression] {
         var builder ImmutableArray[BoundExpression].Builder? = nil
         for var i = 0; i < arguments.Length; i++ {
@@ -2613,6 +2624,33 @@ internal partial class ExpressionBinder {
             if parameterTypeOverrides != nil {
                 parameterTypeOverrides.TryGetValue(paramIndex, out parameterTypeOverride)
             }
+            let parameterTargetSymbol = parameterTypeOverride ??
+                (
+                if paramIndex < parameters.Length {
+                    (
+                        if method != nil {
+                            MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                                receiverType,
+                                method,
+                                paramIndex,
+                                symbolicMethodTypeArgs
+                            ) ??
+                                (
+                                if receiverType != nil {
+                                    MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                                } else {
+                                    default(TypeSymbol?)
+                                }
+                            )
+                        } else {
+                            default(TypeSymbol?)
+                        }
+                    ) ??
+                        ClrNullability.GetParameterTypeSymbol(parameters[paramIndex])
+                } else {
+                    default(TypeSymbol?)
+                }
+            )
             var targetFunctionType FunctionTypeSymbol? = nil
             let hasTargetFunctionType = if parameterTypeOverride != nil {
                 MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterTypeOverride, out targetFunctionType)
@@ -2623,7 +2661,23 @@ internal partial class ExpressionBinder {
                     out targetFunctionType
                 )
             }
-            if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
+            if parameterTargetSymbol != nil && conversions.RequiresRuntimeDelegateReturnValidation(
+                argument,
+                parameterTargetSymbol,
+                out var runtimeLambdaSyntax,
+                method,
+                paramIndex,
+                call
+            ) {
+                let validationTarget = conversions.BuildRuntimeDelegateValidationTarget(
+                    argument,
+                    parameterTargetSymbol,
+                    method,
+                    paramIndex,
+                    call
+                )
+                rebound = BindExpression(runtimeLambdaSyntax!!, validationTarget)
+            } else if paramIndex < parameters.Length && LambdaBinder.TryGetFunctionLiteral(argument, out var literal) &&
                 hasTargetFunctionType &&
                 literal!!.FunctionType != targetFunctionType {
                 targetFunctionType = Invariant.Required(

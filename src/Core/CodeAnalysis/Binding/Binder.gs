@@ -12895,11 +12895,13 @@ partial class Binder {
                         }
                     }
                 }
-            } else if parameterType is FunctionTypeSymbol pf &&
-                argumentType is FunctionTypeSymbol af &&
+            } else if parameterType is FunctionTypeSymbol pf && MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                argumentType,
+                out var af
+            ) &&
                 pf
                 .ParameterTypes
-                .Length == af
+                .Length == af!!
                 .ParameterTypes
                 .Length {
                 // Infer type parameters that appear inside a delegate parameter,
@@ -12908,12 +12910,12 @@ partial class Binder {
                 for var i = 0; i < pf.ParameterTypes.Length; i++ {
                     InferTypeArgumentsCore(
                         pf.ParameterTypes[i],
-                        af.ParameterTypes[i],
+                        af!!.ParameterTypes[i],
                         substitution,
                         MemberLookup.ReverseInferenceBoundKind(boundKind)
                     )
                 }
-                InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution, boundKind)
+                InferTypeArgumentsCore(pf.ReturnType, af!!.ReturnType, substitution, boundKind)
             } else if TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs) &&
                 userParamArgs
                 .Any(TypeSymbol.ContainsTypeParameter) {
@@ -12936,6 +12938,7 @@ partial class Binder {
                         case iface is InterfaceSymbol: StructSymbol.CollectEnclosingTypeParameters(iface).AddRange(
                             iface.DeclaredTypeParameters
                         )
+                        case del is DelegateTypeSymbol: del.TypeParameters
                         default: ImmutableArray[TypeParameterSymbol].Empty
                     }
                     for var i = 0; i < userParamArgs.Length; i++ {
@@ -13166,6 +13169,11 @@ partial class Binder {
                     definition = i.Definition ?? i
                     typeArguments = Conversion.GetEffectiveInterfaceTypeArguments(i)
                     return !typeArguments.IsDefaultOrEmpty
+                }
+                case d is DelegateTypeSymbol when !d.TypeArguments.IsDefaultOrEmpty {
+                    definition = d.Definition ?? d
+                    typeArguments = d.TypeArguments
+                    return true
                 }
                 default {
                     definition = nil
