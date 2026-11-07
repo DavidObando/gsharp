@@ -71,9 +71,9 @@ internal class EmittedNameAllocator {
             // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
             if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
                 let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
-                var renamed = "__cs2gsDeconstruct"
+                var renamed = "deconstruct"
                 for var suffix = 2; taken.Contains(renamed); suffix++ {
-                    renamed = "__cs2gsDeconstruct_" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {
                     this.emittedNames[member] = renamed

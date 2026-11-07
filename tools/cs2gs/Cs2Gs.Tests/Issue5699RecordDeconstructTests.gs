@@ -137,8 +137,9 @@ namespace RecordDeconstruction {
         Verify(`
 namespace RecordDeconstruction {
     public partial record R<T>(T Value) {
-        public int __cs2gsDeconstruct;
-        public void __cs2gsRecordDeconstruct_R_2_0() { }
+        public int deconstruct;
+        public void deconstructTuple() { }
+        public void deconstructTuple2() { }
     }
     public partial record R<T> {
         public void Deconstruct(out int count, out T item) { count = 7; item = Value; }
@@ -176,6 +177,115 @@ namespace RecordDeconstruction {
         }
     }
 }`)
+    }
+
+    @Fact
+    func UserRecordWithSelectedExtensionDeconstruct_ReportsGapInsteadOfReadingDataFields() {
+        const source = `
+namespace RecordDeconstruction {
+    public record R {
+        public int X;
+        public int Y;
+        public int Z;
+        public void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
+    public static class Extensions {
+        public static void Deconstruct(this R r, out int x, out int y, out int z) {
+            x = r.Y * 10; y = r.X; z = r.Z * 50;
+        }
+    }
+    public static class Probe {
+        public static string Run() {
+            var (x, y, z) = new R { X = 2, Y = 3, Z = 4 };
+            return $"{x},{y},{z}";
+        }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(
+            project.Compilation.WithAssemblyName("ExtensionBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
+        )
+        Assert.Equal(
+            "30,2,200",
+            cast[string](
+                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
+                    nil,
+                    nil
+                )
+            )
+        )
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("extension Deconstruct calls", gap.Message)
+        Assert.Equal(
+            source.IndexOf("public void Deconstruct", StringComparison.Ordinal),
+            gap.Location!!.SourceSpan.Start
+        )
+    }
+
+    @Fact
+    func NestedUserRecordPatterns_ReportGapInsteadOfRepeatingDeconstruct() {
+        const source = `
+namespace RecordDeconstruction {
+    public record R {
+        public int X;
+        public int Y;
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; x = Y * 10; y = X; }
+    }
+    public class Holder { public R Child = new R { X = 2, Y = 3 }; }
+    public static class Probe {
+        public static string Run() {
+            var result = new Holder() switch {
+                Holder { Child: R(0, _) } => 0,
+                Holder { Child: R(var x, var y) } => x + y,
+                _ => -1
+            };
+            return $"{result},{R.Calls}";
+        }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(
+            project.Compilation.WithAssemblyName("NestedBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
+        )
+        Assert.Equal(
+            "32,1",
+            cast[string](
+                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
+                    nil,
+                    nil
+                )
+            )
+        )
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gaps = context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported).ToArray()
+        Assert.Equal(2, gaps.Length)
+        Assert.All(
+            gaps,
+            (gap TranslationDiagnostic) -> {
+                Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+                Assert.Contains("nested user-declared record Deconstruct", gap.Message)
+            }
+        )
+        Assert.Equal(
+            []int32{
+                source.IndexOf("R(0, _)", StringComparison.Ordinal),
+                source.IndexOf("R(var x, var y)", StringComparison.Ordinal)
+            },
+            gaps.Select((gap TranslationDiagnostic) -> gap.Location!!.SourceSpan.Start).ToArray()
+        )
     }
 
     @Fact
@@ -257,6 +367,7 @@ namespace RecordDeconstruction {
             let document = Assert.Single(project.Documents)
             let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
             let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.DoesNotContain("func __", printed)
             Assert.DoesNotContain(
                 context.Diagnostics,
                 (diagnostic TranslationDiagnostic) ->
