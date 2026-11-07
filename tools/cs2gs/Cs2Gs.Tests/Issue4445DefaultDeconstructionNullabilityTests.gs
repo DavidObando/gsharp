@@ -1869,7 +1869,76 @@ public sealed class Probe<T>
         this.callback = localDelegate;
         coalesceLocalPair = (default(T), replacement);
         this.callback?.Invoke();
+
+        var restoredPair = (replacement, replacement);
+        void RestoredLocal()
+        {
+            var (restoredFieldLeft, _) = restoredPair;
+            Fill(ref restoredFieldLeft, replacement);
+        }
+        void Restore()
+        {
+            this.callback = RestoredLocal;
+        }
+
+        this.callback = RestoredLocal;
+        this.callback = null;
+        Restore();
+        restoredPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var savedPropertyPair = (replacement, replacement);
+        void SavedPropertyLocal()
+        {
+            var (savedPropertyLeft, _) = savedPropertyPair;
+            Fill(ref savedPropertyLeft, replacement);
+        }
+
+        this.callback = SavedPropertyLocal;
+        this.secondCallback = this.callback;
+        this.callback = this.Saved;
+        this.secondCallback = null;
+        savedPropertyPair = (default(T), replacement);
+        this.callback?.Invoke();
+
+        var chainPair = (replacement, replacement);
+        void ChainLocal()
+        {
+            var (chainLocalLeft, _) = chainPair;
+            Fill(ref chainLocalLeft, replacement);
+        }
+
+        System.Action d0 = ChainLocal;
+        System.Action d1 = d0;
+        System.Action d2 = d1;
+        System.Action d3 = d2;
+        System.Action d4 = d3;
+        System.Action d5 = d4;
+        System.Action d6 = d5;
+        System.Action d7 = d6;
+        System.Action d8 = d7;
+        System.Action d9 = d8;
+        System.Action d10 = d9;
+        System.Action d11 = d10;
+        System.Action d12 = d11;
+        System.Action d13 = d12;
+        System.Action d14 = d13;
+        System.Action d15 = d14;
+        System.Action d16 = d15;
+        System.Action d17 = d16;
+        System.Action d18 = d17;
+        System.Action d19 = d18;
+        System.Action d20 = d19;
+        System.Action d21 = d20;
+        System.Action d22 = d21;
+        System.Action d23 = d22;
+        System.Action d24 = d23;
+        this.callback = d24;
+        chainPair = (default(T), replacement);
+        this.callback?.Invoke();
     }
+
+    private System.Action? Saved => this.secondCallback;
 
     private static System.Action? GetFromHolder(Probe<T> holder) => holder.callback;
 }`
@@ -1891,6 +1960,9 @@ public sealed class Probe<T>
         Assert.Matches("\\b(let|var) instanceHelperLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) coalesceFieldLeft T\\? =", printed)
         Assert.Matches("\\b(let|var) coalesceLocalStorageLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) restoredFieldLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) savedPropertyLeft T\\? =", printed)
+        Assert.Matches("\\b(let|var) chainLocalLeft T\\? =", printed)
     }
 
     shared {
