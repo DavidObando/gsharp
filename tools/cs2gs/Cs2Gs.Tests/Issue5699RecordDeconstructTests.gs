@@ -14,8 +14,54 @@ import Xunit
 
 class Issue5699RecordDeconstructTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BroaderSourceExtensions_ReportGapForTheActualRecordReceiver(forEach bool) {
+        let source = (`
+namespace Broader {
+    public record R {
+        public int X = 2, Y = 3, Z = 4;
+        public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
+    }
+    public static class Extensions {
+        public static void Deconstruct(this object r, out int x, out int y, out int z) {
+            x = 70; y = 80; z = 90;
+        }
+    }
+    public static class Probe {
+        public static void Run() {
+            var r = new R();
+            STATEMENT
+        }
+    }
+}`).Replace(
+            "STATEMENT",
+            if forEach {
+                "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
+            } else {
+                "var (x, y, z) = r;"
+            }
+        )
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        using let oracle = MemoryStream()
+        Assert.True(project.Compilation.Emit(oracle).Success)
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("extension Deconstruct", gap.Message)
+        Assert.Equal("Source.cs", gap.Location!!.SourceTree!!.FilePath)
+    }
+
+    @Theory
     @InlineData("extension")
     @InlineData("extension foreach")
+    @InlineData("broad extension")
+    @InlineData("broad extension foreach")
     @InlineData("interface")
     @InlineData("unqualified")
     func MetadataContractsAndExtensions_ReportConsumerBridgeGaps(shape string) {
@@ -23,7 +69,7 @@ class Issue5699RecordDeconstructTests {
 namespace Producer {
     public interface IParts { void Deconstruct(out int x, out int y); }
     public record R : IParts {
-        public int X = 2, Y = 3;
+        public int X = 2, Y = 3, Z = 4;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
 }`
@@ -39,7 +85,7 @@ namespace Consumer {
             (`
 namespace Consumer {
     public static class Extensions {
-        public static void Deconstruct(this Producer.R r, out int x, out int y, out int z) {
+        public static void Deconstruct(this RECEIVER r, out int x, out int y, out int z) {
             x = 70; y = 80; z = 90;
         }
     }
@@ -52,9 +98,18 @@ namespace Consumer {
 }`).Replace(
                 "STATEMENT",
                 switch shape {
-                    case "extension": "var (x, y, z) = r;"
-                    case "extension foreach": "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
+                    case "extension" or "broad extension": "var (x, y, z) = r;"
+                    case "extension foreach" or "broad extension foreach":
+                    "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
                     default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y);"
+                }
+            )
+                .Replace(
+                "RECEIVER",
+                if shape.StartsWith("broad", StringComparison.Ordinal) {
+                    "object"
+                } else {
+                    "Producer.R"
                 }
             )
         }

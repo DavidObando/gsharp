@@ -1766,8 +1766,8 @@ partial class CSharpToGSharpTranslator {
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
                 if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
-                    this.ReportMetadataRecordDeconstruction(deconstruction.Method, node)
-                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method)
+                    this.ReportMetadataRecordDeconstruction(deconstruction.Method, node, forEachInfo.ElementType)
+                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method, forEachInfo.ElementType)
                     if extractions.Count > 0 || conversions.Count > 0 {
                         let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
                         statements.AddRange(extractions)
@@ -1802,6 +1802,7 @@ partial class CSharpToGSharpTranslator {
                             IdentifierExpression(pair),
                             deconstruction.Method,
                             node,
+                            actualReceiverType: forEachInfo.ElementType,
                             emittedReceiverType: if forEachInfo.ElementType == nil {
                                 nil
                             } else {
@@ -2119,7 +2120,8 @@ partial class CSharpToGSharpTranslator {
                                 IdentifierExpression(carrier),
                                 deconstruction.Method,
                                 nestedTuple,
-                                emittedReceiverType: emittedReceiverType
+                                emittedReceiverType: emittedReceiverType,
+                                actualReceiverType: receiverType
                             )
                         )
                     )

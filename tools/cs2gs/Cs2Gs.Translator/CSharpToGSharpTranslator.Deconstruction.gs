@@ -117,7 +117,7 @@ partial class CSharpToGSharpTranslator {
                     .SemanticModel
                     .GetOperation(pattern) is IRecursivePatternOperation operation &&
                     operation.DeconstructSymbol is IMethodSymbol method {
-                    this.ReportMetadataRecordDeconstruction(method, pattern)
+                    this.ReportMetadataRecordDeconstruction(method, pattern, operation.MatchedType)
                 }
             }
             let patterns = owner
@@ -236,7 +236,10 @@ partial class CSharpToGSharpTranslator {
         method != nil && method.Name == "Deconstruct" && !EmittedNameAllocator.IsUserRecordDeconstruct(method) &&
             this.EmittedName(method, method.Name) != method.Name
 
-        private func ReportUnsupportedRecordDeconstruction(method IMethodSymbol?) {
+        private func ReportUnsupportedRecordDeconstruction(
+            method IMethodSymbol?,
+            actualReceiverType ITypeSymbol? = nil
+        ) {
             if this.HasRenamedNonRecordDeconstructContract(method) {
                 this.context.ReportUnsupported(
                     method!!.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(),
@@ -246,7 +249,8 @@ partial class CSharpToGSharpTranslator {
             }
             let extension = method?.ReducedFrom ?? method
             if extension != nil && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
-                let receiverType = (
+                let receiverType = actualReceiverType as INamedTypeSymbol ??
+                    (
                     if method?.ReducedFrom != nil {
                         method?.ReceiverType
                     } else {
@@ -278,10 +282,16 @@ partial class CSharpToGSharpTranslator {
             method IMethodSymbol?,
             diagnosticSite SyntaxNode,
             receiverSyntax ExpressionSyntax? = nil,
-            emittedReceiverType GTypeReference? = nil
+            emittedReceiverType GTypeReference? = nil,
+            actualReceiverType ITypeSymbol? = nil
         ) GExpression? {
-            this.ReportMetadataRecordDeconstruction(method, diagnosticSite)
-            this.ReportUnsupportedRecordDeconstruction(method)
+            let receiverType = actualReceiverType ?? if receiverSyntax != nil {
+                this.context.GetTypeInfo(receiverSyntax).Type
+            } else {
+                nil
+            }
+            this.ReportMetadataRecordDeconstruction(method, diagnosticSite, receiverType)
+            this.ReportUnsupportedRecordDeconstruction(method, receiverType)
             if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {
                 return value
             }
@@ -298,14 +308,19 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func ReportMetadataRecordDeconstruction(method IMethodSymbol?, site SyntaxNode) {
+        private func ReportMetadataRecordDeconstruction(
+            method IMethodSymbol?,
+            site SyntaxNode,
+            actualReceiverType ITypeSymbol? = nil
+        ) {
             if method == nil || method.Name != "Deconstruct" {
                 return
             }
             var needsBridge = this.MetadataProducerRenamesMethod(method)
             let extension = method.ReducedFrom ?? method
             if !needsBridge && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
-                let receiver = (
+                let receiver = actualReceiverType as INamedTypeSymbol ??
+                    (
                     if method.ReducedFrom != nil {
                         method.ReceiverType
                     } else {
@@ -1505,7 +1520,8 @@ partial class CSharpToGSharpTranslator {
                         deconstruction.Method,
                         pattern,
                         receiverSyntax,
-                        emittedReceiverType
+                        emittedReceiverType,
+                        rhsTupleType
                     )
                 )
             )
@@ -1895,7 +1911,8 @@ partial class CSharpToGSharpTranslator {
                         deconstruction.Method,
                         designation,
                         receiverSyntax,
-                        emittedReceiverType
+                        emittedReceiverType,
+                        receiverType
                     )
                 )
             )
