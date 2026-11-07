@@ -181,6 +181,35 @@ func Check[T](x Pair[T, T]) Pair[int32, string]? -> x as Pair[int32, string]?
 Check[int32](Pair[int32, int32]{First: 1, Second: 2}) == nil`)
         Assert.Single(rejectedRepeatedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
 
+        let rejectedStructConstrainedTypeParameter = Evaluate(`func Check[T struct](x T) string? -> x as string
+Check[int32](42) == nil`)
+        Assert.Single(rejectedStructConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedClassConstrainedTypeParameter = Evaluate(`open class Animal {}
+class Unrelated {}
+func Check[T Animal](x T) Unrelated? -> x as Unrelated
+Check[Animal](Animal{}) == nil`)
+        Assert.Single(rejectedClassConstrainedTypeParameter.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedEnclosingAndNestedStructArguments = Evaluate(`class Outer[A] {
+    struct Inner[B] { var X A; var Y B }
+}
+func Check[T](x Outer[T].Inner[T]) Outer[int32].Inner[string]? -> x as Outer[int32].Inner[string]?
+Check[int32](Outer[int32].Inner[int32]{X: 1, Y: 2}) == nil`)
+        Assert.Single(rejectedEnclosingAndNestedStructArguments.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedTransitiveTypeParameterEquality = Evaluate(`struct Triple[A, B, C] { var First A; var Second B; var Third C }
+func Check[T, U](x Triple[T, T, U]) Triple[U, int32, string]? -> x as Triple[U, int32, string]?
+Check[int32, int32](Triple[int32, int32, int32]{First: 1, Second: 2, Third: 3}) == nil`)
+        Assert.Single(rejectedTransitiveTypeParameterEquality.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
+        let rejectedNestedDirectionalCovariantSlot = Evaluate(`import System.Collections.Generic
+interface IBox[out U] {}
+struct S[T] : IBox[IEnumerable[T]] {}
+func Check[T](s S[T]) IBox[List[T]]? -> s as IBox[List[T]]
+Check[int32](S[int32]{}) == nil`)
+        Assert.Single(rejectedNestedDirectionalCovariantSlot.Diagnostics, (d Diagnostic) -> d.Id == "GS0637")
+
         let allowed = Evaluate(`import System
 import System.Collections.Generic
 class S {}
