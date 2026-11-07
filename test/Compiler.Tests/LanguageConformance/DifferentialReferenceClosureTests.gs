@@ -155,7 +155,9 @@ open class DifferentialReferenceClosureTests {
             "ForIn.gs",
             "LinqExtensions.gs",
             "MapForIn.gs",
+            "ScopeAll.gs",
             "Select.gs",
+            "Timeout.gs",
             "TupleSequenceIterators.gs"
         }
 

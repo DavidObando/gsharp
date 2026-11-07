@@ -90,20 +90,10 @@ open class CoverageMatrixGoldenTests {
         }
 
         private func LocateGolden() string {
-            var dir DirectoryInfo? = DirectoryInfo(
-                Path.GetDirectoryName(typeof(CoverageMatrixGoldenTests).Assembly.Location)!!
-            )
-            while dir != nil {
-                if RepositoryRootMarker.IsRoot(dir.FullName) {
-                    return Path.Combine(
-                        dir.FullName,
-                        "test",
-                        "Core.Tests",
-                        "CoverageMatrix",
-                        "coverage-matrix.golden.txt"
-                    )
-                }
-                dir = dir.Parent
+            if RepositoryRootMarker.Locate(
+                Path.GetDirectoryName(typeof(CoverageMatrixGoldenTests).Assembly.Location)
+            ) is {} root {
+                return Path.Combine(root, "test", "Core.Tests", "CoverageMatrix", "coverage-matrix.golden.txt")
             }
             return "coverage-matrix.golden.txt"
         }

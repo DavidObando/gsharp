@@ -337,7 +337,7 @@ open class LexerTests {
         let tokens = SyntaxTree.ParseTokens("`a\r\nb\rc`", out var diagnostics)
         let token = Assert.Single(tokens)
         Assert.Empty(diagnostics)
-        Assert.Equal("a${Environment.NewLine}b${Environment.NewLine}c", token.Value)
+        Assert.Equal("a\nb\nc", token.Value)
     }
 
     @Fact
@@ -437,7 +437,7 @@ open class LexerTests {
         let fragments = Assert.IsType[InterpolationFragments](token.Value).Items
         Assert.Equal(2, fragments.Length)
         Assert.False(fragments[0].IsExpression)
-        Assert.Equal("hello${Environment.NewLine}", fragments[0].Text)
+        Assert.Equal("hello\n", fragments[0].Text)
     }
 
     @Fact

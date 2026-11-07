@@ -165,6 +165,32 @@ jobs:
           # them co-located in ./nupkgs to pick them up).
           path: out/bin/Release/nupkgs/*
 
+  fixpoint:
+    # Issue #4925: stage-1 gsc (built by the pinned SDK) builds stage 2, stage-2
+    # gsc builds stage 3, and stage 2 must equal stage 3 modulo the MVID slot.
+    needs: select
+    if: contains(fromJSON(needs.select.outputs.plan).jobs, 'fixpoint')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK (main)
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore compiler graph
+        run: dotnet restore src/Compiler/Compiler.gsproj --locked-mode
+
+      - name: Test the stage-2 fixpoint script
+        run: python3 build/test-selfhost-fixpoint.py
+
+      - name: Verify stage-2/stage-3 compiler PE fixpoint
+        run: python3 build/selfhost-fixpoint.py
+
   discover-tests:
     needs: select
     if: contains(fromJSON(needs.select.outputs.plan).jobs, 'discover-tests')
@@ -195,10 +221,9 @@ jobs:
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    # Raised from 30: the G#-built suites compile and run slower than the C# ones did,
-    # and the Cs2Gs.Tests shards also build the final C# tree. Rebalance the shards
-    # (build/generate-ci-test-matrix.py) from this run's timings, then lower it.
-    timeout-minutes: 90
+    # Issue #4895: rebalanced test shards complete within 20 minutes; keep a
+    # 60-minute ceiling for runner variance.
+    timeout-minutes: 60
     needs: [select, discover-tests, test-partition]
     if: contains(fromJSON(needs.select.outputs.plan).jobs, 'tests')
     strategy:
@@ -539,7 +564,8 @@ jobs:
               dotnet restore build/selfhost/TestSupervisorLogger.gsproj --locked-mode
               dotnet build build/selfhost/PackageContentHash.gsproj --configuration Release --no-restore --nologo
               dotnet build build/selfhost/TestSupervisorLogger.gsproj --configuration Release --no-restore --nologo
-              python3 build/test-selfhost-stage2.py ;;
+              python3 build/test-selfhost-stage2.py
+              python3 build/test-selfhost-fixpoint.py ;;
             concurrency) python3 build/verify-concurrency-bench.py --smoke ;;
             apps)
               python3 build/test-cs2gs-apps-gate-issues.py
@@ -1155,7 +1181,7 @@ jobs:
       actions: read
     outputs:
       unverified_rids: ${{ steps.check.outputs.unverified_rids }}
-    needs: [select, build, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke, go2gs, go2gs-windows, go2gs-macos]
+    needs: [select, build, fixpoint, discover-tests, tests, test-partition, harness, format, e2e, ilverify, release-version-refs, cs2gs-corpus, vscode-extension, vsix, visual-studio-extension, desktop-msbuild-sdk-smoke, r2r-compiler-smoke, go2gs, go2gs-windows, go2gs-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

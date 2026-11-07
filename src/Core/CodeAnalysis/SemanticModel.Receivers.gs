@@ -846,15 +846,15 @@ partial class SemanticModel {
                 userCall.Method,
                 userCall.Type
             )
-            case baseCall is BoundBaseClassCallExpression: if baseCall.Method != nil {
-                SubstituteGroupMember(baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass, baseCall.Method)
-            } else if baseCall.Property != nil {
+            case baseCall is BoundBaseClassCallExpression: if let method = baseCall.Method {
+                SubstituteGroupMember(baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass, method)
+            } else if let property = baseCall.Property {
                 SubstituteSourceMember(
                     TypeMemberModel.ResolveStaticMemberOwner(
                         baseCall.Receiver.Type as StructSymbol ?? baseCall.BaseClass,
                         baseCall.BaseClass
                     ),
-                    baseCall.Property
+                    property
                 )
             } else {
                 default(Symbol?)
