@@ -67,30 +67,36 @@ partial class CSharpToGSharpTranslator {
                 name = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
             var helperSuffix = 2
+            var assignedName = name
             while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveMemberName(
-                original.ContainingType,
-                name
+                original,
+                name,
+                out assignedName
             ) {
                 do {
                     name = stem + helperSuffix.ToString(CultureInfo.InvariantCulture)
                     helperSuffix++
                 } while taken.Contains(name)
             }
-            this.recordDeconstructionAdapterNames.Add(original, name)
-            return name
+            this.recordDeconstructionAdapterNames.Add(original, assignedName)
+            return assignedName
         }
 
         private func BeginRecordPatternDecision(owner SyntaxNode) {
             this.recordPatternCaches.Remove(owner)
-            if owner
+            let patterns = owner
                 .DescendantNodes()
                 .OfType[RecursivePatternSyntax]()
-                .Any(
-                (pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil && object.ReferenceEquals(
+                .Where(
+                (pattern RecursivePatternSyntax) -> object.ReferenceEquals(
                     this.RecordPatternDecisionOwner(pattern),
                     owner
-                ) &&
-                    this.UserRecordPatternDeconstruct(pattern) != nil && this.RecordPatternNeedsDeconstruction(pattern)
+                )
+            )
+                .ToArray()
+            if patterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) && patterns.Any(
+                (pattern RecursivePatternSyntax) ->
+                this.UserRecordPatternDeconstruct(pattern) != nil && this.RecordPatternNeedsDeconstruction(pattern)
             ) {
                 this.context.ReportUnsupported(
                     owner,
@@ -234,10 +240,11 @@ partial class CSharpToGSharpTranslator {
         private func RewriteRecordDeconstruction(
             value GExpression?,
             method IMethodSymbol?,
+            diagnosticSite SyntaxNode,
             receiverSyntax ExpressionSyntax? = nil,
             emittedReceiverType GTypeReference? = nil
         ) GExpression? {
-            this.ReportMetadataRecordDeconstruction(method, receiverSyntax)
+            this.ReportMetadataRecordDeconstruction(method, diagnosticSite)
             this.ReportUnsupportedRecordDeconstruction(method)
             if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {
                 return value
@@ -255,7 +262,7 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func ReportMetadataRecordDeconstruction(method IMethodSymbol?, site SyntaxNode?) {
+        private func ReportMetadataRecordDeconstruction(method IMethodSymbol?, site SyntaxNode) {
             if method == nil || method.Name != "Deconstruct" || !method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
                 return
             }
@@ -410,7 +417,7 @@ partial class CSharpToGSharpTranslator {
                 )
                 return LiteralExpression.Bool(false)
             }
-            let call = this.RewriteRecordDeconstruction(receiver, method)
+            let call = this.RewriteRecordDeconstruction(receiver, method, recursive)
             let outputTypes = this.MapRecordDeconstructionParameterTypes(method)
             let resultType = this.RecordDeconstructionResultType(outputTypes)
             let BuildTest = func (tuple GExpression) GExpression {
@@ -1417,6 +1424,7 @@ partial class CSharpToGSharpTranslator {
                     this.RewriteRecordDeconstruction(
                         rhsValue,
                         deconstruction.Method,
+                        pattern,
                         receiverSyntax,
                         emittedReceiverType
                     )
@@ -1803,7 +1811,13 @@ partial class CSharpToGSharpTranslator {
                 TupleDeconstructionStatement(
                     BindingKind.Let,
                     temps,
-                    this.RewriteRecordDeconstruction(value, deconstruction.Method, receiverSyntax, emittedReceiverType)
+                    this.RewriteRecordDeconstruction(
+                        value,
+                        deconstruction.Method,
+                        designation,
+                        receiverSyntax,
+                        emittedReceiverType
+                    )
                 )
             )
             let values = List[GExpression](parenthesized.Variables.Count)

@@ -190,19 +190,25 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
-    func TryReserveMemberName(owner INamedTypeSymbol, name string) bool {
+    func TryReserveMemberName(member IMethodSymbol, name string, out assignedName string) bool {
         lock this.gate {
-            let key = owner.OriginalDefinition
-            if !this.usedByType.TryGetValue(key, out var used) {
+            let key = (member.PartialDefinitionPart ?? member).OriginalDefinition
+            if this.assigned.TryGetValue(key, out assignedName) {
+                return true
+            }
+            assignedName = name
+            let owner = key.ContainingType.OriginalDefinition
+            if !this.usedByType.TryGetValue(owner, out var used) {
                 used = HashSet[string](StringComparer.Ordinal)
-                this.usedByType.Add(key, used)
+                this.usedByType.Add(owner, used)
             }
             if used.Contains(name) || this.aliasNames.Contains(name) ||
-                (this.localNamesByType.TryGetValue(key, out var locals) && locals.Contains(name)) {
+                (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
                 return false
             }
             used.Add(name)
             this.helperNames.Add(name)
+            this.assigned.Add(key, name)
             return true
         }
     }

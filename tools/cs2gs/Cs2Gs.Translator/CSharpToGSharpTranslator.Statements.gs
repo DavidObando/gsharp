@@ -5214,6 +5214,7 @@ partial class CSharpToGSharpTranslator {
                                 this.RewriteRecordDeconstruction(
                                     this.TranslateExpression(assignment.Right),
                                     this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
+                                    assignment.Right,
                                     assignment.Right
                                 )
                             )

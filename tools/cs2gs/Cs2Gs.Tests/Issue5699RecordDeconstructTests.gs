@@ -16,6 +16,109 @@ class Issue5699RecordDeconstructTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func SeparateDocuments_ReuseTheCanonicalAdapterName(consumerFirst bool) {
+        let declaration = ("Record.cs", `
+namespace RecordDeconstruction {
+    public record R {
+        public int X = 2, Y = 3;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`)
+        let consumer = ("Consumer.cs", `
+namespace RecordDeconstruction {
+    public static class Probe {
+        public static string Run() {
+            var r = new R();
+            var (x, y) = r;
+            return $"{x},{y}";
+        }
+    }
+}`)
+        Verify(
+            if consumerFirst {
+                [](string, string){consumer, declaration}
+            } else {
+                [](string, string){declaration, consumer}
+            }
+        )
+    }
+
+    @Theory
+    @InlineData("foreach")
+    @InlineData("await foreach")
+    @InlineData("nested")
+    @InlineData("nested foreach")
+    func MetadataRecursiveAndForEachConsumers_ReportLocatedGaps(shape string) {
+        let producer = CSharpProjectLoader.LoadInMemory([](string, string){("Producer.cs", `
+namespace Producer {
+    public record struct R {
+        public int X, Y;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`)}, assemblyName: "Producer" + Guid.NewGuid().ToString("N"))
+        Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
+        using let image = MemoryStream()
+        Assert.True(producer.Compilation.Emit(image).Success)
+        let statement = switch shape {
+            case "foreach": "foreach (var (x, y) in new[] { r }) { System.Console.WriteLine(x + y); }"
+            case "await foreach": "await foreach (var (x, y) in Values(r)) { System.Console.WriteLine(x + y); }"
+            case "nested": "var ((x, y), tag) = (r, 1);"
+            default: "foreach (var ((x, y), tag) in new[] { (r, 1) }) { System.Console.WriteLine(x + y + tag); }"
+        }
+        let source = (`
+namespace RecordDeconstruction {
+    public static class Probe {
+        public static async System.Threading.Tasks.Task<string> Run() {
+            var r = new Producer.R { X = 2, Y = 3 };
+            STATEMENT
+            return "";
+        }
+        public static async System.Collections.Generic.IAsyncEnumerable<Producer.R> Values(Producer.R r) {
+            yield return r;
+            await System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
+}`).Replace("STATEMENT", statement)
+        let consumer = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Consumer.cs", source)},
+            CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(image.ToArray()))
+                .ToArray(),
+            assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+        )
+        Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
+        using let baseline = MemoryStream()
+        Assert.True(consumer.Compilation.Emit(baseline).Success)
+        let document = Assert.Single(consumer.Documents)
+        let context = TranslationContext(
+            consumer.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            repositoryCompilations: []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{producer.Compilation, consumer.Compilation}
+        )
+        CSharpToGSharpTranslator().TranslateDocument(document, context)
+        let gap = Assert.Single(
+            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
+        )
+        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
+        Assert.Contains("migrated producer", gap.Message)
+        let location = gap.Location!!
+        Assert.Equal("Consumer.cs", location.SourceTree!!.FilePath)
+        let site = if shape == "nested" || shape == "nested foreach" {
+            "(x, y)"
+        } else {
+            shape
+        }
+        Assert.Equal(source.IndexOf(site, StringComparison.Ordinal), location.SourceSpan.Start)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func LiftedLocalHelpers_ReserveRecordAdapterNamesInEitherMemberOrder(helperFirst bool) {
         let deconstruct = "public void Deconstruct(out int x, out int y) { x = 30; y = 2; }"
         let helper = `public int Work() {
@@ -239,9 +342,11 @@ namespace RecordDeconstruction {
 }`)
     }
 
-    @Fact
-    func MixedPositionalPropertyDecision_ReportsGapInsteadOfChangingRoslynEvaluation() {
-        const source = `
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func MixedPositionalPropertyDecision_ReportsGapInsteadOfChangingRoslynEvaluation(separateClauses bool) {
+        let source = (`
 #nullable enable
 namespace RecordDeconstruction {
     public record R {
@@ -253,11 +358,18 @@ namespace RecordDeconstruction {
             public static string Run() {
                 R? r = new R();
                 R.Hook = () => r = null;
-                try { return (r is R(0, _) or R(1, _) { Value: 3 }).ToString(); }
+                try { return (r is PATTERN).ToString(); }
                 catch (System.NullReferenceException) { return "threw"; }
             }
     }
-}`
+}`).Replace(
+            "PATTERN",
+            if separateClauses {
+                "R(0, _) or R { Value: 3 }"
+            } else {
+                "R(0, _) or R(1, _) { Value: 3 }"
+            }
+        )
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
         using let image = MemoryStream()
@@ -1187,7 +1299,11 @@ namespace RecordDeconstruction {
 
     shared {
         private func Verify(source string, emittedSignature string? = nil) {
-            let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+            Verify([](string, string){("Snippet.cs", source)}, emittedSignature)
+        }
+
+        private func Verify(sources[](string, string), emittedSignature string? = nil) {
+            let project = CSharpProjectLoader.LoadInMemory(sources)
             Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
             using let image = MemoryStream()
             let baseline = project.Compilation.WithAssemblyName("Baseline" + Guid.NewGuid().ToString("N")).Emit(image)
@@ -1198,23 +1314,40 @@ namespace RecordDeconstruction {
                     nil
                 )
             )
-            let document = Assert.Single(project.Documents)
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            let printedSources = project
+                .Documents
+                .Select(
+                (document LoadedDocument) -> {
+                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+                    let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                    Assert.DoesNotContain(
+                        context.Diagnostics,
+                        (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                    )
+                    return printed
+                }
+            )
+                .ToArray()
+            if printedSources.Length > 1 {
+                var index = 0
+                for document in project.Documents {
+                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+                    Assert.Equal(
+                        printedSources[index++],
+                        GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                    )
+                }
+            }
+            let printed = string.Join("\n", printedSources)
             Assert.DoesNotContain("func __", printed)
             if emittedSignature != nil {
                 Assert.Contains(emittedSignature, printed)
             }
-            Assert.DoesNotContain(
-                context.Diagnostics,
-                (diagnostic TranslationDiagnostic) ->
-                diagnostic.Severity == TranslationSeverity.Unsupported
-            )
             Assert.Contains("data ", printed)
-            Assert.Equal(expected + "\n", CompileAndRun(printed).Replace("\r\n", "\n"))
+            Assert.Equal(expected + "\n", CompileAndRun(printedSources).Replace("\r\n", "\n"))
         }
 
-        private func CompileAndRun(printed string) string {
+        private func CompileAndRun(printedSources[]string) string {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
@@ -1232,11 +1365,22 @@ namespace RecordDeconstruction {
             let directory = Path.Combine(AppContext.BaseDirectory, "issue-5699", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
-                let source = Path.Combine(directory, "Snippet.gs")
                 let output = Path.Combine(directory, "Snippet.dll")
-                File.WriteAllText(source, printed + "\nSystem.Console.WriteLine(Probe.Run())\n")
-                let compile = RunDotnet([]string{compiler, "/target:exe", "/out:" + output, source})
-                Assert.True(compile.Exit == 0, compile.Output + "\n" + printed)
+                let arguments = System.Collections.Generic.List[string]{compiler, "/target:exe", "/out:" + output}
+                for var i = 0; i < printedSources.Length; i++ {
+                    let source = Path.Combine(directory, "Snippet" + i.ToString() + ".gs")
+                    File.WriteAllText(
+                        source,
+                        printedSources[i] + if i == 0 {
+                            "\nSystem.Console.WriteLine(Probe.Run())\n"
+                        } else {
+                            string.Empty
+                        }
+                    )
+                    arguments.Add(source)
+                }
+                let compile = RunDotnet(arguments.ToArray())
+                Assert.True(compile.Exit == 0, compile.Output + "\n" + string.Join("\n", printedSources))
                 let run = RunDotnet([]string{output})
                 Assert.True(run.Exit == 0, run.Output)
                 return run.Output
