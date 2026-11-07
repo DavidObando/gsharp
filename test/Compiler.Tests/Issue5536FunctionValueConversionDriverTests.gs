@@ -369,16 +369,35 @@ func CleanupBranchMemberRecovered() string {
     }
     return ""
 }
+func CleanupBranchCallableTuple() int32 {
+    var pair (f (int32) -> int32, tag int32)? = (f: (value int32) -> value + 1, tag: 2)
+    var n = 0
+    if pair != nil {
+        L: if n > 0 {
+            let picked = if n > 1 {
+                default((f (int32) -> int32, tag int32)?)
+            } else {
+                defer Console.Write("")
+                pair
+            }
+            return picked!!.f(value: 4)
+        }
+        n++
+        pair = (f: (value int32) -> value + 10, tag: 3)
+        goto L
+    }
+    return 0
+}
 func Main() {
-    Console.Write("${MemberGoto()},${MemberKept()},${LocalClassGoto()},${LocalValueGoto()},${CleanupBranchGoto()},${CleanupBranchMemberRecovered()}")
+    Console.Write("${MemberGoto()},${MemberKept()},${LocalClassGoto()},${LocalValueGoto()},${CleanupBranchGoto()},${CleanupBranchMemberRecovered()},${CleanupBranchCallableTuple()}")
 }
 `
         let oracle = `using System;
 class Program {
-    static void Main() => Console.Write("cat,dog,cat,True,True,dog");
+    static void Main() => Console.Write("cat,dog,cat,True,True,dog,14");
 }
 `
-        Check(fixture, source, oracle, "cat,dog,cat,True,True,dog")
+        Check(fixture, source, oracle, "cat,dog,cat,True,True,dog,14")
     }
 
     /// Issue #5543: a function literal is a plain value, so it binds to the pointee of an imported `in` or

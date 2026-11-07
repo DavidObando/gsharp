@@ -675,7 +675,7 @@ internal class ConversionClassifier {
                         resultVar.Name,
                         resultVar.IsReadOnly,
                         recoveredInit.Type ?? TypeSymbol.Error
-                    )
+                    ){CallableParameterNameTree = StatementBinder.BuildCallableParameterNameTree(recoveredInit)}
                     newResultVar = updatedVar
                     builder.Add(BoundVariableDeclaration(decl.Syntax, updatedVar, recoveredInit))
                     changed = true
