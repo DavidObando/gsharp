@@ -2054,6 +2054,12 @@ class ToolchainManifestTests(unittest.TestCase):
         rejected = run_driver("--verify-dotnet-archive", archive_path, wrong_hash, self.root / "bad-extract")
         self.assertEqual(2, rejected.returncode)
         self.assertIn("dotnet archive hash is not in the approved set", rejected.stderr)
+        self.assertFalse((self.root / "bad-extract").exists())
+
+        existing_dest = run_driver("--verify-dotnet-archive", archive_path, wrong_hash, extracted)
+        self.assertEqual(2, existing_dest.returncode)
+        self.assertIn("dotnet archive extraction root must not already exist", existing_dest.stderr)
+        self.assertTrue((extracted / "dotnet").is_file())
 
     def test_system_owned_tree_components_only_validates_intermediate_ancestors(self) -> None:
         dotnet_root = self.root / "dotnet-root"

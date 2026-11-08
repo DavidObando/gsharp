@@ -1513,22 +1513,30 @@ def extract_verified_dotnet_archive(
             or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in allowed_hashes)):
         raise CertificationError(
             "dotnet archive verification requires lowercase SHA-256 hashes")
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.mkdir(parents=True, mode=0o700)
+    if destination.exists() or destination.is_symlink():
+        raise CertificationError(
+            f"dotnet archive extraction root must not already exist: {destination}")
     frozen_archive = (
         snapshot_path
         if snapshot_path is not None
         else destination.parent / f".{destination.name}.archive"
     )
-    if frozen_archive != archive_path:
+    created_snapshot = frozen_archive != archive_path
+    if created_snapshot:
+        if frozen_archive.exists() or frozen_archive.is_symlink():
+            raise CertificationError(
+                f"frozen dotnet archive snapshot must not already exist: {frozen_archive}")
         atomic_bytes(frozen_archive, archive_path.read_bytes())
         os.chmod(frozen_archive, 0o400)
     owned_file(frozen_archive, "frozen dotnet archive")
     actual = sha256_file(frozen_archive)
     if actual not in allowed_hashes:
+        if created_snapshot and frozen_archive.exists():
+            os.chmod(frozen_archive, 0o600)
+            frozen_archive.unlink(missing_ok=True)
         raise CertificationError(
             f"dotnet archive hash is not in the approved set: {archive_path}")
+    destination.mkdir(parents=True, mode=0o700)
     allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
     with tarfile.open(frozen_archive, "r:*") as archive:
         for member in archive.getmembers():
