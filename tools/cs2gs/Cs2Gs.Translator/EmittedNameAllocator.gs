@@ -33,6 +33,8 @@ internal class EmittedNameAllocator {
         IReadOnlyCollection[string]
     ](SymbolEqualityComparer.Default)
     private let invocationSensitive HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
+    private let referencedBindingNames Dictionary[SyntaxNode, Dictionary[ISymbol, HashSet[string]]] =
+    Dictionary[SyntaxNode, Dictionary[ISymbol, HashSet[string]]]()
     private let deconstructionReservedNames Dictionary[IAssemblySymbol, IReadOnlyCollection[string]] =
     Dictionary[IAssemblySymbol, IReadOnlyCollection[string]](SymbolEqualityComparer.Default)
 
@@ -82,6 +84,15 @@ internal class EmittedNameAllocator {
         if symbol == nil {
             return nil
         }
+        symbol = Canonical(symbol)
+        if symbol!!.DeclaringSyntaxReferences.FirstOrDefault() is {} declaration &&
+            !this
+            .compilation
+            .ContainsSyntaxTree(declaration.SyntaxTree) &&
+            FindDeclaringCompilation(this.compilation, declaration.SyntaxTree, HashSet[Compilation]()) is {} owner {
+            let declared = owner.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration.GetSyntax())
+            return For(owner).GetName(declared ?? symbol, additionalContext)
+        }
         lock this.gate {
             symbol = Canonical(symbol)
             if this.emittedNames.TryGetValue(symbol!!, out var existing) {
@@ -101,8 +112,9 @@ internal class EmittedNameAllocator {
             // neighbor. Locals and other body-scoped names without a CLR
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
-            if sourceName == "_" &&
-                (symbol is ILocalSymbol || symbol is IParameterSymbol) &&
+            if sourceName == "_" && (symbol is ILocalSymbol || symbol is IParameterSymbol) && !contract.Any(
+                (member ISymbol) -> member is IPropertySymbol
+            ) &&
                 this.GetReferencedBindingScopeNames(symbol!!) is {} referencedNames {
                 let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
                 taken.UnionWith(referencedNames)
@@ -137,7 +149,11 @@ internal class EmittedNameAllocator {
                 }
                 return renamed
             }
-            if contract.Any(IsMetadataVisible) && GSharpSyntaxFacts.IsReservedIdentifier(sourceName, context) {
+            if contract.Any(IsMetadataVisible) &&
+                (
+                GSharpSyntaxFacts.IsReservedIdentifier(sourceName, context) ||
+                    (sourceName == "_" && contract.Any((member ISymbol) -> member is IPropertySymbol))
+            ) {
                 let escaped = "$$" + sourceName
                 for member in contract {
                     this.emittedNames[member] = escaped
@@ -164,20 +180,64 @@ internal class EmittedNameAllocator {
 
     private func GetReferencedBindingScopeNames(symbol ISymbol) IReadOnlyCollection[string]? {
         var names HashSet[string]? = nil
-        for reference in symbol.DeclaringSyntaxReferences {
-            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
-            for identifier in reference.SyntaxTree.GetRoot().DescendantNodes().OfType[IdentifierNameSyntax]() {
-                if identifier.Identifier.ValueText == "_" && SymbolEqualityComparer.Default.Equals(
-                    model.GetSymbolInfo(identifier).Symbol,
-                    symbol
-                ) {
-                    let occupied = names ?? HashSet[string](StringComparer.Ordinal)
-                    names = occupied
+        let references = if symbol.ContainingSymbol is IMethodSymbol method &&
+            !method
+            .DeclaringSyntaxReferences
+            .IsDefaultOrEmpty {
+            method.DeclaringSyntaxReferences
+        } else {
+            symbol.DeclaringSyntaxReferences
+        }
+        for reference in references {
+            if !this.compilation.ContainsSyntaxTree(reference.SyntaxTree) {
+                continue
+            }
+            let declaration = reference.GetSyntax()
+            if !this.referencedBindingNames.TryGetValue(declaration, out var bindings) {
+                bindings = Dictionary[ISymbol, HashSet[string]](SymbolEqualityComparer.Default)
+                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                for identifier in declaration.DescendantNodes().OfType[IdentifierNameSyntax]() {
+                    if identifier.Identifier.ValueText != "_" {
+                        continue
+                    }
+                    let referenced = Canonical(model.GetSymbolInfo(identifier).Symbol)
+                    if referenced is not ILocalSymbol && referenced is not IParameterSymbol {
+                        continue
+                    }
+                    if !bindings.TryGetValue(referenced!!, out var occupied) {
+                        occupied = HashSet[string](StringComparer.Ordinal)
+                        bindings.Add(referenced!!, occupied)
+                    }
                     occupied.UnionWith(model.LookupSymbols(identifier.SpanStart).Select(SourceName))
                 }
+                this.referencedBindingNames.Add(declaration, bindings)
+            }
+            if bindings.TryGetValue(symbol, out var scopedNames) {
+                let occupied = names ?? HashSet[string](StringComparer.Ordinal)
+                names = occupied
+                occupied.UnionWith(scopedNames)
             }
         }
         return names
+    }
+
+    private func FindDeclaringCompilation(
+        compilation Compilation,
+        tree SyntaxTree,
+        visited HashSet[Compilation]
+    ) Compilation? {
+        if !visited.Add(compilation) {
+            return nil
+        }
+        if compilation.ContainsSyntaxTree(tree) {
+            return compilation
+        }
+        for reference in compilation.References.OfType[CompilationReference]() {
+            if FindDeclaringCompilation(reference.Compilation, tree, visited) is {} owner {
+                return owner
+            }
+        }
+        return nil
     }
 
     func GetNamespaceName(namespaceSymbol INamespaceSymbol?) string? {
@@ -776,6 +836,7 @@ internal class EmittedNameAllocator {
         }
 
         private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
+            case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
             case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
             case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)

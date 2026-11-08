@@ -8,6 +8,7 @@ import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import System
+import System.Collections.Generic
 import System.Diagnostics
 import System.IO
 import System.Linq
@@ -223,12 +224,26 @@ public class P
 }
 
 internal shared class LiteralConstructionRuntimeParity {
-    func AssertMatches(source string, verifyTranslation Action[string]? = nil) {
+    func AssertMatches(source string, verifyTranslation Action[string]? = nil, librarySource string? = nil) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
+        let library = if librarySource != nil {
+            CSharpCompilation.Create(
+                "Library",
+                []SyntaxTree{CSharpSyntaxTree.ParseText(librarySource, path: "Lib.cs")},
+                CSharpProjectLoader.RuntimeReferences(),
+                CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            )
+        } else {
+            default(CSharpCompilation?)
+        }
+        var references = CSharpProjectLoader.RuntimeReferences().AsEnumerable()
+        if library != nil {
+            references = references.Append(library.ToMetadataReference())
+        }
         let compilation = CSharpCompilation.Create(
             "Native",
             []SyntaxTree{tree},
-            CSharpProjectLoader.RuntimeReferences(),
+            references,
             CSharpCompilationOptions(OutputKind.ConsoleApplication).WithNullableContextOptions(
                 NullableContextOptions.Enable
             )
@@ -252,6 +267,12 @@ internal shared class LiteralConstructionRuntimeParity {
         )
         Directory.CreateDirectory(directory)
         try {
+            let libraryPath = Path.Combine(directory, "Library.dll")
+            if library != nil {
+                using let stream = File.Create(libraryPath)
+                let result = library.Emit(stream)
+                Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics))
+            }
             let nativePath = Path.Combine(directory, "Native.dll")
             {
                 using let stream = File.Create(nativePath)
@@ -267,10 +288,38 @@ internal shared class LiteralConstructionRuntimeParity {
             let gsPath = Path.Combine(directory, "Translated.gs")
             let translatedPath = Path.Combine(directory, "Translated.dll")
             File.WriteAllText(gsPath, printed)
-            RunDotnet(
-                []string{FindCompiler(), "/target:exe", "/targetframework:net10.0", "/out:" + translatedPath, gsPath},
-                printed
-            )
+            let compilerArguments = List[string]{
+                FindCompiler(),
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/out:" + translatedPath,
+                gsPath
+            }
+            if library != nil {
+                let libraryTree = library.SyntaxTrees.Single()
+                let libraryModel = library.GetSemanticModel(libraryTree)
+                let libraryPrinted = GSharpPrinter.Print(
+                    CSharpToGSharpTranslator().TranslateDocument(
+                        LoadedDocument("Lib.cs", libraryTree, libraryModel),
+                        TranslationContext(library, libraryModel, "Lib.cs")
+                    )
+                )
+                verifyTranslation?.Invoke(libraryPrinted)
+                let libraryGs = Path.Combine(directory, "Lib.gs")
+                File.WriteAllText(libraryGs, libraryPrinted)
+                RunDotnet(
+                    []string{
+                        FindCompiler(),
+                        "/target:library",
+                        "/targetframework:net10.0",
+                        "/out:" + libraryPath,
+                        libraryGs
+                    },
+                    libraryPrinted
+                )
+                compilerArguments.Add("/reference:" + libraryPath)
+            }
+            RunDotnet(compilerArguments.ToArray(), printed)
             Assert.Equal(expected, RunDotnet([]string{translatedPath}))
         } finally {
             Directory.Delete(directory, recursive: true)

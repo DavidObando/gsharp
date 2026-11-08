@@ -2,6 +2,7 @@
 
 package Cs2Gs.Tests
 
+import Cs2Gs.Pipeline
 import System
 import System.Diagnostics
 import System.IO
@@ -55,6 +56,44 @@ open class Issue5875EntryStateTranslationTests {
 }
 
 open class Issue5877UnderscoreLocalTranslationTests {
+    @Fact
+    func GenericNamedArgument_UsesTheDeclarationName() {
+        LiteralConstructionRuntimeParity.AssertMatches(`using System;
+public class P {
+    static string Echo<T>(string _) { string underscore = "suffix"; return _ + underscore; }
+    public static void Main() { Console.WriteLine(Echo<int>(_: "x")); }
+}`, Issue5875ReadabilityCounters.AssertNoSynthetics)
+    }
+
+    @Fact
+    func RecordPrimaryParameter_PreservesPropertyReflection() {
+        LiteralConstructionRuntimeParity.AssertMatches(`using System;
+public record R(int _) { public int Copy { get; } = _; }
+public class P {
+    public static void Main() {
+        var value = new R(42);
+        Console.WriteLine(value.Copy);
+        Console.WriteLine(typeof(R).GetProperty("_")?.GetValue(value) ?? "missing");
+    }
+}`, Issue5875ReadabilityCounters.AssertNoSynthetics)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func CompilationReferenceNamedArgument_UsesTheOwningAllocator(referenced bool) {
+        let library = if referenced {
+            "namespace Library { public static class Lib { public static int Echo(int _) => _; } }"
+        } else {
+            "namespace Library { public static class Lib { public static int Echo(int _) => 42; } }"
+        }
+        LiteralConstructionRuntimeParity.AssertMatches(
+            "using System; public class P { public static void Main() { Console.WriteLine(Library.Lib.Echo(_: 42)); } }",
+            Issue5875ReadabilityCounters.AssertNoSynthetics,
+            library
+        )
+    }
+
     @Theory
     @InlineData("local")
     @InlineData("ref")
@@ -164,10 +203,7 @@ internal shared class Issue5875ReadabilityCounters {
         Directory.CreateDirectory(directory)
         try {
             File.WriteAllText(Path.Combine(directory, "Translated.gs"), printed)
-            var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
-            while root != nil && !File.Exists(Path.Combine(root.FullName, "build", "cs2gs-counters.sh")) {
-                root = root.Parent
-            }
+            let root = GsharpTestProjectRunner.FindRepoRoot()
             Assert.NotNull(root)
             let start = ProcessStartInfo("bash"){
                 UseShellExecute = false,
@@ -178,7 +214,7 @@ internal shared class Issue5875ReadabilityCounters {
                 "-c",
                 `source "$1"; cs2gs_raw_lines "$2" | cs2gs_extract_synthetics | wc -l`,
                 "counters",
-                Path.Combine(root!!.FullName, "build", "cs2gs-counters.sh"),
+                Path.Combine(root!!, "build", "cs2gs-counters.sh"),
                 directory
             } {
                 start.ArgumentList.Add(argument)
