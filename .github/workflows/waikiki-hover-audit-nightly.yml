@@ -61,24 +61,35 @@ jobs:
         run: python3 build/waikiki-hover-audit.py checkout --dest "$RUNNER_TEMP/waikiki-corpus"
 
       - name: Run headless Waikiki hover audit
+        id: run_audit
         shell: bash
         env:
           MSBUILDDISABLENODEREUSE: 1
         run: |
           python3 build/waikiki-hover-audit.py run \
             --corpus "$RUNNER_TEMP/waikiki-corpus" \
-            --out "$RUNNER_TEMP/waikiki-hover-audit"
+            --out "$RUNNER_TEMP/waikiki-hover-audit-raw"
+
+      - name: Verify and stage scrubbed hover audit artifacts
+        id: verify_artifacts
+        if: steps.run_audit.outcome == 'success'
+        shell: bash
+        run: |
+          python3 build/waikiki-hover-audit.py stage \
+            --raw "$RUNNER_TEMP/waikiki-hover-audit-raw" \
+            --out "$RUNNER_TEMP/waikiki-hover-audit-verified" \
+            --corpus "$RUNNER_TEMP/waikiki-corpus"
 
       - name: Upload scrubbed hover audit artifacts
-        if: always()
+        if: steps.verify_artifacts.outcome == 'success'
         uses: actions/upload-artifact@v5
         with:
           name: waikiki-hover-audit-${{ matrix.os }}
           retention-days: 14
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}/waikiki-hover-audit/summary.json
-            ${{ runner.temp }}/waikiki-hover-audit/summary.md
-            ${{ runner.temp }}/waikiki-hover-audit/failures.json
-            ${{ runner.temp }}/waikiki-hover-audit/failures.csv
-            ${{ runner.temp }}/waikiki-hover-audit/inventory.json
+            ${{ runner.temp }}/waikiki-hover-audit-verified/summary.json
+            ${{ runner.temp }}/waikiki-hover-audit-verified/summary.md
+            ${{ runner.temp }}/waikiki-hover-audit-verified/failures.json
+            ${{ runner.temp }}/waikiki-hover-audit-verified/failures.csv
+            ${{ runner.temp }}/waikiki-hover-audit-verified/inventory.json

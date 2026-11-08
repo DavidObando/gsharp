@@ -98,6 +98,63 @@ open class WaikikiHoverAuditTests {
                 Assert.DoesNotContain("ACCESS-SECRET", text, StringComparison.Ordinal)
             }
 
+            // Verify indexed-member inventory collects accessor-nested indexed targets (runner.Calls[0],
+            // call.Args[0], call.FileName[0], uri.ToString()[0], etc.) while excluding bare indexed
+            // locals and index-argument identifiers.
+            let consumerPath = Path.Combine(corpusRoot, "Consumer.gs")
+            let consumerText = File.ReadAllText(consumerPath)
+            let consumerTree = SyntaxTree.Parse(SourceText.From(consumerText, consumerPath))
+            let indexedSpans = CollectIndexedMemberTokenSpans(consumerTree.Root)
+            let indexedRoles = List[string]()
+            for tok in EnumerateTreeTokens(consumerTree.Root) {
+                if IsPhysicalToken(consumerTree.Text, tok) && tok.Kind == SyntaxKind.IdentifierToken {
+                    let role = ClassifyTokenRole(tok, indexedSpans)
+                    if role == "IndexedMemberAccess" {
+                        let line1 = SemanticLookup.ToRange(consumerTree.Text, tok.Span).Start.Line + 1
+                        indexedRoles.Add("$line1:${tok.Text}")
+                    }
+                }
+            }
+            let expectedIndexedLines = []string{
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Calls[0]", 0).Line + 1}:Calls",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Calls[^1]", 0).Line + 1}:Calls",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Args[0]", 0).Line + 1}:Args",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Args[..]", 0).Line + 1}:Args",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "FileName[0]", 0).Line + 1}:FileName",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "FileName[1..^1]", 0).Line + 1}:FileName",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Calls[0].FileName.Length", 0).Line + 1}:Calls",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Segments[0]", 0).Line + 1}:Segments",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Host[0]", 0).Line + 1}:Host",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "ToString()[0]", 0).Line + 1}:ToString",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Calls[Calls]", 0).Line + 1}:Calls",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Args[Args]", 0).Line + 1}:Args",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Calls[^1]", 1).Line + 1}:Calls",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Span[0]", 0).Line + 1}:Span",
+                "${LanguageServerTestHelpers.PositionOf(consumerText, "Span[0]", 1).Line + 1}:Span"
+            }
+            Assert.Equal(expectedIndexedLines, indexedRoles)
+
+            let bareLocalOffset = consumerText.IndexOf("plainArgs[0]", StringComparison.Ordinal)
+            let bareLocalTok = SemanticLookup.FindTokenAt(consumerTree, bareLocalOffset)!!
+            Assert.Equal("NameExpression", ClassifyTokenRole(bareLocalTok, indexedSpans))
+
+            let indexArgOffset = consumerText.IndexOf("Calls]", StringComparison.Ordinal)
+            let indexArgTok = SemanticLookup.FindTokenAt(consumerTree, indexArgOffset)!!
+            Assert.Equal("NameExpression", ClassifyTokenRole(indexArgTok, indexedSpans))
+
+            // Verify wrong-member navigation in the same file fails the declaration range check.
+            let modelsUri = DocumentUri.FromFileSystemPath(Path.Combine(corpusRoot, "Models.gs"))!!
+            let expectedCallsLoc = Location{
+                Uri: modelsUri,
+                Range: GSharp.LanguageServer.Protocol.Range(Position(58, 9), Position(58, 14))
+            }
+            let wrongSameFileLoc = Location{
+                Uri: modelsUri,
+                Range: GSharp.LanguageServer.Protocol.Range(Position(43, 9), Position(43, 13))
+            }
+            Assert.True(LocationsMatchExpectedDeclaration(expectedCallsLoc, expectedCallsLoc))
+            Assert.False(LocationsMatchExpectedDeclaration(expectedCallsLoc, wrongSameFileLoc))
+
             // ADR-0154 discrimination witnesses: verify each failure class fails the gate.
             let mutantPlaceholder = EvaluateTargetCheck(
                 "Consumer.gs:24:13:loaded",
@@ -234,6 +291,7 @@ open class WaikikiHoverAuditTests {
             let consumerPath = Path.Combine(scratchRoot, "Consumer.gs")
             let modelsPath = Path.Combine(scratchRoot, "Models.gs")
             let consumerText = File.ReadAllText(consumerPath)
+            let modelsText = File.ReadAllText(modelsPath)
             Assert.True(project.TryGetSyntaxTree(consumerPath, out var consumerTree))
             let lines = BuildLineOffsets(consumerText)
             let content = DocumentContent(consumerTree, lines, project, workspace)
@@ -267,6 +325,14 @@ open class WaikikiHoverAuditTests {
             )
             Assert.Equal(plainCallsHover.Contents.ToString(), indexedCallsHover.Contents.ToString())
             Assert.Equal(plainCallsHover.Contents.ToString(), fromEndCallsHover.Contents.ToString())
+            let callsDeclPos = LanguageServerTestHelpers.PositionOf(modelsText, "Calls List[RunnerCall]", 0)
+            let expectedCallsDeclLoc = Location{
+                Uri: modelsUri,
+                Range: GSharp
+                    .LanguageServer
+                    .Protocol
+                    .Range(callsDeclPos, Position(callsDeclPos.Line, callsDeclPos.Character + "Calls".Length))
+            }
             let callsDef = Assert.IsType[Location](
                 DefinitionComputer.ComputeDefinition(
                     consumerUri,
@@ -274,7 +340,7 @@ open class WaikikiHoverAuditTests {
                     LanguageServerTestHelpers.PositionOf(consumerText, "Calls[0]", 0)
                 )
             )
-            Assert.Equal(modelsUri, callsDef.Uri)
+            Assert.True(LocationsMatchExpectedDeclaration(expectedCallsDeclLoc, callsDef))
 
             // 2. call.Args vs call.Args[0] vs call.Args[..]
             let plainArgsHover = AssertHoverAt(
@@ -303,6 +369,14 @@ open class WaikikiHoverAuditTests {
             )
             Assert.Equal(plainArgsHover.Contents.ToString(), indexedArgsHover.Contents.ToString())
             Assert.Equal(plainArgsHover.Contents.ToString(), sliceArgsHover.Contents.ToString())
+            let argsDeclPos = LanguageServerTestHelpers.PositionOf(modelsText, "Args []string", 0)
+            let expectedArgsDeclLoc = Location{
+                Uri: modelsUri,
+                Range: GSharp
+                    .LanguageServer
+                    .Protocol
+                    .Range(argsDeclPos, Position(argsDeclPos.Line, argsDeclPos.Character + "Args".Length))
+            }
             let argsDef = Assert.IsType[Location](
                 DefinitionComputer.ComputeDefinition(
                     consumerUri,
@@ -310,7 +384,7 @@ open class WaikikiHoverAuditTests {
                     LanguageServerTestHelpers.PositionOf(consumerText, "Args[0]", 0)
                 )
             )
-            Assert.Equal(modelsUri, argsDef.Uri)
+            Assert.True(LocationsMatchExpectedDeclaration(expectedArgsDeclLoc, argsDef))
 
             // 3. call.FileName vs call.FileName[0] vs call.FileName[1..^1]
             let plainFileHover = AssertHoverAt(
@@ -339,6 +413,22 @@ open class WaikikiHoverAuditTests {
             )
             Assert.Equal(plainFileHover.Contents.ToString(), indexedFileHover.Contents.ToString())
             Assert.Equal(plainFileHover.Contents.ToString(), sliceFileHover.Contents.ToString())
+            let fileDeclPos = LanguageServerTestHelpers.PositionOf(modelsText, "FileName string", 0)
+            let expectedFileDeclLoc = Location{
+                Uri: modelsUri,
+                Range: GSharp
+                    .LanguageServer
+                    .Protocol
+                    .Range(fileDeclPos, Position(fileDeclPos.Line, fileDeclPos.Character + "FileName".Length))
+            }
+            let fileDef = Assert.IsType[Location](
+                DefinitionComputer.ComputeDefinition(
+                    consumerUri,
+                    content,
+                    LanguageServerTestHelpers.PositionOf(consumerText, "FileName[0]", 0)
+                )
+            )
+            Assert.True(LocationsMatchExpectedDeclaration(expectedFileDeclLoc, fileDef))
 
             // 4. uri.Segments / uri.Host, plain and indexed
             AssertHoverAt(content, consumerText, "Segments\n", 0, "Segments", "System.Uri.Segments []string { get; }")
@@ -390,8 +480,8 @@ open class WaikikiHoverAuditTests {
             AssertHoverAt(
                 content,
                 consumerText,
-                "Calls[^1]\n",
-                0,
+                "Calls[^1]",
+                1,
                 "Calls",
                 "prop Calls System.Collections.Generic.List[RunnerCall] { get; }"
             )
@@ -1150,8 +1240,13 @@ open class WaikikiHoverAuditTests {
                                 let expectedSig = ExpectedOracleSignature(sym, compilation, tok)
                                 var defMatches = true
                                 if role == "IndexedMemberAccess" && !BoundSemantics.IsImportedMember(sym) {
-                                    let defLoc = DefinitionComputer.ComputeDefinition(uri, content, startRange.Start)
-                                    defMatches = defLoc != nil
+                                    defMatches = DefinitionMatchesOracleSymbol(
+                                        uri,
+                                        content,
+                                        startRange.Start,
+                                        compilation,
+                                        sym
+                                    )
                                 }
                                 let outcome = EvaluateTargetCheck(
                                     targetId,
@@ -1333,8 +1428,20 @@ open class WaikikiHoverAuditTests {
             expectedIndexedArrayPropHover string
         ) {
             let originalSource = File.ReadAllText(targetFilePath)
+            let siblingSource = File.ReadAllText(siblingDeclarationPath)
             let canonicalUri = DocumentUri.FromFileSystemPath(targetFilePath)!!
             let siblingUri = DocumentUri.FromFileSystemPath(siblingDeclarationPath)!!
+            let indexedDeclPos = LanguageServerTestHelpers.PositionOf(siblingSource, "prop " + indexedPropName + " ", 0)
+            let expectedIndexedPropDeclLoc = Location{
+                Uri: siblingUri,
+                Range: GSharp
+                    .LanguageServer
+                    .Protocol
+                    .Range(
+                    Position(indexedDeclPos.Line, indexedDeclPos.Character + 5),
+                    Position(indexedDeclPos.Line, indexedDeclPos.Character + 5 + indexedPropName.Length)
+                )
+            }
 
             // Phase 1: Cold-open before project discovery completes (#5024).
             {
@@ -1382,14 +1489,13 @@ open class WaikikiHoverAuditTests {
                             }
                         }
                     )
-                    Assert.Null(workspace.GetProjectForFile(targetFilePath))
-                    let preDiscoveryDiag = await server.DocumentDiagnosticAsync(
-                        DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: canonicalUri}},
-                        CancellationToken.None
+                    let preDiscoveryDiag = await clientRpc.InvokeWithParameterObjectAsync[FullDocumentDiagnosticReport](
+                        "textDocument/diagnostic",
+                        DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: canonicalUri}}
                     )
-                    if preDiscoveryDiag is FullDocumentDiagnosticReport fullPre {
-                        Assert.Empty(fullPre.Items)
-                    }
+                    Assert.NotNull(preDiscoveryDiag)
+                    Assert.Empty(preDiscoveryDiag.Items)
+                    Assert.Null(workspace.GetProjectForFile(targetFilePath))
 
                     await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
                     await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30))
@@ -1398,9 +1504,8 @@ open class WaikikiHoverAuditTests {
 
                     await AssertLifecycleTargetsOverRpcAsync(
                         clientRpc,
-                        server,
                         canonicalUri,
-                        siblingUri,
+                        expectedIndexedPropDeclLoc,
                         originalSource,
                         localSymbolName,
                         expectedLocalHover,
@@ -1482,9 +1587,8 @@ open class WaikikiHoverAuditTests {
                     )
                     await AssertLifecycleTargetsOverRpcAsync(
                         clientRpc,
-                        server,
                         activeUri,
-                        siblingUri,
+                        expectedIndexedPropDeclLoc,
                         originalSource,
                         localSymbolName,
                         expectedLocalHover,
@@ -1534,9 +1638,8 @@ open class WaikikiHoverAuditTests {
                         )
                         await AssertLifecycleTargetsOverRpcAsync(
                             clientRpc,
-                            server,
                             activeUri,
-                            siblingUri,
+                            expectedIndexedPropDeclLoc,
                             edited,
                             localSymbolName,
                             expectedLocalHover,
@@ -1564,9 +1667,8 @@ open class WaikikiHoverAuditTests {
                     )
                     await AssertLifecycleTargetsOverRpcAsync(
                         clientRpc,
-                        server,
                         activeUri,
-                        siblingUri,
+                        expectedIndexedPropDeclLoc,
                         fullRebindSource,
                         localSymbolName,
                         expectedLocalHover,
@@ -1602,9 +1704,8 @@ open class WaikikiHoverAuditTests {
 
         private async func AssertLifecycleTargetsOverRpcAsync(
             clientRpc JsonRpc,
-            server LspServer,
             uri DocumentUri,
-            siblingUri DocumentUri,
+            expectedIndexedPropDeclLoc Location,
             source string,
             localSymbolName string,
             expectedLocalHover string,
@@ -1616,12 +1717,11 @@ open class WaikikiHoverAuditTests {
             indexedArrayPropName string,
             expectedIndexedArrayPropHover string
         ) {
-            let diagReport = Assert.IsType[FullDocumentDiagnosticReport](
-                await server.DocumentDiagnosticAsync(
-                    DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: uri}},
-                    CancellationToken.None
-                )
+            let diagReport = await clientRpc.InvokeWithParameterObjectAsync[FullDocumentDiagnosticReport](
+                "textDocument/diagnostic",
+                DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: uri}}
             )
+            Assert.NotNull(diagReport)
             Assert.Empty(diagReport.Items)
 
             let localPos = LanguageServerTestHelpers.PositionOf(source, "let " + localSymbolName + " =", 0)
@@ -1660,15 +1760,12 @@ open class WaikikiHoverAuditTests {
             Assert.NotNull(indexedPropHover)
             Assert.Equal(expectedIndexedPropHover, ExtractSignature(indexedPropHover))
 
-            let indexedPropDefs = await server.DefinitionAsync(
+            let indexedPropDefs = await clientRpc.InvokeWithParameterObjectAsync[IReadOnlyList[Location]](
+                "textDocument/definition",
                 DefinitionParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: indexedPropPos}
             )
             Assert.NotEmpty(indexedPropDefs)
-            Assert.Equal(
-                Path.GetFullPath(siblingUri.GetFileSystemPath()!!),
-                Path.GetFullPath(indexedPropDefs[0].Uri!!.GetFileSystemPath()!!),
-                ignoreCase: true
-            )
+            Assert.True(LocationsMatchExpectedDeclaration(expectedIndexedPropDeclLoc, indexedPropDefs[0]))
 
             let indexedArrayPos = LanguageServerTestHelpers.PositionOf(source, indexedArrayPropName + "[0]", 0)
             let indexedArrayHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
@@ -1827,8 +1924,9 @@ class Consumer {
         let optCall = nullableRunner?.Calls[^1]
         let memElem = memory.Span[0]
         let roMemElem = roMemory.Span[0]
+        let bareLocal = plainArgs[0]
         let tag = genHost.GeneratedTag()
-        return "user=${loaded!!.AccessToken} tag=$tag first=$firstArg char=$uriFirstChar"
+        return "user=${loaded!!.AccessToken} tag=$tag first=$firstArg bare=$bareLocal char=$uriFirstChar"
     }
 }
 `)
@@ -1858,49 +1956,116 @@ class Consumer {
             return hover
         }
 
+        private func DefinitionMatchesOracleSymbol(
+            uri DocumentUri,
+            content DocumentContent,
+            position Position,
+            compilation Compilation,
+            symbol Symbol
+        ) bool {
+            let actualLoc = DefinitionComputer.ComputeDefinition(uri, content, position)
+            if !TryGetExpectedSourceDeclarationLocation(compilation, symbol, uri, out var expectedLoc) {
+                return false
+            }
+            return LocationsMatchExpectedDeclaration(expectedLoc, actualLoc)
+        }
+
+        private func LocationsMatchExpectedDeclaration(expectedLoc Location?, actualLoc Location?) bool {
+            if expectedLoc == nil || actualLoc == nil {
+                return false
+            }
+            return ServerPathIdentity.AreSame(
+                expectedLoc.Uri?.GetFileSystemPath(),
+                actualLoc.Uri?.GetFileSystemPath()
+            ) &&
+                RangesEqual(expectedLoc.Range, actualLoc.Range)
+        }
+
+        private func TryGetExpectedSourceDeclarationLocation(
+            compilation Compilation,
+            symbol Symbol,
+            fallbackUri DocumentUri,
+            out expectedLocation Location?
+        ) bool {
+            expectedLocation = nil
+            let declToken = switch symbol {
+                case p is PropertySymbol when p.Declaration != nil: p.Declaration!!.Identifier
+                case f is FunctionSymbol when f.Declaration != nil: f.Declaration!!.Identifier
+                case f is FunctionSymbol when f.LocalDeclaration != nil: f.LocalDeclaration!!.Identifier
+                case fld is FieldSymbol when fld.Declaration is FieldDeclarationSyntax fd: fd.Identifier
+                case fld is FieldSymbol when fld.Declaration is ParameterSyntax pd: pd.Identifier
+                case ev is EventSymbol when ev.Declaration != nil: ev.Declaration!!.Identifier
+                case s is StructSymbol when s.Declaration != nil: s.Declaration!!.Identifier
+                case i is InterfaceSymbol when i.Declaration != nil: i.Declaration.Identifier
+                case e is EnumSymbol when e.Declaration != nil: e.Declaration.Identifier
+                default: default(SyntaxToken?)
+            }
+            if declToken == nil || declToken.SyntaxTree?.Text == nil {
+                return false
+            }
+            let fileName = declToken.SyntaxTree.Text.FileName
+            let targetUri = if !string.IsNullOrEmpty(fileName) {
+                DocumentUri.FromFileSystemPath(fileName)!!
+            } else {
+                fallbackUri
+            }
+            expectedLocation = Location{Uri: targetUri, Range: SemanticLookup.ToRange(declToken)}
+            return true
+        }
+
         private func CollectIndexedMemberTokenSpans(root SyntaxNode) HashSet[(int32, int32)] {
             let spans = HashSet[(int32, int32)]()
-            for idx in FindDescendantNodes[IndexExpressionSyntax](root) {
-                for tok in EnumerateTargetMemberTokens(idx.Target) {
+            for acc in FindDescendantNodes[AccessorExpressionSyntax](root) {
+                for tok in EnumerateIndexedMemberTokensInAccessorRight(acc.RightPart) {
                     spans.Add((tok.Span.Start, tok.Span.End))
+                }
+            }
+            for idx in FindDescendantNodes[IndexExpressionSyntax](root) {
+                if idx.Target is AccessorExpressionSyntax directAcc {
+                    for tok in EnumerateIndexedTargetLeafTokens(directAcc.RightPart) {
+                        spans.Add((tok.Span.Start, tok.Span.End))
+                    }
                 }
             }
             return spans
         }
 
-        private func EnumerateTargetMemberTokens(expr ExpressionSyntax) sequence[SyntaxToken] {
+        private func EnumerateIndexedMemberTokensInAccessorRight(expr ExpressionSyntax) sequence[SyntaxToken] {
             switch expr {
-                case acc is AccessorExpressionSyntax {
-                    for tok in EnumerateAccessorRightTokens(acc.RightPart) {
+                case idx is IndexExpressionSyntax {
+                    for tok in EnumerateIndexedTargetLeafTokens(idx.Target) {
                         yield tok
                     }
                 }
-                case idx is IndexExpressionSyntax {
-                    for tok in EnumerateTargetMemberTokens(idx.Target) {
+                case nested is AccessorExpressionSyntax {
+                    for tok in EnumerateIndexedMemberTokensInAccessorRight(nested.LeftPart) {
+                        yield tok
+                    }
+                    for tok in EnumerateIndexedMemberTokensInAccessorRight(nested.RightPart) {
                         yield tok
                     }
                 }
             }
         }
 
-        private func EnumerateAccessorRightTokens(expr ExpressionSyntax) sequence[SyntaxToken] {
-            switch expr {
+        private func EnumerateIndexedTargetLeafTokens(target ExpressionSyntax) sequence[SyntaxToken] {
+            switch target {
                 case name is NameExpressionSyntax {
                     yield name.IdentifierToken
+                }
+                case genericName is GenericNameExpressionSyntax {
+                    yield genericName.Identifier
                 }
                 case call is CallExpressionSyntax {
                     yield call.Identifier
                 }
                 case idx is IndexExpressionSyntax {
-                    for tok in EnumerateAccessorRightTokens(idx.Target) {
+                    for tok in EnumerateIndexedTargetLeafTokens(idx.Target) {
                         yield tok
                     }
                 }
-                case nested is AccessorExpressionSyntax {
-                    for tok in EnumerateAccessorRightTokens(nested.LeftPart) {
-                        yield tok
-                    }
-                    for tok in EnumerateAccessorRightTokens(nested.RightPart) {
+                case acc is AccessorExpressionSyntax {
+                    for tok in EnumerateIndexedTargetLeafTokens(acc.RightPart) {
                         yield tok
                     }
                 }

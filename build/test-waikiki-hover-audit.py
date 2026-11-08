@@ -161,18 +161,43 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
             audit.verify_artifacts(out_dir, corpus_dir=corpus_dir)
 
         self.write_valid_artifacts(out_dir)
+        win_root = r"C:\agent\_work\gsharp"
+        (out_dir / "summary.md").write_text(
+            json.dumps({"leakedRoot": win_root + r"\src\Waikiki.Core\JobState.gs"}),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(audit.AuditVerificationError, "unscrubbed local path"):
+            audit.verify_artifacts(out_dir, corpus_dir=corpus_dir, repo_dir=win_root)
+
+        self.write_valid_artifacts(out_dir)
         (out_dir / "summary.md").write_text("Leaked token: ACCESS-SECRET\n", encoding="utf-8")
         with self.assertRaisesRegex(audit.AuditVerificationError, "forbidden secret/env marker"):
             audit.verify_artifacts(out_dir, corpus_dir=corpus_dir)
 
+    def test_stage_verified_artifacts_publishes_only_after_validation_passes(self) -> None:
+        raw_dir = SCRATCH_ROOT / "raw-artifacts"
+        publish_dir = SCRATCH_ROOT / "verified-artifacts"
+        corpus_dir = SCRATCH_ROOT / "stage-corpus"
+        self.write_valid_artifacts(raw_dir)
+        summary = audit.stage_verified_artifacts(raw_dir, publish_dir, corpus_dir=corpus_dir)
+        self.assertEqual(summary["PhysicalTokenCount"], audit.EXPECTED_PHYSICAL_TOKENS)
+        for name in audit.REQUIRED_ARTIFACTS:
+            self.assertTrue((publish_dir / name).is_file())
+
+        (raw_dir / "summary.md").write_text("Leaked token: ACCESS-SECRET\n", encoding="utf-8")
+        with self.assertRaisesRegex(audit.AuditVerificationError, "forbidden secret/env marker"):
+            audit.stage_verified_artifacts(raw_dir, publish_dir, corpus_dir=corpus_dir)
+        self.assertFalse(publish_dir.exists())
+
     def test_checkout_verifies_commit_sdk_pin_and_msbuild_isolation_guards(self) -> None:
+        sdk_key = "Gsharp." + "NET.Sdk"
         origin = SCRATCH_ROOT / "origin-repo"
         origin.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(origin)], check=True)
         subprocess.run(["git", "-C", str(origin), "config", "user.name", "Audit Test"], check=True)
         subprocess.run(["git", "-C", str(origin), "config", "user.email", "audit@example.invalid"], check=True)
         (origin / "global.json").write_text(
-            json.dumps({"msbuild-sdks": {"Gsharp.NET.Sdk": audit.WAIKIKI_SDK_VERSION}}),
+            json.dumps({"msbuild-sdks": {sdk_key: audit.WAIKIKI_SDK_VERSION}}),
             encoding="utf-8",
         )
         subprocess.run(["git", "-C", str(origin), "add", "global.json"], check=True)
@@ -195,7 +220,7 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(bad_origin), "config", "user.name", "Audit Test"], check=True)
         subprocess.run(["git", "-C", str(bad_origin), "config", "user.email", "audit@example.invalid"], check=True)
         (bad_origin / "global.json").write_text(
-            json.dumps({"msbuild-sdks": {"Gsharp.NET.Sdk": "0.0.1"}}),
+            json.dumps({"msbuild-sdks": {sdk_key: "unexpected-sdk-pin"}}),
             encoding="utf-8",
         )
         subprocess.run(["git", "-C", str(bad_origin), "add", "global.json"], check=True)
