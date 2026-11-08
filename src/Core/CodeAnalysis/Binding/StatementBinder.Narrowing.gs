@@ -11554,6 +11554,9 @@ internal partial class StatementBinder {
         private func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
+                if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {
+                    break
+                }
                 value = conversion.Expression
             }
             return value.Type == TypeSymbol.Null ||

@@ -118,6 +118,51 @@ Read()
     }
 
     @Theory
+    @InlineData("cast[object](cast[int32](cast[*int32](nil)))")
+    @InlineData("cast[object](cast[nint](cast[*int32](nil)))")
+    func BoxedPointerZeroPattern_InvalidatesClosureAssignedNarrowing(pattern string) {
+        let result = EmittedOracle.Evaluate(`
+unsafe func Read(value object) int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    if text != nil {
+        let matches = value is (PATTERN)
+        return text.Length
+    }
+    return 0
+}
+Read(0)
+`.Replace("PATTERN", pattern))
+        let diagnostic = Assert.Single(result.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0158"))
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData("var p = P.Nil\n        p = replacement\n        let matches = value is (p)")
+    @InlineData(
+        "var p = P.Nil\n        var copy = p\n        copy = replacement\n        let matches = value is (copy)"
+    )
+    func ReassignedNullOriginInLoop_InvalidatesClosureAssignedNarrowing(body string) {
+        let result = EmittedOracle.Evaluate(`
+class C {}
+class P { public const Nil C? = nil }
+func Read(value object, replacement C) int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        BODY
+    }
+    return 0
+}
+Read(C(), C())
+`.Replace("BODY", body))
+        let diagnostic = Assert.Single(result.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0158"))
+        Assert.Equal("Length", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
     @InlineData("MaxValue", "79228162514264337593543950335")
     @InlineData("MinValue", "-79228162514264337593543950335")
     @InlineData("Zero", "0")

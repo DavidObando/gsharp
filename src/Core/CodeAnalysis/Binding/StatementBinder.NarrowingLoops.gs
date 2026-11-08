@@ -2384,7 +2384,7 @@ internal partial class StatementBinder {
     }
 
     private func RegionPatternValueIsNull(test RegionPatternTest) bool {
-        guard let path = test.Value else {
+        guard let path = test.ConstantValuePath else {
             return false
         }
         if path.RootIsCall || path.RootType != nil || path.RootLiteralType != nil {

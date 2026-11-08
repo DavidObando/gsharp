@@ -37,6 +37,9 @@ A source reference type can lack a runtime `Type` while its constant value is kn
    Use the type-level `ForNullConstant` operation to make that declaration nullable.
    Apply this operation after every initializer path, before establishing declaration and flow facts.
    Statement and loop pattern effects recognize known null field, local, and global constants through one symbol predicate.
+   Null recognition stops at conversions that materialize pointers or function pointers.
+   Loop constant-read provenance remains separate from type-origin paths.
+   Reassigned or copied mutable locals cannot inherit a constant's null value from their type origin.
    Existing nullable and platform wrappers retain their distinct kinds.
    Do not permit non-null, non-string reference constants.
    Preserve existing named local function-literal `const` bindings; these are not CLR field constants.
