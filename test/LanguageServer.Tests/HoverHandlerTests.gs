@@ -789,6 +789,323 @@ class Person {
         Assert.DoesNotContain("single-precision", value, StringComparison.OrdinalIgnoreCase)
     }
 
+    @Fact
+    func ComputeHover_ImportedStaticAndInstanceMembers_NotShadowedByEnclosingMembers_Issue5899() {
+        const source = `package Repro
+
+import System.IO
+
+class JobStateStore {
+    var inner Stream
+    prop Position int64 { get; set; }
+
+    init(s Stream) {
+        inner = s
+    }
+
+    func Delete(fingerprint string) int64 {
+        File.Delete(fingerprint)
+        return inner.Position
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let fileDeleteHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Delete", 1)
+        )
+        Assert.NotNull(fileDeleteHover)
+        let fileDeleteValue = fileDeleteHover!!.Contents.ToString()
+        Assert.Contains("System.IO.File", fileDeleteValue, StringComparison.Ordinal)
+        Assert.DoesNotContain("JobStateStore", fileDeleteValue, StringComparison.Ordinal)
+
+        let streamPositionHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Position", 1)
+        )
+        Assert.NotNull(streamPositionHover)
+        let streamPositionValue = streamPositionHover!!.Contents.ToString()
+        Assert.Contains("System.IO.Stream.Position", streamPositionValue, StringComparison.Ordinal)
+        Assert.DoesNotContain("JobStateStore", streamPositionValue, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_ParenthesizedNullableArrowFunctionTypeClause_ClosingParenReturnsNull_Issue5899() {
+        const source = `package Repro
+
+import System.Text
+
+func Build(factory (() -> StringBuilder)?) {
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let returnTypeHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StringBuilder")
+        )
+        Assert.NotNull(returnTypeHover)
+        Assert.Contains("System.Text.StringBuilder", returnTypeHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let closeParenHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, ")?")
+        )
+        Assert.Null(closeParenHover)
+    }
+
+    @Fact
+    func ComputeHover_GenericClrTypeAndConstructorReferences_Resolve_Issue5900() {
+        const source = `package Repro
+
+import System
+import System.Collections.Generic
+
+class ByteProgress : IProgress[int64] {
+    func Report(value int64) {
+        let items = List[string]()
+        let map = Dictionary[string, int32]()
+        let cmp = EqualityComparer[string].Default
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let progressHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "IProgress")
+        )
+        Assert.NotNull(progressHover)
+        Assert.Contains("interface System.IProgress[T]", progressHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let listHover Hover? = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "List"))
+        Assert.NotNull(listHover)
+        Assert.Contains(
+            "class System.Collections.Generic.List[T]",
+            listHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+
+        let dictHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Dictionary")
+        )
+        Assert.NotNull(dictHover)
+        Assert.Contains(
+            "class System.Collections.Generic.Dictionary[TKey, TValue]",
+            dictHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+
+        let comparerHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "EqualityComparer")
+        )
+        Assert.NotNull(comparerHover)
+        Assert.Contains(
+            "class System.Collections.Generic.EqualityComparer[T]",
+            comparerHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+    }
+
+    @Fact
+    func ComputeHover_PropertySetterAssignmentTargets_Resolve_Issue5900() {
+        const source = `package Repro
+
+import System
+import System.Diagnostics
+import System.IO
+
+class JobState {
+    prop CardId string { get; set; }
+}
+
+class Holder {
+    prop State JobState { get; set; }
+}
+
+class CustomError : Exception {
+    func Apply(state JobState?, holder Holder, stream Stream, proc Process) {
+        if state != nil {
+            state.CardId = "card-1"
+        }
+        holder.State.CardId = "card-2"
+        stream.Position = 0
+        proc.StartInfo.FileName = "dotnet"
+        HResult = 42
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let stateCardIdHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "CardId", 1)
+        )
+        Assert.NotNull(stateCardIdHover)
+        Assert.Contains("CardId string", stateCardIdHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let chainedCardIdHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "CardId", 2)
+        )
+        Assert.NotNull(chainedCardIdHover)
+        Assert.Contains("CardId string", chainedCardIdHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let streamPosHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Position")
+        )
+        Assert.NotNull(streamPosHover)
+        Assert.Contains("System.IO.Stream.Position", streamPosHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let chainedClrHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "FileName")
+        )
+        Assert.NotNull(chainedClrHover)
+        Assert.Contains(
+            "System.Diagnostics.ProcessStartInfo.FileName",
+            chainedClrHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+
+        let hresultHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "HResult")
+        )
+        Assert.NotNull(hresultHover)
+        Assert.Contains("System.Exception.HResult", hresultHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_StructLiteralMemberInitializers_Resolve_Issue5900() {
+        const source = `package Repro
+
+import System.Diagnostics
+
+class JobState {
+    prop CardId string { get; set; }
+}
+
+class Runner {
+    prop FileName string { get; set; }
+
+    func Build() ProcessStartInfo {
+        let state = JobState{CardId: "abc"}
+        return ProcessStartInfo{FileName: state.CardId, UseShellExecute: true}
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let sourceInitHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "CardId", 1)
+        )
+        Assert.NotNull(sourceInitHover)
+        Assert.Contains("CardId string", sourceInitHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let clrFileNameHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "FileName", 1)
+        )
+        Assert.NotNull(clrFileNameHover)
+        let fileNameValue = clrFileNameHover!!.Contents.ToString()
+        Assert.Contains("System.Diagnostics.ProcessStartInfo.FileName", fileNameValue, StringComparison.Ordinal)
+        Assert.DoesNotContain("Runner", fileNameValue, StringComparison.Ordinal)
+
+        let clrShellHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "UseShellExecute")
+        )
+        Assert.NotNull(clrShellHover)
+        Assert.Contains(
+            "System.Diagnostics.ProcessStartInfo.UseShellExecute",
+            clrShellHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+    }
+
+    @Fact
+    func ComputeHover_GenericClassTypeParameterDeclarationAndUses_Resolve_Issue5900() {
+        const source = `package Repro
+
+import System
+import System.Collections.Generic
+
+class SyncProgress[T] : IProgress[T] {
+    let items = List[T]()
+
+    func Report(value T) {
+        items.Add(value)
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let declHover Hover? = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "T", 0))
+        Assert.NotNull(declHover)
+        Assert.Contains("type T", declHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let baseTypeArgHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "T", 1)
+        )
+        Assert.NotNull(baseTypeArgHover)
+        Assert.Contains("type T", baseTypeArgHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let fieldInitTypeArgHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "T", 2)
+        )
+        Assert.NotNull(fieldInitTypeArgHover)
+        Assert.Contains("type T", fieldInitTypeArgHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_NestedImportedTypeAndQualifiedClrConstructor_Resolve_Issue5900() {
+        const source = `package Repro
+
+import System
+
+func Run() string {
+    let folder = Environment.SpecialFolder.ApplicationData
+    let sb = System.Text.StringBuilder(folder.ToString())
+    return sb.ToString()
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let nestedTypeHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "SpecialFolder")
+        )
+        Assert.NotNull(nestedTypeHover)
+        Assert.Contains(
+            "enum System.Environment.SpecialFolder",
+            nestedTypeHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+
+        let enumMemberHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "ApplicationData")
+        )
+        Assert.NotNull(enumMemberHover)
+        Assert.Contains(
+            "System.Environment.SpecialFolder.ApplicationData",
+            enumMemberHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+
+        let qualifiedCtorHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StringBuilder")
+        )
+        Assert.NotNull(qualifiedCtorHover)
+        Assert.Contains(
+            "class System.Text.StringBuilder",
+            qualifiedCtorHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+    }
+
     shared {
         private func CreateReferencePackResolver() ReferenceResolver {
             let TryParseVersion = func (s string) Version? {

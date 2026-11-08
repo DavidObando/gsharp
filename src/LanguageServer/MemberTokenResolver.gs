@@ -35,8 +35,36 @@ internal shared class MemberTokenResolver {
             return false
         }
         let includeAttributeSuffixFallback = IsAnnotationNameToken(tree.Root, token)
-        type = SemanticLookup.ResolveImportedClrType(tree, compilation, token.Text, includeAttributeSuffixFallback)
+        type = SemanticLookup.ResolveImportedClrType(tree, compilation, token, includeAttributeSuffixFallback)
         return type != nil
+    }
+
+    /// Tells whether [`token`](paramref) names a member access, field assignment, or initializer member (#5899).
+    func IsMemberOrInitializerToken(root SyntaxNode, token SyntaxToken?) bool {
+        if token == nil || token.Kind != SyntaxKind.IdentifierToken {
+            return false
+        }
+        switch token.Parent {
+            case fa is FieldAssignmentExpressionSyntax when MatchesToken(fa.FieldIdentifier, token) {
+                return true
+            }
+            case mfa is MemberFieldAssignmentExpressionSyntax when MatchesToken(mfa.FieldIdentifier, token) {
+                return true
+            }
+            case pi is PropertyInitializerSyntax when MatchesToken(pi.PropertyIdentifier, token) {
+                return true
+            }
+            case fi is FieldInitializerSyntax when MatchesToken(fi.FieldIdentifier, token) {
+                return true
+            }
+            case bic is BaseInterfaceCallExpressionSyntax when MatchesToken(bic.MethodIdentifier, token) {
+                return true
+            }
+        }
+        if token.SyntaxTree is {} tokenTree && FindAccessorMemberContexts(tokenTree, token).Any() {
+            return true
+        }
+        return false
     }
 
     /// Attempts to resolve [`token`](paramref) to a member of a receiver: a member selected with
@@ -68,9 +96,8 @@ internal shared class MemberTokenResolver {
             overloadCount = Math.Max(1, BoundSemantics.GetMemberGroup(compilation, token).Length)
             return true
         }
-        for context in FindAccessorMemberContexts(tree, token).Concat(
-            FindObjectInitializerMemberContexts(tree, token)
-        ) {
+        for context in FindAccessorMemberContexts(tree, token).Concat(FindFieldAssignmentMemberContexts(tree, token))
+            .Concat(FindObjectInitializerMemberContexts(tree, token)) {
             var receiver ResolvedReceiver? = nil
             if token.Parent?.Parent is MemberCollectionElementSyntax {
                 if InferInitializerReceiverType(tree, compilation, context.ReceiverExpression) is {} initializerType {
@@ -107,6 +134,10 @@ internal shared class MemberTokenResolver {
                 }
                 return true
             }
+        }
+        if !IsMemberOrInitializerToken(tree.Root, token) &&
+            TryResolveImplicitThisMember(tree, compilation, token, out member, out overloadCount) {
+            return true
         }
         return false
     }
@@ -190,6 +221,9 @@ internal shared class MemberTokenResolver {
         if BoundSemantics.GetExpressionType(compilation, expression) is {} boundType {
             return ResolvedReceiver(boundType, StaticMembers: false)
         }
+        if BoundSemantics.GetNodeSymbol(compilation, expression) is TypeSymbol staticQualifier {
+            return ResolvedReceiver(staticQualifier, StaticMembers: true)
+        }
         switch expression {
             case name is NameExpressionSyntax {
                 let symbol = SemanticLookup.ResolveSymbol(compilation, name.IdentifierToken)
@@ -199,7 +233,21 @@ internal shared class MemberTokenResolver {
                 if TypeOfValue(symbol) is {} valueType {
                     return ResolvedReceiver(valueType, StaticMembers: false)
                 }
-                return ImportedTypeByName(tree, compilation, name.IdentifierToken.Text, StaticMembers: true)
+                return ImportedTypeByToken(tree, compilation, name.IdentifierToken, StaticMembers: true)
+            }
+            case genericName is GenericNameExpressionSyntax {
+                let symbol = SemanticLookup.ResolveSymbol(compilation, genericName.Identifier)
+                if symbol is TypeSymbol typeName {
+                    return ResolvedReceiver(typeName, StaticMembers: true)
+                }
+                return ImportedTypeByToken(tree, compilation, genericName.Identifier, StaticMembers: true)
+            }
+            case index is IndexExpressionSyntax when index.Target is NameExpressionSyntax targetName {
+                let symbol = SemanticLookup.ResolveSymbol(compilation, targetName.IdentifierToken)
+                if symbol is TypeSymbol typeName {
+                    return ResolvedReceiver(typeName, StaticMembers: true)
+                }
+                return ImportedTypeByToken(tree, compilation, targetName.IdentifierToken, StaticMembers: true)
             }
             case call is CallExpressionSyntax {
                 let callee = SemanticLookup.ResolveSymbol(compilation, call.Identifier)
@@ -212,7 +260,14 @@ internal shared class MemberTokenResolver {
                 }
                 // A constructor call on an imported CLR type whose identifier does not resolve to a
                 // symbol: the type by name gives the instance members of the constructed object.
-                return ImportedTypeByName(tree, compilation, call.Identifier.Text, StaticMembers: false)
+                return ImportedTypeByToken(tree, compilation, call.Identifier, StaticMembers: false)
+            }
+            case structLiteral is StructLiteralExpressionSyntax {
+                let symbol = SemanticLookup.ResolveSymbol(compilation, structLiteral.TypeIdentifier)
+                if symbol is TypeSymbol structType {
+                    return ResolvedReceiver(structType, StaticMembers: false)
+                }
+                return ImportedTypeByToken(tree, compilation, structLiteral.TypeIdentifier, StaticMembers: false)
             }
             case accessor is AccessorExpressionSyntax {
                 // A chain: the receiver of `a.b.c` for `c` is the type of the member `b` of `a`.
@@ -225,19 +280,25 @@ internal shared class MemberTokenResolver {
                     default: string.Empty
                 }
                 let outer = ResolveReceiver(tree, compilation, accessor.LeftPart)
-                if outer == nil {
-                    return nil
+                if outer != nil {
+                    let members = BoundSemantics.LookupMembers(
+                        compilation,
+                        tree,
+                        accessor.RightPart.Span.Start,
+                        outer.Type,
+                        memberName
+                    )
+                    if Choose(members, outer.StaticMembers, outer.Type) is {} intermediate &&
+                        TypeOfValue(intermediate) is {} memberType {
+                        return ResolvedReceiver(memberType, StaticMembers: false)
+                    }
                 }
-                let members = BoundSemantics.LookupMembers(
-                    compilation,
+                if accessor.RightPart is NameExpressionSyntax rightName && SemanticLookup.ResolveImportedClrType(
                     tree,
-                    accessor.RightPart.Span.Start,
-                    outer.Type,
-                    memberName
-                )
-                if Choose(members, outer.StaticMembers, outer.Type) is {} intermediate &&
-                    TypeOfValue(intermediate) is {} memberType {
-                    return ResolvedReceiver(memberType, StaticMembers: false)
+                    compilation,
+                    rightName.IdentifierToken
+                ) is {} nestedClrType {
+                    return ResolvedReceiver(ImportedTypeSymbol.Get(nestedClrType), StaticMembers: true)
                 }
                 return nil
             }
@@ -247,13 +308,13 @@ internal shared class MemberTokenResolver {
         }
     }
 
-    private func ImportedTypeByName(
+    private func ImportedTypeByToken(
         tree SyntaxTree,
         compilation Compilation,
-        name string,
+        token SyntaxToken,
         StaticMembers bool
     ) ResolvedReceiver? {
-        let imported Type? = SemanticLookup.ResolveImportedClrType(tree, compilation, name)
+        let imported Type? = SemanticLookup.ResolveImportedClrType(tree, compilation, token)
         return if imported == nil {
             default(ResolvedReceiver?)
         } else {
@@ -320,9 +381,26 @@ internal shared class MemberTokenResolver {
         }
     }
 
-    /// Yields the member context of a token that names a property of an object initializer
-    /// (`T(args) { Prop = v }`). The receiver is the constructor call whose constructed type the
-    /// property is looked up on.
+    /// Yields the member context for the assigned member of a field or property assignment (#5900).
+    private func FindFieldAssignmentMemberContexts(tree SyntaxTree, token SyntaxToken?) sequence[
+        (ReceiverExpression ExpressionSyntax, MemberName string)
+    ] {
+        if token == nil || token.Kind != SyntaxKind.IdentifierToken {
+            yield break
+        }
+        for assign in FindNodes[FieldAssignmentExpressionSyntax](tree.Root) {
+            if MatchesToken(assign.FieldIdentifier, token) {
+                yield (NameExpressionSyntax(tree, assign.Receiver), assign.FieldIdentifier.ValueText)
+            }
+        }
+        for memberAssign in FindNodes[MemberFieldAssignmentExpressionSyntax](tree.Root) {
+            if MatchesToken(memberAssign.FieldIdentifier, token) {
+                yield (memberAssign.Receiver, memberAssign.FieldIdentifier.ValueText)
+            }
+        }
+    }
+
+    /// Yields the member context for a member in an object initializer or struct literal (#5900).
     private func FindObjectInitializerMemberContexts(tree SyntaxTree, token SyntaxToken?) sequence[
         (ReceiverExpression ExpressionSyntax, MemberName string)
     ] {
@@ -347,6 +425,120 @@ internal shared class MemberTokenResolver {
                 }
             }
         }
+        for structLiteral in FindNodes[StructLiteralExpressionSyntax](tree.Root) {
+            for initializer in structLiteral.Initializers {
+                if MatchesToken(initializer.FieldIdentifier, token) {
+                    yield (structLiteral, initializer.FieldIdentifier.ValueText)
+                }
+            }
+        }
+    }
+
+    private func TryResolveImplicitThisMember(
+        tree SyntaxTree,
+        compilation Compilation,
+        token SyntaxToken,
+        out member Symbol?,
+        out overloadCount int32
+    ) bool {
+        member = nil
+        overloadCount = 0
+        if token.Parent is NameExpressionSyntax ne && BoundSemantics.GetNodeSymbol(compilation, ne) is TypeSymbol {
+            return false
+        }
+        let enclosingDecl StructDeclarationSyntax? = FindNodes[StructDeclarationSyntax](tree.Root)
+            .Where((s StructDeclarationSyntax) -> s.Span.Start <= token.Span.Start && token.Span.End <= s.Span.End)
+            .OrderBy((s StructDeclarationSyntax) -> s.Span.Length)
+            .FirstOrDefault()
+        if enclosingDecl == nil || !IsInsideMemberBody(enclosingDecl, token) {
+            return false
+        }
+        if SemanticLookup.ResolveSymbol(compilation, enclosingDecl.Identifier) is not StructSymbol enclosingStruct {
+            return false
+        }
+        let candidates = BoundSemantics
+            .LookupMembers(compilation, tree, token.Span.Start, enclosingStruct, token.Text)
+            .Where((c Symbol) -> !BoundSemantics.IsReceiverExtension(c, enclosingStruct))
+            .ToImmutableArray()
+        let chosen = Choose(candidates, staticMembers: false, enclosingStruct)
+        if chosen == nil {
+            return false
+        }
+        member = chosen
+        overloadCount = if chosen is FunctionSymbol or ImportedFunctionSymbol {
+            candidates.Count(
+                (c Symbol) -> c is FunctionSymbol or
+                    ImportedFunctionSymbol &&
+                    IsStatic(c, enclosingStruct) == IsStatic(chosen, enclosingStruct)
+            )
+        } else {
+            1
+        }
+        return true
+    }
+
+    private func IsInsideMemberBody(enclosingDecl StructDeclarationSyntax, token SyntaxToken) bool {
+        var current SyntaxNode? = token.Parent
+        while current != nil && !object.ReferenceEquals(current, enclosingDecl) {
+            switch current {
+                case fn is FunctionDeclarationSyntax when fn.Body != nil &&
+                    fn.Body!!
+                    .Span
+                    .Start <= token
+                    .Span
+                    .Start &&
+                    token
+                    .Span
+                    .End <= fn.Body!!
+                    .Span
+                    .End {
+                    return true
+                }
+                case ctor is ConstructorDeclarationSyntax when ctor
+                    .Body
+                    .Span
+                    .Start <= token
+                    .Span
+                    .Start &&
+                    token
+                    .Span
+                    .End <= ctor
+                    .Body
+                    .Span
+                    .End {
+                    return true
+                }
+                case accessor is PropertyAccessorSyntax when accessor.Body != nil &&
+                    accessor.Body!!
+                    .Span
+                    .Start <= token
+                    .Span
+                    .Start &&
+                    token
+                    .Span
+                    .End <= accessor.Body!!
+                    .Span
+                    .End {
+                    return true
+                }
+                case deinit_ is DeinitDeclarationSyntax when deinit_
+                    .Body
+                    .Span
+                    .Start <= token
+                    .Span
+                    .Start &&
+                    token
+                    .Span
+                    .End <= deinit_
+                    .Body
+                    .Span
+                    .End {
+                    return true
+                }
+            }
+            current = current.Parent
+        }
+        return false
     }
 
     private func TryResolveAccessorMemberContext(
