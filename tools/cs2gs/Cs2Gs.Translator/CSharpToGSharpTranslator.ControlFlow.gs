@@ -293,10 +293,7 @@ partial class CSharpToGSharpTranslator {
             if mainBinder != nil && !separateMainBinder {
                 hoistName = this.EmittedName(mainBinder, mainBinder.Name)
             } else {
-                do {
-                    hoistName = "__scrutinee${this.state.LoopHoistCounter}"
-                    this.state.LoopHoistCounter++
-                } while !this.TryClaimSynthesizedLocalName(hoistName, clause)
+                hoistName = this.AllocateScopedSynthesizedLocalName("scrutinee", clause)
             }
             let hoistBinding = if separateMainBinder {
                 BindingKind.Let

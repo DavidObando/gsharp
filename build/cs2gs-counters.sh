@@ -40,8 +40,6 @@
 cs2gs_synthetic_families=(
   # live
   '__arg|argument spill (evaluation order)'
-  '__pattern|pattern-matching temporary'
-  '__scrutinee|switch scrutinee temporary'
   '__spill|expression spill temporary'
   '__underscore|discard rename'
   # retired or never emitted: these must stay 0
@@ -56,6 +54,8 @@ cs2gs_synthetic_families=(
   '__anon|retired by #4297 (discard parameters)'
   '__decon|retired by #4300 (source-derived structural carriers)'
   '__local_|retired by #4302 (native/readable local recursion)'
+  '__pattern|retired by #4303 (mutable switch-pattern capture temporary)'
+  '__scrutinee|retired by #4305 (binder-less loop-condition pattern temporary)'
   '__foreach|retired by #3925 (typed range clauses)'
   '__q|retired by #4304/ADR-0185 (tuple-destructuring arrow-lambda parameters)'
   '__generatedRegex_|retired by #4301 (G# @GeneratedRegex declaring parts, ADR-0192)'

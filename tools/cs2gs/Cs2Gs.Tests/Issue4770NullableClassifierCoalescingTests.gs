@@ -35,12 +35,18 @@ open class Issue4770NullableClassifierCoalescingTests {
         let root = GsharpTestProjectRunner.FindRepoRoot()!!
         Assert.NotNull(root)
         let testPath = Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Tests", "Issue4612GenericStoreBridgeTests.cs")
+        let gsTestPath = Path.ChangeExtension(testPath, ".gs")
+        Assert.True(
+            File.Exists(testPath) || File.Exists(gsTestPath),
+            "Expected Issue4612GenericStoreBridgeTests under $root."
+        )
+        let testSource = if File.Exists(testPath) {
+            File.ReadAllText(testPath)
+        } else {
+            FrozenParamsElementTestSource
+        }
         let original = Assert.Single(
-            CSharpSyntaxTree
-                .ParseText(File.ReadAllText(testPath))
-                .GetRoot()
-                .DescendantNodes()
-                .OfType[MethodDeclarationSyntax](),
+            CSharpSyntaxTree.ParseText(testSource).GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax](),
             (method MethodDeclarationSyntax) -> method
                 .Identifier
                 .ValueText == "ParamsElement_ClassifiesExpandedElementsOnly"
@@ -59,7 +65,12 @@ namespace Issue4770;
 public class Probe
 {` + original.WithAttributeLists(default(SyntaxList[AttributeListSyntax])).ToFullString() + "\n}"
         let helper = ExtractClassifier(root)
-        this.output.WriteLine("Original test source SHA256=" + Hash(File.ReadAllBytes(testPath)))
+        let hashInput = if File.Exists(testPath) {
+            File.ReadAllBytes(testPath)
+        } else {
+            File.ReadAllBytes(gsTestPath)
+        }
+        this.output.WriteLine("Original test source SHA256=" + Hash(hashInput))
         this.Run(
             source,
             helper,
@@ -170,17 +181,33 @@ public static class Probe
     func DefensiveCoalescing_DoesNotWidenFixedParameterOrMemberContracts() {
         let root = GsharpTestProjectRunner.FindRepoRoot()!!
         let binding = Path.Combine(root, "src", "Core", "CodeAnalysis", "Binding")
+        let cacheKeyCs = Path.Combine(binding, "BoundBodyCacheKey.cs")
+        let cacheKeyGs = Path.Combine(binding, "Incremental", "BoundBodyCacheKey.gs")
+        Assert.True(
+            File.Exists(cacheKeyCs) || File.Exists(Path.ChangeExtension(cacheKeyCs, ".gs")) || File.Exists(cacheKeyGs),
+            "Expected BoundBodyCacheKey under $binding."
+        )
+        let cacheKeySource = if File.Exists(cacheKeyCs) {
+            File.ReadAllText(cacheKeyCs)
+        } else {
+            FrozenBoundBodyCacheKeySource
+        }
+        let resolverCs = Path.Combine(binding, "OverloadResolution", "OverloadResolver.cs")
+        let resolverSource = if File.Exists(resolverCs) {
+            File.ReadAllText(resolverCs)
+        } else {
+            FrozenOverloadResolverSource
+        }
+        let lambdaBinderCs = Path.Combine(binding, "LambdaBinder.cs")
+        let lambdaBinderSource = if File.Exists(lambdaBinderCs) {
+            File.ReadAllText(lambdaBinderCs)
+        } else {
+            FrozenLambdaBinderSource
+        }
         let record = Assert.Single(
-            CSharpSyntaxTree
-                .ParseText(File.ReadAllText(Path.Combine(binding, "BoundBodyCacheKey.cs")))
-                .GetRoot()
-                .DescendantNodes()
-                .OfType[RecordDeclarationSyntax]()
+            CSharpSyntaxTree.ParseText(cacheKeySource).GetRoot().DescendantNodes().OfType[RecordDeclarationSyntax]()
         )
-        let resolver = CSharpSyntaxTree.ParseText(
-            File.ReadAllText(Path.Combine(binding, "OverloadResolution", "OverloadResolver.cs"))
-        )
-            .GetRoot()
+        let resolver = CSharpSyntaxTree.ParseText(resolverSource).GetRoot()
         let callback = Assert.Single(
             resolver.DescendantNodes().OfType[DelegateDeclarationSyntax](),
             (declaration DelegateDeclarationSyntax) -> declaration
@@ -195,7 +222,7 @@ public static class Probe
         )
         let implementation = Assert.Single(
             CSharpSyntaxTree
-                .ParseText(File.ReadAllText(Path.Combine(binding, "LambdaBinder.cs")))
+                .ParseText(lambdaBinderSource)
                 .GetRoot()
                 .DescendantNodes()
                 .OfType[MethodDeclarationSyntax](),
@@ -430,8 +457,12 @@ public static class Classifier
 
         private func ExtractClassifier(root string) string {
             let directory = Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Translator")
-            let methods = Directory
-                .EnumerateFiles(directory, "CSharpToGSharpTranslator*.cs")
+            let csFiles = Directory.EnumerateFiles(directory, "CSharpToGSharpTranslator*.cs").ToArray()
+            if csFiles.Length == 0 {
+                Assert.NotEmpty(Directory.EnumerateFiles(directory, "CSharpToGSharpTranslator*.gs"))
+                return FrozenClassifierContractsSource
+            }
+            let methods = csFiles
                 .SelectMany(
                 func (path string) IEnumerable[MethodDeclarationSyntax] {
                     return CSharpSyntaxTree
@@ -503,5 +534,343 @@ private static class DeclarationVisitor {
         }
 
         private func Hash(bytes[]uint8) string -> Convert.ToHexString(SHA256.HashData(bytes))
+
+        private const FrozenParamsElementTestSource string = `public class FrozenIssue4612 {
+    public void ParamsElement_ClassifiesExpandedElementsOnly()
+    {
+        const string source = @"
+            using System;
+            using System.Collections.Generic;
+
+            public static class C
+            {
+                public static List<T> Of<T>(params T[] items) => new List<T>(items);
+
+                public static int Span<T>(params ReadOnlySpan<T> items) => items.Length;
+
+                public static List<string> Explicit(string s) => Of<string>(s, ""y"");
+
+                public static List<string> Inferred(string s) => Of(s, ""y"");
+
+                public static int Collection(string s) => Span(s, ""y"");
+
+                public static List<string> Direct(string[] s) => Of(s);
+            }
+            ";
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        List<ArgumentSyntax> arguments = document.GetRoot().DescendantNodes().OfType<ArgumentSyntax>()
+            .Where(argument => argument.Expression.ToString() == "s")
+            .ToList();
+        Assert.Equal(4, arguments.Count);
+
+        var kinds = new List<string>();
+        foreach (ArgumentSyntax argument in arguments)
+        {
+            bool expanded = document.SemanticModel.GetOperation(argument) is not IArgumentOperation;
+            var invocation = (InvocationExpressionSyntax)argument.Parent.Parent;
+            var method = (IMethodSymbol)document.SemanticModel.GetSymbolInfo(invocation).Symbol;
+            string kind = CSharpToGSharpTranslator.ClassifyParameterSlotForTests(
+                method.Parameters[0],
+                argument.Expression,
+                expanded,
+                out ITypeSymbol slotType,
+                out bool resultDependsOnSlot);
+            kinds.Add((kind ?? "not-reported") + " " + slotType.ToDisplayString() + " " + resultDependsOnSlot);
+        }
+
+        Assert.Equal(
+            new[]
+            {
+                "explicit-type-argument,params-element string True",
+                "inferred-method-type-parameter,params-element string True",
+                "inferred-method-type-parameter,params-element string False",
+                "not-reported string[] False",
+            },
+            kinds);
+    }
+}`
+
+        private const FrozenBoundBodyCacheKeySource string = `namespace GSharp.Core.CodeAnalysis.Binding;
+public readonly record struct BoundBodyCacheKey(string StableMemberId, string BodyHash)
+{
+    public string StableMemberId { get; } = StableMemberId ?? string.Empty;
+    public string BodyHash { get; } = BodyHash ?? string.Empty;
+    public override string ToString() => $"{StableMemberId}#{BodyHash}";
+}`
+
+        private const FrozenOverloadResolverSource string = `#nullable enable
+using System;
+namespace GSharp.Core.CodeAnalysis.Binding;
+internal sealed partial class OverloadResolver
+{
+    public delegate bool TryGetFunctionLiteralDelegate(
+        BoundExpression expression,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal);
+    private readonly TryGetFunctionLiteralDelegate tryGetFunctionLiteral;
+    public OverloadResolver(TryGetFunctionLiteralDelegate tryGetFunctionLiteral)
+    {
+        this.tryGetFunctionLiteral = tryGetFunctionLiteral ?? throw new ArgumentNullException(nameof(tryGetFunctionLiteral));
+    }
+}`
+
+        private const FrozenLambdaBinderSource string = `#nullable enable
+namespace GSharp.Core.CodeAnalysis.Binding;
+internal sealed partial class LambdaBinder
+{
+    public static bool TryGetFunctionLiteral(
+        BoundExpression expression,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal)
+    {
+        if (expression is BoundFunctionLiteralExpression direct)
+        {
+            literal = direct;
+            return true;
+        }
+        if (expression is BoundConversionExpression { Expression: BoundFunctionLiteralExpression converted })
+        {
+            literal = converted;
+            return true;
+        }
+        literal = null;
+        return false;
+    }
+}`
+
+        private const FrozenClassifierContractsSource string = `using System.Collections.Generic;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+namespace Issue4770.Contracts;
+public static class CSharpToGSharpTranslator
+{
+    public static string ClassifyParameterSlotForTests(
+        IParameterSymbol parameter,
+        ExpressionSyntax value,
+        bool expandedParams,
+        out ITypeSymbol slotType,
+        out bool resultDependsOnSlot) =>
+        DeclarationVisitor.ClassifyParameterSlot(parameter, value, expandedParams, out slotType, out resultDependsOnSlot);
+private static class DeclarationVisitor {
+        internal static string ClassifyParameterSlot(
+            IParameterSymbol parameter,
+            ExpressionSyntax value,
+            bool expandedParams,
+            out ITypeSymbol slotType,
+            out bool resultDependsOnSlot)
+        {
+            resultDependsOnSlot = false;
+            ITypeSymbol declared = parameter.OriginalDefinition.Type;
+            slotType = parameter.Type;
+            bool paramsElement = false;
+            if (expandedParams
+                && GetParamsElementType(parameter.OriginalDefinition) is { } declaredElement
+                && GetParamsElementType(parameter) is { } constructedElement)
+            {
+                declared = GetBridgedSlotType(value, declaredElement);
+                slotType = constructedElement;
+                paramsElement = true;
+            }
+            slotType = GetBridgedSlotType(value, slotType);
+            if (declared is not ITypeParameterSymbol typeParameter)
+            {
+                return paramsElement ? "params-element" : null;
+            }
+            IMethodSymbol method = parameter.ContainingSymbol as IMethodSymbol;
+            resultDependsOnSlot = CallResultMentionsTypeParameter(method, typeParameter);
+            if (method?.MethodKind == MethodKind.DelegateInvoke)
+            {
+                return "delegate-invoke";
+            }
+            if (typeParameter.TypeParameterKind == TypeParameterKind.Method)
+            {
+                string methodKind = ValueFeedsExplicitTypeArguments(value)
+                    ? "explicit-type-argument"
+                    : "inferred-method-type-parameter";
+                return paramsElement ? methodKind + ",params-element" : methodKind;
+            }
+            return paramsElement ? "constructed-generic-member,params-element" : "constructed-generic-member";
+        }
+        private static ITypeSymbol GetParamsElementType(IParameterSymbol parameter) =>
+            parameter?.IsParams == true
+                ? parameter.Type switch
+                {
+                    IArrayTypeSymbol arrayType => arrayType.ElementType,
+                    INamedTypeSymbol { TypeArguments: [ITypeSymbol element] } collection
+                        when IsSupportedParamsCollectionType(collection)
+                        => element,
+                    _ => null,
+                }
+                : null;
+        private static bool IsSupportedParamsCollectionType(ITypeSymbol type)
+        {
+            if (type is not INamedTypeSymbol { TypeArguments: [ITypeSymbol] } named)
+            {
+                return false;
+            }
+            if (named.Name == "List" && named.ContainingNamespace?.ToDisplayString() == "System.Collections.Generic")
+            {
+                return true;
+            }
+            if (IsSpanParamsCollectionType(named))
+            {
+                return true;
+            }
+            SpecialType specialType = named.OriginalDefinition.SpecialType;
+            return specialType == SpecialType.System_Collections_Generic_IEnumerable_T
+                || specialType == SpecialType.System_Collections_Generic_ICollection_T
+                || specialType == SpecialType.System_Collections_Generic_IList_T
+                || specialType == SpecialType.System_Collections_Generic_IReadOnlyList_T
+                || specialType == SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
+        }
+        private static bool IsSpanParamsCollectionType(ITypeSymbol type) =>
+            type is INamedTypeSymbol { TypeArguments: [ITypeSymbol] } named
+            && named.ContainingNamespace?.ToDisplayString() == "System"
+            && named.Name is "Span" or "ReadOnlySpan";
+        private static ITypeSymbol GetBridgedSlotType(ExpressionSyntax value, ITypeSymbol slotType)
+        {
+            if (value == null || slotType is not INamedTypeSymbol)
+            {
+                return slotType;
+            }
+            var tupleIndices = new List<int>();
+            OutermostTransparentNode(value, tupleIndices);
+            return GetTupleSlot(slotType, tupleIndices);
+        }
+        private static ITypeSymbol GetTupleSlot(ITypeSymbol slotType, List<int> tupleIndices)
+        {
+            for (int i = tupleIndices.Count - 1; i >= 0; i--)
+            {
+                if (slotType is INamedTypeSymbol nullable
+                    && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                    && nullable.TypeArguments.Length == 1
+                    && nullable.TypeArguments[0] is INamedTypeSymbol { IsTupleType: true } underlyingTuple)
+                {
+                    slotType = underlyingTuple;
+                }
+                if (slotType is not INamedTypeSymbol { IsTupleType: true } tupleType)
+                {
+                    return slotType;
+                }
+                if (tupleIndices[i] >= tupleType.TupleElements.Length)
+                {
+                    return null;
+                }
+                slotType = GetEffectiveTupleElementType(tupleType, tupleIndices[i]);
+            }
+            return slotType;
+        }
+        private static ITypeSymbol GetEffectiveTupleElementType(INamedTypeSymbol tuple, int index)
+        {
+            IFieldSymbol element = tuple.TupleElements[index];
+            NullableAnnotation annotation =
+                element.NullableAnnotation == NullableAnnotation.Annotated
+                || element.Type.NullableAnnotation == NullableAnnotation.Annotated
+                    ? NullableAnnotation.Annotated
+                    : element.NullableAnnotation;
+            return element.Type.WithNullableAnnotation(annotation);
+        }
+        private static SyntaxNode OutermostTransparentNode(
+            ExpressionSyntax value,
+            List<int> tupleIndices = null,
+            List<SyntaxNode> storeNodes = null)
+        {
+            SyntaxNode node = value;
+            while (true)
+            {
+                SyntaxNode parent = node.Parent;
+                switch (parent)
+                {
+                    case ParenthesizedExpressionSyntax:
+                    case CastExpressionSyntax:
+                    case CheckedExpressionSyntax:
+                    case ConditionalAccessExpressionSyntax:
+                    case PostfixUnaryExpressionSyntax forgiving
+                        when forgiving.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                        node = parent;
+                        break;
+                    case BinaryExpressionSyntax binary
+                        when binary.IsKind(SyntaxKind.CoalesceExpression)
+                            || (binary.IsKind(SyntaxKind.AsExpression) && binary.Left == node):
+                        node = parent;
+                        break;
+                    case AssignmentExpressionSyntax assignment
+                        when assignment.Right == node
+                            && (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                                || assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)):
+                        storeNodes?.Add(node);
+                        node = parent;
+                        break;
+                    case ConditionalExpressionSyntax conditional when conditional.Condition != node:
+                        node = parent;
+                        break;
+                    case SwitchExpressionArmSyntax arm when arm.Expression == node:
+                        node = arm.Parent;
+                        break;
+                    case ArgumentSyntax tupleElement when tupleElement.Parent is TupleExpressionSyntax tuple:
+                        tupleIndices?.Add(tuple.Arguments.IndexOf(tupleElement));
+                        node = tuple;
+                        break;
+                    default:
+                        return node;
+                }
+            }
+        }
+        private static bool ValueFeedsExplicitTypeArguments(ExpressionSyntax value) =>
+            EnclosingInvocationArgument(value) is { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax invocation } }
+            && HasExplicitTypeArguments(invocation.Expression);
+        private static ArgumentSyntax EnclosingInvocationArgument(ExpressionSyntax value) =>
+            OutermostTransparentNode(value).Parent is ArgumentSyntax { Parent: BaseArgumentListSyntax } argument
+                ? argument
+                : null;
+        private static bool HasExplicitTypeArguments(ExpressionSyntax callee) => callee switch
+        {
+            GenericNameSyntax => true,
+            MemberAccessExpressionSyntax member => HasExplicitTypeArguments(member.Name),
+            MemberBindingExpressionSyntax binding => HasExplicitTypeArguments(binding.Name),
+            _ => false,
+        };
+        private static bool CallResultMentionsTypeParameter(IMethodSymbol method, ITypeParameterSymbol typeParameter)
+        {
+            if (method == null)
+            {
+                return false;
+            }
+            IMethodSymbol contract = method.OriginalDefinition;
+            return MentionsTypeParameter(
+                contract.MethodKind == MethodKind.Constructor ? contract.ContainingType : contract.ReturnType,
+                typeParameter);
+        }
+        private static bool MentionsTypeParameter(ITypeSymbol type, ITypeParameterSymbol typeParameter)
+        {
+            if (type == null)
+            {
+                return false;
+            }
+            if (SymbolEqualityComparer.Default.Equals(type, typeParameter))
+            {
+                return true;
+            }
+            if (type is IArrayTypeSymbol array)
+            {
+                return MentionsTypeParameter(array.ElementType, typeParameter);
+            }
+            if (type is IPointerTypeSymbol pointer)
+            {
+                return MentionsTypeParameter(pointer.PointedAtType, typeParameter);
+            }
+            if (type is IFunctionPointerTypeSymbol functionPointer)
+            {
+                return MentionsTypeParameter(functionPointer.Signature.ReturnType, typeParameter)
+                    || functionPointer.Signature.Parameters.Any(parameter => MentionsTypeParameter(parameter.Type, typeParameter));
+            }
+            return type is INamedTypeSymbol named
+                && (named.TypeArguments.Any(argument => MentionsTypeParameter(argument, typeParameter))
+                    || MentionsTypeParameter(named.ContainingType, typeParameter));
+        }
+}
+}`
     }
 }

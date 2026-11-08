@@ -44,6 +44,13 @@ internal class LiftedLocalFunctionNameAllocator {
         ISymbol,
         List[(Property IPropertySymbol, Name string)]
     ](SymbolEqualityComparer.Default)
+    private let nextLocalSuffixByType Dictionary[ISymbol, Dictionary[string, int32]] = Dictionary[
+        ISymbol,
+        Dictionary[string, int32]
+    ](SymbolEqualityComparer.Default)
+    private let nextTopLevelLocalSuffixByStem Dictionary[string, int32] = Dictionary[string, int32](
+        StringComparer.Ordinal
+    )
     private var compilationPreallocated bool
 
     func TryBeginCompilationPreallocation() bool {
@@ -118,6 +125,46 @@ internal class LiftedLocalFunctionNameAllocator {
             let name = allocate()
             this.scopedLocalNames.Add(key, name)
             return name
+        }
+    }
+
+    func GetNextLocalSuffix(emittedOwner INamedTypeSymbol?, stem string) int32 {
+        lock this.gate {
+            let owner ISymbol? = emittedOwner?.OriginalDefinition
+            if owner == nil {
+                return if this.nextTopLevelLocalSuffixByStem.TryGetValue(stem, out var topSuffix) {
+                    topSuffix
+                } else {
+                    1
+                }
+            }
+            if this.nextLocalSuffixByType.TryGetValue(owner, out var byStem) && byStem.TryGetValue(
+                stem,
+                out var suffix
+            ) {
+                return suffix
+            }
+            return 1
+        }
+    }
+
+    func SetNextLocalSuffix(emittedOwner INamedTypeSymbol?, stem string, nextSuffix int32) {
+        lock this.gate {
+            let owner ISymbol? = emittedOwner?.OriginalDefinition
+            if owner == nil {
+                if !this.nextTopLevelLocalSuffixByStem.TryGetValue(stem, out var currentTop) ||
+                    nextSuffix > currentTop {
+                    this.nextTopLevelLocalSuffixByStem[stem] = nextSuffix
+                }
+                return
+            }
+            if !this.nextLocalSuffixByType.TryGetValue(owner, out var byStem) {
+                byStem = Dictionary[string, int32](StringComparer.Ordinal)
+                this.nextLocalSuffixByType.Add(owner, byStem)
+            }
+            if !byStem.TryGetValue(stem, out var current) || nextSuffix > current {
+                byStem[stem] = nextSuffix
+            }
         }
     }
 
