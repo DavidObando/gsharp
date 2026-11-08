@@ -246,15 +246,6 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is INamedTypeSymbol type {
                 return TypeExpression(this.typeMapper.Map(type, this.context, identifier.GetLocation()))
             }
-            if identifier
-                .Identifier
-                .ValueText == "_" &&
-                this
-                .context
-                .GetSymbolInfo(identifier)
-                .Symbol is IParameterSymbol {
-                return IdentifierExpression("__underscore")
-            }
             if identifier.Identifier.ValueText == "_" && this.context.GetSymbolInfo(identifier).Symbol == nil {
                 return IdentifierExpression("_")
             }

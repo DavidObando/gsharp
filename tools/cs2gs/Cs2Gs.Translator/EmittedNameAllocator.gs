@@ -101,6 +101,20 @@ internal class EmittedNameAllocator {
             // neighbor. Locals and other body-scoped names without a CLR
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
+            if sourceName == "_" &&
+                (symbol is ILocalSymbol || symbol is IParameterSymbol) &&
+                this.GetReferencedBindingScopeNames(symbol!!) is {} referencedNames {
+                let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
+                taken.UnionWith(referencedNames)
+                var renamed = "underscore"
+                for var suffix = 2; taken.Contains(renamed); suffix++ {
+                    renamed = "underscore_" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }
+                for member in contract {
+                    this.emittedNames[member] = renamed
+                }
+                return renamed
+            }
             // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
             if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) &&
                 !contract
@@ -147,6 +161,24 @@ internal class EmittedNameAllocator {
         context GSharpIdentifierNameContext = GSharpIdentifierNameContext.General,
         scopeNames IEnumerable[string]? = nil
     ) string -> GSharpSyntaxFacts.GetEmittedIdentifier(name!!, context, scopeNames)
+
+    private func GetReferencedBindingScopeNames(symbol ISymbol) IReadOnlyCollection[string]? {
+        var names HashSet[string]? = nil
+        for reference in symbol.DeclaringSyntaxReferences {
+            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+            for identifier in reference.SyntaxTree.GetRoot().DescendantNodes().OfType[IdentifierNameSyntax]() {
+                if identifier.Identifier.ValueText == "_" && SymbolEqualityComparer.Default.Equals(
+                    model.GetSymbolInfo(identifier).Symbol,
+                    symbol
+                ) {
+                    let occupied = names ?? HashSet[string](StringComparer.Ordinal)
+                    names = occupied
+                    occupied.UnionWith(model.LookupSymbols(identifier.SpanStart).Select(SourceName))
+                }
+            }
+        }
+        return names
+    }
 
     func GetNamespaceName(namespaceSymbol INamespaceSymbol?) string? {
         if namespaceSymbol == nil || namespaceSymbol.IsGlobalNamespace {

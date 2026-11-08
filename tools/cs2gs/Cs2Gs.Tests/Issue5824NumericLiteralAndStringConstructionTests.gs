@@ -223,7 +223,7 @@ public class P
 }
 
 internal shared class LiteralConstructionRuntimeParity {
-    func AssertMatches(source string) {
+    func AssertMatches(source string, verifyTranslation Action[string]? = nil) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let compilation = CSharpCompilation.Create(
             "Native",
@@ -244,6 +244,7 @@ internal shared class LiteralConstructionRuntimeParity {
         let printed = GSharpPrinter.Print(
             CSharpToGSharpTranslator().TranslateDocument(LoadedDocument("Probe.cs", tree, model), context)
         )
+        verifyTranslation?.Invoke(printed)
         let directory = Path.Combine(
             AppContext.BaseDirectory,
             "literal-construction-parity",

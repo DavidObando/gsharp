@@ -344,7 +344,7 @@ partial class CSharpToGSharpTranslator {
             this.preserveEntryType || entryType.GetTypeMembers().Any(
                 (type INamedTypeSymbol) -> type.TypeKind != TypeKind.Delegate
             ) ||
-                EntryTypeExportsNonEntryMembers(entryType, entryPoint) ||
+                EntryTypeRequiresDeclaration(entryType, entryPoint) ||
                 DeclaresGeneratedRegexDefinition(entryType)
         )
         let keptTopLevelProgram INamedTypeSymbol? = if preserveEntryType && IsTopLevelStatementsProgram(entryType) {
@@ -1481,21 +1481,19 @@ partial class CSharpToGSharpTranslator {
         /// include, an `InternalsVisibleTo` test project, or reflection are all
         /// invisible to that scan. This check needs no cross-project knowledge: if
         /// hoisting would erase externally visible surface, keep the class. An entry
-        /// class whose non-entry members are all `private` exports nothing and
-        /// still hoists to the canonical top-level form (ADR-0115 §B.1/§B.11).
+        /// type with only private ordinary static methods can still hoist.
+        /// State and initialization require the original owner (#5875).
         /// @param entryType The entry point's enclosing type.
         /// @param entryPoint The bound entry-point method.
-        /// @returns `true` when hoisting would erase visible surface.
-        private func EntryTypeExportsNonEntryMembers(entryType INamedTypeSymbol?, entryPoint IMethodSymbol?) bool {
+        /// @returns `true` when hoisting would erase visible surface or unsupported members.
+        private func EntryTypeRequiresDeclaration(entryType INamedTypeSymbol?, entryPoint IMethodSymbol?) bool {
             for member in entryType!!.GetMembers() {
-                if member.IsImplicitlyDeclared || SymbolEqualityComparer.Default.Equals(member, entryPoint) ||
-                    (
-                    member is IMethodSymbol method &&
-                        (
-                        method.MethodKind == MethodKind.Constructor || method.MethodKind == MethodKind.StaticConstructor
-                    )
-                ) {
+                if member.IsImplicitlyDeclared || SymbolEqualityComparer.Default.Equals(member, entryPoint) {
                     continue
+                }
+                // Only ordinary static methods have a top-level mapping. Keep state and initialization on their owner.
+                if member is not IMethodSymbol{IsStatic: true, MethodKind: MethodKind.Ordinary} {
+                    return true
                 }
                 if member.DeclaredAccessibility != Accessibility.Private &&
                     member.DeclaredAccessibility != Accessibility.NotApplicable {

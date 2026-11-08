@@ -41,8 +41,8 @@ cs2gs_synthetic_families=(
   # live
   '__arg|argument spill (evaluation order)'
   '__spill|expression spill temporary'
-  '__underscore|discard rename'
   # retired or never emitted: these must stay 0
+  '__underscore|retired by #5877 (readable real underscore bindings)'
   '__switchExit|switch lowering label (GATED: syntheticLabelCeiling)'
   '__iteratorExit|iterator lowering label (GATED: syntheticLabelCeiling)'
   '__gotoCase|goto-case label (GATED: syntheticLabelCeiling)'

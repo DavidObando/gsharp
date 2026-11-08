@@ -541,20 +541,22 @@ public class C
     }
 
     @Fact
-    func ReadableLiftFallback_ReferencedUnderscoreParameterReservesEmittedName() {
+    func ReadableLiftFallback_ReferencedUnderscoreParameterAvoidsSourceHelperName() {
         let printed = Translate(`using System;
 
 public class C
 {
     public int Run(Func<int, int> _)
     {
-        return _(0) + __underscore(0);
-        static int __underscore(int n) =>
+        return _(0) + underscore(0);
+        static int underscore(int n) =>
             n == 0 ? 7 : Other<int>(n - 1);
-        static int Other<T>(int n) => __underscore(n);
+        static int Other<T>(int n) => underscore(n);
     }
 }`)
-        Assert.Contains("func __underscore_2(", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore_2", printed, StringComparison.Ordinal)
+        Assert.Contains("func underscore(", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(C().Run((value int32) -> 100))",
@@ -1012,7 +1014,8 @@ public class C
 
     public static int Run() => Apply(_ => _ + 1);
 }`)
-        Assert.Contains("__underscore", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 
