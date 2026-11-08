@@ -7,6 +7,7 @@ package GSharp.Core.Tests.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -20,6 +21,59 @@ import System.Runtime.Loader
 import Xunit
 
 class InterfaceAdaptationReviewTests {
+    @Theory
+    @InlineData(`interface ILeft { func Read() int32; }
+interface IRight { func Read() int32; }
+interface IBoth : ILeft, IRight { }`)
+    @InlineData(`interface IGeneric[T, Unused] { func Read() T; }
+interface IBoth : IGeneric[int32, string], IGeneric[int32, bool] { }`)
+    @InlineData(`interface IRoot { func Read() int32; }
+interface ILeft : IRoot { func Read() int32; }
+interface IRight : IRoot { func Read() int32; }
+interface IBoth : ILeft, IRight { }`)
+    func IndependentInheritedInterfaceSlotsDiagnoseAmbiguity(interfaces string) {
+        let source = "package IndependentSlots\n" + interfaces + `
+interface Reader { func Read() int32; }
+func Bad(source IBoth) Reader { return adapt[Reader](source) }`
+        let tree = SyntaxTree.Parse(source)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil)
+        let diagnostic = Assert.Single(program.Diagnostics)
+        Assert.Equal("GS0606", diagnostic.Id)
+        Assert.Contains("ambiguous", diagnostic.Message)
+        Assert.Equal(source.IndexOf("adapt", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("adapt[Reader](source)", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
+    @InlineData("int32", "ref int32")
+    @InlineData("ref int32", "ref readonly int32")
+    @InlineData("string", "string?")
+    func InheritedInterfaceReturnRefKindsAndNullabilityRemainDistinct(firstReturn string, secondReturn string) {
+        let tree = SyntaxTree.Parse(`package DistinctReturnShapes
+interface IFirst { func Read() ` + firstReturn + `; }
+interface ISecond { func Read() ` + secondReturn + `; }
+interface IBoth : IFirst, ISecond { }
+func First(source IBoth) IFirst { return adapt[IFirst](source) }
+func Second(source IBoth) ISecond { return adapt[ISecond](source) }`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil)
+        Assert.Empty(program.Diagnostics)
+        let methods = program
+            .Structs
+            .Where((type StructSymbol) -> type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+            .SelectMany(
+            func (type StructSymbol) IEnumerable[FunctionSymbol] {
+                return type.Methods
+            }
+        )
+            .ToArray()
+        Assert.Equal(2, methods.Length)
+        Assert.False(methods[0].ReturnRefKind == methods[1].ReturnRefKind && methods[0].Type == methods[1].Type)
+    }
+
     @Fact
     func RichBaseArgumentHeapRetentionRejectsRefAndRefLikeShapes() {
         let refConstructor ConstructorInfo? = typeof(RefConstructorBase).GetConstructor(
@@ -84,6 +138,16 @@ func Build(value int32) Reader {
         Assert.True(cache.Hits > int64(0))
         AssertSyntheticBodiesRegistered(first)
         AssertSyntheticBodiesRegistered(second)
+        Assert.NotEmpty(global.LatestRichAnonymousObjectPlans)
+        for plan in global.LatestRichAnonymousObjectPlans.Values {
+            Assert.NotNull(plan.MethodBodies)
+            let fields = plan
+                .GetType()
+                .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select((prop PropertyInfo) -> prop.PropertyType)
+                .ToArray()
+            Assert.DoesNotContain(typeof(ImmutableArray[BoundExpression]), fields)
+        }
     }
 
     @Fact
@@ -105,6 +169,43 @@ func Bad() { let value = adapt[Target](Source()) }`)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0606")
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RichMethodDiagnosticsSurviveRepeatedBinding(useBodyCache bool) {
+        let tree = SyntaxTree.Parse(`package RichDiagnostics
+interface Reader { func Read() int32; }
+func Build() Reader {
+    return object : Reader {
+        func Read() int32 { let ignored = 0 }
+        func Other() int32 { let ignored = 1 }
+    }
+}`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let cache = if useBodyCache {
+            BoundBodyCache()
+        } else {
+            default(BoundBodyCache?)
+        }
+        for var i = 0; i < 3; i++ {
+            let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil, cache)
+            Assert.Equal(2, program.Diagnostics.Length)
+            Assert.Equal(
+                []string{"Read", "Other"},
+                program
+                    .Diagnostics
+                    .Select(
+                    func (diagnostic Diagnostic) string {
+                        Assert.Equal("GS0100", diagnostic.Id)
+                        return diagnostic.Location.Text!!.ToString(diagnostic.Location.Span)
+                    }
+                )
+                    .ToArray()
+            )
+        }
+    }
+
     @Fact
     func UserPropertyContractRequiresMatchingUnscopedRefMetadata() {
         let target = CreateRefProperty(unscoped: true)
@@ -112,6 +213,67 @@ func Bad() { let value = adapt[Target](Source()) }`)
         Assert.False(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source))
         source.GetterSymbol?.MarkUnscopedRef()
         Assert.True(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RichMethodAdapterSynthesisSurvivesRepeatedBindingAndEmission(useBodyCache bool) {
+        let tree = SyntaxTree.Parse(`package RichAdapterRetention
+interface Reader { func Read() int32; }
+class Source(Value int32) { public func Read() int32 -> Value }
+func Build(value int32) Reader {
+    return object : Reader {
+        func Read() int32 -> adapt[Reader](Source(value)).Read()
+    }
+}
+public func Run() int32 {
+    let plain = adapt[Reader](Source(7))
+    return Build(6).Read() + plain.Read()
+}`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let cache = if useBodyCache {
+            BoundBodyCache()
+        } else {
+            default(BoundBodyCache?)
+        }
+        var previousBytes = Array.Empty[uint8]()
+        for var i = 0; i < 3; i++ {
+            let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil, cache)
+            Assert.Empty(program.Diagnostics)
+            let adapters = program
+                .Structs
+                .Where((type StructSymbol) -> type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+                .ToArray()
+            Assert.Equal(2, adapters.Length)
+            let methods = adapters.SelectMany(
+                func (type StructSymbol) IEnumerable[FunctionSymbol] {
+                    return type.Methods
+                }
+            )
+                .ToArray()
+            Assert.Equal(2, methods.Length)
+            for method in methods {
+                Assert.True(program.Functions.ContainsKey(method), method.Name)
+            }
+            using let pe = MemoryStream()
+            ReflectionMetadataEmitter.Emit(program, pe)
+            let bytes = pe.ToArray()
+            if i > 0 {
+                Assert.Equal(previousBytes, bytes)
+            }
+            previousBytes = bytes
+            pe.Position = 0
+            let context = AssemblyLoadContext("RichAdapterRetention-" + i.ToString(), isCollectible: true)
+            try {
+                let assembly = context.LoadFromStream(pe)
+                let programType = Assert.Single(assembly.GetTypes(), (type Type) -> type.Name == "<Program>")
+                Assert.Equal(13, programType.GetMethod("Run")!!.Invoke(nil, nil))
+            } finally {
+                context.Unload()
+            }
+        }
     }
 
     @Fact

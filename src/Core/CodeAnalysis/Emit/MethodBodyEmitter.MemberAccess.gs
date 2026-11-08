@@ -26,6 +26,14 @@ import System.Reflection.Metadata.Ecma335
 /// See `MethodBodyEmitter.cs` for the root partial (fields, constructor,
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
+    private func IsHeapPromotedFixedBufferVariable(variable VariableSymbol) bool -> this.asyncFieldMap != nil ||
+        this.iteratorEmitCtx != nil ||
+        this
+        .enclosingClosure
+        ?.CaptureFields
+        .ContainsKey(variable) == true ||
+        object.ReferenceEquals(variable, this.structThisParameter)
+
     private func EmitLoadVariable(variable VariableSymbol) {
         // Issue #216: const bindings have no IL slot — inline the literal value.
         if this.constValues != nil && this.constValues.TryGetValue(variable, out var cv) {
@@ -1552,8 +1560,10 @@ internal partial class MethodBodyEmitter {
             if receiver is BoundVariableExpression bve && this.TryLoadStructVariableAddress(bve) {
                 return
             }
-            if receiver is BoundTupleElementAccessExpression tuple &&
-                RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple) {
+            if receiver is BoundTupleElementAccessExpression tuple && this.outer.IsAddressableReceiverStorage(
+                tuple,
+                this.CanLoadVariableAddress
+            ) {
                 this.EmitTupleElementAccess(tuple, addressOnly: true)
                 return
             }
@@ -1607,6 +1617,13 @@ internal partial class MethodBodyEmitter {
             // here before this issue made such calls/properties lvalues, so
             // ReceiverSpillCollector never needed to plan a slot for it.
             if RefCapabilities.IsNativeRefReturningCall(receiver) {
+                this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
+                return
+            }
+            if receiver is not BoundVariableExpression && this.outer.IsAddressableReceiverStorage(
+                receiver,
+                this.CanLoadVariableAddress
+            ) {
                 this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
                 return
             }
@@ -1725,10 +1742,10 @@ internal partial class MethodBodyEmitter {
             this.EmitFieldAddress(fieldAccess)
             return
         }
-        if receiver is not BoundVariableExpression &&
-            receiver is not BoundFieldAccessExpression &&
-            RefCapabilities
-            .IsDirectlyAddressableForImplicitIn(receiver) {
+        if receiver is not BoundVariableExpression && this.outer.IsAddressableReceiverStorage(
+            receiver,
+            this.CanLoadVariableAddress
+        ) {
             this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
             return
         }
@@ -1788,52 +1805,10 @@ internal partial class MethodBodyEmitter {
         return true
     }
 
-    /// Returns `true` when [`fa`](paramref) is addressable —
-    /// i.e. `ldflda` against its receiver yields a valid managed
-    /// pointer. Static fields are always addressable; instance fields on
-    /// class receivers are addressable (the receiver is an object
-    /// reference); instance fields on value-type receivers are addressable
-    /// only if the receiver itself is addressable (a variable, or another
-    /// addressable field access).
-    private func IsAddressableFieldAccess(fa BoundFieldAccessExpression) bool {
-        if fa.Receiver == nil {
-            // Issue #1525: mirror ReflectionMetadataEmitter
-            // .IsAddressableFieldAccessForReceiverSpill — a static field is
-            // addressable via ldsflda except for an initonly (readonly) static
-            // value-type field outside its declaring type's .cctor, which must
-            // be spilled to a temp (defensive copy) to keep the IL verifiable.
-            // These two predicates MUST stay in sync: if they disagree the
-            // emitter looks up a spill slot the planner never reserved.
-            return this.outer.IsStaticFieldAddressLegalHere(fa.Field)
-        }
-        if fa.Receiver!!.Type is StructSymbol rs && rs.IsClass {
-            return true
-        }
-        if fa.Receiver!!.Type?.ClrType != nil && !fa.Receiver!!.Type.ClrType!!.IsValueType {
-            return true
-        }
-        if fa.Receiver is BoundVariableExpression bv && this.CanLoadVariableAddress(bv.Variable) {
-            return true
-        }
-        if fa.Receiver is BoundFieldAccessExpression nested {
-            return this.IsAddressableFieldAccess(nested)
-        }
-        if fa.Receiver is BoundTupleElementAccessExpression tuple {
-            return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
-        }
-        // Issue #3185: a prior-cell submission global (or a value-type CLR
-        // field chain rooted at one) is addressable storage.
-        if fa.Receiver is BoundClrPropertyAccessExpression clrReceiver {
-            return ReflectionMetadataEmitter.IsAddressableClrFieldChain(clrReceiver)
-        }
-        // Issue #3292: an array-backed element is addressable via `ldelema`
-        // regardless of how the collection reference itself was produced
-        // (the array reference is the storage root).
-        if fa.Receiver is BoundIndexExpression elementReceiver {
-            return elementReceiver.IsArrayBackedElementAccess
-        }
-        return RefCapabilities.IsDirectlyAddressableForImplicitIn(fa.Receiver!!)
-    }
+    /// Uses the shared receiver-storage query to decide whether the field has a legal address in this context.
+    private func IsAddressableFieldAccess(fa BoundFieldAccessExpression) bool -> this
+        .outer
+        .IsAddressableReceiverStorage(fa, this.CanLoadVariableAddress)
 
     /// Issue #3185: emits the managed-pointer address of an addressable CLR
     /// field chain (see (cref:ReflectionMetadataEmitter.IsAddressableClrFieldChain)):
@@ -1844,7 +1819,7 @@ internal partial class MethodBodyEmitter {
     /// @param access The CLR member access whose address to load.
     /// @returns `true` once the address is on the stack.
     private func TryEmitAddressableClrFieldAddress(access BoundClrPropertyAccessExpression) bool {
-        if !ReflectionMetadataEmitter.IsAddressableClrFieldChain(access) {
+        if !this.outer.IsAddressableReceiverStorage(access, this.CanLoadVariableAddress) {
             return false
         }
         this.EmitAddressOf(BoundAddressOfExpression(nil, access))

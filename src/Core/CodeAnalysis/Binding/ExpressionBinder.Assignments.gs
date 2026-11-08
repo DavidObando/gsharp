@@ -3583,7 +3583,9 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         let tempName = "<derefAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, pointer.Type)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, pointer.Type){
+            IsManagedPointerSlot = ContainsFixedBufferPointer(pointer)
+        }
         if !$scope.TryDeclareVariable(tempVar) {
             // Defensive: synthesized names cannot collide with user identifiers
             // (the `<...>` prefix is not a valid identifier token), so a failure
@@ -4007,7 +4009,8 @@ internal partial class ExpressionBinder {
                 MakeFixedBufferPointer(
                     BoundVariableExpression(nil, implicitField.Receiver),
                     implicitField.StructType,
-                    implicitField.Field
+                    implicitField.Field,
+                    fixedBufferSyntax: syntax.TargetIdentifier
                 )
             } else {
                 let makeNarrowedField(TypeSymbol) -> BoundExpression = (
@@ -4034,7 +4037,9 @@ internal partial class ExpressionBinder {
                 )
             }
             let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type)
+            let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type){
+                IsManagedPointerSlot = ContainsFixedBufferPointer(fieldAccess)
+            }
             $scope.TryDeclareVariable(tempVar)
             let declaration = BoundVariableDeclaration(syntax, tempVar, fieldAccess)
             let assignment = BindIndexedAssignmentToVariable(

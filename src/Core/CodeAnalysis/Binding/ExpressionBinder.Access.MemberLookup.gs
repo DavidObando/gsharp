@@ -824,7 +824,21 @@ internal partial class ExpressionBinder {
                 )
             }
             case ix is IndexExpressionSyntax {
-                let indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target)
+                let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
+                if binderCtx.SuppressedMovableFixedBufferIndexSyntaxes?.Contains(ix) != true &&
+                    !ix.IsNullConditional &&
+                    ix
+                    .Indices
+                    .Count == 1 &&
+                    !(ix.Index is RangeExpressionSyntax) {
+                    binderCtx.AllowedMovableFixedBufferSyntax = GetRightmostMemberNameSyntax(ix.Target)
+                }
+                var indexTarget BoundExpression
+                try {
+                    indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target)
+                } finally {
+                    binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
+                }
                 if indexTarget is BoundErrorExpression {
                     return indexTarget
                 }
@@ -1004,7 +1018,7 @@ internal partial class ExpressionBinder {
                         // type. Indexing / passing then flows through the
                         // existing unmanaged-pointer machinery.
                         if field.IsFixedBuffer {
-                            return MakeFixedBufferPointer(receiver, declaringType, field)
+                            return BindFixedBufferPointer(receiver, declaringType, field, ne)
                         }
                         return ApplyMemberNarrowing(BoundFieldAccessExpression(nil, receiver, declaringType, field))
                     }
@@ -1676,7 +1690,20 @@ internal partial class ExpressionBinder {
             // index operand). Otherwise it indexes the captured value once.
             return BindNullConditionalIndexExpression(syntax)
         }
-        let target = BindExpression(syntax.Target)
+        let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
+        if binderCtx.SuppressedMovableFixedBufferIndexSyntaxes?.Contains(syntax) != true &&
+            syntax
+            .Indices
+            .Count == 1 &&
+            !(syntax.Index is RangeExpressionSyntax) {
+            binderCtx.AllowedMovableFixedBufferSyntax = GetRightmostMemberNameSyntax(syntax.Target)
+        }
+        var target BoundExpression
+        try {
+            target = BindExpression(syntax.Target)
+        } finally {
+            binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
+        }
         if syntax.Indices.Count > 1 || IsRectangularArrayType(target.Type) {
             return BindRectangularIndexAgainstTarget(target, syntax.Indices, syntax.Target.Location)
         }
@@ -2497,10 +2524,19 @@ internal partial class ExpressionBinder {
                 }
             )
         }
-        let boundReceiver = if chainBase == nil {
-            BindExpression(remainingChain)
-        } else {
-            BindAccessorStep(chainBase, nil, remainingChain)
+        let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
+        if !(indexSyntax is RangeExpressionSyntax) {
+            binderCtx.AllowedMovableFixedBufferSyntax = GetRightmostMemberNameSyntax(remainingChain)
+        }
+        var boundReceiver BoundExpression
+        try {
+            boundReceiver = if chainBase == nil {
+                BindExpression(remainingChain)
+            } else {
+                BindAccessorStep(chainBase, nil, remainingChain)
+            }
+        } finally {
+            binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
         }
         if boundReceiver is BoundErrorExpression || boundReceiver.Type == TypeSymbol.Error {
             return BoundErrorExpression(nil)
@@ -2527,7 +2563,9 @@ internal partial class ExpressionBinder {
             )
         }
         let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type){
+            IsManagedPointerSlot = ContainsFixedBufferPointer(boundReceiver)
+        }
         if !$scope.TryDeclareVariable(tempVar) {
             // Defensive: synthesized names cannot collide with user identifiers
             // (the `<...>` prefix is not a valid identifier token), so a failure
@@ -5572,6 +5610,35 @@ internal partial class ExpressionBinder {
         return true
     }
 
+    internal func BindFixedBufferPointer(
+        receiver BoundExpression,
+        declaringType StructSymbol,
+        field FieldSymbol,
+        syntax SyntaxNode?,
+        allowMovablePointer bool = false
+    ) BoundExpression {
+        let requiresFixed = !allowMovablePointer &&
+            (syntax == nil || !object.ReferenceEquals(syntax, binderCtx.AllowedMovableFixedBufferSyntax))
+        let pointer = MakeFixedBufferPointer(
+            receiver,
+            declaringType,
+            field,
+            if requiresFixed {
+                syntax
+            } else {
+                default(SyntaxNode?)
+            },
+            syntax
+        )
+        if requiresFixed &&
+            TryGetFixedBufferFieldAccess(pointer, out var bufferAccess) &&
+            !StatementBinder
+            .IsFixedVariable(bufferAccess) {
+            Diagnostics.ReportMovableFixedBufferRequiresFixed(syntax?.Location ?? default(TextLocation), field.Name)
+        }
+        return pointer
+    }
+
     shared {
         /// Issue #4986: the names of the members `Nullable<T>` itself
         /// declares (`HasValue`, `Value`, `GetValueOrDefault`). Overrides of
@@ -7050,6 +7117,23 @@ internal partial class ExpressionBinder {
             return type
         }
 
+        internal func GetRightmostMemberNameSyntax(syntax ExpressionSyntax) SyntaxNode {
+            var current = syntax
+            while true {
+                if current is ParenthesizedExpressionSyntax parenthesized {
+                    current = parenthesized.Expression
+                } else if current is CheckedExpressionSyntax checkedExpr {
+                    current = checkedExpr.Expression
+                } else if current is BlockExpressionSyntax{Expression: {} blockExpr} {
+                    current = blockExpr
+                } else if current is AccessorExpressionSyntax accessor {
+                    current = accessor.RightPart
+                } else {
+                    return current
+                }
+            }
+        }
+
         /// ADR-0122 §10 / issue #1035: builds the `*T` value a fixed-size
         /// buffer field decays to — the address of the inline backing struct
         /// (whose first element sits at offset 0) reinterpreted to the element
@@ -7062,10 +7146,16 @@ internal partial class ExpressionBinder {
         private func MakeFixedBufferPointer(
             receiver BoundExpression,
             declaringType StructSymbol,
-            field FieldSymbol
+            field FieldSymbol,
+            escapeSyntax SyntaxNode? = nil,
+            fixedBufferSyntax SyntaxNode? = nil
         ) BoundExpression {
             let fieldAccess = BoundFieldAccessExpression(nil, receiver, declaringType, field)
-            let addressOf = BoundAddressOfExpression(nil, fieldAccess, unmanaged: true)
+            // Preserve escaping-source syntax for validation after capture and state-machine promotion.
+            let addressOf = BoundAddressOfExpression(nil, fieldAccess, unmanaged: true){
+                FixedBufferEscapeSyntax = escapeSyntax,
+                FixedBufferSyntax = fixedBufferSyntax ?? escapeSyntax
+            }
             if field.FixedBufferElementType is not{} elementType {
                 throw InvalidOperationException("Fixed-buffer field is missing its element type.")
             }
@@ -7100,6 +7190,25 @@ internal partial class ExpressionBinder {
             }
             bufferAccess = nil
             return false
+        }
+
+        internal func ContainsFixedBufferPointer(expression BoundExpression) bool -> switch expression {
+            case block is BoundBlockExpression: ContainsFixedBufferPointer(block.Expression)
+            case conditional is BoundConditionalExpression: ContainsFixedBufferPointer(conditional.WhenTrue) ||
+                ContainsFixedBufferPointer(conditional.WhenFalse)
+            case binary is BoundBinaryExpression: ContainsFixedBufferPointer(binary.Left) ||
+                ContainsFixedBufferPointer(binary.Right)
+            case conversion is BoundConversionExpression: (
+                TryGetFixedBufferFieldAccess(conversion, out var bufferAccess) && !StatementBinder.IsFixedVariable(
+                    bufferAccess,
+                    (_ VariableSymbol) -> true,
+                    allowTemporaryValues: false
+                )
+            ) ||
+                ContainsFixedBufferPointer(conversion.Expression)
+            case variable is BoundVariableExpression{Variable: LocalVariableSymbol{IsManagedPointerSlot: true}}: true
+            default: TryGetFixedBufferFieldAccess(expression, out var defaultAccess) &&
+                !StatementBinder.IsFixedVariable(defaultAccess, (_ VariableSymbol) -> true, allowTemporaryValues: false)
         }
     }
 }

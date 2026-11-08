@@ -29,6 +29,270 @@ import Xunit
 /// the declaring struct decays exactly like the explicit `this.Name`.
 open class Issue4378FixedBufferPinEmitTests {
     @Fact
+    func MovableBufferAssignments_UseManagedByRefLocalsAcrossSynchronousGC() {
+        let source = BoneInfoPrelude + `unsafe class MovableClassBuffer {
+    fixed Data [8]int8
+
+    func WriteBare(indexFn () -> int32, valueFn () -> int8) {
+        Data[indexFn()] = valueFn()
+    }
+
+    func ReadBare(index int32) int32 -> int32(Data[index])
+}
+
+func CompactHeap(holes []object?) {
+    for var i = 1; i < holes.Length; i += 2 {
+        holes[i] = nil
+    }
+    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true)
+    GC.WaitForPendingFinalizers()
+    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true)
+}
+
+func CollectIndex(holes []object?, index int32) int32 {
+    CompactHeap(holes)
+    return index
+}
+
+func CollectByte(holes []object?, value int8) int8 {
+    CompactHeap(holes)
+    return value
+}
+
+unsafe func ExerciseAssignments(holes []object?, h Holder, c MovableClassBuffer) {
+    h.B.Name[CollectIndex(holes, 0)] = CollectByte(holes, int8(11))
+    h.B.Name[CollectIndex(holes, 1)] = int8(20)
+    h.B.Name[CollectIndex(holes, 1)] += CollectByte(holes, int8(2))
+    c.WriteBare(() -> CollectIndex(holes, 2), () -> CollectByte(holes, int8(33)))
+    var sink = int8(0)
+    h.B.Name[CollectIndex(holes, 3)], sink = CollectByte(holes, int8(44)), CollectByte(holes, int8(55))
+    let flag = false
+    h.B.Name[{ if flag { return } CollectIndex(holes, 4) }] = { if flag { return } CollectByte(holes, int8(66)) }
+    let read4 = h.B.Name[{ if flag { return } CollectIndex(holes, 4) }]
+    Console.WriteLine(int32(h.B.Name[0]))
+    Console.WriteLine(int32(h.B.Name[1]))
+    Console.WriteLine(c.ReadBare(2))
+    Console.WriteLine(int32(h.B.Name[3]))
+    Console.WriteLine(int32(sink))
+    Console.WriteLine(int32(read4))
+}
+
+unsafe func run() {
+    var holes = [256]object?
+    for var i = 0; i < holes.Length; i++ {
+        holes[i] = [1024]byte
+    }
+    let holder = Holder()
+    let classBuf = MovableClassBuffer()
+    for var i = 0; i < holes.Length; i += 2 {
+        holes[i] = nil
+    }
+    ExerciseAssignments(holes, holder, classBuf)
+}
+run()`
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4378_assign_gc_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            Compile(srcPath, outPath, "exe")
+            using let pe = PEReader(File.OpenRead(outPath))
+            let md = pe.GetMetadataReader()
+            for methodName in[]string{"ExerciseAssignments", "WriteBare"} {
+                let method = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == methodName)
+                let body = pe.GetMethodBody(method.RelativeVirtualAddress)
+                Assert.False(body.LocalSignature.IsNil, "expected a local signature for $methodName")
+                let localSig = md.GetBlobBytes(md.GetStandaloneSignature(body.LocalSignature).Signature)
+                Assert.True(
+                    ContainsSequence(localSig, []uint8{0x10, 0x04}),
+                    "expected managed 'int8&' local in $methodName; signature was ${BitConverter.ToString(localSig)}"
+                )
+                Assert.False(
+                    ContainsSequence(localSig, []uint8{0x0F, 0x04}),
+                    "unexpected unmanaged 'int8*' local in $methodName; signature was ${BitConverter.ToString(localSig)}"
+                )
+            }
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch {
+                // ignored
+
+            }
+        }
+        Assert.Equal(Lines("11", "22", "33", "44", "55", "66"), CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("return int32((h.B.Name)[await NextIndex()])")
+    @InlineData("return int32(h.B.Name[await NextIndex()])")
+    @InlineData("return int32((b.Name)[await NextIndex()])")
+    @InlineData("return int32((MakeBone().Name)[await NextIndex()])")
+    @InlineData("return int32(((b, 0).Item1.Name)[await NextIndex()])")
+    @InlineData("let p *int8 = MakeBone().Name\n    await System.Threading.Tasks.Task.Yield()\n    return int32(p[0])")
+    @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
+    @InlineData("var sink = int8(0)\n    h.B.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    sink, h.B.Name[0] = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    b.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    func AwaitingIndexBufferPointer_DriverRejectsUnpinnedDecay(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + `func MakeBone() BoneInfo -> BoneInfo{}
+async func NextIndex() int32 {
+    await System.Threading.Tasks.Task.Yield()
+    return 0
+}
+async func NextByte() int8 {
+    await System.Threading.Tasks.Task.Yield()
+    return int8(1)
+}
+unsafe async func bad(h Holder, b BoneInfo) int32 {
+    ` + statement + `
+}`
+        let (code, output) = fixture.TryCompile(source, "awaiting-index-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.LastIndexOf("Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("awaiting-index-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func InlineAwaitBufferPointer_DriverRejectsUnpinnedDecay(parameter bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + `unsafe async func bad(PARAMETER) int32 {
+    LOCAL
+    let p *int8 = ({ await System.Threading.Tasks.Task.Yield()
+        b }).Name
+    return int32(p[0])
+}`.Replace(
+            "PARAMETER",
+            if parameter {
+                "b BoneInfo"
+            } else {
+                string.Empty
+            }
+        )
+            .Replace(
+            "LOCAL",
+            if parameter {
+                string.Empty
+            } else {
+                "var b = BoneInfo{}"
+            }
+        )
+        let (code, output) = fixture.TryCompile(source, "inline-await-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.LastIndexOf("Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("inline-await-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Theory
+    @InlineData(`unsafe func bad() {
+    var b = BoneInfo{}
+    let p *int8 = b.Name
+    let read = func() int32 { return b.Parent }
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func bad() sequence[int32] {
+    var b = BoneInfo{}
+    yield 0
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    func HeapPromotedBufferPointer_DriverRejectsUnpinnedDecay(function string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + function
+        let (code, output) = fixture.TryCompile(source, "heap-promoted-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.IndexOf("b.Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("heap-promoted-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Fact
+    func LocalBlockAndTupleBuffers_ExecuteWithoutPinning() {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    b.Name[0] = int8(17)
+    var pair = (b, (b, 0))
+    let block *int8 = ({ let marker = 0
+        b }).Name
+    let tuple *int8 = pair.Item1.Name
+    let nested *int8 = pair.Item2.Item1.Name
+    let temporary *int8 = (b, 0).Item1.Name
+    Console.WriteLine(int32(block[0]))
+    Console.WriteLine(int32(tuple[0]))
+    Console.WriteLine(int32(nested[0]))
+    Console.WriteLine(int32(temporary[0]))
+}
+run()`
+        Assert.Equal(Lines("17", "17", "17", "17"), CompileAndRun(source))
+    }
+
+    @Theory
+    @InlineData("pair.Item1")
+    @InlineData("pair.Item2.Item1")
+    func BlockWrappedTupleBufferDecay_PreservesLocalStorage(element string) {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    b.Name[0] = int8(17)
+    var pair = (b, (b, 0))
+    var evaluations = 0
+    let p *int8 = ({ evaluations += 1
+        ELEMENT }).Name
+    p[0] = int8(41)
+    Console.WriteLine(int32(p[0]))
+    Console.WriteLine(int32(ELEMENT.Name[0]))
+    Console.WriteLine(evaluations)
+}
+run()`.Replace("ELEMENT", element, StringComparison.Ordinal)
+        Assert.Equal(Lines("41", "41", "1"), CompileAndRun(source))
+    }
+
+    @Fact
+    func CapturedBufferPins_PreserveStorageAcrossCollections() {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    let read = func() int32 { return int32(b.Name[0]) }
+    fixed p *int8 = b.Name {
+        GC.Collect()
+        p[0] = int8(29)
+        GC.Collect()
+        Console.WriteLine(read())
+    }
+    let write = func() int32 {
+        fixed p *int8 = b.Name {
+            GC.Collect()
+            p[0] += int8(1)
+            return int32(p[0])
+        }
+    }
+    Console.WriteLine(write())
+    Console.WriteLine(read())
+}
+run()`
+        Assert.Equal(Lines("29", "30", "30"), CompileAndRun(source))
+    }
+
+    @Fact
     func ClassFieldReceiver_PinsAndReadsThroughPointer() {
         let source = BoneInfoPrelude + `unsafe func run() {
     var h = Holder()
@@ -172,6 +436,63 @@ unsafe func run() {
 run()`
         let output = CompileAndRun(source)
         Assert.Equal(Lines("99", "99"), output)
+    }
+
+    @Fact
+    func MovableBufferPointerOutsideFixed_DriverReportsGS0638_WhileIndexAndLocalBufferSucceed() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4383_").FullName
+        try {
+            let badPath = Path.Combine(tempDir, "bad.gs")
+            let badOut = Path.Combine(tempDir, "bad.dll")
+            File.WriteAllText(badPath, BoneInfoPrelude + `unsafe func bad(h Holder, flag bool, maybe int32?) *int8 {
+    let p *int8 = &{
+        let marker = 0
+        flag ? h.B.Name[0] : h.B.Name[1]
+    }
+    let q *int8 = &(if let n = maybe { h.B.Name[0] } else { h.B.Name[1] })
+    let _ = &(flag ? ref h.B.Name[0] : ref h.B.Name[1])
+    return h.B.Name
+}
+`)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var badExit int32
+            try {
+                badExit = Program.Main(
+                    []string{"/out:" + badOut, "/target:library", "/targetframework:net10.0", badPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let combined = compileOut.ToString() + compileErr.ToString()
+            Assert.NotEqual(0, badExit)
+            Assert.False(File.Exists(badOut))
+            Assert.Equal(7, combined.Split("error GS0638:").Length - 1)
+            Assert.Contains("'Name'", combined)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch {
+                // ignored
+
+            }
+        }
+        let validSource = BoneInfoPrelude + `unsafe func run() {
+    var h = Holder()
+    h.B.Name[0] = int8(42)
+    var local = h.B
+    var localPtr *int8 = local.Name
+    Console.WriteLine(int32(h.B.Name[0]))
+    Console.WriteLine(int32(localPtr[0]))
+}
+
+run()`
+        Assert.Equal(Lines("42", "42"), CompileAndRun(validSource))
     }
 
     @Fact

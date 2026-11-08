@@ -14,6 +14,48 @@ import System.Linq
 import Xunit
 
 open class RefInitializationHoisterTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RefLocalAddressReconstruction_PreservesSafetyProvenance(readOnly bool) {
+        let syntax = SyntaxTree.Parse("var values = []int32{1}").Root
+        let array = LocalVariableSymbol("values", false, TypeSymbol.FromClrType(typeof([]int32)))
+        let operand = BoundIndexExpression(
+            nil,
+            BoundVariableExpression(nil, array),
+            BoundLiteralExpression(nil, 0),
+            TypeSymbol.Int32
+        )
+        let address = BoundAddressOfExpression(syntax, operand, unmanaged: false, readOnly){
+            FixedBufferEscapeSyntax = syntax
+        }
+        let slot = LocalVariableSymbol("slot", false, address.Type)
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](
+                BoundVariableDeclaration(nil, slot, address),
+                BoundExpressionStatement(nil, BoundVariableExpression(nil, slot))
+            )
+        )
+        let result = RefInitializationHoister.Rewrite(body)
+        let prelude = Assert.IsType[BoundBlockStatement](result.Statements[0])
+        let probe = Assert.IsType[BoundAddressOfExpression](
+            Assert.IsType[BoundExpressionStatement](prelude.Statements[^1]).Expression
+        )
+        let rebuilt = Assert.IsType[BoundAddressOfExpression](
+            Assert.IsType[BoundExpressionStatement](result.Statements[1]).Expression
+        )
+        Assert.NotSame(operand, rebuilt.Operand)
+        Assert.Same(probe.Operand, rebuilt.Operand)
+        for reference in[]BoundAddressOfExpression{probe, rebuilt} {
+            Assert.Equal(address.Type, reference.Type)
+            Assert.False(reference.IsUnmanaged)
+            Assert.Equal(readOnly, reference.IsReadOnly)
+            Assert.Same(syntax, reference.Syntax)
+            Assert.Same(syntax, reference.FixedBufferEscapeSyntax)
+        }
+    }
+
     @Fact
     func RefLocal_NotCrossingAwait_LeftAlone() {
         // A body with no await: the hoister still eliminates ref locals

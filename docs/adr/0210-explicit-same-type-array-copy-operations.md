@@ -1419,7 +1419,8 @@ through native-slice elements. Ref-returning storage remains a location through
 bound-block prefixes; source-field receivers use the canonical addressability
 query. This correction needs no F1 carriers, copy bridges or verifier-policy
 changes. It does not complete F2/F3 or enable fixed-array value defaults.
-Suspending stores remain a separate gate, including the existing #5012 defect.
+The #5012 suspended-store compiler defect was resolved on `main` (#5776), while
+broader F2 value-lowering and suspended-store admission work remains unvalidated.
 Neither foundation grants retained fixed views.
 F1/F2a integration must include #5331's complete-diagnostic-set correction;
 the earlier green F1/F2a heads predate that shared policy fix.
@@ -1478,12 +1479,11 @@ checks, numeric empty-allocation inference or `migrationReady: false`.
 Actual implementation/ref witnesses independently inspect field order and
 construct canonical inputs; a round trip alone is not a copy oracle.
 
-The broader native-slice nested-field write gate remains blocked by
-[#5325](https://github.com/DavidObando/gsharp/issues/5325).
-Released 0.5.212 silently drops an imported nested value-field store through
-a slice element; the corresponding same-file case reports GS9998.
+The synchronous native-slice nested-field write gate ([#5325](https://github.com/DavidObando/gsharp/issues/5325))
+and the [#5012](https://github.com/DavidObando/gsharp/issues/5012) suspended-store compiler defect
+are resolved on `main` (#5336/#5348, #5776); broader F2 value-lowering and suspended-store admission work remains unvalidated.
 F2a tests whole-carrier stores and existing retained roots.
-It neither works around this compiler defect nor claims that full F2,
+It neither works around compiler defects nor claims that full F2,
 fixed views/promotion, equality/protocol admission or breaking rollout is ready.
 
 Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8

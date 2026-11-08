@@ -198,20 +198,31 @@ internal partial class ExpressionBinder {
         while rawOperand is ParenthesizedExpressionSyntax pen {
             rawOperand = pen.Expression
         }
-        if rawOperand is ConditionalRefArgumentExpressionSyntax condOperand {
-            return conversions.BindConditionalRefArgument(
-                condOperand,
-                outerModifier: nil,
-                bindConditionalAddress: BindConditionalAddressCore
-            )
+        let previousSuppressedIndices = binderCtx.SuppressedMovableFixedBufferIndexSyntaxes
+        if binderCtx.InUnsafeContext {
+            var suppressedIndices HashSet[IndexExpressionSyntax]? = nil
+            CollectAddressedIndexSyntaxes(rawOperand, ref suppressedIndices)
+            binderCtx.SuppressedMovableFixedBufferIndexSyntaxes = suppressedIndices
         }
-        // ADR-0062: a general conditional expression as the operand of `&`
-        // binds to the conditional-address path (preserving ADR-0061 byref
-        // safety) when both arms are lvalues of a common pointee type.
-        if rawOperand is ConditionalExpressionSyntax generalCond {
-            return BindConditionalAddressFromGeneral(generalCond, outerModifier: nil)
+        var operand BoundExpression
+        try {
+            if rawOperand is ConditionalRefArgumentExpressionSyntax condOperand {
+                return conversions.BindConditionalRefArgument(
+                    condOperand,
+                    outerModifier: nil,
+                    bindConditionalAddress: BindConditionalAddressCore
+                )
+            }
+            // ADR-0062: a general conditional expression as the operand of `&`
+            // binds to the conditional-address path (preserving ADR-0061 byref
+            // safety) when both arms are lvalues of a common pointee type.
+            if rawOperand is ConditionalExpressionSyntax generalCond {
+                return BindConditionalAddressFromGeneral(generalCond, outerModifier: nil)
+            }
+            operand = BindExpression(syntax.Operand)
+        } finally {
+            binderCtx.SuppressedMovableFixedBufferIndexSyntaxes = previousSuppressedIndices
         }
-        let operand = BindExpression(syntax.Operand)
         if operand is BoundErrorExpression {
             return operand
         }
@@ -300,6 +311,58 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         return BoundAddressOfExpression(nil, operand, unmanaged: binderCtx.InUnsafeContext)
+    }
+
+    private func CollectAddressedIndexSyntaxes(
+        expression ExpressionSyntax?,
+        ref target HashSet[IndexExpressionSyntax]?
+    ) {
+        if expression == nil {
+            return
+        }
+        switch expression {
+            case parenthesized is ParenthesizedExpressionSyntax {
+                CollectAddressedIndexSyntaxes(parenthesized.Expression, ref target)
+            }
+            case block is BlockExpressionSyntax {
+                CollectAddressedIndexSyntaxes(block.Expression, ref target)
+            }
+            case checkedExpr is CheckedExpressionSyntax {
+                CollectAddressedIndexSyntaxes(checkedExpr.Expression, ref target)
+            }
+            case conditional is ConditionalExpressionSyntax {
+                CollectAddressedIndexSyntaxes(conditional.WhenTrue, ref target)
+                CollectAddressedIndexSyntaxes(conditional.WhenFalse, ref target)
+            }
+            case condRef is ConditionalRefArgumentExpressionSyntax {
+                CollectAddressedIndexSyntaxes(condRef.WhenTrue, ref target)
+                CollectAddressedIndexSyntaxes(condRef.WhenFalse, ref target)
+            }
+            case refArg is RefArgumentExpressionSyntax {
+                CollectAddressedIndexSyntaxes(refArg.Expression, ref target)
+            }
+            case ifExpr is IfExpressionSyntax {
+                CollectAddressedIndexSyntaxes(ifExpr.ThenBlock, ref target)
+                CollectAddressedIndexSyntaxes(ifExpr.ElseExpression, ref target)
+            }
+            case ifLetExpr is IfLetExpressionSyntax {
+                CollectAddressedIndexSyntaxes(ifLetExpr.ThenBlock, ref target)
+                CollectAddressedIndexSyntaxes(ifLetExpr.ElseExpression, ref target)
+            }
+            case switchExpr is SwitchExpressionSyntax {
+                for arm in switchExpr.Arms {
+                    CollectAddressedIndexSyntaxes(arm.Result, ref target)
+                }
+            }
+            case accessor is AccessorExpressionSyntax {
+                CollectAddressedIndexSyntaxes(accessor.RightPart, ref target)
+            }
+            case index is IndexExpressionSyntax {
+                let set = target ?? HashSet[IndexExpressionSyntax](ReferenceEqualityComparer.Instance)
+                let _ = set.Add(index)
+                target = set
+            }
+        }
     }
 
     /// ADR-0039: Binds `*expr` — dereferences a managed pointer.

@@ -4467,12 +4467,7 @@ internal partial class StatementBinder {
                             reboundRef is BoundAddressOfExpression reboundAddr &&
                             !object
                             .ReferenceEquals(reboundAddr.Operand, finalAddr.Operand) {
-                            let rebuiltAddr = BoundAddressOfExpression(
-                                finalAddr.Syntax,
-                                reboundAddr.Operand,
-                                finalAddr.IsUnmanaged,
-                                finalAddr.IsReadOnly
-                            )
+                            let rebuiltAddr = finalAddr.Update(reboundAddr.Operand)
                             replacements[finalAddr] = rebuiltAddr
                             finalArg = rebuiltAddr
                         } else if finalArg is BoundConditionalAddressExpression finalCondAddr &&

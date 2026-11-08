@@ -8,6 +8,8 @@ import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
+import System.Text.Json
+import System.Text.Json.Nodes
 import System.Text.RegularExpressions
 import System.Xml.Linq
 import Cs2Gs.Translator.Loading
@@ -294,6 +296,7 @@ internal shared class GSharpProjectTransformer {
             destinationProjectDirectory,
             generatedProjectPaths
         )
+        let suppressedProjectNames = HashSet[string](StringComparer.OrdinalIgnoreCase)
         for projectReference in ElementsNamed(document, "ProjectReference").ToList() {
             let include XAttribute? = AttributeNamed(projectReference, "Include")
             if include == nil || string.IsNullOrWhiteSpace(include.Value) {
@@ -322,10 +325,74 @@ internal shared class GSharpProjectTransformer {
                 // looks for the built assembly on disk — and drop only its
                 // contribution to the reference set.
                 projectReference.SetAttributeValue(XName?("ReferenceOutputAssembly")!!, "false")
+                let projectName = Path.GetFileNameWithoutExtension(sourceReferencePath)
+                if !string.IsNullOrEmpty(projectName) {
+                    suppressedProjectNames.Add(projectName)
+                    suppressedProjectNames.Add("GSharp." + projectName)
+                }
                 continue
             }
             include.Value = Path.GetRelativePath(destinationProjectDirectory, Path.GetFullPath(generatedProjectPath))
                 .Replace('\\', '/')
+        }
+        if suppressedProjectNames.Count > 0 {
+            PruneSuppressedProjectsFromLockFile(destinationProjectDirectory, suppressedProjectNames)
+        }
+    }
+
+    internal func PruneSuppressedProjectsFromLockFile(
+        destinationProjectDirectory string,
+        suppressedProjectNames IReadOnlySet[string]
+    ) {
+        let lockFilePath = Path.Combine(destinationProjectDirectory, "packages.lock.json")
+        if !File.Exists(lockFilePath) {
+            return
+        }
+        var rootNode JsonNode? = nil
+        try {
+            rootNode = JsonNode.Parse(File.ReadAllText(lockFilePath))
+        } catch (JsonException) {
+            return
+        }
+        if rootNode is not JsonObject root || root["dependencies"] is not JsonObject dependencies {
+            return
+        }
+        var changed = false
+        for tfmPair in dependencies {
+            if tfmPair.Value is not JsonObject tfmDependencies {
+                continue
+            }
+            let toRemove = List[string]()
+            for depPair in tfmDependencies {
+                if depPair.Value is not JsonObject depObj {
+                    continue
+                }
+                if !string.Equals(depObj["type"]?.GetValue[string](), "Project", StringComparison.OrdinalIgnoreCase) {
+                    continue
+                }
+                if suppressedProjectNames.Contains(depPair.Key) {
+                    toRemove.Add(depPair.Key)
+                    continue
+                }
+                if depObj["dependencies"] is JsonObject nestedDependencies {
+                    let nestedRemove = nestedDependencies
+                        .Select((kv KeyValuePair[string, JsonNode?]) -> kv.Key)
+                        .Where((key string) -> suppressedProjectNames.Contains(key))
+                        .ToList()
+                    for nestedKey in nestedRemove {
+                        nestedDependencies.Remove(nestedKey)
+                        changed = true
+                    }
+                }
+            }
+            for key in toRemove {
+                tfmDependencies.Remove(key)
+                changed = true
+            }
+        }
+        if changed {
+            let options = JsonSerializerOptions{WriteIndented: true}
+            File.WriteAllText(lockFilePath, root.ToJsonString(options) + "\n")
         }
     }
 

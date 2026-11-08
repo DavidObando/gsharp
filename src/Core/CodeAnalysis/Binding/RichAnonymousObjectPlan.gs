@@ -4,30 +4,37 @@
 
 package GSharp.Core.CodeAnalysis.Binding
 
+import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
 
 internal class RichAnonymousObjectPlan {
     internal init(
-        constructedType StructSymbol,
-        arguments ImmutableArray[BoundExpression],
-        methodBodies Dictionary[FunctionSymbol, BoundBlockStatement]
+        captureDescriptors ImmutableArray[(Name string, IsMutable bool, Field FieldSymbol)],
+        referencedTypeParameters ImmutableArray[TypeParameterSymbol],
+        methodBodies Dictionary[FunctionSymbol, BoundBlockStatement],
+        methodDiagnostics ImmutableArray[Diagnostic]
     ) {
-        ConstructedType = constructedType
-        Arguments = arguments
+        CaptureDescriptors = captureDescriptors
+        ReferencedTypeParameters = referencedTypeParameters
         MethodBodies = methodBodies
+        MethodDiagnostics = methodDiagnostics
     }
 
-    internal prop ConstructedType StructSymbol {
+    internal prop CaptureDescriptors ImmutableArray[(Name string, IsMutable bool, Field FieldSymbol)] {
         get;
     }
 
-    internal prop Arguments ImmutableArray[BoundExpression] {
+    internal prop ReferencedTypeParameters ImmutableArray[TypeParameterSymbol] {
         get;
     }
 
     internal prop MethodBodies Dictionary[FunctionSymbol, BoundBlockStatement] {
+        get;
+    }
+
+    internal prop MethodDiagnostics ImmutableArray[Diagnostic] {
         get;
     }
 }

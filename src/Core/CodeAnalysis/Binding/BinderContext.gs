@@ -84,6 +84,16 @@ internal class BinderContext {
     /// Instance access is unavailable until the selected constructor has run.
     var ConstructorInitializerDepth int32
 
+    /// Issue #4383: the member-name syntax node currently permitted to decay a
+    /// movable fixed-size buffer field (`fixed p *T = buf` or `buf[i]`).
+    var AllowedMovableFixedBufferSyntax SyntaxNode?
+
+    /// Issue #4383: the terminal `IndexExpressionSyntax` nodes addressed by an
+    /// unsafe address-of expression (`&buf[i]`), where taking the element's address
+    /// produces an unpinned pointer value while still allowing ordinary element
+    /// indexing inside receiver, condition, or index subexpressions.
+    var SuppressedMovableFixedBufferIndexSyntaxes HashSet[IndexExpressionSyntax]?
+
     /// Issue #5596: binds a struct's deferred field initializers on demand before a composite literal reads them.
     var EnsureStructFieldInitializerBound((StructSymbol?, FieldSymbol?) -> void)?
 
