@@ -2486,9 +2486,11 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ReconcileLinkedRefStorageContracts() {
-            if this.context.RepositoryCompilations is not{Count: > 1} repository || !this.refStorageSlots!!.Keys.Any(
-                this.IsDeclaredInRepositorySharedDocument
-            ) {
+            if this.context.RepositoryCompilations is not{Count: > 1} repository {
+                return
+            }
+            this.EnsureRepositorySharedDocumentPaths()
+            if this.repositorySharedDocumentPaths!!.Count == 0 {
                 return
             }
             let visitors = List[DeclarationVisitor](){this}
@@ -2779,12 +2781,23 @@ partial class CSharpToGSharpTranslator {
         // compilation — linked/shared sources whose translation must not
         // depend on which project is being translated.
         private func IsDeclaredInRepositorySharedDocument(symbol ISymbol?) bool {
-            if this.context.RepositoryCompilations is not{Count: > 1} repository {
+            if this.context.RepositoryCompilations is not{Count: > 1} {
                 return false
             }
+            this.EnsureRepositorySharedDocumentPaths()
+            for reference in symbol!!.DeclaringSyntaxReferences {
+                let path string? = reference.SyntaxTree?.FilePath
+                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path!!) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func EnsureRepositorySharedDocumentPaths() {
             if this.repositorySharedDocumentPaths == nil {
                 let counts = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase)
-                for compilation in repository {
+                for compilation in this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]() {
                     for tree in compilation.SyntaxTrees {
                         if !string.IsNullOrEmpty(tree.FilePath) {
                             counts[tree.FilePath] = if counts.TryGetValue(tree.FilePath, out var n) {
@@ -2800,13 +2813,6 @@ partial class CSharpToGSharpTranslator {
                     .Select((kv KeyValuePair[string, int32]) -> kv.Key)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
             }
-            for reference in symbol!!.DeclaringSyntaxReferences {
-                let path string? = reference.SyntaxTree?.FilePath
-                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path!!) {
-                    return true
-                }
-            }
-            return false
         }
 
         // Issue #2521: sink lowering must use the target contract that G# will

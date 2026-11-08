@@ -425,6 +425,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]
     ] = ConditionalWeakTable[Compilation, Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]]()
 
+    private class RefArraySourceSlot {
+        var Parent RefArraySourceSlot? = nil
+        var Size int32 = 1
+        let Sources List[ISymbol] = List[ISymbol]()
+
+        func Root() RefArraySourceSlot {
+            var root = this
+            while root.Parent != nil {
+                root = root.Parent!!
+            }
+            return root
+        }
+    }
+
     private let ComputeCounts ConditionalWeakTable[Compilation, StrongBox[int32]] = ConditionalWeakTable[
         Compilation,
         StrongBox[int32]
@@ -4468,12 +4482,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
         let aliases = RefArraySources.GetValue(compilation, BuildRefArraySources)
-        for positions in aliases.Values {
-            for sources in positions.Values {
-                for source in sources.Skip(1) {
-                    edges.Add((sources[0], source))
-                    edges.Add((source, sources[0]))
-                }
+        for sources in aliases
+            .Values
+            .SelectMany((positions Dictionary[int32, List[ISymbol]]) -> positions.Values)
+            .Distinct() {
+            for source in sources.Skip(1) {
+                edges.Add((sources[0], source))
+                edges.Add((source, sources[0]))
             }
         }
         for tree in compilation.SyntaxTrees {
@@ -4493,7 +4508,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func BuildRefArraySources(compilation Compilation) Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] {
-        let aliases = Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]](SymbolEqualityComparer.Default)
+        let slots = Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
             for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
@@ -4513,22 +4528,104 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 let (source, depth) = RefArrayStorage(reference.Expression, model)
-                if depth == 0 || source == nil {
-                    continue
+                if depth > 0 && source != nil {
+                    RefArraySourceSlotFor(slots, source, depth).Root().Sources.Add(Canonical(target)!!)
                 }
-                if !aliases.TryGetValue(source, out var positions) {
-                    positions = Dictionary[int32, List[ISymbol]]()
-                    aliases.Add(source, positions)
+                ConnectRefArraySources(slots, target!!, reference.Expression, model)
+            }
+            for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                if argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && model.GetOperation(
+                    argument
+                ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                    ConnectRefArraySources(slots, parameter, argument.Expression, model)
                 }
-                let canonicalTarget = Canonical(target)!!
-                if !positions.TryGetValue(depth, out var sources) {
-                    sources = List[ISymbol]()
-                    positions.Add(depth, sources)
+            }
+        }
+        let aliases = Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]](SymbolEqualityComparer.Default)
+        for owner in slots {
+            let positions = Dictionary[int32, List[ISymbol]]()
+            for slot in owner.Value {
+                let sources = slot.Value.Root().Sources
+                if sources.Count > 0 {
+                    positions.Add(slot.Key, sources)
                 }
-                sources.Add(canonicalTarget)
+            }
+            if positions.Count > 0 {
+                aliases.Add(owner.Key, positions)
             }
         }
         return aliases
+    }
+
+    private func RefArraySourceSlotFor(
+        slots Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]],
+        owner ISymbol,
+        depth int32
+    ) RefArraySourceSlot {
+        if !slots.TryGetValue(owner, out var positions) {
+            positions = Dictionary[int32, RefArraySourceSlot]()
+            slots.Add(owner, positions)
+        }
+        if !positions.TryGetValue(depth, out var slot) {
+            slot = RefArraySourceSlot()
+            positions.Add(depth, slot)
+        }
+        return slot
+    }
+
+    private func ConnectRefArraySources(
+        slots Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]],
+        target ISymbol,
+        expression ExpressionSyntax,
+        model SemanticModel
+    ) {
+        let value = Unwrap(expression, unwrapSuppressions: true)
+        if value is RefExpressionSyntax reference {
+            ConnectRefArraySources(slots, target, reference.Expression, model)
+            return
+        }
+        if value is ConditionalExpressionSyntax conditional {
+            ConnectRefArraySources(slots, target, conditional.WhenTrue, model)
+            ConnectRefArraySources(slots, target, conditional.WhenFalse, model)
+            return
+        }
+        var type ITypeSymbol? = SymbolValueType(target)
+        if type is not IArrayTypeSymbol || value == nil {
+            return
+        }
+        let (source, depth) = RefArrayStorage(value, model)
+        if source == nil {
+            return
+        }
+        let owner = Canonical(
+            GetArrayStorageOwner(target, model, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? target
+        )!!
+        var position = 0
+        while true {
+            let left = RefArraySourceSlotFor(slots, owner, position).Root()
+            let right = RefArraySourceSlotFor(slots, source, depth + position).Root()
+            if !object.ReferenceEquals(left, right) {
+                let larger = if left.Size >= right.Size {
+                    left
+                } else {
+                    right
+                }
+                let smaller = if object.ReferenceEquals(larger, left) {
+                    right
+                } else {
+                    left
+                }
+                smaller.Parent = larger
+                larger.Size += smaller.Size
+                larger.Sources.AddRange(smaller.Sources)
+                smaller.Sources.Clear()
+            }
+            if type is not IArrayTypeSymbol array {
+                break
+            }
+            type = array.ElementType
+            position++
+        }
     }
 
     internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {

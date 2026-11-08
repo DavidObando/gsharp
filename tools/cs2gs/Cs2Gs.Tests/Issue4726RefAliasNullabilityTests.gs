@@ -46,6 +46,36 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("returned-array")
+    @InlineData("subarray")
+    func ConnectedStorageReads_PreserveCSharpOutput(shape string) {
+        let source = switch shape {
+            case "returned-array": `public static class Obj {
+    private static string[] xs = new[] { "x" };
+    private static ref string[] Borrow() => ref xs;
+    private static string Read() {
+        ref string[] ys = ref Borrow();
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            default: `public static class Obj {
+    private static string Read() {
+        string[][] xs = new[] { new[] { "x" } };
+        ref string[] ys = ref xs[0];
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0][0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        }
+        AssertParity(source, Translate(source), "null")
+    }
+
+    @Theory
     @InlineData(false, false)
     @InlineData(true, false)
     @InlineData(false, true)
@@ -817,8 +847,10 @@ public static class Obj {
         AssertParity(source, printed, "keep:2|null:1|x:2")
     }
 
-    @Fact
-    func LinkedFieldContracts_AgreeAcrossRepositoryCompilations() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func LinkedFieldContracts_AgreeAcrossRepositoryCompilations(idleProject bool) {
         const sharedSource = `public static class Shared { public static string Text = "x"; }`
         const appSource = `public static class Obj {
     public static string Run() {
@@ -836,12 +868,18 @@ public static class Constraint {
         let constraint = CSharpProjectLoader.LoadInMemory(
             [](string, string){("Shared.cs", sharedSource), ("Constraint.cs", constraintSource)}
         )
-        let repository = []CSharpCompilation{app.Compilation, constraint.Compilation}
+        let idle = CSharpProjectLoader.LoadInMemory([](string, string){("Shared.cs", sharedSource)})
+        let projects = if idleProject {
+            []LoadedCSharpProject{app, constraint, idle}
+        } else {
+            []LoadedCSharpProject{app, constraint}
+        }
+        let repository = projects.Select((project LoadedCSharpProject) -> project.Compilation).ToArray()
         let translator = CSharpToGSharpTranslator()
         var appShared string? = nil
         var constraintShared string? = nil
         var appPrinted = ""
-        for project in[]LoadedCSharpProject{app, constraint} {
+        for project in projects {
             Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
             for document in project.Documents {
                 let context = TranslationContext(
@@ -858,8 +896,10 @@ public static class Constraint {
                 if document.FilePath.EndsWith("Shared.cs", StringComparison.Ordinal) {
                     if project == app {
                         appShared = printed
-                    } else {
+                    } else if project == constraint {
                         constraintShared = printed
+                    } else {
+                        Assert.Equal(appShared, printed)
                     }
                 }
                 if project == app {
