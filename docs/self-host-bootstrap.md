@@ -64,6 +64,11 @@ Root directory rows use path `.`.
 Caller verification detects `chmod` changes to files, directories, and the root.
 Archive extraction and digest failures return controlled errors, including truncated streams and decompression failures.
 Certification writes `certified: false` in its failure report when the report directory is writable.
+Tar and ZIP readers validate the complete member tree before payload hashing or extraction.
+They reject duplicate paths, normalized aliases, case-folded or Unicode-equivalent aliases, and file/directory prefix collisions.
+The same validation applies to package caches, SDK resolution, payload verification, and bootstrap package rewriting.
+Invalid member trees cannot replace an existing extracted package cache.
+Valid single paths with repeated separators remain supported, and valid package payload hashes retain their existing encoding.
 
 ```sh
 python3 build/selfhost-stage2.py \

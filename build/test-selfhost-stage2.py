@@ -2354,6 +2354,183 @@ class ToolchainManifestTests(unittest.TestCase):
                 self.assertFalse((migrated / "snapshot").exists())
 
 
+class ArchiveCollisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = REPO / "build" / f".stage2-collision-test-{self.id().rsplit('.', 1)[-1]}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def collisions(self, prefix: str) -> list[tuple[str, list[tuple[str, bytes]]]]:
+        leaf = f"{prefix}/a.dll"
+        return [
+            ("duplicate", [(leaf, b"first"), (leaf, b"last")]),
+            ("dot-alias", [(leaf, b"first"), (f"./{leaf}", b"last")]),
+            ("separator-alias", [(leaf, b"first"), (leaf.replace("/", "//"), b"last")]),
+            ("backslash-alias", [(leaf, b"first"), (leaf.replace("/", "\\"), b"last")]),
+            ("case-alias", [(leaf, b"first"), (f"{prefix}/A.dll", b"last")]),
+            ("parent-case-alias", [(leaf, b"first"), (f"{prefix.upper()}/b.dll", b"last")]),
+            ("unicode-alias", [(f"{prefix}/é.dll", b"first"),
+                               (f"{prefix}/e\u0301.dll", b"last")]),
+            ("parent-first", [(prefix, b"parent"), (leaf, b"child")]),
+            ("child-first", [(leaf, b"child"), (prefix, b"parent")]),
+            ("file-directory", [(leaf, b"file"), (leaf + "/", b"")]),
+            ("directory-file", [(leaf + "/", b""), (leaf, b"file")]),
+            ("duplicate-directory", [(prefix + "/", b""), (prefix + "/", b"")]),
+        ]
+
+    def write_zip(self, path: Path, rows: list[tuple[str, bytes]]) -> None:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(path, "w") as archive:
+                for name, data in rows:
+                    archive.writestr(name, data)
+
+    def test_zip_collisions_cannot_receive_payload_hash_or_resolution_approval(self) -> None:
+        resolved = self.root / "resolved"
+        for case, rows in self.collisions("Sdk/probe"):
+            with self.subTest(case=case):
+                package = self.root / f"{case}.nupkg"
+                self.write_zip(package, rows)
+                remove_tree(resolved)
+                resolved.mkdir()
+                # Match the old verifier's last-write-wins dictionary for aliases.
+                if case in ("duplicate", "dot-alias", "separator-alias", "case-alias",
+                            "unicode-alias", "backslash-alias"):
+                    for name, data in rows:
+                        target = resolved / Path(stage2.packer.entry_name(name))
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                for consumer, verify in (
+                    ("payload-hash", lambda: stage2.package_payload_hash(package)),
+                    ("resolved-payload", lambda: stage2.verify_resolved_sdk_payload(package, resolved)),
+                ):
+                    with self.subTest(consumer=consumer):
+                        with self.assertRaisesRegex(stage2.CertificationError, "colliding archive"):
+                            verify()
+
+    def test_package_driver_rejects_collisions_without_replacing_existing_cache(self) -> None:
+        for case, rows in self.collisions("lib/probe"):
+            with self.subTest(case=case):
+                source = self.root / case
+                source.mkdir()
+                package = source / "example.1.0.0.nupkg"
+                self.write_zip(package, rows)
+                (source / "example.1.0.0.nupkg.sha512").write_text(
+                    base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+                    encoding="utf-8")
+                destination = self.root / f"extracted-{case}"
+                destination.mkdir()
+                marker = destination / "keep.txt"
+                marker.write_bytes(b"existing cache")
+                result = run_driver("--verify-package-cache", source, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("colliding archive", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual([marker], list(destination.rglob("*")))
+                self.assertEqual(b"existing cache", marker.read_bytes())
+
+    def test_sdk_cache_and_resolution_reject_collisions(self) -> None:
+        installed = self.root / "installed"
+        for relative in stage2.TRUSTED_DOTNET_COMPONENTS:
+            path = installed / relative
+            if relative == Path("dotnet"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"dotnet")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "marker.txt").write_bytes(b"trusted")
+        (installed / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir()
+        for case, rows in self.collisions("Sdk/probe"):
+            for consumer in ("cache", "resolution"):
+                with self.subTest(case=case, consumer=consumer):
+                    workspace = self.root / f"{case}-{consumer}"
+                    workspace.mkdir()
+                    package = workspace / f"{stage2.SDK_ID}.0.5.600.nupkg"
+                    nuspec = (
+                        f"{stage2.SDK_ID}.nuspec",
+                        f"<package><metadata><version>0.5.600</version></metadata></package>".encode(),
+                    )
+                    self.write_zip(package, [nuspec, *rows])
+                    controller = object.__new__(stage2.Controller)
+                    controller.stage1 = workspace
+                    controller.writable = lambda *_: workspace / "packages"
+                    controller.offline_feed = lambda *_: workspace / "feed"
+                    controller.write_offline_config = lambda *_: None
+                    controller.resolve_installed_dotnet = lambda: installed / "dotnet"
+                    controller.stage_dotnet = lambda *_: workspace / "toolchain" / "dotnet"
+                    controller.stage_toolchain = lambda *_: workspace / "toolchain"
+                    controller.toolchain_manifests = {}
+                    controller.evidence = workspace / "evidence"
+                    controller.evidence.mkdir()
+                    seed = (controller.seed_sdk_cache if consumer == "cache"
+                            else controller.seed_sdk_resolution)
+                    with self.assertRaisesRegex(stage2.CertificationError, "colliding archive"):
+                        seed("stage-1", package)
+                    if consumer == "cache":
+                        self.assertFalse((workspace / "packages").exists())
+                    else:
+                        self.assertFalse(
+                            (workspace / "toolchain" / "dotnet" / "sdk"
+                             / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / stage2.SDK_ID).exists())
+
+    def test_dotnet_driver_rejects_collisions_before_extracting_any_member(self) -> None:
+        prefix = f"sdk/{stage2.TRUSTED_DOTNET_SDK_VERSION}/Sdks/probe"
+        ordinary = [
+            ("dotnet", b"#!/bin/sh\nexit 0\n"), ("host/fxr.dll", b"host"),
+            ("shared/core.dll", b"shared"), ("packs/ref.dll", b"packs"),
+            (f"sdk/{stage2.TRUSTED_DOTNET_SDK_VERSION}/Sdks/marker.txt", b"sdk"),
+        ]
+        for case, rows in self.collisions(prefix):
+            with self.subTest(case=case):
+                package = self.root / f"{case}.tar.gz"
+                with tarfile.open(package, "w:gz") as archive:
+                    for name, data in ordinary + rows:
+                        member = tarfile.TarInfo(name)
+                        member.mode = 0o755 if name == "dotnet" else 0o644
+                        if name.endswith("/"):
+                            member.type = tarfile.DIRTYPE
+                        else:
+                            member.size = len(data)
+                        archive.addfile(member, io.BytesIO(data))
+                destination = self.root / f"extracted-{case}"
+                digest = hashlib.sha256(package.read_bytes()).hexdigest()
+                result = run_driver("--verify-dotnet-archive", package, digest, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("colliding archive", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(destination.exists())
+
+    def test_valid_zip_parent_markers_and_single_normalized_paths_preserve_bytes(self) -> None:
+        source = self.root / "source"
+        source.mkdir()
+        package = source / "example.1.0.0.nupkg"
+        rows = [
+            ("./lib//probe/a.dll", b"accepted"),
+            ("lib/probe/", b""), ("lib/", b""), ("./", b""),
+        ]
+        self.write_zip(package, rows)
+        (source / "example.1.0.0.nupkg.sha512").write_text(
+            base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+            encoding="utf-8")
+        destination = self.root / "extracted"
+        result = run_driver("--verify-package-cache", source, destination)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"accepted", (destination / "lib/probe/a.dll").read_bytes())
+        digest = hashlib.sha256()
+        name, data = rows[0]
+        encoded = name.encode()
+        digest.update(len(encoded).to_bytes(4, "little"))
+        digest.update(encoded)
+        digest.update(len(data).to_bytes(8, "little"))
+        digest.update(hashlib.sha256(data).digest())
+        self.assertEqual(digest.hexdigest(), stage2.package_payload_hash(package))
+
+
 class ArchiveFailureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = REPO / "build" / f".stage2-archive-test-{self.id().rsplit('.', 1)[-1]}"

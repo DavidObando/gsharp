@@ -31,6 +31,7 @@ import sys
 import tarfile
 import threading
 import time
+import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
@@ -1118,6 +1119,48 @@ def package_component(value: Any, label: str) -> str:
     return value
 
 
+def validated_archive_members(
+    archive: zipfile.ZipFile | tarfile.TarFile,
+) -> list[tuple[Path, Any, bool]]:
+    members = archive.infolist() if isinstance(archive, zipfile.ZipFile) else archive.getmembers()
+    nodes: dict[tuple[str, ...], tuple[tuple[str, ...], bool]] = {}
+    explicit: set[tuple[str, ...]] = set()
+    result = []
+    for member in members:
+        if isinstance(member, zipfile.ZipInfo):
+            raw_name = member.orig_filename
+            directory = member.is_dir() or raw_name.endswith("\\")
+            kind = stat.S_IFMT(member.external_attr >> 16)
+            regular = kind in (0, stat.S_IFDIR if directory else stat.S_IFREG)
+        else:
+            raw_name = member.name
+            directory = member.isdir()
+            regular = directory or member.isfile()
+        name = raw_name.replace("\\", "/")
+        parts = tuple(part for part in name.split("/") if part and part != ".")
+        if (name.startswith("/") or not parts and not directory
+                or any(char in name for char in ("\0", "\r", "\n", ":"))
+                or ".." in parts or any(part.endswith((" ", ".")) for part in parts)):
+            raise CertificationError(f"unsafe archive entry: {raw_name!r}")
+        if not regular:
+            raise CertificationError(f"unsupported non-regular archive entry: {raw_name!r}")
+        key = tuple(unicodedata.normalize("NFC", part).casefold() for part in parts)
+        if key in explicit:
+            raise CertificationError(f"colliding archive path: {raw_name!r}")
+        for length in range(1, len(parts) + 1):
+            prefix, spelling = key[:length], parts[:length]
+            old = nodes.get(prefix)
+            leaf = length == len(parts)
+            if old is not None and (
+                old[0] != spelling or not old[1] or leaf and not directory
+            ):
+                raise CertificationError(f"colliding archive path: {raw_name!r}")
+            nodes[prefix] = (spelling, directory if leaf else True)
+        explicit.add(key)
+        result.append((Path(*parts), member, directory))
+    return result
+
+
 def extract_verified_package(
     source: Path, destination: Path, content_hash: str | None = None,
 ) -> Path:
@@ -1130,16 +1173,15 @@ def extract_verified_package(
         hashlib.sha512(nupkgs[0].read_bytes()).digest()).decode()
     if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
         raise CertificationError(f"package archive hash is invalid: {source}")
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.mkdir(parents=True)
     with zipfile.ZipFile(nupkgs[0]) as archive:
-        for info in archive.infolist():
-            name = Path(packer.entry_name(info.filename))
-            if info.is_dir():
+        members = validated_archive_members(archive)
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.mkdir(parents=True)
+        for name, info, directory in members:
+            if directory:
+                (destination / name).mkdir(parents=True, exist_ok=True)
                 continue
-            if name.is_absolute() or ".." in name.parts:
-                raise CertificationError(f"unsafe package entry {info.filename}")
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(info))
@@ -1218,10 +1260,12 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
 def package_payload_hash(path: Path) -> str:
     digest = hashlib.sha256()
     with zipfile.ZipFile(path) as archive:
-        names = sorted(name for name in archive.namelist() if not name.endswith("/"))
-        for name in names:
-            encoded = name.encode()
-            data = archive.read(name)
+        members = sorted(validated_archive_members(archive), key=lambda row: row[1].filename)
+        for _, info, directory in members:
+            if directory:
+                continue
+            encoded = info.filename.encode()
+            data = archive.read(info)
             digest.update(len(encoded).to_bytes(4, "little"))
             digest.update(encoded)
             digest.update(len(data).to_bytes(8, "little"))
@@ -1232,9 +1276,9 @@ def package_payload_hash(path: Path) -> str:
 def verify_resolved_sdk_payload(package: Path, resolved: Path) -> str:
     expected: dict[str, str] = {}
     with zipfile.ZipFile(package) as archive:
-        for info in archive.infolist():
-            name = packer.entry_name(info.filename).lstrip("/")
-            if info.is_dir() or not name.startswith(("Sdk/", "tools/", "build/")):
+        for relative, info, directory in validated_archive_members(archive):
+            name = relative.as_posix()
+            if directory or not name.startswith(("Sdk/", "tools/", "build/")):
                 continue
             expected[name] = sha256_bytes(archive.read(info))
     actual: dict[str, str] = {}
@@ -1569,31 +1613,18 @@ def extract_verified_dotnet_archive(
             frozen_archive.unlink(missing_ok=True)
         raise CertificationError(
             f"dotnet archive hash is not in the approved set: {archive_path}")
-    destination.mkdir(parents=True, mode=0o700)
     allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
     try:
         with tarfile.open(frozen_archive, "r:*") as archive:
-            for member in archive.getmembers():
-                raw_name = member.name.lstrip("./")
-                if not raw_name:
-                    continue
-                if "\r" in raw_name or "\n" in raw_name:
-                    raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
-                rel = Path(raw_name)
-                if rel.is_absolute() or ".." in rel.parts or not rel.parts:
-                    raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
-                if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo():
-                    raise CertificationError(
-                        f"unsupported non-regular dotnet archive entry: {member.name!r}")
-                if rel.parts[0] not in allowed_roots:
+            members = validated_archive_members(archive)
+            destination.mkdir(parents=True, mode=0o700)
+            for rel, member, directory in members:
+                if not rel.parts or rel.parts[0] not in allowed_roots:
                     continue
                 target = destination / rel
-                if member.isdir():
+                if directory:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
-                if not member.isfile():
-                    raise CertificationError(
-                        f"unsupported dotnet archive entry kind: {member.name!r}")
                 extracted = archive.extractfile(member)
                 if extracted is None:
                     raise CertificationError(f"cannot read dotnet archive entry: {member.name!r}")
@@ -2395,16 +2426,15 @@ class Controller:
     def seed_sdk_cache(self, stage: str, package: Path) -> dict[str, Any]:
         version = package_version(package)
         destination = self.writable(stage, "packages") / SDK_ID.casefold() / version.casefold()
-        if destination.exists():
-            shutil.rmtree(destination)
-        destination.mkdir(parents=True)
         with zipfile.ZipFile(package) as archive:
-            for info in archive.infolist():
-                normalized = Path(packer.entry_name(info.filename))
-                if info.is_dir():
+            members = validated_archive_members(archive)
+            if destination.exists():
+                shutil.rmtree(destination)
+            destination.mkdir(parents=True)
+            for normalized, info, directory in members:
+                if directory:
+                    (destination / normalized).mkdir(parents=True, exist_ok=True)
                     continue
-                if normalized.is_absolute() or ".." in normalized.parts:
-                    raise CertificationError(f"unsafe package entry {info.filename}")
                 target = destination / normalized
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(info))
@@ -2482,15 +2512,16 @@ class Controller:
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")
         package_root = resolution / SDK_ID
-        package_root.mkdir()
         with zipfile.ZipFile(package) as archive:
-            for info in archive.infolist():
-                name = Path(packer.entry_name(info.filename))
-                if info.is_dir() or not name.parts or name.parts[0] not in {"Sdk", "build", "tools"}:
+            members = validated_archive_members(archive)
+            package_root.mkdir()
+            for name, info, directory in members:
+                if not name.parts or name.parts[0] not in {"Sdk", "build", "tools"}:
                     continue
-                if name.is_absolute() or ".." in name.parts:
-                    raise CertificationError(f"unsafe SDK payload entry {info.filename}")
                 target = package_root / name
+                if directory:
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(info))
         payload = verify_resolved_sdk_payload(package, package_root)
@@ -3684,13 +3715,13 @@ class Controller:
         temporary = produced.with_suffix(".new")
         with zipfile.ZipFile(self.bootstrap) as source, zipfile.ZipFile(
                 temporary, "w", zipfile.ZIP_DEFLATED) as sink:
-            for info in source.infolist():
-                normalized = packer.entry_name(info.filename)
+            for relative, info, directory in validated_archive_members(source):
+                normalized = relative.as_posix()
                 if normalized == ".signature.p7s" or normalized in replacements:
                     continue
                 if normalized.startswith(replaced_prefixes):
                     continue
-                data = source.read(info.filename)
+                data = source.read(info)
                 if normalized.endswith(".nuspec"):
                     text, count = re.subn(
                         r"<(version)>[^<]*</version>",
