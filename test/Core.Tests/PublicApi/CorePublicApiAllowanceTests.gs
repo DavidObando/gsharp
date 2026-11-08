@@ -243,6 +243,90 @@ data class Pair(A int32)
         )
         Assert.DoesNotContain("Gsharp.Runtime.Values", channelsTests, StringComparison.Ordinal)
         Assert.DoesNotContain("GsharpNoValuesRuntime", channelsTests, StringComparison.Ordinal)
+        // Issue #5073: netstandard2.0 SDK/packaging projects opt out of net10.0
+        // implicit runtime references so ResolveAssemblyReferences emits zero MSB3277 warnings.
+        for netstandardProject in[]string{
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk", "Gsharp.NET.Sdk.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.Templates", "Gsharp.Templates.gsproj"),
+            Path.Combine("src", "Sdk", "Gsharp.NET.Sdk.Compiler", "Gsharp.NET.Sdk.Compiler.gsproj")
+        } {
+            let text = File.ReadAllText(Path.Combine(repoRoot, netstandardProject))
+            Assert.Contains("<GsharpNoExtensions>true</GsharpNoExtensions>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>", text, StringComparison.Ordinal)
+            Assert.Contains("<GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>", text, StringComparison.Ordinal)
+        }
+        let sdkProps = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "build", "Gsharp.NET.Sdk.props")
+        )
+        Assert.Contains("_ExplicitReference", sdkProps, StringComparison.Ordinal)
+        let sdkCoreTargets = File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "build", "Gsharp.NET.Core.Sdk.targets")
+        )
+        Assert.Contains(
+            "$([MSBuild]::GetTargetFrameworkIdentifier('$(TargetFramework)')) != '.NETCoreApp'",
+            sdkCoreTargets,
+            StringComparison.Ordinal
+        )
+        let sdkPropsPath = Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "Sdk", "Sdk.props")
+        let sdkTargetsPath = Path.Combine(repoRoot, "src", "Sdk", "Gsharp.NET.Sdk", "Sdk", "Sdk.targets")
+        let initialExt = Path.Combine(this.directory, "Initial.Gsharp.Extensions.dll")
+        let initialChannels = Path.Combine(this.directory, "Initial.Gsharp.Runtime.Channels.dll")
+        let initialValues = Path.Combine(this.directory, "Initial.Gsharp.Runtime.Values.dll")
+        let fakeExt = Path.Combine(this.directory, "Override.Gsharp.Extensions.dll")
+        let fakeChannels = Path.Combine(this.directory, "Override.Gsharp.Runtime.Channels.dll")
+        let fakeValues = Path.Combine(this.directory, "Override.Gsharp.Runtime.Values.dll")
+        File.WriteAllText(initialExt, string.Empty)
+        File.WriteAllText(initialChannels, string.Empty)
+        File.WriteAllText(initialValues, string.Empty)
+        File.WriteAllText(fakeExt, string.Empty)
+        File.WriteAllText(fakeChannels, string.Empty)
+        File.WriteAllText(fakeValues, string.Empty)
+        let EvaluateConsumerExplicitReferences = func (tfm string) string {
+            let consumerPath = Path.Combine(this.directory, "Consumer_$tfm.gsproj")
+            File.WriteAllText(
+                consumerPath,
+                "<Project>\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <GsharpExtensionsAssemblyFullPath>$initialExt</GsharpExtensionsAssemblyFullPath>\n" +
+                    "    <GsharpChannelsRuntimeAssemblyFullPath>$initialChannels</GsharpChannelsRuntimeAssemblyFullPath>\n" +
+                    "    <GsharpValuesRuntimeAssemblyFullPath>$initialValues</GsharpValuesRuntimeAssemblyFullPath>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Import Project=\"$sdkPropsPath\" />\n" +
+                    "  <PropertyGroup>\n" +
+                    "    <TargetFramework>$tfm</TargetFramework>\n" +
+                    "    <GsharpExtensionsAssemblyFullPath>$fakeExt</GsharpExtensionsAssemblyFullPath>\n" +
+                    "    <GsharpChannelsRuntimeAssemblyFullPath>$fakeChannels</GsharpChannelsRuntimeAssemblyFullPath>\n" +
+                    "    <GsharpValuesRuntimeAssemblyFullPath>$fakeValues</GsharpValuesRuntimeAssemblyFullPath>\n" +
+                    "  </PropertyGroup>\n" +
+                    "  <Import Project=\"$sdkTargetsPath\" />\n" +
+                    "</Project>\n"
+            )
+            let startInfo = System.Diagnostics.ProcessStartInfo("dotnet")
+            startInfo.RedirectStandardOutput = true
+            startInfo.RedirectStandardError = true
+            startInfo.UseShellExecute = false
+            startInfo.ArgumentList.Add("msbuild")
+            startInfo.ArgumentList.Add(consumerPath)
+            startInfo.ArgumentList.Add("-nologo")
+            startInfo.ArgumentList.Add("-getItem:_ExplicitReference")
+            using let proc = System.Diagnostics.Process.Start(startInfo)!!
+            let stdout = proc.StandardOutput.ReadToEnd()
+            let stderr = proc.StandardError.ReadToEnd()
+            proc.WaitForExit()
+            Assert.True(proc.ExitCode == 0, stderr + stdout)
+            return stdout
+        }
+        let net10Refs = EvaluateConsumerExplicitReferences("net10.0")
+        Assert.Contains("Override.Gsharp.Extensions.dll", net10Refs, StringComparison.Ordinal)
+        Assert.Contains("Override.Gsharp.Runtime.Channels.dll", net10Refs, StringComparison.Ordinal)
+        Assert.Contains("Override.Gsharp.Runtime.Values.dll", net10Refs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Initial.Gsharp.Extensions.dll", net10Refs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Initial.Gsharp.Runtime.Channels.dll", net10Refs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Initial.Gsharp.Runtime.Values.dll", net10Refs, StringComparison.Ordinal)
+        let netstandardRefs = EvaluateConsumerExplicitReferences("netstandard2.0")
+        Assert.DoesNotContain("Gsharp.Extensions.dll", netstandardRefs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Gsharp.Runtime.Channels.dll", netstandardRefs, StringComparison.Ordinal)
+        Assert.DoesNotContain("Gsharp.Runtime.Values.dll", netstandardRefs, StringComparison.Ordinal)
     }
 
     private func Compare(golden IReadOnlyList[string], actual IReadOnlyList[string]) GoldenFileComparison {

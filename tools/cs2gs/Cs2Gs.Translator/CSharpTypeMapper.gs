@@ -1029,7 +1029,7 @@ class CSharpTypeMapper {
             .Any((type INamedTypeSymbol) -> type.Locations.Any((candidate Location) -> candidate.IsInSource))
     }
 
-    private func HasVisibleCallableName(
+    private func HasVisibleCallableOrValueName(
         name string,
         context TranslationContext,
         location Location?,
@@ -1044,14 +1044,24 @@ class CSharpTypeMapper {
         } else {
             context.Compilation.GetSemanticModel(location!!.SourceTree!!)
         }
-        return semanticModel
-            .LookupSymbols(position)
-            .OfType[IMethodSymbol]()
-            .Any(
-            (method IMethodSymbol) -> (
-                method.MethodKind == MethodKind.Ordinary || method.MethodKind == MethodKind.ReducedExtension
+        return semanticModel.LookupSymbols(position).Any(
+            (symbol ISymbol) -> (
+                (
+                    symbol is IMethodSymbol method &&
+                        (
+                        method.MethodKind == MethodKind.Ordinary ||
+                            method.MethodKind == MethodKind.ReducedExtension ||
+                            method.MethodKind == MethodKind.LocalFunction
+                    )
+                ) ||
+                    symbol is IFieldSymbol ||
+                    symbol is IPropertySymbol ||
+                    symbol is ILocalSymbol ||
+                    symbol is IParameterSymbol ||
+                    symbol is IRangeVariableSymbol ||
+                    symbol is IEventSymbol
             ) &&
-                names.GetName(method) == name
+                names.GetName(symbol) == name
         )
     }
 
@@ -1104,7 +1114,7 @@ class CSharpTypeMapper {
                 .reservedTypeParameterNames
                 .Contains(reservedAlias.Key) && !this.reservedInvokedLocalNames.Contains(reservedAlias.Key) &&
                 !ConflictsWithCompilationSourceType(reservedAlias.Key) &&
-                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleCallableOrValueName(reservedAlias.Key, context, location, names) &&
                 !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
@@ -1115,11 +1125,8 @@ class CSharpTypeMapper {
                 .reservedInvokedLocalNames
                 .Contains(existing.Key) &&
                 !ConflictsWithCompilationSourceType(existing.Key) &&
-                !this.HasVisibleCallableName(existing.Key, context, location, names) && !this.HasVisibleSourceTypeName(
-                existing.Key,
-                context,
-                location
-            ) {
+                !this.HasVisibleCallableOrValueName(existing.Key, context, location, names) &&
+                !this.HasVisibleSourceTypeName(existing.Key, context, location) {
                 return existing.Key
             }
         }
@@ -1144,7 +1151,7 @@ class CSharpTypeMapper {
         let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
             target,
             "$namespaceQualifier$simpleName",
-            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableOrValueName(
                 candidate,
                 context,
                 location,
@@ -1230,7 +1237,7 @@ class CSharpTypeMapper {
                 !this
                 .reservedImportedTypeNames
                 .Contains(reservedAlias.Key) && !this.HasSourceTopLevelTypeNamed(reservedAlias.Key, context) &&
-                !this.HasVisibleCallableName(reservedAlias.Key, context, location, names) &&
+                !this.HasVisibleCallableOrValueName(reservedAlias.Key, context, location, names) &&
                 !this.HasVisibleSourceTypeName(reservedAlias.Key, context, location) {
                 return reservedAlias.Key
             }
@@ -1240,7 +1247,7 @@ class CSharpTypeMapper {
                 !this
                 .reservedInvokedLocalNames
                 .Contains(existing.Key) && !this.reservedImportedTypeNames.Contains(existing.Key) &&
-                !this.HasSourceTopLevelTypeNamed(existing.Key, context) && !this.HasVisibleCallableName(
+                !this.HasSourceTopLevelTypeNamed(existing.Key, context) && !this.HasVisibleCallableOrValueName(
                 existing.Key,
                 context,
                 location,
@@ -1265,7 +1272,7 @@ class CSharpTypeMapper {
         let alias = LiftedLocalFunctionNameAllocator.For(context.Compilation).ClaimAlias(
             namespaceName,
             baseAlias,
-            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableName(
+            (candidate string) -> reserved.Contains(candidate) || this.HasVisibleCallableOrValueName(
                 candidate,
                 context,
                 location,
@@ -1496,10 +1503,45 @@ class CSharpTypeMapper {
                 TranslationSeverity.Info
             )
         )
+        let toStringValue GExpression = if properties.Count == 0 {
+            cast[GExpression](LiteralExpression.String("{ }"))
+        } else {
+            let parts = List[InterpolationPart](properties.Count * 2 + 1)
+            for var index = 0; index < properties.Count; index++ {
+                let prefix = if index == 0 {
+                    "{ "
+                } else {
+                    ", "
+                }
+                parts.Add(InterpolationPart.Literal(prefix + properties[index].Name + " = "))
+                parts.Add(
+                    InterpolationPart.Hole(
+                        InvocationExpression(
+                            MemberAccessExpression(IdentifierExpression("string"), "Concat"),
+                            []GExpression{
+                                ConversionExpression(
+                                    NamedTypeReference("object"){IsNullable = true},
+                                    MemberAccessExpression(ThisExpression(), parameters[index].Name)
+                                )
+                            }
+                        )
+                    )
+                )
+            }
+            parts.Add(InterpolationPart.Literal(" }"))
+            cast[GExpression](InterpolatedStringExpression(parts))
+        }
+        let toStringMethod = MethodDeclaration(
+            "ToString",
+            returnType: NamedTypeReference("string"),
+            isOverride: true,
+            expressionBody: ReturnStatement(toStringValue)
+        )
         let declaration = TypeDeclaration(
             TypeDeclarationKind.DataClass,
             syntheticName,
             primaryConstructorParameters: parameters,
+            members: []GMember{toStringMethod},
             visibility: Visibility.Internal
         )
         let reference = NamedTypeReference(syntheticName)

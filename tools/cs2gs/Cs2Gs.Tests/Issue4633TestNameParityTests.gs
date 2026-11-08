@@ -90,6 +90,86 @@ class Issue4633TestNameParityTests {
         Assert.Equal(1, result.Matched)
     }
 
+    /// Issue #4691: when a multi-targeted test project loses an entire framework
+    /// whose cases are only non-enumerated theories, per-framework comparison
+    /// catches the missing framework even when the surviving framework executes
+    /// enough theory rows to match the flattened bare count.
+    @Fact
+    func Compare_LostFrameworkOfOnlyNonEnumeratedTheories_IsReportedMissing() {
+        const listingOutput = `Test run for /repo/out/bin/Release/net9.0/Own.Tests.dll (.NETCoreApp,Version=v9.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /repo/out/bin/Release/net10.0/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let oracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, listingOutput)
+        Assert.NotNull(oracle.TestsByFramework)
+        Assert.Equal(2, oracle.TestsByFramework!!.Count)
+        let survivingOnly = []TestCaseOutcome{
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 1 })", "Passed", "net10.0"),
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 2 })", "Passed", "net10.0")
+        }
+        let lostResult = TestNameParity.Compare(oracle, survivingOnly)
+        Assert.False(lostResult.IsMatch)
+        Assert.Equal(1, lostResult.Matched)
+        Assert.Equal(2, lostResult.TheoryRows)
+        Assert.Equal([]string{"Own.Tests.A.Cells"}, lostResult.Missing)
+        let bothFrameworks = survivingOnly.Append(
+            TestCaseOutcome("Own.Tests.A.Cells(cell: Cell { X = 1 })", "Passed", "net9.0")
+        )
+            .ToArray()
+        let fullResult = TestNameParity.Compare(oracle, bothFrameworks)
+        Assert.True(fullResult.IsMatch)
+        Assert.Equal(2, fullResult.Matched)
+        Assert.Equal(3, fullResult.TheoryRows)
+        Assert.Empty(fullResult.Missing)
+        Assert.Null(CSharpTestOracle.NormalizeTargetFramework("net10.0.trx"))
+        Assert.Equal("net10.0", CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0.trx"))
+        Assert.Equal("net10.0-windows", CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0-windows.trx"))
+        const platformListing = `Test run for /repo/out/bin/Release/net10.0/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /repo/out/bin/Release/net10.0-windows/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let platformOracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, platformListing)
+        Assert.Equal(2, platformOracle.TestsByFramework!!.Count)
+        let platformParity = TestNameParity.Compare(
+            platformOracle,
+            []TestCaseOutcome{
+                TestCaseOutcome("Own.Tests.A.Cells(cell: 1)", "Passed", "net10.0"),
+                TestCaseOutcome("Own.Tests.A.Cells(cell: 1)", "Passed", "net10.0-windows")
+            }
+        )
+        Assert.True(platformParity.IsMatch)
+        Assert.Equal("netcoreapp3.1", CSharpTestOracle.NormalizeTargetFramework(".NETCoreApp,Version=v3.1"))
+        Assert.Equal("netcoreapp3.1", CSharpTestOracle.InferTargetFrameworkFromPath("/results/netcoreapp3.1.trx"))
+        const legacyCoreListing = `Test run for /custom-out/Own.Tests.dll (.NETCoreApp,Version=v3.1)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /custom-out/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`
+        let legacyCoreOracle = CSharpTestOracle.CreateFromListTestsOutput(AppId, legacyCoreListing)
+        Assert.True(legacyCoreOracle.TestsByFramework!!.ContainsKey("netcoreapp3.1"))
+        let legacyCoreParity = TestNameParity.Compare(
+            legacyCoreOracle,
+            []TestCaseOutcome{
+                TestCaseOutcome(
+                    "Own.Tests.A.Cells(cell: 1)",
+                    "Passed",
+                    CSharpTestOracle.InferTargetFrameworkFromPath("/results/netcoreapp3.1.trx")
+                ),
+                TestCaseOutcome(
+                    "Own.Tests.A.Cells(cell: 1)",
+                    "Passed",
+                    CSharpTestOracle.InferTargetFrameworkFromPath("/results/net10.0.trx")
+                )
+            }
+        )
+        Assert.True(legacyCoreParity.IsMatch)
+    }
+
     /// Review finding: an oracle holding an empty name is rejected, not silently shrunk.
     @Fact
     func Oracle_EmptyName_IsRejected() {
@@ -100,6 +180,45 @@ class Issue4633TestNameParityTests {
                 return CSharpTestOracle.LoadOrNull(dir, AppId)
             }
         )
+        let mismatchDir = NewDirectory()
+        CSharpTestOracle{
+            AppId: AppId,
+            TestCount: 2,
+            Tests: List[string]{"Own.Tests.A.Works", "Own.Tests.A.Works"},
+            TestsByFramework: Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net9.0"] = List[string]{"Own.Tests.A.Works"},
+                ["net10.0"] = List[string]{"Own.Tests.A.Other"}
+            }
+        }.Write(mismatchDir)
+        Assert.Throws[InvalidOperationException](
+            func () object? {
+                return CSharpTestOracle.LoadOrNull(mismatchDir, AppId)
+            }
+        )
+        let duplicateFrameworkDir = NewDirectory()
+        CSharpTestOracle{
+            AppId: AppId,
+            TestCount: 2,
+            Tests: List[string]{"Own.Tests.A.Works", "Own.Tests.B.Works"},
+            TestsByFramework: Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net10.0"] = List[string]{"Own.Tests.A.Works"},
+                [".NETCoreApp,Version=v10.0"] = List[string]{"Own.Tests.B.Works"}
+            }
+        }.Write(duplicateFrameworkDir)
+        Assert.Throws[InvalidOperationException](
+            func () object? {
+                return CSharpTestOracle.LoadOrNull(duplicateFrameworkDir, AppId)
+            }
+        )
+        let combinedBuckets = TestNameParity.CompareByFramework(
+            Dictionary[string, List[string]](StringComparer.Ordinal){
+                ["net10.0"] = List[string]{"Own.Tests.A.Works"},
+                [".NETCoreApp,Version=v10.0"] = List[string]{"Own.Tests.B.Works"}
+            },
+            []TestCaseOutcome{TestCaseOutcome("Own.Tests.A.Works", "Passed", "net10.0")}
+        )
+        Assert.False(combinedBuckets.IsMatch)
+        Assert.Equal([]string{"Own.Tests.B.Works"}, combinedBuckets.Missing)
     }
 
     /// A bare C# case with neither an exact result nor any row is missing.

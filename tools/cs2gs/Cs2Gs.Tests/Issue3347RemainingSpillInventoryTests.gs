@@ -42,17 +42,23 @@ class Issue3347RemainingSpillInventoryTests {
             // translation. The same four families must not appear in it.
             var committedCasts = 0
             var committedDeconstructions = 0
+            var committedPatterns = 0
+            var committedScrutinees = 0
             var committedSpills = 0
             var committedUsings = 0
             for file in CommittedCompilerSource.GSharpFiles(repoRoot, "src/Core") {
                 let committed = File.ReadAllText(file)
                 committedCasts += CountOccurrences(committed, "__cast")
                 committedDeconstructions += CountOccurrences(committed, "__decon")
+                committedPatterns += CountOccurrences(StripCommentLines(committed), "__pattern")
+                committedScrutinees += CountOccurrences(StripCommentLines(committed), "__scrutinee")
                 committedSpills += CountOccurrences(StripCommentLines(committed), "let __spill")
                 committedUsings += CountOccurrences(committed, "__using")
             }
             Assert.Equal(0, committedCasts)
             Assert.Equal(0, committedDeconstructions)
+            Assert.Equal(0, committedPatterns)
+            Assert.Equal(0, committedScrutinees)
             Assert.Equal(0, committedSpills)
             Assert.Equal(0, committedUsings)
             return

@@ -176,6 +176,26 @@ class Program
     }
 
     @Fact
+    func ClassScoped_Main_Retains_Precedence_Over_StructScoped_Main() {
+        let globalScope = BindSource(`
+struct AValue {
+    shared {
+        func Main() { }
+    }
+}
+class ZLauncher {
+    shared {
+        func Main() { }
+    }
+}
+`)
+        Assert.NotNull(globalScope.EntryPoint)
+        let owner = Assert.IsType[StructSymbol](globalScope.EntryPoint!!.StaticOwnerType)
+        Assert.True(owner.IsClass)
+        Assert.Equal("ZLauncher", owner.Name)
+    }
+
+    @Fact
     func Reports_Conflict_When_TopLevel_And_Explicit_Main_Coexist() {
         let globalScope = BindSource(`Console.WriteLine("hi")
 func Main() {

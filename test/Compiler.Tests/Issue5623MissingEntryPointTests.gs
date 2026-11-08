@@ -16,6 +16,7 @@ open class Issue5623MissingEntryPointTests {
     @Theory
     @InlineData("Lowercase", "/target:exe", "lower.gs(5,6,5,10): error GS0634: ", true)
     @InlineData("ClassLowercase", "/target:exe", "lower.gs(4,10,4,14): error GS0634: ", true)
+    @InlineData("StructLowercase", "/target:exe", "lower.gs(5,14,5,18): error GS0634: ", true)
     @InlineData("NoFunction", "/target:exe", "lower.gs(1,1,1,1): error GS0634: ", false)
     @InlineData("NoFunction", "/target:winexe", "lower.gs(1,1,1,1): error GS0634: ", false)
     @InlineData("Lowercase", "", "lower.gs(5,6,5,10): error GS0634: ", true)
@@ -62,6 +63,8 @@ open class Issue5623MissingEntryPointTests {
     @Theory
     @InlineData("PackageMain", "/target:exe", true)
     @InlineData("ClassMain", "/target:exe", true)
+    @InlineData("StructMain", "/target:exe", true)
+    @InlineData("StructMainWithArgs", "/target:exe", true)
     @InlineData("TopLevel", "/target:exe", true)
     @InlineData("Lowercase", "/target:library", false)
     @InlineData("NoFunction", "/target:library", false)
@@ -98,6 +101,14 @@ shared class Program {
     func main(args []string) { }
 }
 `
+            case "StructLowercase": `package NoEntry
+
+struct Program {
+    shared {
+        func main() { }
+    }
+}
+`
             case "NoFunction": `package NoEntry
 
 class Widget { }
@@ -110,6 +121,22 @@ func Main() { }
 
 shared class Program {
     func Main(args []string) { }
+}
+`
+            case "StructMain": `package NoEntry
+
+struct Program {
+    shared {
+        func Main() { }
+    }
+}
+`
+            case "StructMainWithArgs": `package NoEntry
+
+struct Program {
+    shared {
+        func Main(args []string) int32 -> args.Length
+    }
 }
 `
             case "TopLevel": `System.Console.WriteLine("Hello")

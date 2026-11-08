@@ -589,16 +589,7 @@ open class Compilation {
         if bound.EntryPoint != nil {
             return ImmutableArray[Diagnostic].Empty
         }
-        // The candidates are the same as in Binder.ResolveEntryPoint: package functions and static class methods.
-        let nearMiss FunctionSymbol? = bound
-            .Functions
-            .Concat(
-            bound
-                .Structs
-                .Where((s StructSymbol) -> s.IsClass && !s.StaticMethods.IsDefaultOrEmpty)
-                .SelectMany((s StructSymbol) -> s.StaticMethods.AsEnumerable())
-        )
-            .FirstOrDefault(
+        let nearMiss FunctionSymbol? = Binder.GetEntryPointCandidates(bound.Functions, bound.Structs).FirstOrDefault(
             (f FunctionSymbol) -> f.Declaration != nil && f.Name != "Main" && string.Equals(
                 f.Name,
                 "Main",

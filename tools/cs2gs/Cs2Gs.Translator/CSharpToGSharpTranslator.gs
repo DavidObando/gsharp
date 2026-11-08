@@ -113,6 +113,16 @@ partial class CSharpToGSharpTranslator {
         set -> semanticOnlyAbstractTypes = value
     }
 
+    internal prop LastManagedReferenceArrayProjectedMethodCacheCount int32 {
+        get;
+        private set;
+    }
+
+    internal prop LastManagedReferenceArrayProjectedMethodQueryCount int32 {
+        get;
+        private set;
+    }
+
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
     // GeneratedSourceDetection) to a partial method's other part.
@@ -590,6 +600,9 @@ partial class CSharpToGSharpTranslator {
                 allImports.Add(ImportDirective(alias.Value, alias.Key))
             }
         }
+        let projectionMetrics = visitor.GetManagedReferenceArrayProjectionMetrics()
+        this.LastManagedReferenceArrayProjectedMethodCacheCount = projectionMetrics.CacheCount
+        this.LastManagedReferenceArrayProjectedMethodQueryCount = projectionMetrics.QueryCount
         // The C# file's header comment (license, copyright) stays at the top
         // of every G# unit translated from it.
         return CompilationUnit(
