@@ -2808,20 +2808,7 @@ partial class CSharpToGSharpTranslator {
                 .ContainingSymbol {
                 for symbol in this.GetLiftedHelperOccupiedSymbols(scope_) {
                     if !SymbolEqualityComparer.Default.Equals(symbol, localFunction) {
-                        let name string? = if symbol is IParameterSymbol{Name: "_"} parameter &&
-                            parameter
-                            .DeclaringSyntaxReferences
-                            .FirstOrDefault()
-                            ?.GetSyntax() is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .ParameterSyntax syntax {
-                            this.MapParameterName(parameter, syntax)
-                        } else {
-                            this.EmittedName(symbol, symbol.Name)
-                        }
-                        occupied.Add(name!!)
+                        occupied.Add(this.EmittedName(symbol, symbol.Name)!!)
                     }
                 }
             }
@@ -2864,7 +2851,12 @@ partial class CSharpToGSharpTranslator {
                 return cached
             }
             let symbols = List[ISymbol]()
-            for reference in $scope!!.DeclaringSyntaxReferences {
+            let references = if $scope is IMethodSymbol{AssociatedSymbol: {} associated} {
+                $scope.DeclaringSyntaxReferences.AsEnumerable().Concat(associated.DeclaringSyntaxReferences)
+            } else {
+                $scope!!.DeclaringSyntaxReferences.AsEnumerable()
+            }
+            for reference in references {
                 using let scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree)
                 symbols.AddRange(
                     reference

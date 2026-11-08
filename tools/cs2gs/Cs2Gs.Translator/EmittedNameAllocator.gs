@@ -466,15 +466,9 @@ internal class EmittedNameAllocator {
                     .CSharp
                     .Syntax
                     .NameColonSyntax &&
-                    (
-                    SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(identifier).Symbol, parameter) ||
-                        (
-                        implParameter != nil && SymbolEqualityComparer.Default.Equals(
-                            model.GetSymbolInfo(identifier).Symbol,
-                            implParameter
-                        )
-                    )
-                )
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(Canonical(model.GetSymbolInfo(identifier).Symbol), parameter)
             )
             if referenced {
                 return true
@@ -489,33 +483,65 @@ internal class EmittedNameAllocator {
             names.UnionWith(this.GetVisibleTypeMemberNames(containingType))
         }
         for var current ISymbol? = parameter.ContainingSymbol;
-            current is IMethodSymbol currentMethod;
+            current != nil &&
+            current is not INamespaceSymbol &&
+            current is not INamedTypeSymbol;
             current = current!!
             .ContainingSymbol {
-            for candidate in currentMethod.Parameters {
-                if !SymbolEqualityComparer.Default.Equals(candidate, parameter) {
+            let candidates = switch current {
+                case currentMethod is IMethodSymbol: currentMethod.Parameters.AsEnumerable()
+                case currentProperty is IPropertySymbol: currentProperty.Parameters.AsEnumerable()
+                default: Enumerable.Empty[IParameterSymbol]()
+            }
+            for candidate in candidates {
+                let canonicalCandidate = Canonical(candidate)!!
+                if !SymbolEqualityComparer.Default.Equals(canonicalCandidate, parameter) {
                     names.Add(candidate.Name)
-                    if this.emittedNames.TryGetValue(candidate, out var emittedCandidate) {
+                    if this.emittedNames.TryGetValue(canonicalCandidate, out var emittedCandidate) {
                         names.Add(emittedCandidate)
                     }
                 }
             }
-            let references = currentMethod
-                .DeclaringSyntaxReferences
-                .AsEnumerable()
-                .Concat(
-                currentMethod
-                    .PartialImplementationPart
-                    ?.DeclaringSyntaxReferences
-                    .AsEnumerable() ??
-                    Enumerable.Empty[SyntaxReference]()
-            )
+            let references = switch current {
+                case currentMethod is IMethodSymbol: currentMethod
+                    .DeclaringSyntaxReferences
+                    .AsEnumerable()
+                    .Concat(
+                    currentMethod
+                        .PartialImplementationPart
+                        ?.DeclaringSyntaxReferences
+                        .AsEnumerable() ??
+                        Enumerable.Empty[SyntaxReference]()
+                )
+                    .Concat(
+                    currentMethod
+                        .AssociatedSymbol
+                        ?.DeclaringSyntaxReferences
+                        .AsEnumerable() ??
+                        Enumerable.Empty[SyntaxReference]()
+                )
+                case currentProperty is IPropertySymbol: currentProperty
+                    .DeclaringSyntaxReferences
+                    .AsEnumerable()
+                    .Concat(
+                    currentProperty
+                        .PartialImplementationPart
+                        ?.DeclaringSyntaxReferences
+                        .AsEnumerable() ??
+                        Enumerable.Empty[SyntaxReference]()
+                )
+                default: current.DeclaringSyntaxReferences.AsEnumerable()
+            }
             for reference in references {
                 let root = reference.GetSyntax()
                 let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
                 for node in root.DescendantNodesAndSelf() {
                     let declared ISymbol? = model.GetDeclaredSymbol(node)
-                    if declared == nil || SymbolEqualityComparer.Default.Equals(declared, parameter) {
+                    if declared == nil {
+                        continue
+                    }
+                    let canonicalDeclared = Canonical(declared)!!
+                    if SymbolEqualityComparer.Default.Equals(canonicalDeclared, parameter) {
                         continue
                     }
                     if declared is ILocalSymbol ||
@@ -523,7 +549,7 @@ internal class EmittedNameAllocator {
                         declared is IRangeVariableSymbol ||
                         declared is ILabelSymbol {
                         names.Add(declared.Name)
-                        if this.emittedNames.TryGetValue(declared, out var emittedDeclared) {
+                        if this.emittedNames.TryGetValue(canonicalDeclared, out var emittedDeclared) {
                             names.Add(emittedDeclared)
                         }
                     }
@@ -903,6 +929,17 @@ internal class EmittedNameAllocator {
         }
 
         private func CanonicalParameter(parameter IParameterSymbol) ISymbol {
+            var parameter = parameter
+            if parameter.ContainingSymbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol associatedProperty} &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal < associatedProperty
+                .Parameters
+                .Length &&
+                associatedProperty
+                .Parameters[parameter.Ordinal]
+                .Name == parameter.Name {
+                parameter = associatedProperty.OriginalDefinition.Parameters[parameter.Ordinal]
+            }
             if parameter.ContainingSymbol is IMethodSymbol{PartialDefinitionPart: {} defMethod} &&
                 parameter.Ordinal >= 0 &&
                 parameter.Ordinal < defMethod

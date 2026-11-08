@@ -1079,6 +1079,30 @@ public class C
         LocalFunctionHoistTranslationTests.CompileAndRun(sourceOnly, "Console.WriteLine(C().Run())", "29")
     }
 
+    @Fact
+    func ReferencedUnderscoreIndexerParameter_DisambiguatesAgainstAccessorLocal() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int this[int _]
+    {
+        get
+        {
+            int underscore = 10;
+            return _ + underscore;
+        }
+    }
+
+    public int Run() => this[32];
+}`)
+        Assert.Contains("prop this[underscore_2 int32] int32", printed, StringComparison.Ordinal)
+        Assert.Contains("return underscore_2 + underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("return underscore + underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "42")
+    }
+
     shared {
         private func CompileExternalReference(source string) MetadataReference {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", source)})
