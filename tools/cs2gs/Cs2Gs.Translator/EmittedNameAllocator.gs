@@ -85,10 +85,11 @@ internal class EmittedNameAllocator {
             return nil
         }
         symbol = Canonical(symbol)
-        if symbol!!.DeclaringSyntaxReferences.FirstOrDefault() is {} declaration &&
-            !this
-            .compilation
-            .ContainsSyntaxTree(declaration.SyntaxTree) &&
+        if symbol!!.Name == "_" &&
+            (symbol is ILocalSymbol || symbol is IParameterSymbol) &&
+            symbol!!
+            .DeclaringSyntaxReferences
+            .FirstOrDefault() is {} declaration && !this.compilation.ContainsSyntaxTree(declaration.SyntaxTree) &&
             FindDeclaringCompilation(this.compilation, declaration.SyntaxTree, HashSet[Compilation]()) is {} owner {
             let declared = owner.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration.GetSyntax())
             return For(owner).GetName(declared ?? symbol, additionalContext)
@@ -180,15 +181,20 @@ internal class EmittedNameAllocator {
 
     private func GetReferencedBindingScopeNames(symbol ISymbol) IReadOnlyCollection[string]? {
         var names HashSet[string]? = nil
-        let references = if symbol.ContainingSymbol is IMethodSymbol method &&
-            !method
+        let references = if symbol.ContainingSymbol is {} containing &&
+            !containing
             .DeclaringSyntaxReferences
             .IsDefaultOrEmpty {
-            method.DeclaringSyntaxReferences
+            containing.DeclaringSyntaxReferences.AsEnumerable()
         } else {
-            symbol.DeclaringSyntaxReferences
+            symbol.DeclaringSyntaxReferences.AsEnumerable()
         }
-        for reference in references {
+        let allReferences = if symbol.ContainingSymbol is IMethodSymbol{PartialImplementationPart: {} implementation} {
+            references.Concat(implementation.DeclaringSyntaxReferences)
+        } else {
+            references
+        }
+        for reference in allReferences {
             if !this.compilation.ContainsSyntaxTree(reference.SyntaxTree) {
                 continue
             }
@@ -836,6 +842,15 @@ internal class EmittedNameAllocator {
         }
 
         private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
+            case parameter is IParameterSymbol when parameter.ContainingSymbol is IMethodSymbol{
+                AssociatedSymbol: IPropertySymbol property
+            } &&
+                parameter.Ordinal < property
+                .Parameters
+                .Length:
+            cast[ISymbol](property.OriginalDefinition.Parameters[parameter.Ordinal])
+            case parameter is IParameterSymbol when parameter.ContainingSymbol is IMethodSymbol method:
+            cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition.Parameters[parameter.Ordinal])
             case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
             case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)

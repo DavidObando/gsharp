@@ -56,6 +56,42 @@ open class Issue5875EntryStateTranslationTests {
 }
 
 open class Issue5877UnderscoreLocalTranslationTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IndexerUnderscoreParameter_PreservesItsRead(accessor bool) {
+        let member = if accessor {
+            "public int this[int _] { get { return _; } }"
+        } else {
+            "public int this[int _] => _;"
+        }
+        LiteralConstructionRuntimeParity.AssertMatches(
+            "using System; public class C { " +
+                member +
+                " } public class P { public static void Main() { Console.WriteLine(new C()[42]); } }",
+            Issue5875ReadabilityCounters.AssertNoSynthetics
+        )
+    }
+
+    @Fact
+    func PartialMethodUnderscoreParameter_UsesOneIdentity() {
+        LiteralConstructionRuntimeParity.AssertMatches(`using System;
+public partial class P {
+    private static partial int Echo(int _);
+    private static partial int Echo(int _) => _;
+    public static void Main() { Console.WriteLine(Echo(_: 42)); }
+}`, Issue5875ReadabilityCounters.AssertNoSynthetics)
+    }
+
+    @Fact
+    func ForeignContextualMethod_KeepsCallerEscaping() {
+        LiteralConstructionRuntimeParity.AssertMatches(
+            "using System; using static Library.Lib; public class P { public static void Main() { Console.WriteLine(@nameof()); } }",
+            Issue5875ReadabilityCounters.AssertNoSynthetics,
+            "namespace Library { public static class Lib { public static int @nameof() => 42; } }"
+        )
+    }
+
     @Fact
     func GenericNamedArgument_UsesTheDeclarationName() {
         LiteralConstructionRuntimeParity.AssertMatches(`using System;
