@@ -5,6 +5,49 @@ import System.Text
 import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
+    @Fact
+    func Review4WrittenGenericFunctionCastsVerifyAndRequireAllArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = `package ErasedGeneric5815
+import System
+func Run[T](value T) T {
+return cast[(int32) -> T](func(x int32 = 7) T { return value })(3)
+}
+Console.Write(Run(7))
+`
+        let dll = fixture.Compile(source, "generic-erased", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(dll))
+        let rejected = source.Replace("})(3)", "})()")
+        Assert.NotEqual(source, rejected)
+        let (code, output) = fixture.TryCompile(rejected, "generic-erased-omitted", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0144", output, StringComparison.Ordinal)
+        Assert.Contains(".gs(4,", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Review4ThrowArgumentsAndWrapperResultsVerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package ContractControls5815
+import System
+class Box[T] {
+var Value T
+init(value T) { Value = value }
+func operator implicit(value Box[T]) T -> value.Value
+}
+func MakeBox[T](value T) Box[T] -> Box[T](value)
+func Choose[T](left T, right T) T -> left
+func Choose(left int32, right int32) int32 -> left
+var f = (x int32 = 7) -> x
+f = MakeBox(f)
+try { Choose(f, throw InvalidOperationException()) } catch { Console.Write("caught:") }
+Console.Write(f())
+`, "contract-controls", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("caught:7"), fixture.RunBytes(dll))
+    }
+
     @Theory
     @InlineData("x int32 = 9")
     @InlineData("x int32")

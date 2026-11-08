@@ -12,6 +12,53 @@ import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
     @Fact
+    func Review4WrittenGenericFunctionCastsEraseOptionalDefaults() {
+        let prefix = "func Run[T](value T) T { return cast[(int32) -> T](func(x int32 = 7) T { return value })"
+        let valid = EmittedOracle.Evaluate(prefix + "(3) }\nRun(7)")
+        Assert.Empty(valid.Diagnostics)
+        Assert.Equal(7, valid.Value)
+        let invalid = EmittedOracle.Evaluate(prefix + "() }\nRun(7)")
+        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0144" && d.Location.StartLine == 0)
+    }
+
+    @Fact
+    func Review4NeverConversionsPreserveGenericOverloads() {
+        let parameter = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter.SetExplicitDefaultValue(7)
+        let optional = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32).WithParameters(
+            ImmutableArray.Create(parameter)
+        )
+        Assert.True(Conversion.Classify(TypeSymbol.Never, optional).IsImplicit)
+        Assert.True(Conversion.Classify(TypeSymbol.Never, SliceTypeSymbol.Get(optional)).IsImplicit)
+        let result = EmittedOracle.Evaluate(`import System
+func Choose[T](left T, right T) T -> left
+func Choose(left int32, right int32) int32 -> left
+let f = (x int32 = 7) -> x
+var result = 0
+try { Choose(f, throw InvalidOperationException()) } catch { result = 7 }
+result`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(7, result.Value)
+    }
+
+    @Fact
+    func Review4UserDefinedWrapperConversionUsesItsResultContract() {
+        let declarations = `class Box[T] {
+var Value T
+init(value T) { Value = value }
+func operator implicit(value Box[T]) T -> value.Value
+}
+func MakeBox[T](value T) Box[T] -> Box[T](value)
+var f = (x int32 = 7) -> x
+`
+        let valid = EmittedOracle.Evaluate(declarations + "f = MakeBox(f)\nf()")
+        Assert.Empty(valid.Diagnostics)
+        Assert.Equal(7, valid.Value)
+        let invalid = EmittedOracle.Evaluate(declarations + "let g = (x int32 = 9) -> x\nf = MakeBox(g)")
+        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 8)
+    }
+
+    @Fact
     func Review3CallbackContractsFollowParameterAndReturnVariance() {
         let parameter = ParameterSymbol("x", TypeSymbol.Int32)
         parameter.SetExplicitDefaultValue(7)

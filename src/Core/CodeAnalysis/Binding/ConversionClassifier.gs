@@ -493,7 +493,7 @@ internal class ConversionClassifier {
             expression = reboundSibling
         }
         let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
-        let result = BindConversionCore(
+        var result = BindConversionCore(
             diagnosticLocation,
             expression,
             type,
@@ -501,6 +501,16 @@ internal class ConversionClassifier {
             callParameter,
             trackNarrowing
         )
+        // Preserve the requested static contract after identity conversions and runtime-equivalent function adapters.
+        if type != nil && result.Type is {} resultType && resultType != TypeSymbol.Error && !object.ReferenceEquals(
+            resultType,
+            type
+        ) &&
+            FunctionTypeSymbol.ContainsOptionalContract(resultType) &&
+            TypeSymbol
+            .AreRuntimeEquivalentIgnoringReferenceNullability(resultType, type) {
+            result = BoundConversionExpression(nil, type, result, binderCtx.IsCheckedContext)
+        }
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -1208,7 +1218,11 @@ internal class ConversionClassifier {
             ){ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch, HasTargetDelegateType = true}
             expression = this.createUserMethodGroupAdapter(resolvedUserMethodGroup)
         }
-        if expression.Type != nil && type != nil && !Conversion.HaveCompatibleOptionalContracts(expression.Type, type) {
+        if expression is BoundFunctionLiteralExpression &&
+            expression.Type != nil &&
+            type != nil &&
+            !Conversion
+            .HaveCompatibleOptionalContracts(expression.Type, type) {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)
             return BoundErrorExpression(expression.Syntax)
         }
@@ -1547,14 +1561,7 @@ internal class ConversionClassifier {
                     )
                 }
             }
-            // Preserve the complete target type after tuple-literal adaptation, including nested callable metadata.
-            return if !object.ReferenceEquals(expression.Type, type) && FunctionTypeSymbol.ContainsOptionalContract(
-                expression.Type
-            ) {
-                BoundConversionExpression(nil, type!!, expression, binderCtx.IsCheckedContext)
-            } else {
-                expression
-            }
+            return expression
         }
         // ADR-0186 §4: the coercion check. `Conversion.Classify` already
         // decided whether this pairing is "a platform value into a

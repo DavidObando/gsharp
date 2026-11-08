@@ -350,6 +350,7 @@ class Conversion {
         ) bool {
             if object.ReferenceEquals(source, target) ||
                 source == TypeSymbol.Null ||
+                source == TypeSymbol.Never ||
                 source == TypeSymbol.Error ||
                 target == TypeSymbol.Error {
                 return true
