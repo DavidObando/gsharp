@@ -14,6 +14,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Disjoint default toolchain archive snapshots** (#4856). Stage-2 verification rejects caller archives that collide with the default snapshot path. Same-path reuse requires an explicit controller-owned, read-only snapshot and an approved SHA-256 hash.
 - **Canonical cs2gs fixture markers and complete stage-2 archive error boundaries** (#4896, #4856). The staged-feed fixture uses the shared repository marker. Archive readers convert encryption, unsupported compression, malformed UTF-8, and optional codec failures into controlled certification errors and failure reports.
 - **Staged-only SDK discovery for configured cs2gs source roots** (#4896). Shared package discovery now consults the writable `LocalPackageFeed` as well as the source `.nugs` feed. Exact-version lookup, SDK and analyzer-verifier version resolution, compilation, and live test-project setup can reuse packages that remain only in the staging feed. Existing build-output and source-feed precedence remain unchanged.
 - **Shared archive-path collision rejection in stage-2 certification** (#4856, #4885). Tar and ZIP consumers validate canonical member trees before payload hashing or extraction. They reject duplicate and normalized paths, case-folded and Unicode-equivalent aliases, and file/directory prefix collisions. Package cache rejection preserves existing extracted files. Valid archives retain their payload hash encoding.

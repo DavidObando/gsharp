@@ -69,6 +69,8 @@ Certification writes `certified: false` in its failure report when the report di
 Tar and ZIP readers validate the complete member tree before payload hashing or extraction.
 They reject duplicate paths, normalized aliases, case-folded or Unicode-equivalent aliases, and file/directory prefix collisions.
 The same validation applies to package caches, SDK resolution, payload verification, and bootstrap package rewriting.
+The caller archive and default toolchain archive snapshot must be disjoint, including through path aliases.
+Only explicit controller-owned, read-only snapshots support same-path reuse, and their hashes still require approval.
 Invalid member trees cannot replace an existing extracted package cache.
 Valid single paths with repeated separators remain supported, and valid package payload hashes retain their existing encoding.
 

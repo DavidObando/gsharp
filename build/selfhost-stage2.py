@@ -1615,6 +1615,11 @@ def extract_verified_dotnet_archive(
         if snapshot_path is not None
         else destination.parent / f".{destination.name}.archive"
     )
+    if snapshot_path is None:
+        reject_root_collisions({
+            "dotnet archive": archive_path,
+            "default dotnet archive snapshot": frozen_archive,
+        })
     created_snapshot = frozen_archive != archive_path
     if created_snapshot:
         if frozen_archive.exists() or frozen_archive.is_symlink():
@@ -1622,7 +1627,8 @@ def extract_verified_dotnet_archive(
                 f"frozen dotnet archive snapshot must not already exist: {frozen_archive}")
         atomic_bytes(frozen_archive, archive_path.read_bytes())
         os.chmod(frozen_archive, 0o400)
-    owned_file(frozen_archive, "frozen dotnet archive")
+    if owned_file(frozen_archive, "frozen dotnet archive").st_mode & 0o222:
+        raise CertificationError(f"frozen dotnet archive snapshot must be read-only: {frozen_archive}")
     actual = sha256_file(frozen_archive)
     if actual not in allowed_hashes:
         if created_snapshot and frozen_archive.exists():

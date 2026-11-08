@@ -2062,6 +2062,63 @@ class ToolchainManifestTests(unittest.TestCase):
         self.assertIn("dotnet archive extraction root must not already exist", existing_dest.stderr)
         self.assertTrue((extracted / "dotnet").is_file())
 
+    def write_dotnet_archive(self, path: Path) -> None:
+        with tarfile.open(path, "w:gz") as archive:
+            for relative in stage2.TRUSTED_DOTNET_COMPONENTS:
+                name = relative if relative == Path("dotnet") else relative / "marker.txt"
+                data = b"approved-" + relative.as_posix().encode()
+                member = tarfile.TarInfo(name.as_posix())
+                member.size = len(data)
+                member.mode = 0o755 if relative == Path("dotnet") else 0o644
+                archive.addfile(member, io.BytesIO(data))
+
+    def test_dotnet_archive_default_snapshot_cannot_reuse_caller_archive(self) -> None:
+        archive_path = self.root / ".sdk.archive"
+        self.write_dotnet_archive(archive_path)
+        original = archive_path.read_bytes()
+        digest = hashlib.sha256(original).hexdigest()
+        destination = self.root / "sdk"
+        for mode in (0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                remove_tree(destination)
+                archive_path.chmod(mode)
+                result = run_driver("--verify-dotnet-archive", archive_path, digest, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("dotnet archive and default dotnet archive snapshot are not disjoint",
+                              result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(destination.exists())
+                self.assertEqual(original, archive_path.read_bytes())
+                self.assertEqual(mode, archive_path.stat().st_mode & 0o777)
+
+    def test_dotnet_archive_explicit_snapshot_must_be_frozen_and_approved(self) -> None:
+        archive_path = self.root / "controller.archive"
+        self.write_dotnet_archive(archive_path)
+        original = archive_path.read_bytes()
+        digest = hashlib.sha256(original).hexdigest()
+        destination = self.root / "sdk"
+        with self.subTest(snapshot="writable"):
+            archive_path.chmod(0o600)
+            with self.assertRaisesRegex(stage2.CertificationError, "snapshot must be read-only"):
+                stage2.extract_verified_dotnet_archive(
+                    archive_path, destination, {digest}, snapshot_path=archive_path)
+            self.assertFalse(destination.exists())
+        remove_tree(destination)
+        archive_path.chmod(0o400)
+        with self.subTest(snapshot="unapproved"):
+            with self.assertRaisesRegex(stage2.CertificationError, "hash is not in the approved set"):
+                stage2.extract_verified_dotnet_archive(
+                    archive_path, destination, {"0" * 64}, snapshot_path=archive_path)
+            self.assertFalse(destination.exists())
+            self.assertEqual(original, archive_path.read_bytes())
+            self.assertEqual(0o400, archive_path.stat().st_mode & 0o777)
+        with self.subTest(snapshot="frozen-approved"):
+            executable = stage2.extract_verified_dotnet_archive(
+                archive_path, destination, {digest}, snapshot_path=archive_path)
+            self.assertEqual(b"approved-dotnet", executable.read_bytes())
+            self.assertEqual(original, archive_path.read_bytes())
+            self.assertEqual(0o400, archive_path.stat().st_mode & 0o777)
+
     def test_system_owned_tree_components_only_validates_intermediate_ancestors(self) -> None:
         dotnet_root = self.root / "dotnet-root"
         (dotnet_root / "host").mkdir(parents=True)
