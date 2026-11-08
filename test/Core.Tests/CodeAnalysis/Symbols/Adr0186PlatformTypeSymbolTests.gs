@@ -120,33 +120,11 @@ open class Adr0186PlatformTypeSymbolTests {
         Assert.Equal(expectedNonNull, ClrNullability.IsPositionNonNull(ImmutableArray.Create(flag), 0))
     }
 
-    /// The `enabled` half of ADR-0186's central claim: under ADR-0136's
-    /// reading an oblivious position produces `T?` via
-    /// (cref:NullableTypeSymbol), indistinguishable from an explicitly
-    /// annotated one.
-    ///
-    /// <b>Step 3 made the scope explicit.</b> This used to rely on the
-    /// ambient default being (cref:NullabilityMode.Enabled), which is
-    /// no longer true — and relying on an ambient default to assert what a
-    /// non-default mode does was always the weaker form of the test. Entering
-    /// the mode says what is being asserted.
-    /// @param state The declaration's state, as a `ClrNullabilityState` ordinal.
-    @Theory
-    @InlineData(int32(0))
-    @InlineData(int32(2))
-    func SymbolForState_Yields_Nullable_For_Both_NonNonNull_States_Under_TheEnabledMode(state int32) {
-        using let scope_ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-        let symbol = ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState(state))
-        Assert.IsType[NullableTypeSymbol](symbol)
-        Assert.Same(NullableTypeSymbol.Get(TypeSymbol.String), symbol)
-    }
-
-    /// The mode-on half: oblivious becomes `T!` and <em>only</em>
-    /// oblivious does. The `Annotated` and `NotAnnotated` rows are
-    /// the negative controls — ADR-0186 changes exactly one cell of ADR-0136's
-    /// table, so an implementation that widened the pivot to the annotated
-    /// states (un-annotating the BCL, which the ADR explicitly forbids) fails
-    /// here.
+    /// Oblivious becomes `T!` and <em>only</em> oblivious does. The
+    /// `Annotated` and `NotAnnotated` rows are the negative controls —
+    /// ADR-0186 changes one cell of ADR-0136's table, so an implementation
+    /// that widened the pivot to the annotated states (un-annotating the BCL,
+    /// which the ADR explicitly forbids) fails here.
     @Fact
     func SymbolForState_Yields_PlatformType_For_Oblivious_Only_When_The_Mode_Is_On() {
         using let scope_ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
@@ -163,29 +141,23 @@ open class Adr0186PlatformTypeSymbolTests {
     }
 
     /// The mode is scoped, not global: leaving the scope restores the previous
-    /// reading. Without this, one test changing the mode would silently
-    /// change what every later test in the same process imports.
-    ///
-    /// Written against the `enabled` mode since step 3, because that is
-    /// now the non-default one — a restore test whose inner and outer modes
-    /// are both the default asserts nothing. It also covers the shape step 3
-    /// had to fix in `NullabilityOptions`: an unset ambient value must
-    /// resolve to `DefaultMode`, not to the enum's zero value, or a
-    /// restored "nothing" would silently mean `enabled` forever after.
+    /// mode. Issue #4372 retired the `enabled` mode in `ParseEnvironmentMode`,
+    /// leaving `platform-types` as the default and `oblivious` as the
+    /// source-oblivious mode.
     @Fact
     func The_Mode_Is_Restored_When_Its_Scope_Ends() {
-        Assert.True(NullabilityOptions.PlatformTypesEnabled)
+        Assert.False(NullabilityOptions.SourceObliviousByDefault)
         {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.False(NullabilityOptions.PlatformTypesEnabled)
-            Assert.IsType[NullableTypeSymbol](
-                ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious)
-            )
+            using let _ = NullabilityOptions.Enter(NullabilityMode.Oblivious)
+            Assert.True(NullabilityOptions.SourceObliviousByDefault)
         }
-        Assert.True(NullabilityOptions.PlatformTypesEnabled)
-        Assert.IsType[PlatformTypeSymbol](
-            ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious)
-        )
+        Assert.False(NullabilityOptions.SourceObliviousByDefault)
+        Assert.Equal(1, int32(NullabilityMode.PlatformTypes))
+        Assert.Equal(2, int32(NullabilityMode.Oblivious))
+        Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode(nil))
+        Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode("enabled"))
+        Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode("platform-types"))
+        Assert.Equal(NullabilityMode.Oblivious, NullabilityOptions.ParseEnvironmentMode("oblivious"))
     }
 
     /// ADR-0186 §1: `T!` is reference-unique per underlying type.
@@ -436,17 +408,6 @@ open class Adr0186PlatformTypeSymbolTests {
                 ClrNullability.ClassifyPosition(ImmutableArray.Create(uint8(0)), 0)
             )
             Assert.IsType[PlatformTypeSymbol](
-                ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious)
-            )
-        }
-        // Under `enabled`: the very same emitted byte still reads as "not
-        // non-null", which is ADR-0136's answer. The encoding is
-        // forward-compatible in both directions rather than a private
-        // convention, which is what makes an assembly emitted by a
-        // platform-types compilation still readable by an `enabled` one.
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.IsType[NullableTypeSymbol](
                 ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious)
             )
         }

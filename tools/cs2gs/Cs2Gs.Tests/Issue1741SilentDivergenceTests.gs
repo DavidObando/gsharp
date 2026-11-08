@@ -165,7 +165,7 @@ namespace Demo
     }
 }`)
         let printed = GSharpPrinter.Print(unit)
-        Assert.Contains("_ = 5", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore = 5", printed, StringComparison.Ordinal)
     }
 
     /// A genuine C# discard (`_ = e;` with no `_` variable in scope)

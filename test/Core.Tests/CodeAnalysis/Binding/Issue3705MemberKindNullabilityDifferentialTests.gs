@@ -387,13 +387,6 @@ func Main() {
             // instead, which is the flip and is asserted immediately below —
             // the anti-vacuity property this method exists for is that the
             // four states are DISTINCT, and they are distinct in both modes.
-            {
-                using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-                Assert.IsNotType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(nonNullField))
-                Assert.IsType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(nullableField))
-                Assert.IsType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(absentField))
-                Assert.IsType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(zeroField))
-            }
             // The default reading: annotated non-null stays `T`, annotated
             // nullable stays `T?`, and both oblivious shapes are `T!`.
             Assert.IsNotType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(nonNullField))
@@ -503,17 +496,6 @@ func Main() {
                     ClrNullability.ClassifyPosition(ClrNullability.ReadNullableFlags(field, field.DeclaringType), 0)
                 )
             }
-            // The `enabled` mode — ADR-0136's answers, asserted on the same
-            // four real declarations. ADR-0186 step 3 made the scope
-            // explicit: this is no longer the default, and a claim about a
-            // specific mode should say which mode it is about.
-            {
-                using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-                Assert.IsNotType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(fields[0].Field))
-                for (state, field, _) in fields[1 ..] {
-                    Assert.IsType[NullableTypeSymbol](ClrNullability.GetFieldTypeSymbol(field))
-                }
-            }
             // Mode ON — the third column.
             {
                 using let _ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
@@ -601,18 +583,12 @@ func Main() {
 import Issue3705.NullabilityLibrary
 
 let probe = ObliviousNullAtRuntimeSurface().ObliviousField`)
-            // Mode off: ADR-0136's reading, unchanged.
-            Assert.IsType[NullableTypeSymbol](BindGlobalProbeType(source, NullabilityMode.Enabled, libraryPath))
-            // Mode on: the read path produces `T!` — which can only happen if
-            // `Compilation.Nullability` actually reached `ClrNullability`.
             let platform = BindGlobalProbeType(source, NullabilityMode.PlatformTypes, libraryPath)
             Assert.IsType[PlatformTypeSymbol](platform)
             Assert.Equal("string!", platform.Name)
-            // …and the mode is scoped to the compilation that asked for it,
-            // which is now shown the other way round: the `enabled`
-            // compilation above must not have left `enabled` installed
-            // ambiently, so the default reading is back in force here.
-            Assert.True(NullabilityOptions.PlatformTypesEnabled)
+            let oblivious = BindGlobalProbeType(source, NullabilityMode.Oblivious, libraryPath)
+            Assert.IsType[PlatformTypeSymbol](oblivious)
+            Assert.False(NullabilityOptions.SourceObliviousByDefault)
         } finally {
             DeleteOutputDirectory(directory)
         }

@@ -1117,7 +1117,7 @@ Options:
   /lib:<path>                   Accepted for csc compatibility (currently a no-op).
   /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
   /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
-  /nullability:<mode>           How oblivious imported reference positions are read: platform-types (default, ADR-0186) or enabled (ADR-0136); oblivious also makes this compilation's own declarations oblivious (ADR-0186 §9).
+  /nullability:<mode>           Nullability mode: platform-types (default, ADR-0186); oblivious also makes this compilation's own declarations oblivious (ADR-0186 §9).
   /platform-nil-checks:<on|off> Insert the ADR-0186 nil check where a platform value is coerced to a non-null type (default: on; off is an escape hatch, not a supported mode).
   /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
   /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
@@ -1328,21 +1328,15 @@ Options:
                             result.ImplicitSystemImport = false
                         }
                         case "nullability" {
-                            // ADR-0186: how an oblivious imported reference
-                            // position is read. `platform-types` reads it as the
-                            // platform type `T!` and is the DEFAULT since step 3
-                            // flipped it; `enabled` selects ADR-0136's older `T?`
-                            // reading. The default lives on
-                            // `CommandLineArgs.Nullability`, not here — this
-                            // switch only overrides it — and the two statements
-                            // have to agree, which is why `/help`'s wording is
-                            // asserted by `Adr0186NullabilitySwitchTests`.
+                            // ADR-0186 (#4372 retired the legacy `enabled` mode):
+                            // `platform-types` is the default; `oblivious` (§9)
+                            // additionally makes this compilation's own unadorned
+                            // reference declarations `T!`.
                             result.Nullability = switch value!!.ToLowerInvariant() {
-                                case "enabled": NullabilityMode.Enabled
                                 case "platform-types" or "platformtypes": NullabilityMode.PlatformTypes
                                 case "oblivious": NullabilityMode.Oblivious
                                 default: throw CommandLineException(
-                                    "/nullability: unknown mode '$value'; expected enabled, platform-types or oblivious."
+                                    "/nullability: unknown mode '$value'; expected platform-types or oblivious."
                                 )
                             }
                         }

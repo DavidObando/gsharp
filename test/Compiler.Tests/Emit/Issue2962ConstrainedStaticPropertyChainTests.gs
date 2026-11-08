@@ -141,7 +141,11 @@ func Read[T I[string]](w T) int32 {
                 sourcePath
             )
             Assert.Equal(1, exitCode)
-            Assert.Contains("error GS0158: Cannot find member Length.", output, StringComparison.Ordinal)
+            Assert.Contains(
+                "error GS0158: Cannot access member Length because receiver 'T.V' may be nil.",
+                output,
+                StringComparison.Ordinal
+            )
             Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
         } finally {
             Directory.Delete(directory, recursive: true)

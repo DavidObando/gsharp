@@ -445,7 +445,7 @@ internal partial class ExpressionBinder {
                     enumSymbol = inheritedColorEnum
                 } else {
                     inheritedClrHead?.AnchorSyntax(leftName)
-                    return BindAccessorStep(inheritedClrHead, nil, rightPart)
+                    return BindAccessorStep(inheritedClrHead, nil, rightPart, leftName)
                 }
             } else if TryResolveInterfaceInstancePropertyByBareName(name, out _, out _) &&
                 !(
@@ -473,7 +473,7 @@ internal partial class ExpressionBinder {
                 // wins on the static-member shape, by falling through to the
                 // source-type arms below).
                 return if TryBindInterfaceInstancePropertyByBareName(leftName, out var dimHead) {
-                    BindAccessorStep(dimHead, nil, rightPart)
+                    BindAccessorStep(dimHead, nil, rightPart, leftName)
                 } else {
                     cast[BoundExpression](BoundErrorExpression(nil))
                 }
@@ -485,7 +485,7 @@ internal partial class ExpressionBinder {
                 // earlier cell — binds the head as the submission's static
                 // field read and continues the chain on that value.
                 submissionHead?.AnchorSyntax(leftName)
-                return BindAccessorStep(submissionHead, nil, rightPart)
+                return BindAccessorStep(submissionHead, nil, rightPart, leftName)
             } else if binderCtx.TryLookupSourceType(
                 $scope,
                 name,
@@ -2299,7 +2299,7 @@ internal partial class ExpressionBinder {
                 if nested.IsNullConditional {
                     return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
                 }
-                return BindAccessorStep(head, nil, nested.RightPart)
+                return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart)
             }
             case ce is CallExpressionSyntax {
                 // Resolve the nested owner before treating the name as a shared
@@ -2739,7 +2739,7 @@ internal partial class ExpressionBinder {
                 if head is BoundErrorExpression {
                     return head
                 }
-                return BindAccessorStep(head, nil, nested.RightPart)
+                return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart)
             }
             default {
                 return BoundErrorExpression(nil)

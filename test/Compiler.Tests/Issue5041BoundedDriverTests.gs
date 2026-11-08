@@ -225,9 +225,9 @@ namespace Foreign { public static class Api { public static string Read() => "ok
         let primitiveBodies = string.Concat(
             Enumerable.Range(0, 32).Select((i int32) -> "func Independent$i(x int32) int32 -> x + $i\n")
         )
-        let source = "package NullableWorkers\nimport Foreign\nfunc Value() int32 -> Api.Read().Length\n" +
+        let source = "package NullableWorkers\nimport Foreign\nfunc Value() int32 { let s string = nil\nreturn Api.Read().Length }\n" +
             primitiveBodies
-        for mode in[]string{"platform-types", "enabled"} {
+        for mode in[]string{"oblivious", "platform-types"} {
             var expected string? = nil
             var image[]uint8 = Array.Empty[uint8]()
             for workers in[]int32{1, 2, 4, 8} {
@@ -240,7 +240,7 @@ namespace Foreign { public static class Api { public static string Read() => "ok
                     "--nullability:$mode",
                     "--workers:$workers"
                 )
-                if mode == "platform-types" {
+                if mode == "oblivious" {
                     Assert.True(code == 0, diagnostics)
                     let bytes = File.ReadAllBytes(Path.Combine(fixture.Directory, "nullable.dll"))
                     if workers == 1 {
@@ -250,7 +250,7 @@ namespace Foreign { public static class Api { public static string Read() => "ok
                     }
                 } else {
                     Assert.NotEqual(0, code)
-                    Assert.Contains("GS0158", diagnostics)
+                    Assert.Contains("GS0155", diagnostics)
                 }
                 expected ??= diagnostics
                 Assert.Equal(expected, diagnostics)

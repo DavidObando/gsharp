@@ -541,7 +541,7 @@ public class C
     }
 
     @Fact
-    func ReadableLiftFallback_ReferencedUnderscoreParameterReservesEmittedName() {
+    func ReadableLiftFallback_ReferencedUnderscoreParameterAvoidsSourceHelperName() {
         let printed = Translate(`using System;
 
 public class C
