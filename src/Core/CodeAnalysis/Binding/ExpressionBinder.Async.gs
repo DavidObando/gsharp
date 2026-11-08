@@ -876,7 +876,12 @@ internal partial class ExpressionBinder {
                     receiverClrType = resolvedImportedEventTarget?.ClrType
                 }
                 if eventInfo == nil {
-                    ReportUnableToFindMemberOrNilableReceiver(boundReceiver, eventNameSyntax, accessor.LeftPart)
+                    ReportUnableToFindMemberOrNilableReceiver(
+                        boundReceiver,
+                        eventNameSyntax,
+                        accessor.LeftPart,
+                        forWriteOrEvent: true
+                    )
                     return BoundErrorExpression(nil)
                 }
             }

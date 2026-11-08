@@ -80,6 +80,17 @@ func f(n Node?) { n.Name = "x" }`, "", "Cannot access member Name because receiv
     var Next Node?
 }
 func f(n Node) int32 { return n.Next.Missing }`, "", "Cannot find member Missing.")
+    @InlineData(`import System.Linq
+class Node {}
+func f(n Node?) { n.Count = 1 }`, "", "Cannot find member Count.")
+    @InlineData(`class Node {
+    private var secret int32 = 1
+}
+func f(n Node?) int32 { return n.secret }`, "", "Cannot find member secret.")
+    @InlineData(`class Node {
+    private var secret int32 = 1
+}
+func f(n Node?) { n.secret = 2 }`, "", "Cannot find member secret.")
     func Issue4366_NilableReceiver_MemberAccess_ExplainsNilableReceiver_And_MissingMember_StaysCannotFind(
         declarations string,
         body string,

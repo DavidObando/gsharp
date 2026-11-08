@@ -14,6 +14,6 @@ package GSharp.Core.CodeAnalysis.Symbols
 /// compilation's own unadorned reference declarations `T!`. The legacy
 /// `enabled` mode (ADR-0136) was retired by #4372.
 enum NullabilityMode {
-    PlatformTypes,
-    Oblivious
+    PlatformTypes = 1,
+    Oblivious = 2
 }

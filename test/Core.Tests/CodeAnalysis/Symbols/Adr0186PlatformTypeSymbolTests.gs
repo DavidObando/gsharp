@@ -152,6 +152,8 @@ open class Adr0186PlatformTypeSymbolTests {
             Assert.True(NullabilityOptions.SourceObliviousByDefault)
         }
         Assert.False(NullabilityOptions.SourceObliviousByDefault)
+        Assert.Equal(1, int32(NullabilityMode.PlatformTypes))
+        Assert.Equal(2, int32(NullabilityMode.Oblivious))
         Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode(nil))
         Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode("enabled"))
         Assert.Equal(NullabilityMode.PlatformTypes, NullabilityOptions.ParseEnvironmentMode("platform-types"))

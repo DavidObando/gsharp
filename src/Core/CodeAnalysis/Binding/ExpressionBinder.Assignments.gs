@@ -1307,7 +1307,8 @@ internal partial class ExpressionBinder {
                 ReportUnableToFindMemberOrNilableReceiver(
                     assignmentReceiver,
                     NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
-                    NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
+                    NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver),
+                    forWriteOrEvent: true
                 )
                 return BoundErrorExpression(nil)
             }
@@ -1523,7 +1524,8 @@ internal partial class ExpressionBinder {
             ReportUnableToFindMemberOrNilableReceiver(
                 assignmentReceiver,
                 NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
-                NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
+                NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver),
+                forWriteOrEvent: true
             )
             return BoundErrorExpression(nil)
         }
@@ -4669,7 +4671,8 @@ internal partial class ExpressionBinder {
                 ReportUnableToFindMemberOrNilableReceiver(
                     receiver,
                     NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
-                    syntax.Receiver
+                    syntax.Receiver,
+                    forWriteOrEvent: true
                 )
                 return BoundErrorExpression(nil)
             }
@@ -4960,7 +4963,8 @@ internal partial class ExpressionBinder {
         ReportUnableToFindMemberOrNilableReceiver(
             receiver,
             NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
-            syntax.Receiver
+            syntax.Receiver,
+            forWriteOrEvent: true
         )
         return BoundErrorExpression(nil)
     }

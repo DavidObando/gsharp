@@ -841,8 +841,8 @@ type enum GSharp.Core.CodeAnalysis.Symbols.MethodKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind PropertySet = 4
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind StaticConstructor = 5
 type enum GSharp.Core.CodeAnalysis.Symbols.NullabilityMode : Int32
-  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Oblivious = 1
-  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode PlatformTypes = 0
+  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Oblivious = 2
+  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode PlatformTypes = 1
 type enum GSharp.Core.CodeAnalysis.Symbols.SuspendingKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Declared = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Inferred = 1
