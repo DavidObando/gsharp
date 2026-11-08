@@ -841,9 +841,8 @@ type enum GSharp.Core.CodeAnalysis.Symbols.MethodKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind PropertySet = 4
   field public const GSharp.Core.CodeAnalysis.Symbols.MethodKind StaticConstructor = 5
 type enum GSharp.Core.CodeAnalysis.Symbols.NullabilityMode : Int32
-  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Enabled = 0
-  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Oblivious = 2
-  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode PlatformTypes = 1
+  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode Oblivious = 1
+  field public const GSharp.Core.CodeAnalysis.Symbols.NullabilityMode PlatformTypes = 0
 type enum GSharp.Core.CodeAnalysis.Symbols.SuspendingKind : Int32
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Declared = 2
   field public const GSharp.Core.CodeAnalysis.Symbols.SuspendingKind Inferred = 1
@@ -3748,6 +3747,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportTypeParameterVariancePositionViolation(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeParameterName, String declaredVariance, String usedPosition)
   method public Void ReportUnableToFindFunction(GSharp.Core.CodeAnalysis.Text.TextLocation location, String functionName, String receiverName)
   method public Void ReportUnableToFindFunction(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
+  method public Void ReportUnableToFindMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String receiverName)
   method public Void ReportUnableToFindMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
   method public Void ReportUnableToFindQualifiedType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName, String prefix, Boolean isPackage)
   method public Void ReportUnableToFindType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)

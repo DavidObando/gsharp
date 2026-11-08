@@ -59,20 +59,16 @@ shared class ClrNullability {
     private let NullableContextCache ConditionalWeakTable[ICustomAttributeProvider, RawFlags] =
     ConditionalWeakTable[ICustomAttributeProvider, RawFlags]()
 
-    /// The decoded symbol of one declaration, one slot per nullability mode.
-    /// The mode is an ambient setting (see (cref:NullabilityOptions)) and changes the
-    /// decoded symbol, so it is part of the cache key.
+    /// The decoded symbol of one declaration.
     private class DecodedSignature {
         internal var PlatformTypes TypeSymbol?
-        internal var Legacy TypeSymbol?
     }
 
     /// Issue #5125: decoded symbols of imported declarations, keyed by the
-    /// reflected member (property, field, method return or parameter) and the
-    /// nullability mode. The decode reads only the member, its declaring
-    /// context and the mode, so the entry cannot answer another consumer or
-    /// reference set. A member object belongs to one metadata context, and the
-    /// entry lives as long as that member.
+    /// reflected member (property, field, method return or parameter). The
+    /// decode reads only the member and its declaring context, so the entry
+    /// cannot answer another consumer or reference set. A member object belongs
+    /// to one metadata context, and the entry lives as long as that member.
     private let DecodedSignatures ConditionalWeakTable[object, DecodedSignature] = ConditionalWeakTable[
         object,
         DecodedSignature
@@ -80,22 +76,18 @@ shared class ClrNullability {
     private let CreateDecodedSignature ConditionalWeakTable[object, DecodedSignature].CreateValueCallback =
     (_ object) -> DecodedSignature()
 
-    /// Gets the slots of [`member`](paramref). A caller holds the lock on the
-    /// slots while it reads or decodes, so each decode runs once per member and
-    /// mode, also under concurrent callers.
+    /// Gets the slot of [`member`](paramref). A caller holds the lock on the
+    /// slot while it reads or decodes, so each decode runs once per member,
+    /// also under concurrent callers.
     private func GetDecodedSignature(member object) DecodedSignature -> DecodedSignatures.GetValue(
         member,
         CreateDecodedSignature
     )
 
-    /// Reads the decoded symbol of the current nullability mode, or `nil`
-    /// when this member and mode were not decoded yet. Call under the slots lock.
+    /// Reads the decoded symbol, or `nil` when this member was not decoded yet.
+    /// Call under the slots lock.
     private func ReadDecodedSignature(slots DecodedSignature) TypeSymbol? {
-        let cached = if NullabilityOptions.PlatformTypesEnabled {
-            slots.PlatformTypes
-        } else {
-            slots.Legacy
-        }
+        let cached = slots.PlatformTypes
         if cached != nil {
             CompilationMeasurements.Count("metadata.signature-cache-hits")
         }
@@ -131,11 +123,7 @@ shared class ClrNullability {
             return decoded
         }
         CompilationMeasurements.Count("metadata.signature-decodes")
-        if NullabilityOptions.PlatformTypesEnabled {
-            slots.PlatformTypes = decoded
-        } else {
-            slots.Legacy = decoded
-        }
+        slots.PlatformTypes = decoded
         return decoded
     }
 
@@ -1036,32 +1024,19 @@ shared class ClrNullability {
         default: ClrNullabilityState.Oblivious
     }
 
-    /// ADR-0186 §2: the single place that turns a
-    /// (cref:ClrNullabilityState) into a G# type, and therefore the single
-    /// cell of ADR-0136's table that this ADR changes.
+    /// ADR-0186 §2 / ADR-0193 §1: the single place that turns a
+    /// (cref:ClrNullabilityState) into a G# type via
+    /// (cref:NullabilityImportRule.ApplyConcrete):
     /// - (cref:ClrNullabilityState.NotAnnotated) → `T`.
     /// - (cref:ClrNullabilityState.Annotated) → `T?`.
-    /// - (cref:ClrNullabilityState.Oblivious) → `T!` under (cref:NullabilityMode.PlatformTypes), and `T?`
-    /// otherwise — ADR-0136's answer, which is what keeps `--nullability=platform-types` a genuine no-op
-    /// while it is off.
-    ///
-    /// ADR-0193 §1: under platform types this is
-    /// (cref:NullabilityImportRule.ApplyConcrete) — the rule, not a
-    /// copy of it. The `--nullability=enabled` arm is the mode #4372
-    /// retires, and it stays here, outside the rule, until then.
+    /// - (cref:ClrNullabilityState.Oblivious) → `T!`.
     /// @param baseSymbol The unwrapped position type.
     /// @param state What the declaration says about the position.
     /// @returns The nullability-aware type symbol.
-    internal func SymbolForState(baseSymbol TypeSymbol, state ClrNullabilityState) TypeSymbol {
-        if NullabilityOptions.PlatformTypesEnabled {
-            return NullabilityImportRule.ApplyConcrete(baseSymbol, state)
-        }
-        return if state == ClrNullabilityState.NotAnnotated {
-            baseSymbol
-        } else {
-            cast[TypeSymbol](NullableTypeSymbol.Get(baseSymbol))
-        }
-    }
+    internal func SymbolForState(
+        baseSymbol TypeSymbol,
+        state ClrNullabilityState
+    ) TypeSymbol -> NullabilityImportRule.ApplyConcrete(baseSymbol, state)
 
     /// Issue #1354, issue #3705 family 2 — <b>the</b> predicate that turns one
     /// C# nullable-metadata byte into G#'s answer, and the only place in the
@@ -1369,24 +1344,20 @@ shared class ClrNullability {
                 // `List<string?>?` here and `List<string>?` through
                 // `MergeDeclarationNullability`. The slot's `?` belongs to the
                 // argument's root only, and a value-type argument takes none.
-                if NullabilityOptions.PlatformTypesEnabled {
-                    if NullabilityImportRule.IsUnsubstitutedSlot(actual, layout) {
-                        // No substitution happened (see IsUnsubstitutedSlot):
-                        // this arm's pre-ADR-0193 answer, which only an
-                        // explicit `2` widens.
-                        builder.Add(
-                            if ClassifyFlag(flag) == ClrNullabilityState.Annotated {
-                                uint8(2)
-                            } else {
-                                uint8(1)
-                            }
-                        )
-                        return
-                    }
-                    builder.AddRange(NullabilityImportRule.ApplyOpenSlotToFlags(actual, ClassifyFlag(flag)))
+                if NullabilityImportRule.IsUnsubstitutedSlot(actual, layout) {
+                    // No substitution happened (see IsUnsubstitutedSlot):
+                    // this arm's pre-ADR-0193 answer, which only an
+                    // explicit `2` widens.
+                    builder.Add(
+                        if ClassifyFlag(flag) == ClrNullabilityState.Annotated {
+                            uint8(2)
+                        } else {
+                            uint8(1)
+                        }
+                    )
                     return
                 }
-                builder.AddRange(ExpandNullableFlags(actual, ImmutableArray.Create(flag)))
+                builder.AddRange(NullabilityImportRule.ApplyOpenSlotToFlags(actual, ClassifyFlag(flag)))
                 return
             }
             if actual.IsArray && layout.IsArray {
@@ -1486,11 +1457,7 @@ shared class ClrNullability {
     /// constant `2` the two-argument overload always used, so that mode
     /// keeps ADR-0136's reading unchanged.
     /// @returns The fill byte for positions the declaration did not supply.
-    private func DefaultAbsentFill() uint8 -> if NullabilityOptions.PlatformTypesEnabled {
-        uint8(0)
-    } else {
-        uint8(2)
-    }
+    private func DefaultAbsentFill() uint8 -> uint8(0)
 
     private func BuildTupleTypeSymbol(clrType Type, flags ImmutableArray[uint8], offset int32) TupleTypeSymbol {
         return MapTupleTypeSymbol(

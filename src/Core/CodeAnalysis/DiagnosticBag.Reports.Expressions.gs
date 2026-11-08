@@ -627,7 +627,17 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     func ReportUnableToFindMember(location TextLocation, text string) -> Report(
         location,
         DiagnosticDescriptors.UnableToFindMember,
-        text
+        "Cannot find member $text."
+    )
+
+    /// Reports a member access whose receiver lacks a valid non-null narrowing.
+    /// @param location The text location where the error was found.
+    /// @param memberName The accessed member.
+    /// @param receiverName The nullable receiver spelling.
+    func ReportUnableToFindMember(location TextLocation, memberName string, receiverName string) -> Report(
+        location,
+        DiagnosticDescriptors.UnableToFindMember,
+        "Cannot access member $memberName because receiver '$receiverName' may be nil. Use '?.' for null-safe access, '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
     )
 
     /// GS0503: Reports a direct call through a nullable delegate receiver without a valid narrowing.

@@ -342,14 +342,6 @@ func Take(b Box[string?]) {
             NullableTypeSymbol.Get(classConstrained),
             NullableFlagsBuilder.MergeDeclarationNullability(classConstrained, open_.ReturnType, flags)
         )
-        // `--nullability=enabled` (retired by #4372) keeps its own arm.
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.Same(
-                NullableTypeSymbol.Get(unconstrained),
-                NullableFlagsBuilder.MergeDeclarationNullability(unconstrained, open_.ReturnType, flags)
-            )
-        }
     }
 
     /// ADR-0193 §4 found the field and property readers reading an open

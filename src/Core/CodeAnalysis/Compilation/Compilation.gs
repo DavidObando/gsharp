@@ -95,26 +95,16 @@ open class Compilation {
     /// `true`.
     prop ImplicitSystemImport bool
 
-    /// Gets or sets how this compilation reads nullability-<em>oblivious</em>
-    /// imported reference positions (ADR-0186, `--nullability=<mode>`).
-    /// <b>Defaults to <see cref="NullabilityMode.PlatformTypes" /> since
-    /// ADR-0186 step 3</b> — an oblivious imported reference position is the
-    /// platform type `T!`. (cref:NullabilityMode.Enabled) selects
-    /// ADR-0136's older `T?` reading and stays available.
+    /// Gets or sets the nullability mode of this compilation (ADR-0186,
+    /// `--nullability=<mode>`). Defaults to
+    /// (cref:NullabilityMode.PlatformTypes): an oblivious imported reference
+    /// position is the platform type `T!`, and source declarations are
+    /// nullability-enabled by default. (cref:NullabilityMode.Oblivious)
+    /// additionally makes unadorned source reference declarations `T!`.
     /// @remarks The default is read from `NullabilityOptions.DefaultMode`, which
-    /// the `GSHARP_NULLABILITY` environment variable can set back to
-    /// (cref:NullabilityMode.Enabled). That override exists so the
-    /// full test suite can be run <em>both</em> ways from one tree, which is
-    /// how the flip's before/after was measured. An embedder that sets this
+    /// the `GSHARP_NULLABILITY` environment variable can set to
+    /// (cref:NullabilityMode.Oblivious). An embedder that sets this
     /// property always wins over it.
-    ///
-    /// The mode is installed as an ambient scope around binding and emit
-    /// ((cref:NullabilityOptions)) because the metadata reader that
-    /// consults it, `ClrNullability`, is a static leaf with no
-    /// (cref:Compilation) in reach. Note that the interning caches in
-    /// the `Symbols` namespace are process-wide: two compilations that
-    /// disagree about this mode in one process should not share a
-    /// (cref:ReferenceResolver).
     private var _nullability NullabilityMode = NullabilityOptions.DefaultMode
 
     prop Nullability NullabilityMode {

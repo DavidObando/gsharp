@@ -1304,7 +1304,11 @@ internal partial class ExpressionBinder {
         // `box !!T; ldfld`/`callvirt get_X`.
         if assignmentReceiverType is TypeParameterSymbol tpVarType {
             if !HasProvenNonNullTypeParameterReceiver(assignmentReceiver, tpVarType) {
-                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText)
+                ReportUnableToFindMemberOrNilableReceiver(
+                    assignmentReceiver,
+                    NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
+                    NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
+                )
                 return BoundErrorExpression(nil)
             }
             if tpVarType.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
@@ -1516,7 +1520,11 @@ internal partial class ExpressionBinder {
             return BoundErrorExpression(nil)
         }
         if !(assignmentReceiverType is StructSymbol structSymbol) {
-            Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText)
+            ReportUnableToFindMemberOrNilableReceiver(
+                assignmentReceiver,
+                NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
+                NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
+            )
             return BoundErrorExpression(nil)
         }
         let hasNearestProperty = TypeMemberModel.TryGetProperty(
@@ -4658,7 +4666,11 @@ internal partial class ExpressionBinder {
         }
         if receiverType is TypeParameterSymbol tpReceiver {
             if !HasProvenNonNullTypeParameterReceiver(receiver, tpReceiver) {
-                Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
+                ReportUnableToFindMemberOrNilableReceiver(
+                    receiver,
+                    NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
+                    syntax.Receiver
+                )
                 return BoundErrorExpression(nil)
             }
             if tpReceiver.UnwrappedClassConstraintStruct is StructSymbol tpClassConstraint {
@@ -4945,7 +4957,11 @@ internal partial class ExpressionBinder {
                 staticContainerType: nil
             )
         }
-        Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName)
+        ReportUnableToFindMemberOrNilableReceiver(
+            receiver,
+            NameExpressionSyntax(syntax.SyntaxTree, syntax.FieldIdentifier),
+            syntax.Receiver
+        )
         return BoundErrorExpression(nil)
     }
 

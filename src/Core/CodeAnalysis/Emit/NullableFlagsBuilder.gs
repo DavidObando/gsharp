@@ -190,7 +190,7 @@ internal shared class NullableFlagsBuilder {
                 let unsubstituted = !(projected is TypeParameterSymbol) &&
                     projected.ClrType is {} self &&
                     NullabilityImportRule.IsUnsubstitutedSlot(self, layout)
-                if NullabilityOptions.PlatformTypesEnabled && !unsubstituted {
+                if !unsubstituted {
                     return NullabilityImportRule.ApplyOpenSlot(projected, ClrNullability.ClassifyFlag(parameterFlag))
                 }
                 return if ClrNullability.ClassifyFlag(parameterFlag) == ClrNullabilityState.Annotated {

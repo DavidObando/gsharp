@@ -715,7 +715,7 @@ internal partial class ExpressionBinder {
                     }
                     return BindAccessorStep(nil, nestedClassSymbol, nested.RightPart)
                 }
-                let head = BindAccessorStep(receiver, classSymbol, nested.LeftPart)
+                let head = BindAccessorStep(receiver, classSymbol, nested.LeftPart, receiverSyntax, receiverStart)
                 if head is BoundErrorExpression {
                     return head
                 }
@@ -835,7 +835,7 @@ internal partial class ExpressionBinder {
                 }
                 var indexTarget BoundExpression
                 try {
-                    indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target)
+                    indexTarget = BindAccessorStep(receiver, classSymbol, ix.Target, receiverSyntax, receiverStart)
                 } finally {
                     binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
                 }
@@ -1168,7 +1168,7 @@ internal partial class ExpressionBinder {
                     ) {
                         return inheritedClrGroup!!
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is EnumSymbol {
                     // Issue #1218: an inherited System.Enum / ValueType / Object
                     // instance member (HasFlag/ToString/GetHashCode/Equals/GetType)
@@ -1185,7 +1185,7 @@ internal partial class ExpressionBinder {
                     ) {
                         return enumClrGroup!!
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is InterfaceSymbol ifaceSym {
                     // Issue #1068: read a property declared on the static
                     // interface type (or any base interface) through an
@@ -1275,7 +1275,7 @@ internal partial class ExpressionBinder {
                             return ifaceClrGroup!!
                         }
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is TupleTypeSymbol tupleSym {
                     // Phase 4.5 / issue #2924: tuple element access via
                     // one-based Item1..ItemN or zero-based .0...N selectors.
@@ -1289,8 +1289,9 @@ internal partial class ExpressionBinder {
                         }
                         return BoundTupleElementAccessExpression(nil, resolvedReceiver, resolvedTuple, zeroBased)
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
-                } else if receiver != nil && TryBindNullableInstanceMember(receiver, ne, out var nullableMember) {
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
+                } else if receiver != nil &&
+                    TryBindNullableInstanceMember(receiver, ne, out var nullableMember, receiverSyntax, receiverStart) {
                     return nullableMember!!
                 } else if TryGetClrInstanceMemberReceiverType(receiver, out var clrInstanceReceiverType) {
                     // Phase 4 exit: read a public instance property or field on
@@ -1404,7 +1405,7 @@ internal partial class ExpressionBinder {
                     ) {
                         return BoundErrorExpression(nil)
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil &&
                     (receiver.Type is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol) &&
                     receiver
@@ -1444,7 +1445,7 @@ internal partial class ExpressionBinder {
                     ) {
                         return arrayMethodGroup!!
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else if receiver != nil && receiver.Type is TypeParameterSymbol tpRecv {
                     // Issue #1235: a value whose static type is a type parameter
                     // constrained to a class (or interface) exposes that
@@ -1458,9 +1459,9 @@ internal partial class ExpressionBinder {
                     if tpMember != nil {
                         return tpMember
                     }
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 } else {
-                    return BindExtensionMethodGroupOrError(receiver, ne)
+                    return BindExtensionMethodGroupOrError(receiver, ne, receiverSyntax, receiverStart)
                 }
             }
             default {
@@ -1472,7 +1473,9 @@ internal partial class ExpressionBinder {
     private func TryBindNullableInstanceMember(
         receiver BoundExpression,
         name NameExpressionSyntax,
-        @NotNullWhen(true) out member BoundExpression?
+        @NotNullWhen(true) out member BoundExpression?,
+        receiverSyntax ExpressionSyntax? = nil,
+        receiverStart int32? = nil
     ) bool {
         member = nil
         if receiver.Type is not NullableTypeSymbol nullableType {
@@ -1505,7 +1508,7 @@ internal partial class ExpressionBinder {
                 member = nullableGroup
                 return true
             }
-            member = BindExtensionMethodGroupOrError(receiver, name)
+            member = BindExtensionMethodGroupOrError(receiver, name, receiverSyntax, receiverStart)
             return true
         }
         let openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol
@@ -1538,7 +1541,7 @@ internal partial class ExpressionBinder {
             member = openNullableGroup
             return true
         }
-        member = BindExtensionMethodGroupOrError(receiver, name)
+        member = BindExtensionMethodGroupOrError(receiver, name, receiverSyntax, receiverStart)
         return true
     }
 
@@ -1547,7 +1550,12 @@ internal partial class ExpressionBinder {
     /// instance methods have all failed lookup. Calls already resolve extensions
     /// through the overload resolver; method-group lookup must use the same
     /// symbol tables instead of treating the name as a missing property.
-    private func BindExtensionMethodGroupOrError(receiver BoundExpression?, name NameExpressionSyntax) BoundExpression {
+    private func BindExtensionMethodGroupOrError(
+        receiver BoundExpression?,
+        name NameExpressionSyntax,
+        receiverSyntax SyntaxNode? = nil,
+        receiverStart int32? = nil
+    ) BoundExpression {
         if receiver is BoundErrorExpression {
             return receiver
         }
@@ -1582,8 +1590,177 @@ internal partial class ExpressionBinder {
                 )
             }
         }
-        Diagnostics.ReportUnableToFindMember(name.Location, name.IdentifierToken.ValueText)
+        ReportUnableToFindMemberOrNilableReceiver(receiver, name, receiverSyntax, receiverStart)
         return BoundErrorExpression(nil)
+    }
+
+    private var probingNullableUnderlyingMemberDepth int32
+
+    private func ReportUnableToFindMemberOrNilableReceiver(
+        receiver BoundExpression?,
+        memberNameSyntax NameExpressionSyntax,
+        receiverSyntax SyntaxNode? = nil,
+        receiverStart int32? = nil
+    ) {
+        let memberName = memberNameSyntax.IdentifierToken.ValueText
+        if probingNullableUnderlyingMemberDepth == 0 && receiver != nil {
+            let effectiveReceiverSyntax SyntaxNode? = receiverSyntax ?? receiver.Syntax
+            if (
+                receiver.Type is NullableTypeSymbol nullableRecvType &&
+                    IsApplicableNullableUnderlyingMember(receiver, nullableRecvType.UnderlyingType, memberNameSyntax) ||
+                    receiver.Type is TypeParameterSymbol nullableTpRecv &&
+                    !HasProvenNonNullTypeParameterReceiver(receiver, nullableTpRecv) &&
+                    IsApplicableNullableUnderlyingMember(receiver, nullableTpRecv, memberNameSyntax)
+            ) {
+                Diagnostics.ReportUnableToFindMember(
+                    memberNameSyntax.Location,
+                    memberName,
+                    DescribeCallReceiver(receiver, effectiveReceiverSyntax, receiverStart)
+                )
+                return
+            }
+        }
+        Diagnostics.ReportUnableToFindMember(memberNameSyntax.Location, memberName)
+    }
+
+    private func IsApplicableNullableUnderlyingMember(
+        receiver BoundExpression,
+        underlyingType TypeSymbol,
+        memberNameSyntax NameExpressionSyntax
+    ) bool {
+        if underlyingType is NullableTypeSymbol || underlyingType == TypeSymbol.Error {
+            return false
+        }
+        let memberName = memberNameSyntax.IdentifierToken.ValueText
+        let narrowedReceiver = BoundConversionExpression(receiver.Syntax, underlyingType, receiver)
+        let diagnosticMark = Diagnostics.Count
+        probingNullableUnderlyingMemberDepth++
+        try {
+            if underlyingType is TypeParameterSymbol tpRecv {
+                if BindTypeParameterInstanceMemberAccess(
+                    tpRecv,
+                    narrowedReceiver,
+                    memberNameSyntax,
+                    requireProvenNonNull: false
+                ) != nil {
+                    return true
+                }
+                if !$scope.TryLookupExtensionFunctions(tpRecv, memberName).IsDefaultOrEmpty {
+                    return true
+                }
+                return HasWritableOrEventUnderlyingMember(narrowedReceiver, tpRecv, memberName)
+            }
+            let probed = BindAccessorStepCore(narrowedReceiver, classSymbol: nil, memberNameSyntax)
+            if !(probed is BoundErrorExpression) {
+                return true
+            }
+            return HasWritableOrEventUnderlyingMember(narrowedReceiver, underlyingType, memberName)
+        } finally {
+            probingNullableUnderlyingMemberDepth--
+            Diagnostics.TruncateTo(diagnosticMark)
+        }
+    }
+
+    private func HasWritableOrEventUnderlyingMember(
+        narrowedReceiver BoundExpression,
+        underlyingType TypeSymbol,
+        memberName string
+    ) bool {
+        if underlyingType is StructSymbol structSym {
+            if TypeMemberModel.TryGetProperty(structSym, memberName, out _, out _) ||
+                TypeMemberModel.TryGetFieldIncludingInherited(
+                structSym,
+                memberName,
+                MemberQuery.Instance(MemberKinds.Field),
+                out _,
+                out _
+            ) ||
+                TypeMemberModel.TryGetEvent(structSym, memberName, out _, out _) {
+                return true
+            }
+            if GetInheritedClrBaseType(structSym) is Type inhClr &&
+                (
+                ClrTypeUtilities.SafeGetInheritedInstanceProperty(inhClr, memberName, CanAccessInternalsOf) != nil ||
+                    ClrTypeUtilities.SafeGetInheritedInstanceField(inhClr, memberName, CanAccessInternalsOf) != nil ||
+                    MemberLookup
+                    .SafeGetEventIncludingSelfAndInterfaces(
+                    inhClr,
+                    memberName,
+                    CanAccessInternalsOf(inhClr),
+                    CanAccessInternalsOf,
+                    (dt Type?) -> IsFamilyAccessibleClrMember(dt, narrowedReceiver)
+                ) != nil
+            ) {
+                return true
+            }
+            return false
+        }
+        if underlyingType is InterfaceSymbol ifaceSym {
+            return TypeMemberModel.TryGetPropertyWithOwner(ifaceSym, memberName, out _, out _) ||
+                TypeMemberModel.TryGetEvent(ifaceSym, memberName, out _) ||
+                MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+                ifaceSym,
+                memberName,
+                out _,
+                requireReadable: false
+            ) != nil ||
+                MemberLookup.GetInterfaceImportedBaseInstanceEvent(ifaceSym, memberName, out _) != nil
+        }
+        if underlyingType is TypeParameterSymbol tpSym {
+            if tpSym.UnwrappedClassConstraintStruct is StructSymbol tpClass &&
+                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpClass, memberName) {
+                return true
+            }
+            if tpSym.InterfaceConstraint is InterfaceSymbol tpIface &&
+                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpIface, memberName) {
+                return true
+            }
+            let tpImportedConstraint TypeSymbol? = tpSym.ClrInterfaceConstraint ?? tpSym.ClassConstraint
+            if tpImportedConstraint != nil &&
+                !(tpImportedConstraint is StructSymbol) &&
+                tpImportedConstraint.ClrType is Type tpClr {
+                if ClrTypeUtilities.SafeGetEventIncludingInterfaces(
+                    tpClr,
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Instance
+                ) != nil {
+                    return true
+                }
+                if ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
+                    tpClr,
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Instance
+                ) is {} tpProp &&
+                    tpProp
+                    .GetIndexParameters().Length == 0 {
+                    return true
+                }
+            }
+            return false
+        }
+        if TryGetClrInstanceMemberReceiverType(narrowedReceiver, out var clrInstanceReceiverType) &&
+            clrInstanceReceiverType?.ClrType is Type declaredClr &&
+            $scope
+            .References
+            ?.TryGetMemberLookupType(declaredClr, out var lookupClr) == true {
+            if SafeGetVisibleInstanceProperty(lookupClr, memberName) is {} clrProp && clrProp.GetIndexParameters()
+                .Length == 0 {
+                return true
+            }
+            if SafeGetVisibleInstanceField(lookupClr, memberName) != nil {
+                return true
+            }
+            if MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
+                lookupClr,
+                memberName,
+                CanAccessInternalsOf(lookupClr),
+                CanAccessInternalsOf,
+                (dt Type?) -> IsFamilyAccessibleClrMember(dt, narrowedReceiver)
+            ) != nil {
+                return true
+            }
+        }
+        return false
     }
 
     /// Issue #672: resolves a nested CLR type from the left part of an
@@ -4938,9 +5115,10 @@ internal partial class ExpressionBinder {
     private func BindTypeParameterInstanceMemberAccess(
         tpRecv TypeParameterSymbol,
         receiver BoundExpression,
-        ne NameExpressionSyntax
+        ne NameExpressionSyntax,
+        requireProvenNonNull bool = true
     ) BoundExpression? {
-        if !HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) {
+        if requireProvenNonNull && !HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) {
             return nil
         }
         let memberName = ne.IdentifierToken.ValueText
@@ -5170,7 +5348,7 @@ internal partial class ExpressionBinder {
                 if nested.IsNullConditional {
                     return BindNullConditionalAccessExpressionCore(head, nested.RightPart)
                 }
-                return BindAccessorStep(head, nil, nested.RightPart)
+                return BindAccessorStep(head, nil, nested.RightPart, nested.LeftPart, leftName.Span.Start)
             }
             case ix is IndexExpressionSyntax {
                 let indexTarget = BindTypeParameterStaticAccessorStep(tpSym, leftName, ix.Target)
