@@ -288,6 +288,18 @@ The initial implementation landed in PR #498. Items 1–5 above are all implemen
 - Override-by-signature matching now correctly handles base classes that declare same-name overloads.
 - Optional parameters are now accepted on free functions, instance methods, static methods, interface methods, explicit constructors, primary constructors, delegate declarations, and function literals (lambdas). Property accessors and indexers have no user-declared parameter list that admits defaults.
 
+### Inferred function-value contracts (#5815)
+
+An inferred function value retains the literal's optional parameter declarations.
+The shared function-call binder substitutes defaults for omitted slots, including sparse named arguments.
+A written function type, such as `(int32) -> int32`, declares no defaults.
+Conversion to that type discards the literal's optional contract.
+
+The inferred contract belongs to the static type, not the current delegate object.
+Reassignment must retain the same optional slots and default values.
+The compiler rejects a replacement with different defaults or required slots.
+Widen the variable to a written function type to permit those replacements; supply all arguments through that type.
+
 ## References
 
 - `src/Core/CodeAnalysis/Binding/OverloadResolution.cs`

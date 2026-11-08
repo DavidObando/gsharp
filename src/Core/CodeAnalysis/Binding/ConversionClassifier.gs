@@ -1488,6 +1488,16 @@ internal class ConversionClassifier {
             }
         }
         if conversion.IsIdentity {
+            // A conversion to a written function type must not retain the inferred literal's optional contract.
+            if expression.Type is FunctionTypeSymbol sourceCallable &&
+                type is FunctionTypeSymbol targetCallable &&
+                !sourceCallable
+                .Parameters
+                .IsDefaultOrEmpty &&
+                !object
+                .ReferenceEquals(sourceCallable, targetCallable) {
+                return BoundConversionExpression(nil, targetCallable, expression, binderCtx.IsCheckedContext)
+            }
             // ADR-0172 (as amended by issue #3643): same-shape tuples
             // differing only in element names are identity-convertible.
             // Warn (GS0541) only when the source is a tuple LITERAL whose

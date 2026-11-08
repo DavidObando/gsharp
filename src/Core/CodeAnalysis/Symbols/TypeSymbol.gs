@@ -1006,9 +1006,7 @@ open partial class TypeSymbol : Symbol {
                         parameters.Add(materializedParameter)
                     }
                     return if changed {
-                        cast[TypeSymbol](
-                            FunctionTypeSymbol.Get(parameters.MoveToImmutable(), fn.IsVariadic, materializedReturn)
-                        )
+                        cast[TypeSymbol](fn.WithSignature(parameters.MoveToImmutable(), materializedReturn))
                     } else {
                         type
                     }
@@ -1627,13 +1625,7 @@ open partial class TypeSymbol : Symbol {
                     let functionReturn = substitute(function.ReturnType)
                     functionChanged |= !object.ReferenceEquals(functionReturn, function.ReturnType)
                     result = if functionChanged {
-                        cast[TypeSymbol](
-                            FunctionTypeSymbol.Get(
-                                functionParameters.MoveToImmutable(),
-                                function.IsVariadic,
-                                functionReturn
-                            )
-                        )
+                        cast[TypeSymbol](function.WithSignature(functionParameters.MoveToImmutable(), functionReturn))
                     } else {
                         type
                     }

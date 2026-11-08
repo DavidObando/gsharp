@@ -50,6 +50,9 @@ internal partial class ExpressionBinder {
         if IsNegatedInt32MinValueLiteral(syntax.OperatorToken.Kind, syntax.Operand) {
             return BoundLiteralExpression(nil, int32.MinValue, TypeSymbol.Int32)
         }
+        if IsNegatedInt64MinValueLiteral(syntax.OperatorToken.Kind, syntax.Operand) {
+            return BoundLiteralExpression(nil, int64.MinValue, TypeSymbol.Int64)
+        }
         var boundOperand = BindExpression(syntax.Operand)
         if boundOperand.Type == TypeSymbol.Error {
             ReportUnresolvedBareDefaults(boundOperand)
@@ -3813,6 +3816,13 @@ internal partial class ExpressionBinder {
             operand is LiteralExpressionSyntax{Value: uint32 negatedMagnitude} &&
             negatedMagnitude == uint32(int32.MaxValue) +
             uint32(1)
+
+        internal func IsNegatedInt64MinValueLiteral(operatorKind SyntaxKind, operand ExpressionSyntax) bool ->
+        operatorKind == SyntaxKind.MinusToken &&
+            operand is LiteralExpressionSyntax{Value: uint64 magnitude, LiteralToken: var token} &&
+            magnitude == uint64(int64.MaxValue) +
+            1UL &&
+            (token.RequiresInt64Negation || token.Text.Replace("_", "") == "9223372036854775808")
 
         internal func TryGetPromotedCharUnaryType(
             operatorKind SyntaxKind,

@@ -14,22 +14,83 @@ import System.Threading
 /// Represents a first-class function type `func(T1, T2, ...) R`
 /// (Phase 4.7). Instances are cached and compared by structural equality of
 /// parameter and return types so two textually identical type clauses share
-/// the same (cref:FunctionTypeSymbol).
+/// the same (cref:FunctionTypeSymbol). Inferred optional contracts retain their declaration parameters separately.
 class FunctionTypeSymbol : TypeSymbol {
     private init(
         name string,
         parameterTypes ImmutableArray[TypeSymbol],
         isVariadic ImmutableArray[bool],
-        returnType TypeSymbol
+        returnType TypeSymbol,
+        parameters ImmutableArray[ParameterSymbol] = default(ImmutableArray[ParameterSymbol])
     ) : base(name, BuildClrType(parameterTypes, returnType)) {
         ParameterTypes = parameterTypes
         IsVariadic = isVariadic
         ReturnType = returnType
+        Parameters = parameters
     }
 
     /// Gets the function's parameter types.
     prop ParameterTypes ImmutableArray[TypeSymbol] {
         get;
+    }
+
+    /// Gets declaration parameters for an inferred optional callable contract; written function types have none.
+    internal prop Parameters ImmutableArray[ParameterSymbol] {
+        get;
+    }
+
+    internal func WithParameters(parameters ImmutableArray[ParameterSymbol]) FunctionTypeSymbol {
+        for parameter in parameters {
+            if parameter.HasExplicitDefaultValue {
+                return FunctionTypeSymbol(Name, ParameterTypes, IsVariadic, ReturnType, parameters)
+            }
+        }
+        return this
+    }
+
+    internal func WithSignature(parameterTypes ImmutableArray[TypeSymbol], returnType TypeSymbol) FunctionTypeSymbol {
+        let shape = Get(parameterTypes, IsVariadic, returnType)
+        if Parameters.IsDefaultOrEmpty {
+            return shape
+        }
+        let parameters = ImmutableArray.CreateBuilder[ParameterSymbol](Parameters.Length)
+        for var i = 0; i < Parameters.Length; i++ {
+            let source = Parameters[i]
+            if object.ReferenceEquals(source.Type, parameterTypes[i]) {
+                parameters.Add(source)
+            } else {
+                let parameter = ParameterSymbol(source, parameterTypes[i], source.DeclaringSyntax)
+                if source.HasExplicitDefaultValue {
+                    parameter.SetExplicitDefaultValue(source.ExplicitDefaultValue)
+                }
+                parameter.SetAttributes(source.Attributes)
+                parameters.Add(parameter)
+            }
+        }
+        return shape.WithParameters(parameters.MoveToImmutable())
+    }
+
+    internal func AcceptsOptionalContract(source FunctionTypeSymbol) bool {
+        if Parameters.IsDefaultOrEmpty {
+            return true
+        }
+        if source.Parameters.IsDefaultOrEmpty || source.Parameters.Length != Parameters.Length {
+            return false
+        }
+        for var i = 0; i < Parameters.Length; i++ {
+            let target = Parameters[i]
+            let supplied = source.Parameters[i]
+            if target.HasExplicitDefaultValue != supplied.HasExplicitDefaultValue ||
+                (
+                target.HasExplicitDefaultValue && !object.Equals(
+                    target.ExplicitDefaultValue,
+                    supplied.ExplicitDefaultValue
+                )
+            ) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Gets the per-parameter variadic flags (ADR-0102 follow-up / issue #818).
@@ -241,6 +302,11 @@ class FunctionTypeSymbol : TypeSymbol {
                     builder.Append("!tp").Append(id)
                 }
                 case fn is FunctionTypeSymbol {
+                    if !fn.Parameters.IsDefaultOrEmpty {
+                        let id = int64(UserTypeIds.GetValue(fn, (_ TypeSymbol) -> NextTypeParameterId()))
+                        builder.Append("!callable").Append(id)
+                        return
+                    }
                     builder.Append('(')
                     for var i = 0; i < fn.ParameterTypes.Length; i++ {
                         if i > 0 {

@@ -466,11 +466,6 @@ internal class LambdaBinder {
         if isAsync && !isAsyncVoid && !isAsyncIteratorReturnType(returnType!!) {
             observableReturnType = WrapAsTask(returnType!!, asyncReturnsValueTask)
         }
-        let fnType = FunctionTypeSymbol.Get(
-            parameterTypes.MoveToImmutable(),
-            BuildVariadicFlagsIfAny(parameterSymbols),
-            observableReturnType
-        )
         let synthetic = FunctionSymbol(
             explicitName ?? "<lambda${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
             parameterSymbols.ToImmutable(),
@@ -480,6 +475,12 @@ internal class LambdaBinder {
         synthetic.IsAsyncVoid = isAsyncVoid
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask
         synthetic.ReturnRefKind = ValidateFunctionLiteralReturnRefKind(syntax, returnType!!, allowRefReturn)
+        let fnType = FunctionTypeSymbol.Get(
+            parameterTypes.MoveToImmutable(),
+            BuildVariadicFlagsIfAny(parameterSymbols),
+            observableReturnType
+        )
+            .WithParameters(synthetic.Parameters)
         return (synthetic, fnType)
     }
 
@@ -1703,6 +1704,7 @@ internal class LambdaBinder {
                     BuildVariadicFlagsIfAny(parameterSymbols),
                     naturalReturnType
                 )
+                    .WithParameters(placeholder.Parameters)
             ) {
                 keptNaturalType = true
                 discardedTargetDiagnostics?.Add(targetDiagnostics)
@@ -1816,6 +1818,7 @@ internal class LambdaBinder {
             BuildVariadicFlagsIfAny(parameterSymbols),
             observableReturnType
         )
+            .WithParameters(synthetic.Parameters)
         let captured = CollectCapturedVariables(bodyBlock, synthetic)
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
         // be captured by a closure; mirror the function-literal checks.
