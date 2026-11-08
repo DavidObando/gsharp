@@ -2192,25 +2192,7 @@ internal partial class ExpressionBinder {
 
     private func TryGetNarrowedType(variable VariableSymbol, location TextLocation? = nil) TypeSymbol? {
         let answer = LookUpNarrowedType(variable)
-        if NarrowingComparison.Enabled {
-            ReportShadowRead(AccessPath.ForVariable(variable), answer, variable.Type, location)
-        }
         return answer
-    }
-
-    // ADR-0208 section 19, comparison mode: reports a read whose type the shadow
-    // flow would narrow and the frames do not.
-    private func ReportShadowRead(
-        path AccessPath,
-        frameAnswer TypeSymbol?,
-        declaredType TypeSymbol,
-        location TextLocation?
-    ) {
-        let shadowType = binderCtx.ShadowEffectiveType(path, frameAnswer)
-        // A read without a frame fact has the declared type today.
-        if shadowType != nil && !object.Equals(shadowType, frameAnswer ?? declaredType) {
-            NarrowingComparison.ReportRead(location, path, declaredType, shadowType)
-        }
     }
 
     private func LookUpNarrowedType(variable VariableSymbol) TypeSymbol? {
@@ -2225,9 +2207,6 @@ internal partial class ExpressionBinder {
     /// @returns The narrowed type, or `null` when the path is not narrowed.
     private func TryGetNarrowedType(path AccessPath, declaredType TypeSymbol, location TextLocation?) TypeSymbol? {
         let answer = LookUpNarrowedType(path)
-        if NarrowingComparison.Enabled {
-            ReportShadowRead(path, answer, declaredType, location)
-        }
         return answer
     }
 
@@ -2623,10 +2602,22 @@ internal partial class ExpressionBinder {
             clearAssignedRoots,
             evolveAliases
         )
+        let (conditionalThen, conditionalElse) = StatementBinder.TryClassifyNullConditionalBoolNarrowing(
+            condition,
+            restrictBareVariableToLocalsAndParams,
+            beforeAliases,
+            clearAssignedRoots
+        )
         let afterAliases = evolveAliases(condition, beforeAliases)
         return (
-            StatementBinder.MergeNarrowingFrames(assignRefinements, boolThen),
-            StatementBinder.MergeNarrowingFrames(assignRefinements, boolElse),
+            StatementBinder.MergeNarrowingFrames(
+                assignRefinements,
+                StatementBinder.MergeNarrowingFrames(boolThen, conditionalThen)
+            ),
+            StatementBinder.MergeNarrowingFrames(
+                assignRefinements,
+                StatementBinder.MergeNarrowingFrames(boolElse, conditionalElse)
+            ),
             afterAliases,
             afterAliases
         )

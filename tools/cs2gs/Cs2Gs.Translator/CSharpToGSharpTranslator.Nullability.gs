@@ -2401,7 +2401,7 @@ partial class CSharpToGSharpTranslator {
             // NullReferenceException; throw`), unlike C#'s erased `x!`, so a
             // gratuitous assertion on a legitimately-null argument turns a legal
             // C# call into a crash that translate, compile and ILVerify all pass.
-            if this.IsImportedObliviousNullableTarget(targetSymbol, targetType) {
+            if this.IsImportedObliviousNullableTarget(targetSymbol, targetType, writtenValue) {
                 return false
             }
             // Issue #3886: the DECLARATION side deliberately never promotes a
@@ -2584,7 +2584,38 @@ partial class CSharpToGSharpTranslator {
         //    a member whose own declared type is a concrete oblivious reference
         //    type qualifies, exactly as `IsImportedObliviousNullableMember` scopes
         //    the read side.
-        private func IsImportedObliviousNullableTarget(targetSymbol ISymbol?, targetType ITypeSymbol? = nil) bool {
+        private func IsImportedObliviousNullableTarget(
+            targetSymbol ISymbol?,
+            targetType ITypeSymbol? = nil,
+            writtenValue ExpressionSyntax? = nil
+        ) bool {
+            if targetSymbol is IMethodSymbol method && writtenValue != nil && this.ResultLambda(
+                method,
+                writtenValue
+            ) is {} lambda &&
+                !this
+                .LambdaHasExplicitDelegateCast(lambda) {
+                let sink = this.ResolveValueSink(lambda)
+                if sink != nil && this.TargetContractIsFrozenInMetadata(sink) {
+                    let declaredDelegate ITypeSymbol? = switch sink.OriginalDefinition {
+                        case parameter is IParameterSymbol: GetParamsElementType(parameter) ?? parameter.Type
+                        case field is IFieldSymbol: field.Type
+                        case property is IPropertySymbol: property.Type
+                        case owner is IMethodSymbol: owner.ReturnType
+                        default: default(ITypeSymbol?)
+                    }
+                    let delegateType = this.UnwrapExpressionTreeDelegateType(declaredDelegate) as INamedTypeSymbol
+                    var declaredReturn = GetEffectiveReturnType(
+                        delegateType?.DelegateInvokeMethod?.ReturnType,
+                        lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                    )
+                    if this.ResolveLambdaResultTuplePath(lambda, writtenValue, nil) is {} path {
+                        declaredReturn = this.GetTupleElementTypeAtPath(declaredReturn, path)
+                    }
+                    return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(declaredReturn)
+                }
+                return false
+            }
             if !(
                 (targetSymbol is IParameterSymbol || targetSymbol is IFieldSymbol || targetSymbol is IPropertySymbol)
             ) {

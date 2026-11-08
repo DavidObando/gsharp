@@ -49,7 +49,6 @@ internal partial class StatementBinder {
     private func BindIfStatement(syntax IfStatementSyntax) BoundStatement {
         if syntax.Initializer == nil {
             let (condition, thenNarrow, elseNarrow) = BindConditionWithEffects(syntax.Condition)
-            let removedFacts = conditionRemovedFacts
             conditionRemovedFacts = nil
             let callableWhenTrue = lastConditionWhenTrueAliases ?? CaptureExternalCallableAliases()
             let callableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
@@ -60,7 +59,6 @@ internal partial class StatementBinder {
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             let (patternThen, patternElse) = PatternVariables.Classify(condition)
-            let shadowFlow = ShadowBegin(condition)
             let joinEntry = binderCtx.Narrowing
             let joinExits = List[NarrowingState]()
             let outerConditionKills = BeginThenBranchConditionKills()
@@ -73,13 +71,11 @@ internal partial class StatementBinder {
                 syntax.ThenStatement
             )
             AddBranchExits(joinExits, thenStatement)
-            ShadowAddBranch(shadowFlow, thenNarrow, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
             let nonNullByRefThenExit = CaptureNonNullByRefVariables()
             let restoredConditionKills = RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
             RestoreExternalCallableAliases(callableWhenFalse)
             RestoreNonNullByRefVariables(nonNullByRefEntry)
-            ShadowBeginBranch(shadowFlow)
             let elseStatement = if syntax.ElseClause == nil {
                 default(BoundStatement?)
             } else {
@@ -96,7 +92,6 @@ internal partial class StatementBinder {
             } else {
                 AddBranchExits(joinExits, elseStatement)
             }
-            ShadowAddBranch(shadowFlow, elseNarrow, elseStatement)
             EndThenBranchConditionKills(restoredConditionKills)
             let callableElseExit = if syntax.ElseClause == nil {
                 callableWhenFalse
@@ -116,16 +111,6 @@ internal partial class StatementBinder {
             RestoreJoinedNonNullByRefVariables(nonNullByRefThenExit, nonNullByRefElseExit, thenCompletes, elseCompletes)
             let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
             RecordJoinExits(result, joinExits)
-            ShadowFinish(shadowFlow, "if", syntax.Location, []BoundStatement{result}, false, false)
-            // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
-            // can lift it into the enclosing block when the then-branch ends in
-            // an unconditional exit (`return`/`throw`/`break`/`continue`).
-            if elseNarrow != nil && elseNarrow.Count > 0 {
-                binderCtx.PendingEarlyExitFrames[result] = elseNarrow
-                if removedFacts != nil && removedFacts.Count > 0 {
-                    earlyExitRemovedFacts[result] = Dictionary[AccessPath, TypeSymbol](removedFacts)
-                }
-            }
             // ADR-0166: the same early-exit rule leaks pattern variables into
             // the statements that follow the `if` — `if !(x is T t) { return }`
             // makes `t` usable afterwards, and so does an else-branch that
@@ -150,7 +135,6 @@ internal partial class StatementBinder {
             UpdateExternalCallableAliases(initStatement, initializerAliasesAtEntry)
         }
         let (initCondition, initThenNarrow, initElseNarrow) = BindConditionWithEffects(syntax.Condition)
-        let initRemovedFacts = conditionRemovedFacts
         conditionRemovedFacts = nil
         let initCallableWhenTrue = lastConditionWhenTrueAliases ?? CaptureExternalCallableAliases()
         let initCallableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
@@ -158,7 +142,6 @@ internal partial class StatementBinder {
         lastConditionWhenFalseAliases = nil
         let initNonNullByRefEntry = CaptureNonNullByRefVariables()
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
-        let initShadowFlow = ShadowBegin(initCondition, initStatement)
         let initJoinEntry = binderCtx.Narrowing
         let initJoinExits = List[NarrowingState]()
         let initOuterConditionKills = BeginThenBranchConditionKills()
@@ -171,13 +154,11 @@ internal partial class StatementBinder {
             syntax.ThenStatement
         )
         AddBranchExits(initJoinExits, initThen)
-        ShadowAddBranch(initShadowFlow, initThenNarrow, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
         let initNonNullByRefThenExit = CaptureNonNullByRefVariables()
         let initRestoredConditionKills = RestoreThenBranchConditionKills(initOuterConditionKills, initJoinEntry)
         RestoreExternalCallableAliases(initCallableWhenFalse)
         RestoreNonNullByRefVariables(initNonNullByRefEntry)
-        ShadowBeginBranch(initShadowFlow)
         let initElse = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
@@ -194,7 +175,6 @@ internal partial class StatementBinder {
         } else {
             AddBranchExits(initJoinExits, initElse)
         }
-        ShadowAddBranch(initShadowFlow, initElseNarrow, initElse)
         EndThenBranchConditionKills(initRestoredConditionKills)
         let initCallableElseExit = if syntax.ElseClause == nil {
             initCallableWhenFalse
@@ -217,12 +197,6 @@ internal partial class StatementBinder {
         )
         $scope = $scope.Pop()
         let inner = BoundIfStatement(syntax, initCondition, initThen, initElse)
-        if initElseNarrow != nil && initElseNarrow.Count > 0 {
-            binderCtx.PendingEarlyExitFrames[inner] = initElseNarrow
-            if initRemovedFacts != nil && initRemovedFacts.Count > 0 {
-                earlyExitRemovedFacts[inner] = Dictionary[AccessPath, TypeSymbol](initRemovedFacts)
-            }
-        }
         let initResult = BoundBlockStatement(
             syntax,
             ImmutableArray.Create[BoundStatement](
@@ -234,7 +208,6 @@ internal partial class StatementBinder {
                 inner
             )
         )
-        ShadowFinish(initShadowFlow, "if", syntax.Location, []BoundStatement{inner, initResult}, false, false)
         RecordJoinExits(initResult, initJoinExits)
         return initResult
     }
@@ -668,21 +641,12 @@ internal partial class StatementBinder {
             let frame = binderCtx.NarrowedVariables[f]
             savedFrames.Add((frame, frame.SnapshotEntries()))
         }
-        let savedShadowOverlay = binderCtx.ShadowOverlay
-        let savedShadowBase = binderCtx.ShadowOverlayBase
-        let savedShadowSuppressed = Dictionary[AccessPath, int32](binderCtx.ShadowSuppressed)
         try {
             RestoreExternalCallableAliases(HashSet[VariableSymbol](aliasesForElse))
             return BindStatement(elseSyntax)
         } finally {
             for (frame, entries) in savedFrames {
                 frame.RestoreTo(entries)
-            }
-            binderCtx.ShadowOverlay = savedShadowOverlay
-            binderCtx.ShadowOverlayBase = savedShadowBase
-            binderCtx.ShadowSuppressed.Clear()
-            for kv in savedShadowSuppressed {
-                binderCtx.ShadowSuppressed[kv.Key] = kv.Value
             }
             RestoreExternalCallableAliases(savedAliases)
         }
@@ -934,7 +898,7 @@ internal partial class StatementBinder {
             return
         }
         binderCtx.PendingPatternVariableLeaks.Remove(ifStatement)
-        // Issue #4285: same hazard as ApplyEarlyExitNarrowings — a goto
+        // Issue #4285: a goto
         // elsewhere in the function can jump directly to a point after this
         // if-statement without ever taking the exiting arm, so the "leaked"
         // pattern variable would be declared-in-scope but never actually
@@ -2584,6 +2548,69 @@ internal partial class StatementBinder {
             let joined = HashSet[VariableSymbol](first)
             joined.IntersectWith(second)
             return joined
+        }
+
+        /// Equality with a Boolean requires a non-nil conditional receiver (#5849).
+        /// Effects after the receiver read must preserve the tested storage.
+        internal func TryClassifyNullConditionalBoolNarrowing(
+            condition BoundExpression,
+            restrictBareVariableToLocalsAndParams bool,
+            callableAliases IReadOnlyCollection[VariableSymbol]?,
+            clearAssignedRoots(
+                BoundNode,
+                Dictionary[AccessPath, TypeSymbol],
+                IReadOnlyCollection[VariableSymbol]?
+            ) -> void
+        )(Then Dictionary[AccessPath, TypeSymbol]?, Else Dictionary[AccessPath, TypeSymbol]?) {
+            if condition is not BoundBinaryExpression binary ||
+                binary
+                .Op
+                .Kind is not(BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals) {
+                return (nil, nil)
+            }
+            let Unwrap = func (expression BoundExpression) BoundExpression {
+                var expression = expression
+                while expression is BoundConversionExpression conversion && IsFlowTransparentConversion(conversion) {
+                    expression = conversion.Expression
+                }
+                return expression
+            }
+            let left = Unwrap(binary.Left)
+            let right = Unwrap(binary.Right)
+            let access = if right is BoundLiteralExpression{Value: bool} {
+                left as BoundNullConditionalAccessExpression
+            } else if left is BoundLiteralExpression{Value: bool} {
+                right as BoundNullConditionalAccessExpression
+            } else {
+                default(BoundNullConditionalAccessExpression?)
+            }
+            if access == nil || StripNullability(access.Type) != TypeSymbol.Bool {
+                return (nil, nil)
+            }
+            let receiver = Unwrap(access.Receiver)
+            var path AccessPath? = nil
+            var declared TypeSymbol? = nil
+            if receiver is BoundVariableExpression variable &&
+                (!restrictBareVariableToLocalsAndParams || variable.Variable is LocalVariableSymbol) {
+                path = AccessPath.ForVariable(variable.Variable)
+                declared = variable.Variable.Type
+            } else if SmartCastStability.TryGetStableMemberPath(receiver, out var memberPath, out var memberType) {
+                path = memberPath
+                declared = MemberLookup.GetDeclaredAccessPathType(memberPath, memberType)
+            }
+            if path == nil || declared is not(NullableTypeSymbol or PlatformTypeSymbol) {
+                return (nil, nil)
+            }
+            let frame = Dictionary[AccessPath, TypeSymbol]{[path] = StripNullability(declared)!!}
+            clearAssignedRoots(access.WhenNotNull, frame, callableAliases)
+            if frame.Count == 0 {
+                return (nil, nil)
+            }
+            return if binary.Op.Kind == BoundBinaryOperatorKind.Equals {
+                (frame, default(Dictionary[AccessPath, TypeSymbol]?))
+            } else {
+                (default(Dictionary[AccessPath, TypeSymbol]?), frame)
+            }
         }
 
         internal func TryClassifyBoolCallNarrowingLeaf(
