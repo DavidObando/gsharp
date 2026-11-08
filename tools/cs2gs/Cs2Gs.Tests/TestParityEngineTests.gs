@@ -157,8 +157,16 @@ The following Tests are available:
   </Results>
 </TestRun>`)
         let parsedCustomOutNet10 = TrxParser.ParseFile(customOutTrx, requireNames: true)
+        Assert.Equal(2, parsedCustomOutNet10.Count)
         Assert.All(parsedCustomOutNet10, (r TestCaseOutcome) -> Assert.Equal("net10.0", r.TargetFramework))
         Assert.False(TestNameParity.Compare(customOutOracle, parsedCustomOutNet10).IsMatch)
+        Assert.True(
+            TestNameParity.Compare(
+                customOutOracle,
+                parsedCustomOutNet10.Append(TestCaseOutcome("Own.Tests.A.Cells(x: 1)", "Passed", "net8.0")).ToArray()
+            )
+                .IsMatch
+        )
     }
 
     /// Exact-match parity: the G# TRX equals the baseline, so the comparison
