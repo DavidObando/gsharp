@@ -180,8 +180,13 @@ open class ProjectState {
                 ?.FileName == filePath &&
                 existing
                 .Text
-                .ToString() == text && (rawBytes ?? Array.Empty[uint8]()).SequenceEqual(
-                existing.Text.RawBytes ?? Array.Empty[uint8]()
+                .ToString() == text &&
+                (
+                if rawBytes == nil {
+                    !existing.Diagnostics.Any((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0628")
+                } else {
+                    existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes!!)
+                }
             ) {
                 return existing
             }

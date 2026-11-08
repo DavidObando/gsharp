@@ -23,13 +23,22 @@ class ByteStringToolingTests {
                 (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0628"
             )
             Assert.Same(invalid, project.AddFileFromDisk(path))
+            let invalidBuffer = project.UpdateFile(path, invalid.Text.ToString())
+            Assert.NotSame(invalid, invalidBuffer)
+            Assert.Empty(invalidBuffer.Diagnostics)
+            let reloadedInvalid = project.AddFileFromDisk(path)!!
+            Assert.NotSame(invalidBuffer, reloadedInvalid)
+            Assert.Contains(
+                reloadedInvalid.Diagnostics,
+                (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == "GS0628"
+            )
             File.WriteAllText(path, "b\"\uFFFD\"")
             let repaired = project.AddFileFromDisk(path)!!
-            Assert.NotSame(invalid, repaired)
+            Assert.NotSame(reloadedInvalid, repaired)
             Assert.Empty(repaired.Diagnostics)
             Assert.Same(repaired, project.AddFileFromDisk(path))
             let buffer = project.UpdateFile(path, repaired.Text.ToString())
-            Assert.NotSame(repaired, buffer)
+            Assert.Same(repaired, buffer)
             Assert.Empty(buffer.Diagnostics)
         } finally {
             File.Delete(path)

@@ -95,5 +95,6 @@ class ConstructorSymbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration ConstructorDeclarationSyntax) {
         Declaration = declaration
+        ParameterSymbol.RepointDeclarations(Parameters, declaration.Parameters)
     }
 }
