@@ -5240,6 +5240,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         model,
                         tupleTainted,
                         tupleContractEdges,
+                        tupleEdges,
                         tupleScalarEdges,
                         scalarTupleEdges
                     )
@@ -5253,6 +5254,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         model,
                         tupleTainted,
                         tupleContractEdges,
+                        tupleEdges,
                         tupleScalarEdges,
                         scalarTupleEdges
                     )
@@ -6168,6 +6170,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
         tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
@@ -6176,6 +6179,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let storage = Unwrap(expression, unwrapSuppressions: true)
         let targetType = SymbolValueType(target)
+        // Out writes caller storage without freezing the caller's declaration.
+        let isOutput = target is IParameterSymbol{RefKind: RefKind.Out}
         var sourceSymbol ISymbol?
         var sourceType ITypeSymbol?
         var sourcePath string
@@ -6186,7 +6191,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         } else if TryResolveTupleStorageSource(storage, model, out sourceSymbol, out var rootTuple, out sourcePath) {
             sourceType = rootTuple
         } else {
-            if targetType?.IsReferenceType == true {
+            if !isOutput && targetType?.IsReferenceType == true {
                 for scalar in ResolveSources(storage, model) {
                     if SymbolValueType(scalar)?.IsReferenceType != true {
                         continue
@@ -6206,25 +6211,31 @@ internal shared class ObliviousNullabilityAnalyzer {
             .Length == sourceTuple
             .TupleElements
             .Length {
+            if !isOutput {
+                AddTupleShapeEdges(
+                    target,
+                    targetTuple,
+                    string.Empty,
+                    sourceSymbol,
+                    sourceTuple,
+                    sourcePath,
+                    tupleTainted,
+                    tupleContractEdges
+                )
+            }
             AddTupleShapeEdges(
-                target,
-                targetTuple,
-                string.Empty,
                 sourceSymbol,
                 sourceTuple,
                 sourcePath,
-                tupleTainted,
-                tupleContractEdges
-            )
-            AddTupleShapeEdges(
-                sourceSymbol,
-                sourceTuple,
-                sourcePath,
                 target,
                 targetTuple,
                 string.Empty,
                 tupleTainted,
-                tupleContractEdges
+                if isOutput {
+                    tupleEdges
+                } else {
+                    tupleContractEdges
+                }
             )
             return
         }
@@ -6232,11 +6243,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         source = TupleElementKey(sourceSymbol, sourcePath)
-        let targetKey = TupleElementKey(target, string.Empty)
-        scalarTupleEdges.Add((target, source))
         tupleScalarEdges.Add((source, target))
-        tupleContractEdges.Add((source, targetKey))
-        tupleContractEdges.Add((targetKey, source))
+        if !isOutput {
+            let targetKey = TupleElementKey(target, string.Empty)
+            scalarTupleEdges.Add((target, source))
+            tupleContractEdges.Add((source, targetKey))
+            tupleContractEdges.Add((targetKey, source))
+        }
         if IsDeclaredNullablePosition(targetType) {
             tupleTainted.Add(source)
         }

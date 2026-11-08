@@ -16,6 +16,37 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Fact
+    func ArrayValuedTupleLeaf_PreservesItsNullableReturn() {
+        const source = `public static class Obj {
+    private static (string[] Values, int Code) Read() => (null, 1);
+    public static string Run() => Read().Values == null ? "null" : "wrong";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Values []?string", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Fact
+    func TupleOutArgument_DoesNotFreezeTheCallersLeaf() {
+        const source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out string value) { value = "p"; }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Text);
+        ref string alias = ref row.Text;
+        alias = null;
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
     @Theory
     @InlineData("ref")
     @InlineData("out")

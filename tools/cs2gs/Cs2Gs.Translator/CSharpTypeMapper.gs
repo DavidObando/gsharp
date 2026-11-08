@@ -1643,10 +1643,8 @@ class CSharpTypeMapper {
                 path
             )
             path.RemoveAt(path.Count - 1)
-            return if object.ReferenceEquals(element, array.ElementType) {
-                mapped
-            } else {
-                cast[GTypeReference](ArrayTypeReference(element!!, array.Rank){IsNullable = array.IsNullable})
+            if !object.ReferenceEquals(element, array.ElementType) {
+                mapped = ArrayTypeReference(element!!, array.Rank){IsNullable = array.IsNullable}
             }
         }
         if mapped is TupleTypeReference tuple &&
