@@ -1653,11 +1653,8 @@ internal partial class OverloadResolver {
                         evaluations.Add(BoundVariableDeclaration(input.Syntax, inputTemp, input))
                         inputTemps[input] = BoundVariableExpression(input.Syntax, inputTemp)
                     }
-                    replacements[slot] = BoundAddressOfExpression(
-                        inputAddress.Syntax,
-                        CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand),
-                        unmanaged: false,
-                        inputAddress.IsReadOnly
+                    replacements[slot] = inputAddress.Update(
+                        CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand)
                     )
                     continue
                 }

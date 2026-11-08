@@ -29,6 +29,43 @@ import Xunit
 /// the declaring struct decays exactly like the explicit `this.Name`.
 open class Issue4378FixedBufferPinEmitTests {
     @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func InlineAwaitBufferPointer_DriverRejectsUnpinnedDecay(parameter bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + `unsafe async func bad(PARAMETER) int32 {
+    LOCAL
+    let p *int8 = ({ await System.Threading.Tasks.Task.Yield()
+        b }).Name
+    return int32(p[0])
+}`.Replace(
+            "PARAMETER",
+            if parameter {
+                "b BoneInfo"
+            } else {
+                string.Empty
+            }
+        )
+            .Replace(
+            "LOCAL",
+            if parameter {
+                string.Empty
+            } else {
+                "var b = BoneInfo{}"
+            }
+        )
+        let (code, output) = fixture.TryCompile(source, "inline-await-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.LastIndexOf("Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("inline-await-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Theory
     @InlineData(`unsafe func bad() {
     var b = BoneInfo{}
     let p *int8 = b.Name

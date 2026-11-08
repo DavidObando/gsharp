@@ -1747,9 +1747,7 @@ internal partial class MethodBodyEmitter {
             this.EmitFieldAddress(fieldAccess)
             return
         }
-        if receiver is not BoundVariableExpression &&
-            receiver is not BoundFieldAccessExpression &&
-            RefCapabilities.IsDirectlyAddressableForImplicitIn(receiver) && this.outer.IsAddressableReceiverStorage(
+        if receiver is not BoundVariableExpression && this.outer.IsAddressableReceiverStorage(
             receiver,
             this.CanLoadVariableAddress
         ) {

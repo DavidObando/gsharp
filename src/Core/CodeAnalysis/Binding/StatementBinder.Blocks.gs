@@ -1870,12 +1870,7 @@ internal partial class StatementBinder {
                 (tail BoundExpression) -> tail
             )
             if rewritten is BoundBlockExpression {
-                return BoundAddressOfExpression(
-                    outerAddress.Syntax,
-                    BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten),
-                    outerAddress.IsUnmanaged,
-                    outerAddress.IsReadOnly
-                )
+                return outerAddress.Update(BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten))
             }
             return rewritten
         }
@@ -1888,12 +1883,7 @@ internal partial class StatementBinder {
                 retainRemaining,
                 (tail BoundExpression) -> tail
             )
-            return BoundAddressOfExpression(
-                addressBlock.Syntax,
-                rewritten,
-                addressBlock.IsUnmanaged,
-                addressBlock.IsReadOnly
-            )
+            return addressBlock.Update(rewritten)
         }
         if operand is BoundBlockExpression plainBlock &&
             !ReadsUncapturableVariable(plainBlock, retainedVariables) &&

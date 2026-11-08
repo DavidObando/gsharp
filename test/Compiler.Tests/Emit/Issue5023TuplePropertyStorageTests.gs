@@ -5,6 +5,39 @@ import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
     @Theory
+    @InlineData("({ prefixes++\n pair }).Item1", "pair.Item1")
+    @InlineData("({ prefixes++\n pair }).Item2.Item1", "pair.Item2.Item1")
+    func ConstrainedBlockTupleReceiver_PreservesStorageAndEvaluation(receiver string, stored string) {
+        let source = `package Test
+import System
+interface IReader { func Read() int32; }
+struct ValueReader : IReader {
+    var Value int32 = 40
+    func Read() int32 {
+        Value++
+        return Value
+    }
+}
+class ReferenceReader : IReader {
+    var Value int32 = 50
+    func Read() int32 {
+        Value++
+        return Value
+    }
+}
+func Probe[T IReader](value T) {
+    var pair = (value, (value, 0))
+    var prefixes = 0
+    Console.WriteLine(RECEIVER.Read())
+    Console.WriteLine(STORED.Read())
+    Console.WriteLine(prefixes)
+}
+Probe(ValueReader{})
+Probe(ReferenceReader())`.Replace("RECEIVER", receiver).Replace("STORED", stored)
+        Assert.Equal("41\n42\n1\n51\n52\n1\n", CompileAndRun(source))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func AddressPairPropertyWrites_PreserveStoredReceiver(native bool) {

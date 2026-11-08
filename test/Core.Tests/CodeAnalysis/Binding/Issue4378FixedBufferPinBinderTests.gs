@@ -28,6 +28,37 @@ import Xunit
 /// CS0266). Also covers the bare-name decay of issue #4377.
 open class Issue4378FixedBufferPinBinderTests {
     @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func InlineAwaitBufferPointer_ReportsGS0638(parameter bool) {
+        let source = Prelude + `unsafe async func f(PARAMETER) int32 {
+    LOCAL
+    let p *int8 = ({ await System.Threading.Tasks.Task.Yield()
+        b }).Name
+    return int32(p[0])
+}`.Replace(
+            "PARAMETER",
+            if parameter {
+                "b Bone"
+            } else {
+                string.Empty
+            }
+        )
+            .Replace(
+            "LOCAL",
+            if parameter {
+                string.Empty
+            } else {
+                "var b = Bone{}"
+            }
+        )
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func BoxedTupleElement_IsMovableStorage(nested bool) {

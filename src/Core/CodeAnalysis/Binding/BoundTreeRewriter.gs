@@ -1170,13 +1170,7 @@ abstract class BoundTreeRewriter {
     /// @param node The borrowed address.
     /// @returns The rewritten address.
     protected open func RewriteAddressOfExpression(node BoundAddressOfExpression) BoundExpression {
-        let operand = RewriteExpression(node.Operand)
-        if operand == node.Operand {
-            return node
-        }
-        return BoundAddressOfExpression(node.Syntax, operand, node.IsUnmanaged, node.IsReadOnly){
-            FixedBufferEscapeSyntax = node.FixedBufferEscapeSyntax
-        }
+        return node.Update(RewriteExpression(node.Operand))
     }
 
     /// ADR-0061: Rewrites a conditional address-of expression.

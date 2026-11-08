@@ -1188,7 +1188,7 @@ shared class SpillSequenceSpiller {
                         addressOf,
                         addressOf.Operand,
                         func (operand BoundExpression) BoundExpression {
-                            return BoundAddressOfExpression(nil, operand)
+                            return addressOf.Update(operand)
                         }
                     )
                 }

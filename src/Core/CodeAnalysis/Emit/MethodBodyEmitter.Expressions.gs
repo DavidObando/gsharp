@@ -2229,9 +2229,7 @@ internal partial class MethodBodyEmitter {
                 // address of the trailing lvalue. Keeping address-of as the
                 // outer bound shape preserves ref/out call classification.
                 this.EmitBlockExpressionPrefix(block)
-                this.EmitAddressOf(
-                    BoundAddressOfExpression(node.Syntax, block.Expression, node.IsUnmanaged, node.IsReadOnly)
-                )
+                this.EmitAddressOf(node.Update(block.Expression))
             }
             case conditional is BoundConditionalExpression {
                 this.EmitConditionalAddress(
