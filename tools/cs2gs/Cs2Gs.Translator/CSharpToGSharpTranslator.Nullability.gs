@@ -37,6 +37,10 @@ partial class CSharpToGSharpTranslator {
         private var repositorySharedDocumentPaths HashSet[string]?
         private var refStorageSlots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]?
         private var frozenRefStorageContracts Dictionary[ISymbol, HashSet[int32]]?
+        private let linkedRefStoragePromotions Dictionary[ISymbol, HashSet[int32]] = Dictionary[
+            ISymbol,
+            HashSet[int32]
+        ](SymbolEqualityComparer.Default)
 
         private class RefStorageSlot {
             let Symbol ISymbol
@@ -2525,8 +2529,47 @@ partial class CSharpToGSharpTranslator {
             do {
                 changed = false
                 for source in visitors {
-                    for contract in source.frozenRefStorageContracts!!.ToList() {
-                        for reference in contract.Key.DeclaringSyntaxReferences {
+                    let promotions = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
+                    for slots in source.refStorageSlots!!.Values {
+                        for slot in slots.Values {
+                            if source.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
+                                ?.IsReferenceType != true {
+                                continue
+                            }
+                            let tree = slot.Symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree
+                            if tree == nil || !source.context.Compilation.ContainsSyntaxTree(tree) {
+                                continue
+                            }
+                            using let modelScope = source.context.UseSemanticModelFor(tree)
+                            if source.RefStorageIsNullable(slot, includeArrays: true) {
+                                if !promotions.TryGetValue(slot.Symbol.OriginalDefinition, out var positions) {
+                                    positions = HashSet[int32]()
+                                    promotions.Add(slot.Symbol.OriginalDefinition, positions)
+                                }
+                                positions.Add(slot.Depth)
+                            }
+                        }
+                    }
+                    let decisions = source.frozenRefStorageContracts!!
+                        .Select(
+                        (contract KeyValuePair[ISymbol, HashSet[int32]]) -> (
+                            Symbol: contract.Key,
+                            Positions: contract.Value,
+                            Frozen: true
+                        )
+                    )
+                        .Concat(
+                        promotions.Select(
+                            (promotion KeyValuePair[ISymbol, HashSet[int32]]) -> (
+                                Symbol: promotion.Key,
+                                Positions: promotion.Value,
+                                Frozen: false
+                            )
+                        )
+                    )
+                        .ToList()
+                    for contract in decisions {
+                        for reference in contract.Symbol.DeclaringSyntaxReferences {
                             if !this.repositorySharedDocumentPaths!!.Contains(reference.SyntaxTree.FilePath) {
                                 continue
                             }
@@ -2562,12 +2605,20 @@ partial class CSharpToGSharpTranslator {
                                 if symbol == nil {
                                     continue
                                 }
-                                if !target.frozenRefStorageContracts!!.TryGetValue(symbol, out var positions) {
-                                    positions = HashSet[int32]()
-                                    target.frozenRefStorageContracts!!.Add(symbol, positions)
+                                let decisions = if contract.Frozen {
+                                    target.frozenRefStorageContracts!!
+                                } else {
+                                    target.linkedRefStoragePromotions
                                 }
-                                for depth in contract.Value {
+                                if !decisions.TryGetValue(symbol, out var positions) {
+                                    positions = HashSet[int32]()
+                                    decisions.Add(symbol, positions)
+                                }
+                                for depth in contract.Positions {
                                     changed |= positions.Add(depth)
+                                    if !contract.Frozen {
+                                        target.GetRefStorageSlot(symbol, depth)
+                                    }
                                 }
                             }
                         }
@@ -2740,7 +2791,11 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
                 for member in root.Members {
-                    if this.RefStorageSlotType(member)?.NullableAnnotation ==
+                    if this.linkedRefStoragePromotions.TryGetValue(
+                        member.Symbol.OriginalDefinition,
+                        out var positions
+                    ) &&
+                        positions.Contains(member.Depth) || this.RefStorageSlotType(member)?.NullableAnnotation ==
                     Microsoft
                         .CodeAnalysis
                         .NullableAnnotation

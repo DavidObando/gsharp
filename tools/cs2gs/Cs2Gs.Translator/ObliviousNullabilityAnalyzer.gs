@@ -4537,6 +4537,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 if argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && model.GetOperation(
                     argument
                 ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                    let (owner, depth) = RefArrayStorage(argument.Expression, model)
+                    if owner != nil && depth > 0 {
+                        RefArraySourceSlotFor(slots, owner, depth).Root().Sources.Add(Canonical(parameter)!!)
+                    }
                     ConnectRefArraySources(slots, parameter, argument.Expression, model)
                 }
             }
@@ -4728,7 +4732,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                 } else {
                     initializer
                 }
-                if (type.IsVar || initializer is RefExpressionSyntax) && declarationModel.GetSymbolInfo(Unwrap(value))
+                if (
+                    type.IsVar ||
+                        initializer is RefExpressionSyntax ||
+                        (
+                        !declarationModel.GetNullableContext(declaration.SpanStart).HasFlag(
+                            NullableContext.AnnotationsEnabled
+                        ) &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(local.Type, declarationModel.GetTypeInfo(value).Type)
+                    )
+                ) &&
+                    declarationModel
+                    .GetSymbolInfo(Unwrap(value))
                     .Symbol is {} source &&
                     source is ILocalSymbol or
                     IFieldSymbol or

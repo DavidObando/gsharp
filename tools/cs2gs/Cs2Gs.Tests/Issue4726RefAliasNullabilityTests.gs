@@ -48,8 +48,29 @@ public static class Obj {
     @Theory
     @InlineData("returned-array")
     @InlineData("subarray")
+    @InlineData("parameter")
+    @InlineData("typed-alias")
     func ConnectedStorageReads_PreserveCSharpOutput(shape string) {
         let source = switch shape {
+            case "parameter": `public static class Obj {
+    private static ref string Borrow(ref string value) => ref value;
+    private static string Read() {
+        var xs = new[] { "x" };
+        ref string alias = ref Borrow(ref xs[0]);
+        alias = null;
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "typed-alias": `public static class Obj {
+    public static string Run() {
+        var xs = new[] { "x" };
+        string[] ys = xs;
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0] ?? "null";
+    }
+}`
             case "returned-array": `public static class Obj {
     private static string[] xs = new[] { "x" };
     private static ref string[] Borrow() => ref xs;
@@ -73,6 +94,53 @@ public static class Obj {
 }`
         }
         AssertParity(source, Translate(source), "null")
+    }
+
+    @Fact
+    func LinkedArrayPromotion_ReachesAnIdleRepositoryProject() {
+        const sharedSource = `public static class Shared { public static string[] xs = new[] { "x" }; }`
+        const appSource = `public static class Obj {
+    public static string Run() {
+        ref string alias = ref Shared.xs[0];
+        alias = null;
+        return Shared.xs[0] ?? "null";
+    }
+}`
+        let app = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource), ("App.cs", appSource)}
+        )
+        let idle = CSharpProjectLoader.LoadInMemory([](string, string){("Shared.cs", sharedSource)})
+        let repository = []CSharpCompilation{app.Compilation, idle.Compilation}
+        var appShared string? = nil
+        var appPrinted = ""
+        for project in[]LoadedCSharpProject{app, idle} {
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            for document in project.Documents {
+                let context = TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    repositoryCompilations: repository
+                )
+                let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                Assert.DoesNotContain(
+                    context.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                )
+                if document.FilePath.EndsWith("Shared.cs", StringComparison.Ordinal) {
+                    if project == app {
+                        appShared = printed
+                    } else {
+                        Assert.NotNull(appShared)
+                        Assert.Equal(appShared, printed)
+                    }
+                }
+                if project == app {
+                    appPrinted += printed + Environment.NewLine
+                }
+            }
+        }
+        AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "null")
     }
 
     @Theory
