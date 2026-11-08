@@ -83,6 +83,10 @@ layout fail identically under stage 1 and are excluded by name in
 `build/selfhost/stage2-env-bound-tests.json` until
 [#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
 
+When `CS2GS_TEST_SOURCE_ROOT` selects a source tree, cs2gs stages local SDK and RID compiler packages in
+`AppContext.BaseDirectory/.cs2gs-local-feed`. Compilation and test projects read that feed through generated NuGet configuration.
+This directory is in the writable test workspace. The immutable source tree stays unchanged.
+
 The controller accepts a pinned .NET layout or a verified SDK archive through
 `--dotnet-archive ARCHIVE --dotnet-archive-sha256 SHA256`.
 Migration and certification can use separate jobs through `--migrated-tree`.

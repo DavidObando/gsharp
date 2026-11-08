@@ -262,6 +262,8 @@ providing them. At the cut-over, `CS2GS_TEST_SOURCE_ROOT` also had to hold `out/
 until `GsharpTestProjectRunner` was updated (#4896) to fall back to the running G# checkout's built
 packages when `CS2GS_TEST_SOURCE_ROOT` is an unbuilt C# source checkout (restored for MSBuildWorkspace
 package resolution, without a C# build).
+The source checkout can stay read-only. The helpers stage packages in
+`AppContext.BaseDirectory/.cs2gs-local-feed` and use that same feed in generated compilation and test NuGet configuration.
 
 ## Rollback
 

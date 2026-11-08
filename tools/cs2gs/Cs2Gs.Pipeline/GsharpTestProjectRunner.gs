@@ -21,7 +21,7 @@ enum GsharpTestRunStatus {
 /// The live library xUnit parity orchestration for stage 4 (ADR-0115 §C/§E):
 /// given a translated G# library and its translated G# xUnit tests, this writes
 /// an isolated G# test project that consumes the pinned
-/// `Gsharp.NET.Sdk` (copied into the repo's `.nugs` feed when available locally and pinned in
+/// `Gsharp.NET.Sdk` (copied into the local package feed when available and pinned in
 /// the generated `.gsproj`), runs `dotnet test` producing a TRX, and
 /// parses it into the `{name, outcome}` set the comparison engine consumes.
 /// All process I/O is local — it only shells out to `dotnet test`; there is
@@ -111,15 +111,13 @@ open class GsharpTestProjectRunner {
         // and MSBuild has no `--configfile` switch (that's a `dotnet restore`/
         // `dotnet nuget` only switch) - it fails hard with MSB1001. The
         // MSBuild-property form works for build/restore/test alike.
-        if !string.IsNullOrEmpty(this.RepoRoot) {
-            let repoNugetConfig = Path.Combine(this.RepoRoot, "nuget.config")
-            if File.Exists(repoNugetConfig) {
-                args.Add("-p:RestoreConfigFile=$repoNugetConfig")
-            }
-        } else {
-            SdkCompileRunner.WriteLocalNugetConfig(workDir, nil)
-            let localNugetConfig = Path.Combine(workDir, "nuget.config")
-            args.Add("-p:RestoreConfigFile=$localNugetConfig")
+        let localNugetConfig = Path.Combine(workDir, "nuget.config")
+        let restoreConfig = ResolveRestoreConfigFile(workDir, this.RepoRoot)
+        if restoreConfig == localNugetConfig {
+            SdkCompileRunner.WriteLocalNugetConfig(workDir, this.RepoRoot)
+        }
+        if File.Exists(restoreConfig) {
+            args.Add("-p:RestoreConfigFile=$restoreConfig")
         }
         // Bug #1752 (part 1): NuGet's shared global-packages folder keys its
         // extracted package cache on id+version alone, so a same-version
@@ -250,20 +248,10 @@ open class GsharpTestProjectRunner {
 
         private func CandidatePackageRoots(repoRoot string) sequence[string] {
             yield repoRoot
-            let configuredRoot string? = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable)
-            if string.IsNullOrWhiteSpace(configuredRoot) {
-                yield break
-            }
-            var resolvedConfigured string? = nil
-            try {
-                resolvedConfigured = ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory)
-            } catch (DirectoryNotFoundException) {
+            if !IsConfiguredSourceRoot(repoRoot) {
                 yield break
             }
             let canonicalRepoRoot string? = CanonicalRootPath.Resolve(Path.GetFullPath(repoRoot))
-            if !string.Equals(canonicalRepoRoot, resolvedConfigured, StringComparison.Ordinal) {
-                yield break
-            }
             let assemblyRoot string? = FindAssemblyRepoRoot()
             if !string.IsNullOrEmpty(assemblyRoot) && !string.Equals(
                 CanonicalRootPath.Resolve(Path.GetFullPath(assemblyRoot!!)),
@@ -272,6 +260,47 @@ open class GsharpTestProjectRunner {
             ) {
                 yield assemblyRoot!!
             }
+        }
+
+        private func IsConfiguredSourceRoot(repoRoot string?) bool {
+            if string.IsNullOrEmpty(repoRoot) {
+                return false
+            }
+            let configuredRoot string? = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable)
+            if string.IsNullOrWhiteSpace(configuredRoot) {
+                return false
+            }
+            var resolvedConfigured string? = nil
+            try {
+                resolvedConfigured = ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory)
+            } catch (DirectoryNotFoundException) {
+                return false
+            }
+            let canonicalRepoRoot string? = CanonicalRootPath.Resolve(Path.GetFullPath(repoRoot))
+            return string.Equals(canonicalRepoRoot, resolvedConfigured, StringComparison.Ordinal)
+        }
+
+        /// Keeps the configured source tree read-only. Staging and NuGet configuration use the same feed.
+        internal func LocalPackageFeed(repoRoot string?) string? {
+            if string.IsNullOrEmpty(repoRoot) {
+                return nil
+            }
+            return if IsConfiguredSourceRoot(repoRoot) {
+                Path.Combine(AppContext.BaseDirectory, ".cs2gs-local-feed")
+            } else {
+                Path.Combine(repoRoot, ".nugs")
+            }
+        }
+
+        /// Uses generated NuGet configuration for read-only source roots and preserves normal repository configuration.
+        internal func ResolveRestoreConfigFile(workDir string, repoRoot string?) string {
+            if !string.IsNullOrEmpty(repoRoot) && !IsConfiguredSourceRoot(repoRoot) {
+                let config = Path.Combine(repoRoot, "nuget.config")
+                if File.Exists(config) {
+                    return config
+                }
+            }
+            return Path.Combine(workDir, "nuget.config")
         }
 
         internal func FindAssemblyRepoRoot() string? {
@@ -380,17 +409,17 @@ open class GsharpTestProjectRunner {
             return ComparePrereleaseIdentifiers(a.LeftSuffix, b.RightSuffix)
         }
 
-        /// Copies [`nupkgPath`](paramref) into the repo's local `.nugs`
+        /// Copies [`nupkgPath`](paramref) into the local package
         /// feed, refreshing it when the destination already exists but its content
         /// differs from the source (a same-version rebuild), while leaving an
         /// unchanged nupkg untouched.
-        /// @param repoRoot The repository root containing the `.nugs` feed.
+        /// @param repoRoot The source root used to select the local feed.
         /// @param nupkgPath The source nupkg to stage.
         internal func EnsureInLocalFeed(repoRoot string?, nupkgPath string) {
-            if string.IsNullOrEmpty(repoRoot) {
+            let feed = LocalPackageFeed(repoRoot)
+            if feed == nil {
                 return
             }
-            let feed = Path.Combine(repoRoot, ".nugs")
             Directory.CreateDirectory(feed)
             CopyToFeed(feed, nupkgPath)
             // ADR-0207: Gsharp.NET.Sdk restores Gsharp.NET.Sdk.Compiler.<rid> of its exact version

@@ -8,6 +8,7 @@ import Cs2Gs.Pipeline
 import System
 import System.Collections.Generic
 import System.IO
+import System.Linq
 import Xunit
 
 /// Integration coverage for the stage-4 original-source fixture contract.
@@ -215,6 +216,126 @@ open class Issue4072Stage4FixtureContractTests {
                 originalSourceRoot
             )
             Directory.Delete(sourceRoot, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ReadOnlyConfiguredSourceRoot_SdkCompileAndTestUseWritableFeeds(runTests bool) {
+        let assemblyRoot = GsharpTestProjectRunner.FindAssemblyRepoRoot()
+        let builtSdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(assemblyRoot, "Release") ??
+            throw InvalidOperationException("Build the G# SDK packages before this fallback regression test.")
+        let root = Path.Combine(AppContext.BaseDirectory, "issue4896-readonly", Guid.NewGuid().ToString("N"))
+        let sourceRoot = Path.Combine(root, "source")
+        let workDir = Path.Combine(root, "work")
+        Directory.CreateDirectory(sourceRoot)
+        Directory.CreateDirectory(workDir)
+        let fixture = Path.Combine(sourceRoot, "fixture.cs")
+        let sourceConfig = Path.Combine(sourceRoot, "nuget.config")
+        File.WriteAllText(fixture, "class Original { }")
+        File.WriteAllText(sourceConfig, "<configuration><packageSources><clear /></packageSources></configuration>")
+        let originalFixture = File.ReadAllBytes(fixture)
+        let originalConfig = File.ReadAllBytes(sourceConfig)
+        let readOnlyMode = UnixFileMode.UserRead | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+        let originalSourceRoot = Environment.GetEnvironmentVariable(
+            GsharpTestProjectRunner.SourceRootEnvironmentVariable
+        )
+        try {
+            File.SetAttributes(fixture, FileAttributes.ReadOnly)
+            File.SetAttributes(sourceConfig, FileAttributes.ReadOnly)
+            if !OperatingSystem.IsWindows() {
+                File.SetUnixFileMode(sourceRoot, readOnlyMode)
+                Assert.Throws[UnauthorizedAccessException](
+                    func () object? {
+                        File.WriteAllText(Path.Combine(sourceRoot, "forbidden"), "must not be written")
+                        return nil
+                    }
+                )
+            }
+            Environment.SetEnvironmentVariable(GsharpTestProjectRunner.SourceRootEnvironmentVariable, sourceRoot)
+            if runTests {
+                let project = GsharpTestProject{
+                    LibraryName: "ReadOnlyLib",
+                    LibraryRootNamespace: "ReadOnlyLib",
+                    LibraryFiles: []GsharpSourceFile{
+                        GsharpSourceFile(
+                            "Value.gs",
+                            "package ReadOnlyLib\nclass Value { shared { func Get() int32 -> 42 } }\n"
+                        )
+                    },
+                    TestsName: "ReadOnlyLib.Tests",
+                    TestsRootNamespace: "ReadOnlyLib.Tests",
+                    TestFiles: []GsharpSourceFile{
+                        GsharpSourceFile(
+                            "ValueTests.gs",
+                            "package ReadOnlyLib.Tests\nimport Xunit\nimport ReadOnlyLib\n" +
+                                "class ValueTests { @Fact func Returns42() { Assert.Equal(42, Value.Get()) } }\n"
+                        )
+                    }
+                }
+                let run = GsharpTestProjectRunner().Run(project, workDir)
+                Assert.True(run.Status == GsharpTestRunStatus.Ran, run.Output)
+                Assert.Equal(0, run.ExitCode)
+                let outcome = Assert.Single(run.Results)
+                Assert.Equal("ReadOnlyLib.Tests.ValueTests.Returns42", outcome.Name)
+                Assert.Equal("Passed", outcome.Outcome)
+            } else {
+                Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", explicitVersion: nil))
+                Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", builtSdk.Version))
+                let source = Path.Combine(workDir, "Program.gs")
+                File.WriteAllText(
+                    source,
+                    "package ReadOnlyCompile\nimport System\n" +
+                        "class Program { shared { func Main() { Console.WriteLine(\"readonly-4896\") } } }\n"
+                )
+                let compile = SdkCompileRunner().Compile(
+                    workDir,
+                    "ReadOnlyCompile",
+                    []string{source},
+                    TargetKind.Exe,
+                    Array.Empty[string](),
+                    Array.Empty[string](),
+                    Array.Empty[string](),
+                    "ReadOnlyCompile",
+                    "Release"
+                )
+                Assert.True(compile.IsAvailable, compile.UnavailableReason)
+                Assert.True(compile.ExitCode == 0, compile.Output)
+                Assert.NotNull(compile.EmittedAssemblyPath)
+                let execution = ProcessRunner.Run(
+                    "dotnet",
+                    []string{compile.EmittedAssemblyPath!!},
+                    workDir,
+                    TimeSpan.FromSeconds(30)
+                )
+                Assert.True(execution.ExitCode == 0, execution.Output)
+                Assert.Equal("readonly-4896" + Environment.NewLine, execution.Stdout)
+            }
+            Assert.Equal(originalFixture, File.ReadAllBytes(fixture))
+            Assert.Equal(originalConfig, File.ReadAllBytes(sourceConfig))
+            Assert.Equal(
+                []string{"fixture.cs", "nuget.config"},
+                Directory.GetFileSystemEntries(sourceRoot).Select(Path.GetFileName).OrderBy((name string?) -> name)
+            )
+            if !OperatingSystem.IsWindows() {
+                Assert.Equal(readOnlyMode, File.GetUnixFileMode(sourceRoot))
+            }
+        } finally {
+            Environment.SetEnvironmentVariable(
+                GsharpTestProjectRunner.SourceRootEnvironmentVariable,
+                originalSourceRoot
+            )
+            if !OperatingSystem.IsWindows() {
+                File.SetUnixFileMode(
+                    sourceRoot,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                )
+            }
+            File.SetAttributes(fixture, FileAttributes.Normal)
+            File.SetAttributes(sourceConfig, FileAttributes.Normal)
+            Directory.Delete(root, recursive: true)
         }
     }
 }
