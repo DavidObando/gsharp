@@ -420,15 +420,27 @@ internal shared class ObliviousNullabilityAnalyzer {
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
-    private let RefArraySources ConditionalWeakTable[
+    private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
         Compilation,
-        Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]
-    ] = ConditionalWeakTable[Compilation, Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]]()
+        RefArraySourceIndex
+    ]()
+
+    private class RefArraySourceIndex {
+        let Sources Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ISymbol]]
+        ](SymbolEqualityComparer.Default)
+        let Writes Dictionary[ISymbol, Dictionary[int32, List[ExpressionSyntax]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ExpressionSyntax]]
+        ](SymbolEqualityComparer.Default)
+    }
 
     private class RefArraySourceSlot {
         var Parent RefArraySourceSlot? = nil
         var Size int32 = 1
         let Sources List[ISymbol] = List[ISymbol]()
+        let Writes List[ExpressionSyntax] = List[ExpressionSyntax]()
 
         func Root() RefArraySourceSlot {
             var root = this
@@ -4481,7 +4493,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
-        let aliases = RefArraySources.GetValue(compilation, BuildRefArraySources)
+        let aliases = RefArraySources.GetValue(compilation, BuildRefArraySources).Sources
         for sources in aliases
             .Values
             .SelectMany((positions Dictionary[int32, List[ISymbol]]) -> positions.Values)
@@ -4507,7 +4519,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func BuildRefArraySources(compilation Compilation) Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] {
+    private func BuildRefArraySources(compilation Compilation) RefArraySourceIndex {
         let slots = Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
@@ -4545,20 +4557,41 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        let aliases = Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]](SymbolEqualityComparer.Default)
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+                let (owner, depth) = RefArrayStorage(assignment.Left, model)
+                if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && owner != nil && slots.TryGetValue(
+                    owner,
+                    out var positions
+                ) &&
+                    positions.TryGetValue(depth, out var slot) {
+                    slot.Root().Writes.Add(assignment.Right)
+                }
+            }
+        }
+        let index = RefArraySourceIndex()
         for owner in slots {
             let positions = Dictionary[int32, List[ISymbol]]()
+            let writes = Dictionary[int32, List[ExpressionSyntax]]()
             for slot in owner.Value {
                 let sources = slot.Value.Root().Sources
+                let values = slot.Value.Root().Writes
                 if sources.Count > 0 {
                     positions.Add(slot.Key, sources)
                 }
+                if values.Count > 0 {
+                    writes.Add(slot.Key, values)
+                }
             }
             if positions.Count > 0 {
-                aliases.Add(owner.Key, positions)
+                index.Sources.Add(owner.Key, positions)
+            }
+            if writes.Count > 0 {
+                index.Writes.Add(owner.Key, writes)
             }
         }
-        return aliases
+        return index
     }
 
     private func RefArraySourceSlotFor(
@@ -4623,6 +4656,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 larger.Size += smaller.Size
                 larger.Sources.AddRange(smaller.Sources)
                 smaller.Sources.Clear()
+                larger.Writes.AddRange(smaller.Writes)
+                smaller.Writes.Clear()
             }
             if type is not IArrayTypeSymbol array {
                 break
@@ -7536,7 +7571,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol?, Source ISymbol?)],
         scalarTupleEdges List[(Target ISymbol?, Source TupleElementKey)],
         $scope SourceScope = SourceScope.AllSources,
-        readConversion bool = true
+        readConversion bool = true,
+        visitedArrayWrites HashSet[List[ExpressionSyntax]]? = nil
     ) {
         if !IsEligibleScalarTarget(target) {
             return
@@ -7549,7 +7585,16 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if readConversion && GetResultConversion(value, model) is IConversionOperation conversion {
-            CollectScalarValueFlow(target, conversion, model, tainted, edges, scalarTupleEdges, $scope)
+            CollectScalarValueFlow(
+                target,
+                conversion,
+                model,
+                tainted,
+                edges,
+                scalarTupleEdges,
+                $scope,
+                visitedArrayWrites
+            )
             return
         }
         if IsDirectlyNullable(value, model, readConversion: false) {
@@ -7565,7 +7610,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7577,7 +7623,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7589,7 +7636,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7599,17 +7647,53 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
             case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                CollectScalarValueFlow(target, coalesce.Right, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    coalesce.Right,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
                 return
             }
             case conditional is ConditionalExpressionSyntax {
-                CollectScalarValueFlow(target, conditional.WhenTrue, model, tainted, edges, scalarTupleEdges, $scope)
-                CollectScalarValueFlow(target, conditional.WhenFalse, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    conditional.WhenTrue,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
+                CollectScalarValueFlow(
+                    target,
+                    conditional.WhenFalse,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
                 return
             }
             case switchExpression is SwitchExpressionSyntax {
                 for arm in switchExpression.Arms {
-                    CollectScalarValueFlow(target, arm.Expression, model, tainted, edges, scalarTupleEdges, $scope)
+                    CollectScalarValueFlow(
+                        target,
+                        arm.Expression,
+                        model,
+                        tainted,
+                        edges,
+                        scalarTupleEdges,
+                        $scope,
+                        visitedArrayWrites: visitedArrayWrites
+                    )
                 }
                 return
             }
@@ -7629,8 +7713,49 @@ internal shared class ObliviousNullabilityAnalyzer {
             },
             out var forwarded
         ) {
-            CollectScalarValueFlow(target, forwarded, model, tainted, edges, scalarTupleEdges, $scope)
+            CollectScalarValueFlow(
+                target,
+                forwarded,
+                model,
+                tainted,
+                edges,
+                scalarTupleEdges,
+                $scope,
+                visitedArrayWrites: visitedArrayWrites
+            )
             return
+        }
+        if $scope != SourceScope.CallsOnly &&
+            value is ElementAccessExpressionSyntax access &&
+            !IsNullGuardDominatedRead(access, model) {
+            let (owner, depth) = RefArrayStorage(access, model)
+            if owner != nil &&
+                RefArraySources
+                .GetValue(model.Compilation, BuildRefArraySources)
+                .Writes
+                .TryGetValue(owner, out var positions) &&
+                positions
+                .TryGetValue(depth, out var writes) {
+                let visited = visitedArrayWrites ?? HashSet[List[ExpressionSyntax]]()
+                if visited.Add(writes) {
+                    try {
+                        for written in writes {
+                            CollectScalarValueFlow(
+                                target,
+                                written,
+                                model.Compilation.GetSemanticModel(written.SyntaxTree),
+                                tainted,
+                                edges,
+                                scalarTupleEdges,
+                                $scope,
+                                visitedArrayWrites: visited
+                            )
+                        }
+                    } finally {
+                        visited.Remove(writes)
+                    }
+                }
+            }
         }
         if $scope != SourceScope.CallsOnly && TryResolveTupleElementSource(value, model, out var tupleSource) {
             scalarTupleEdges.Add((target, tupleSource))
@@ -7646,7 +7771,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tainted HashSet[ISymbol],
         edges List[(Target ISymbol?, Source ISymbol?)],
         scalarTupleEdges List[(Target ISymbol?, Source TupleElementKey)],
-        $scope SourceScope
+        $scope SourceScope,
+        visitedArrayWrites HashSet[List[ExpressionSyntax]]? = nil
     ) {
         if value is IConversionOperation conversion {
             if IsDirectlyNullable(conversion, model, respectNullGuards: false) {
@@ -7654,7 +7780,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
             if CanForwardCastOperandNullability(conversion) {
-                CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    conversion.Operand,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites
+                )
             }
             if conversion.OperatorMethod != nil && !IsNonNullableValueType(conversion.Type) {
                 CollectConversionResultFlow(target, conversion.OperatorMethod!!, tainted, edges)
@@ -7668,7 +7803,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 edges,
                 scalarTupleEdges,
                 $scope,
-                readConversion: false
+                readConversion: false,
+                visitedArrayWrites: visitedArrayWrites
             )
         }
     }
@@ -7770,10 +7906,11 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {
                 let (owner, depth) = RefArrayStorage(access, model)
-                if owner != nil && RefArraySources.GetValue(model.Compilation, BuildRefArraySources).TryGetValue(
-                    owner,
-                    out var positions
-                ) &&
+                if owner != nil &&
+                    RefArraySources
+                    .GetValue(model.Compilation, BuildRefArraySources)
+                    .Sources
+                    .TryGetValue(owner, out var positions) &&
                     positions.TryGetValue(depth, out var sources) {
                     for source in sources {
                         yield source

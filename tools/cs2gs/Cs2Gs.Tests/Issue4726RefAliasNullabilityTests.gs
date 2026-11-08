@@ -50,8 +50,29 @@ public static class Obj {
     @InlineData("subarray")
     @InlineData("parameter")
     @InlineData("typed-alias")
+    @InlineData("array-write")
+    @InlineData("array-write-cycle")
     func ConnectedStorageReads_PreserveCSharpOutput(shape string) {
         let source = switch shape {
+            case "array-write": `public static class Obj {
+    private static string Read() {
+        var xs = new[] { "x" };
+        ref string[] ys = ref xs;
+        ys[0] = null;
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "array-write-cycle": `public static class Obj {
+    private static string Read() {
+        var xs = new[] { "x" };
+        ref string[] ys = ref xs;
+        ys[0] = xs[0];
+        ys[0] = null;
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
             case "parameter": `public static class Obj {
     private static ref string Borrow(ref string value) => ref value;
     private static string Read() {
