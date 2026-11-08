@@ -4390,7 +4390,17 @@ internal shared class ObliviousNullabilityAnalyzer {
             // records a transitive edge from the return symbol to the returned
             // value's source.
             SeedReturnTaint(root, model, tainted, edges, scalarTupleEdges)
-            CollectTupleFlows(root, model, tainted, edges, tupleTainted, tupleEdges, tupleScalarEdges, scalarTupleEdges)
+            CollectTupleFlows(
+                root,
+                model,
+                tainted,
+                edges,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges,
+                tupleContractEdges
+            )
             CollectDelegateReturnContractEdges(
                 compilation,
                 root,
@@ -4529,26 +4539,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
             for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
-                var target ISymbol? = if reference.Parent is EqualsValueClauseSyntax{
-                    Parent: VariableDeclaratorSyntax declaration
-                } {
-                    model.GetDeclaredSymbol(declaration)
-                } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
-                    model.GetEnclosingSymbol(reference.SpanStart)
-                } else {
-                    default(ISymbol?)
-                }
-                if target is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
-                    target = property
-                }
-                if !IsRefStorageSymbol(target) {
+                let target = RefStorageDestination(reference, model)
+                if target == nil {
                     continue
                 }
                 let (source, depth) = RefArrayStorage(reference.Expression, model)
                 if depth > 0 && source != nil {
                     RefArraySourceSlotFor(slots, source, depth).Root().Sources.Add(Canonical(target)!!)
                 }
-                ConnectRefArraySources(slots, target!!, reference.Expression, model)
+                ConnectRefArraySources(slots, target, reference.Expression, model)
             }
             for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
                 if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
@@ -5229,10 +5228,18 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
-        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
         for node in root.DescendantNodes() {
             switch node {
+                case reference is RefExpressionSyntax when RefStorageDestination(reference, model) is {} target {
+                    ConnectRefTupleStorage(target, reference.Expression, model, tupleTainted, tupleContractEdges)
+                }
+                case argument is ArgumentSyntax when argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) &&
+                    model.GetOperation(argument) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                    ConnectRefTupleStorage(parameter, argument.Expression, model, tupleTainted, tupleContractEdges)
+                }
                 case method is MethodDeclarationSyntax {
                     CollectTupleReturnFlows(
                         model.GetDeclaredSymbol(method),
@@ -5517,6 +5524,36 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
+    private func ConnectRefTupleStorage(
+        target ISymbol,
+        value ExpressionSyntax,
+        model SemanticModel,
+        tupleTainted HashSet[TupleElementKey],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) {
+        let storage = Unwrap(value, unwrapSuppressions: true)
+        if storage is RefExpressionSyntax reference {
+            ConnectRefTupleStorage(target, reference.Expression, model, tupleTainted, tupleContractEdges)
+            return
+        }
+        if storage is ConditionalExpressionSyntax conditional {
+            ConnectRefTupleStorage(target, conditional.WhenTrue, model, tupleTainted, tupleContractEdges)
+            ConnectRefTupleStorage(target, conditional.WhenFalse, model, tupleTainted, tupleContractEdges)
+            return
+        }
+        if model.GetSymbolInfo(storage).Symbol is {} source {
+            // A ref shares every leaf contract, including fixed non-null positions.
+            AddTupleContractPair(
+                target,
+                SymbolValueType(target),
+                source,
+                SymbolValueType(source),
+                tupleTainted,
+                tupleContractEdges
+            )
+        }
+    }
+
     // Issue #3564: Dictionary<TKey, TValue> indexer/method parameters use the
     // receiver's generic TKey slot. When a promoted tuple flows into that slot,
     // carry its per-element taint back to the source field/property type so all
@@ -5595,6 +5632,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @param tupleTainted Directly tainted tuple leaves.
     /// @param tupleEdges Tuple-leaf to tuple-leaf edges.
     /// @param tupleScalarEdges Tuple-leaf to scalar-declaration edges.
+    /// @param prefix The enclosing array-element path.
     private func CollectDeclarationTupleFlow(
         target ISymbol?,
         targetType ITypeSymbol?,
@@ -5602,16 +5640,26 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
-        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)]
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        prefix string = ""
     ) {
         if target == nil {
             return
         }
         if targetType is INamedTypeSymbol tuple && tuple.IsTupleType {
-            CollectTupleValueFlow(target, tuple, value, model, string.Empty, tupleTainted, tupleEdges, tupleScalarEdges)
+            CollectTupleValueFlow(target, tuple, value, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges)
             return
         }
-        CollectNestedTupleValueFlow(target, targetType, value, model, tupleTainted, tupleEdges)
+        CollectNestedTupleValueFlow(
+            target,
+            targetType,
+            value,
+            model,
+            tupleTainted,
+            tupleEdges,
+            tupleScalarEdges,
+            prefix
+        )
     }
 
     // Issue #3641: pairs the nested tuple slots of the target's declared type
@@ -5627,10 +5675,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         value ExpressionSyntax?,
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
-        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        prefix string
     ) {
         var value = value
-        let targetSlots = NestedTupleSlots(targetType)
+        let targetSlots = List[(Path string, Tuple INamedTypeSymbol)]()
+        CollectNestedTupleSlots(targetType, prefix, targetSlots)
         if targetSlots.Count == 0 {
             return
         }
@@ -5640,16 +5691,113 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
             case conditional is ConditionalExpressionSyntax {
-                CollectNestedTupleValueFlow(target, targetType, conditional.WhenTrue, model, tupleTainted, tupleEdges)
-                CollectNestedTupleValueFlow(target, targetType, conditional.WhenFalse, model, tupleTainted, tupleEdges)
+                CollectNestedTupleValueFlow(
+                    target,
+                    targetType,
+                    conditional.WhenTrue,
+                    model,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges,
+                    prefix
+                )
+                CollectNestedTupleValueFlow(
+                    target,
+                    targetType,
+                    conditional.WhenFalse,
+                    model,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges,
+                    prefix
+                )
                 return
             }
             case switchExpression is SwitchExpressionSyntax {
                 for arm in switchExpression.Arms {
-                    CollectNestedTupleValueFlow(target, targetType, arm.Expression, model, tupleTainted, tupleEdges)
+                    CollectNestedTupleValueFlow(
+                        target,
+                        targetType,
+                        arm.Expression,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges,
+                        prefix
+                    )
                 }
                 return
             }
+        }
+        let initializer InitializerExpressionSyntax? = switch value {
+            case creation is BaseObjectCreationExpressionSyntax: creation.Initializer
+            case array is ArrayCreationExpressionSyntax: array.Initializer
+            case array is ImplicitArrayCreationExpressionSyntax: array.Initializer
+            case bare is InitializerExpressionSyntax: bare
+            default: default(InitializerExpressionSyntax?)
+        }
+        if initializer != nil && targetType is IArrayTypeSymbol arrayType {
+            for element in InitializerLeaves(initializer) {
+                CollectDeclarationTupleFlow(
+                    target,
+                    arrayType.ElementType,
+                    element,
+                    model,
+                    tupleTainted,
+                    tupleEdges,
+                    tupleScalarEdges,
+                    AppendTuplePath(prefix, 0)
+                )
+            }
+            return
+        }
+        if initializer != nil && value is BaseObjectCreationExpressionSyntax creation && model.GetTypeInfo(creation)
+            .Type is INamedTypeSymbol createdType {
+            let createdSlots = NestedTupleSlots(createdType)
+            if createdSlots.Count != targetSlots.Count {
+                return
+            }
+            let CollectWrite = func (contractType ITypeSymbol, element ExpressionSyntax) {
+                if !TryGetGenericReceiverTuplePath(createdType, contractType, out _, out var path) {
+                    return
+                }
+                let encodedPath = EncodeTuplePath(path)
+                let index = createdSlots.FindIndex(
+                    (slot(Path string, Tuple INamedTypeSymbol)) -> slot.Path == encodedPath
+                )
+                if index >= 0 {
+                    CollectTupleValueFlow(
+                        target,
+                        targetSlots[index].Tuple,
+                        element,
+                        model,
+                        targetSlots[index].Path,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges
+                    )
+                }
+            }
+            for element in initializer.Expressions {
+                if element is AssignmentExpressionSyntax assignment &&
+                    assignment.Left is ImplicitElementAccessSyntax &&
+                    model
+                    .GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer {
+                    CollectWrite(indexer.OriginalDefinition.Type, assignment.Right)
+                } else if initializer.IsKind(SyntaxKind.CollectionInitializerExpression) &&
+                    model
+                    .GetCollectionInitializerSymbolInfo(element).Symbol is IMethodSymbol add && !add.IsExtensionMethod {
+                    let values = if element is InitializerExpressionSyntax complex {
+                        complex.Expressions.ToList()
+                    } else {
+                        List[ExpressionSyntax]{element}
+                    }
+                    for var i = 0; i < values.Count && i < add.OriginalDefinition.Parameters.Length; i++ {
+                        CollectWrite(add.OriginalDefinition.Parameters[i].Type, values[i])
+                    }
+                }
+            }
+            return
         }
         let source ISymbol? = switch value {
             case _ is InvocationExpressionSyntax or
@@ -5768,7 +5916,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                             model.GetTypeInfo(elementValue).Type,
                             contextualOperator
                         )
-                        if IsDirectlyNullable(elementValue, model, respectNullGuards, resultType: targetType) {
+                        if IsNullOrSuppressedNull(elementValue) ||
+                            IsDirectlyNullable(elementValue, model, respectNullGuards, resultType: targetType) {
                             tupleTainted.Add(targetKey)
                         } else if canForwardElement &&
                             TryResolveTupleElementSource(elementValue, model, out var tupleSource) {
@@ -6280,7 +6429,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @returns The nested tuple slots, outermost type argument first.
     private func NestedTupleSlots(type ITypeSymbol?) List[(Path string, Tuple INamedTypeSymbol)] {
         let slots = List[(Path string, Tuple INamedTypeSymbol)]()
-        if type is INamedTypeSymbol named && !named.IsTupleType {
+        if type is IArrayTypeSymbol || (type is INamedTypeSymbol named && !named.IsTupleType) {
             CollectNestedTupleSlots(type, string.Empty, slots)
         }
         return slots
@@ -6291,6 +6440,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         prefix string,
         slots List[(Path string, Tuple INamedTypeSymbol)]
     ) {
+        if type is IArrayTypeSymbol array {
+            CollectNestedTupleSlots(array.ElementType, AppendTuplePath(prefix, 0), slots)
+            return
+        }
         if type is not INamedTypeSymbol named {
             return
         }
@@ -6465,6 +6618,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol
         var crossesTuple = false
         for component in path.Split('.') {
+            if type is IArrayTypeSymbol array && component == "0" {
+                type = array.ElementType
+                continue
+            }
             if type is not INamedTypeSymbol named || !int32.TryParse(component, out var index) || index < 0 {
                 return nil
             }
@@ -7526,6 +7683,26 @@ internal shared class ObliviousNullabilityAnalyzer {
         IMethodSymbol{ReturnsByRefReadonly: true} ||
         symbol is IPropertySymbol{ReturnsByRef: true} or
         IPropertySymbol{ReturnsByRefReadonly: true}
+
+    internal func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
+        let symbol = if reference.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declaration} {
+            model.GetDeclaredSymbol(declaration)
+        } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+            model.GetEnclosingSymbol(reference.SpanStart)
+        } else {
+            default(ISymbol?)
+        }
+        let normalized = if symbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+            cast[ISymbol](property)
+        } else {
+            symbol
+        }
+        return if IsRefStorageSymbol(normalized) {
+            normalized
+        } else {
+            default(ISymbol?)
+        }
+    }
 
     // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their

@@ -1094,6 +1094,14 @@ partial class CSharpToGSharpTranslator {
             } else {
                 mappedElementType
             }
+            if literal != nil {
+                elementType = this.PromoteTupleTypeArguments(
+                    elementType,
+                    elementTypeSymbol,
+                    this.ResolveValueSink(literal),
+                    List[int32]{0}
+                )
+            }
             if literal is ImplicitArrayCreationExpressionSyntax implicitArray {
                 elementType = this.PromoteInferredDelegateArrayElementType(
                     elementType,
@@ -2346,25 +2354,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
-            let symbol = if reference.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declaration} {
-                model.GetDeclaredSymbol(declaration)
-            } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
-                model.GetEnclosingSymbol(reference.SpanStart)
-            } else {
-                default(ISymbol?)
-            }
-            let normalized = if symbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
-                cast[ISymbol](property)
-            } else {
-                symbol
-            }
-            return if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(normalized) {
-                normalized?.OriginalDefinition
-            } else {
-                default(ISymbol?)
-            }
-        }
+        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? ->
+        ObliviousNullabilityAnalyzer.RefStorageDestination(reference, model)?.OriginalDefinition
 
         private func GetRefStorageSlot(symbol ISymbol, depth int32) RefStorageSlot {
             let identity = RefStorageIdentity(symbol)

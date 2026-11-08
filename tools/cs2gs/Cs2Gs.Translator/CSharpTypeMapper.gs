@@ -1661,6 +1661,20 @@ class CSharpTypeMapper {
                 mapped
             }
         }
+        if mapped is ArrayTypeReference array && declaredType is IArrayTypeSymbol arrayType {
+            path.Add(0)
+            let element = this.PromoteTupleTypeArguments(
+                array.ElementType,
+                arrayType.ElementType,
+                symbol,
+                context,
+                path
+            )
+            path.RemoveAt(path.Count - 1)
+            if !object.ReferenceEquals(element, array.ElementType) {
+                mapped = ArrayTypeReference(element, array.Rank){IsNullable = array.IsNullable}
+            }
+        }
         if mapped is NamedTypeReference named &&
             declaredType is INamedTypeSymbol declaredNamed &&
             named
@@ -1912,6 +1926,13 @@ class CSharpTypeMapper {
                     .Select(
                     (e IFieldSymbol, i int32) -> if e.IsImplicitlyDeclared || e.Name == "Item" + (i + 1).ToString() {
                         default(string?)
+                    } else if GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Syntax
+                        .SyntaxFacts
+                        .IsReservedIdentifier(e.Name, IdentifierNameContext.General) {
+                        "$$" + e.Name
                     } else {
                         e.Name
                     }
@@ -3103,7 +3124,7 @@ class CSharpTypeMapper {
         }
 
         @return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull("reference")
-        private func WithNullable(reference GTypeReference?, isNullable bool) GTypeReference? {
+        internal func WithNullable(reference GTypeReference?, isNullable bool) GTypeReference? {
             switch reference {
                 case slice is NativeSliceTypeReference {
                     return NativeSliceTypeReference(slice.ElementType, slice.IsReadOnly){IsNullable = isNullable}

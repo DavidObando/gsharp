@@ -366,6 +366,38 @@ partial class CSharpToGSharpTranslator {
                         declaration!!.Type.GetLocation()
                     )
                 }
+                // Keep nullable tuple storage even when the initializer is non-null.
+                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol tupleStorage &&
+                    (
+                    tupleStorage.Type is INamedTypeSymbol{IsTupleType: true} ||
+                        ObliviousNullabilityAnalyzer.HasNestedTupleSlots(tupleStorage.Type)
+                ) {
+                    var mapped = type ?? this.typeMapper.MapExplicitType(
+                        tupleStorage.Type,
+                        this.context,
+                        declaration!!.Type.GetLocation()
+                    )
+                    if type == nil && tupleStorage.Type.IsReferenceType {
+                        mapped = CSharpTypeMapper.WithNullable(
+                            mapped,
+                            this.InferredLocalDeclarationIsNullable(tupleStorage)
+                        )
+                    }
+                    let promoted = this.PromoteTupleDeclarationIfTainted(mapped, tupleStorage.Type, tupleStorage)
+                    if type != nil || !object.ReferenceEquals(mapped, promoted) ||
+                        !SymbolEqualityComparer
+                        .IncludeNullability
+                        .Equals(
+                        tupleStorage.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.None),
+                        this
+                            .context
+                            .GetTypeInfo(declarator.Initializer!!.Value)
+                            .Type
+                            ?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.None)
+                    ) {
+                        type = promoted
+                    }
+                }
                 // Issue #5602: the initializer is a store into the storage that the
                 // declaration emits. A type clause fixes that storage, so a promoted
                 // value gets the bridge that an assignment to the local gets. Without

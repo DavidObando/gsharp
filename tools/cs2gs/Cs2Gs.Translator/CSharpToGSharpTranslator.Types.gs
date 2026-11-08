@@ -609,12 +609,13 @@ partial class CSharpToGSharpTranslator {
             if operand is IdentifierNameSyntax ||
                 operand is ElementAccessExpressionSyntax ||
                 operand is MemberAccessExpressionSyntax ||
-                operand is InvocationExpressionSyntax {
+                operand is InvocationExpressionSyntax ||
+                operand is ConditionalExpressionSyntax {
                 return this.TranslateExpression(operand)
             }
             this.context.ReportUnsupported(
                 refExpression,
-                "ref expression over '${operand.Kind()}' has no canonical G# form yet: G#'s ref-aliasing local/return only aliases a variable, array element, or field — not a call result, even a ref-returning one (issue #1900)."
+                "ref expression over '${operand.Kind()}' has no canonical G# lvalue form (issue #1900)."
             )
             return IdentifierExpression("nil")
         }
