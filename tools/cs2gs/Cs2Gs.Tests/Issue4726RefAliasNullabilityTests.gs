@@ -17,6 +17,15 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Fact
+    func Issue5868_TemporaryTupleCollection_PreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() => new List<(string, int)> { (null!, 0) }.Count.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
     func Issue5868_IndexerTupleKey_ConstructionAlonePreservesCSharpOutput() {
         const source = `using System.Collections.Generic;
 public static class Obj {
@@ -52,6 +61,9 @@ public static class Obj {
     @InlineData("implicit-array")
     @InlineData("bare-array")
     @InlineData("jagged-array")
+    @InlineData("array-of-lists")
+    @InlineData("interface-dictionary")
+    @InlineData("parenthesized-null")
     @InlineData("target-typed")
     @InlineData("nested")
     @InlineData("promoted")
@@ -66,6 +78,9 @@ public static class Obj {
             case "implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
             case "bare-array": "{ (null!, 0), (\"abc\", 1) }"
             case "jagged-array": "new[] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
+            case "array-of-lists": "new[] { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "interface-dictionary": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
+            case "parenthesized-null": "new List<(string, int)> { ((null!), 0), (\"abc\", 1) }"
             case "target-typed": "new() { (null!, 0), (\"abc\", 1) }"
             case "nested": "new List<((string, int), int)> { ((null!, 0), 1), ((\"abc\", 1), 2) }"
             case "promoted": "new List<(string, int)> { (Missing(), 0), (\"abc\", 1) }"
@@ -74,6 +89,7 @@ public static class Obj {
         let declaration = switch shape {
             case "target-typed": "List<(string, int)>"
             case "bare-array": "(string, int)[]"
+            case "interface-dictionary": "IEnumerable<KeyValuePair<int, (string, int)>>"
             default: "var"
         }
         let collection = switch shape {
@@ -83,7 +99,8 @@ public static class Obj {
         }
         let leaf = switch shape {
             case "nested": "row.Item1.Item1"
-            case "jagged-array": "row[0].Item1"
+            case "jagged-array" or "array-of-lists": "row[0].Item1"
+            case "interface-dictionary": "row.Value.Item1"
             default: "row.Item1"
         }
         let source = `using System.Collections.Generic;
@@ -134,8 +151,18 @@ public static class Obj {
     @InlineData("guarded-nullable")
     @InlineData("array")
     @InlineData("jagged-array")
+    @InlineData("array-copy")
     func Issue5880_WholeTupleRefStorage_PreservesCSharpOutput(shape string) {
         let source = switch shape {
+            case "array-copy": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 1) };
+        var copy = rows;
+        ref (string, int) alias = ref copy[0];
+        alias = (null!, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
             case "array": `public static class Obj {
     public static string Run() {
         var rows = new (string, int)[] { ("x", 1) };
@@ -288,6 +315,24 @@ public static class Obj {
 }`
         let printed = Translate(source)
         Assert.Contains("var ref alias (string, int32) = rows[0]", printed)
+        Assert.DoesNotContain("(string?, int32)", printed)
+    }
+
+    @Fact
+    func Issue5880_ArrayCopyRefStorage_PreservesFixedLeafContracts() {
+        const source = `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string, int)[] rows = { ("x", 1) };
+#nullable disable
+        (string, int)[] copy = rows;
+        ref (string, int) alias = ref copy[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var ref alias (string, int32) = copy[0]", printed)
         Assert.DoesNotContain("(string?, int32)", printed)
     }
 

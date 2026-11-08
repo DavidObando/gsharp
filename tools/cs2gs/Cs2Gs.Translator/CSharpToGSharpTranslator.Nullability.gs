@@ -576,16 +576,8 @@ partial class CSharpToGSharpTranslator {
             return this.PromoteTupleTypeArguments(mapped, returnType, symbol, path)
         }
 
-        // Issue #3641: `var prepared = new List<(string, byte[])>()` renders the
-        // CREATED type, not the local's declared type, so promoting only the
-        // declaration would leave the initializer's `List[(string, []uint8)]`
-        // unconvertible to the promoted `List[(string, []?uint8)]`. G# tuple
-        // types agree structurally: the construction that feeds a promoted sink
-        // has to be spelled with the same elements. The sink's own element paths
-        // are reused directly — the mapper walks the CREATED type's arguments,
-        // which coincide with the sink's for the covariant collection hand-offs
-        // this shape uses (`List<T>` stored as `IReadOnlyList<T>`) and simply ask
-        // an untainted key otherwise.
+        // Constructions retain their initializer evidence, including temporaries.
+        // Storage projections map tuple slots before the created type is rendered.
         private func PromoteCreationTupleArguments(
             type GTypeReference?,
             typeSymbol ITypeSymbol?,
@@ -594,11 +586,25 @@ partial class CSharpToGSharpTranslator {
             if type == nil || typeSymbol == nil {
                 return type
             }
-            let sink ISymbol? = this.ResolveValueSink(creation)
-            return if sink == nil {
+            let (sink, elementPosition) = this.ResolveArrayStorageSink(creation)
+            let prefix = elementPosition
+                .Split('.')
+                .SkipLast(1)
+                .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                .ToList()
+            let positions = ObliviousNullabilityAnalyzer.NullableTupleConstructionPositions(
+                this.context.Compilation,
+                creation,
+                typeSymbol,
+                sink,
+                prefix,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations
+            )
+            return if positions.Count == 0 {
                 type
             } else {
-                this.PromoteTupleTypeArguments(type, typeSymbol, sink, List[int32]())
+                PromoteNestedPositions(type, typeSymbol, positions, "")
             }
         }
 

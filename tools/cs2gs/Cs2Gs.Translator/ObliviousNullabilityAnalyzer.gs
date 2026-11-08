@@ -1404,6 +1404,88 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     internal func HasNestedTupleSlots(type ITypeSymbol?) bool -> NestedTupleSlots(type).Count != 0
 
+    // A construction owns value evidence even when no declaration receives it.
+    internal func NullableTupleConstructionPositions(
+        compilation CSharpCompilation,
+        value ExpressionSyntax,
+        valueType ITypeSymbol,
+        sink ISymbol?,
+        sinkPrefix IReadOnlyList[int32],
+        model SemanticModel,
+        siblings IReadOnlyList[CSharpCompilation]?
+    ) HashSet[string] {
+        let positions = HashSet[string](StringComparer.Ordinal)
+        let valueSlots = NestedTupleSlots(valueType)
+        if valueSlots.Count == 0 {
+            return positions
+        }
+        let direct = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
+        let tupleEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
+        let scalarEdges = List[(Target TupleElementKey, Source ISymbol)]()
+        CollectDeclarationTupleFlow(valueType, valueType, value, model, direct, tupleEdges, scalarEdges)
+        let AddPosition = func (key TupleElementKey) {
+            if IsEligibleTupleLeaf(TuplePositionType(valueType, key.ContractPath)) {
+                positions.Add(key.ContractPath)
+            }
+        }
+        for key in direct {
+            AddPosition(key)
+        }
+        for (target, source) in tupleEdges {
+            if IsTupleElementTainted(
+                compilation,
+                source.ContractSymbol,
+                source
+                    .ContractPath
+                    .Split('.')
+                    .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                    .ToList(),
+                siblings
+            ) {
+                AddPosition(target)
+            }
+        }
+        for (target, source) in scalarEdges {
+            if IsTainted(compilation, source, siblings) {
+                AddPosition(target)
+            }
+        }
+        if sink == nil {
+            return positions
+        }
+        let prefix = EncodeTuplePath(sinkPrefix)
+        let storageSlots = NestedTupleSlots(TuplePositionType(sink, prefix))
+        if valueSlots.Count != storageSlots.Count {
+            return positions
+        }
+        for var i = 0; i < valueSlots.Count; i++ {
+            if valueSlots[i].Tuple.TupleElements.Length != storageSlots[i].Tuple.TupleElements.Length {
+                return positions
+            }
+            let leaves = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
+            TaintAllTupleLeaves(valueType, valueSlots[i].Tuple, valueSlots[i].Path, leaves)
+            for leaf in leaves {
+                let relative = leaf.ContractPath.Substring(valueSlots[i].Path.Length)
+                let storagePath = storageSlots[i].Path + relative
+                let path = if prefix.Length == 0 {
+                    storagePath
+                } else {
+                    prefix + "." + storagePath
+                }
+                if IsDeclaredNullablePosition(TuplePositionType(sink, path)) ||
+                    IsTupleElementTainted(
+                    compilation,
+                    sink,
+                    path.Split('.').Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture)).ToList(),
+                    siblings
+                ) {
+                    positions.Add(leaf.ContractPath)
+                }
+            }
+        }
+        return positions
+    }
+
     internal func GetResultConversion(expression ExpressionSyntax?, model SemanticModel) IConversionOperation? {
         if expression == nil {
             return nil
@@ -4767,9 +4849,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) ISymbol? {
         if symbol == nil ||
             SymbolValueType(symbol) is not IArrayTypeSymbol arrayType ||
-            !arrayType
-            .ElementType
-            .IsReferenceType ||
+            (!arrayType.ElementType.IsReferenceType && !HasNestedTupleSlots(arrayType)) ||
             !visited.Add(symbol) {
             return nil
         }
@@ -6645,7 +6725,14 @@ internal shared class ObliviousNullabilityAnalyzer {
     )
 
     private func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
-        var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol
+        var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as ITypeSymbol
+        if path.Length == 0 {
+            return if requireTuple {
+                default(ITypeSymbol?)
+            } else {
+                type
+            }
+        }
         var crossesTuple = false
         for component in path.Split('.') {
             if type is IArrayTypeSymbol array && component == "0" {
@@ -8764,15 +8851,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         literal.IsKind(SyntaxKind.NullLiteralExpression)
 
     // `null` or `null!` (a SuppressNullableWarning over a null literal).
-    private func IsNullOrSuppressedNull(expression ExpressionSyntax) bool {
-        var expression = expression
-        if expression is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
-            SyntaxKind.SuppressNullableWarningExpression
-        ) {
-            expression = suppress.Operand
-        }
-        return IsNullLiteral(expression)
-    }
+    private func IsNullOrSuppressedNull(expression ExpressionSyntax) bool ->
+    IsNullLiteral(Unwrap(expression, unwrapSuppressions: true))
 
     private func ProjectTupleContractPosition(
         symbol ISymbol?,
