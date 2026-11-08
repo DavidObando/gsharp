@@ -8355,6 +8355,17 @@ internal partial class StatementBinder {
                 }
             }
         }
+        if syntax.Keyword?.Kind == SyntaxKind.ConstKeyword && convertedInitializer is {} constantInitializer {
+            let constantType = ConstantExpressionEvaluator.GetDeclarationType(constantInitializer, variableType)
+            if constantType != variableType {
+                variableType = constantType
+                convertedInitializer = conversions.BindConversion(
+                    syntax.Initializer?.Location ?? syntax.Identifier.Location,
+                    constantInitializer,
+                    variableType
+                )
+            }
+        }
         let variable VariableSymbol? = preDeclaredSelf ??
             bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, variableType, accessibility)
         // Issue #3316 (ADR-0159 follow-up (a)): a bare `chan T` slot without an
@@ -8510,9 +8521,8 @@ internal partial class StatementBinder {
             } else if (
                 declaredVariable is GlobalVariableSymbol ||
                     (
-                    convertedInitializer is not BoundFunctionLiteralExpression && Conversion.IsReferenceLikeTarget(
-                        declaredVariable.Type.StripToBareShape()
-                    )
+                    !LambdaBinder.TryGetFunctionLiteral(convertedInitializer, out _) &&
+                        Conversion.IsReferenceLikeTarget(declaredVariable.Type.StripToBareShape())
                 )
             ) &&
                 !(convertedInitializer is BoundErrorExpression) &&
@@ -11058,13 +11068,16 @@ internal partial class StatementBinder {
             }
             return value.Type == TypeSymbol.Null ||
                 value is BoundLiteralExpression{Value: nil} ||
-                value is BoundFieldAccessExpression{
-                Field: {IsConst: true, HasConstantValue: true, ConstantValue: nil}
-            } ||
-                value is BoundVariableExpression{
-                Variable: LocalVariableSymbol{IsConst: true, ConstantValue: nil} or
-                    GlobalVariableSymbol{IsConst: true, ConstantValue: nil}
-            } ||
+                (
+                value is BoundFieldAccessExpression field && ConstantExpressionEvaluator.IsNullConstantSymbol(
+                    field.Field
+                )
+            ) ||
+                (
+                value is BoundVariableExpression variable && ConstantExpressionEvaluator.IsNullConstantSymbol(
+                    variable.Variable
+                )
+            ) ||
                 (value is BoundDefaultExpression && IsNullDefault(value.Type))
         }
 

@@ -554,7 +554,7 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten literal expression.
     protected open func RewriteLiteralExpression(node BoundLiteralExpression) BoundExpression {
         return if ForceClone {
-            BoundLiteralExpression(node.Syntax, node.Value, node.Type)
+            BoundLiteralExpression(node.Syntax, node.Value, node.Type, node.ImportedConstantField)
         } else {
             node
         }

@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import System
+import System.Reflection
 
 /// Bound literal expression.
 class BoundLiteralExpression : BoundExpression {
@@ -22,9 +23,15 @@ class BoundLiteralExpression : BoundExpression {
     /// @param syntax The originating syntax.
     /// @param value The runtime value, or `null` for the `nil` literal.
     /// @param type The static type.
-    init(syntax SyntaxNode?, value object?, type TypeSymbol) : base(syntax) {
+    /// @param importedConstantField The imported field whose metadata supplied this value.
+    init(syntax SyntaxNode?, value object?, type TypeSymbol, importedConstantField FieldInfo? = nil) : base(syntax) {
         Value = value
         _type = type
+        ImportedConstantField = importedConstantField
+    }
+
+    internal prop ImportedConstantField FieldInfo? {
+        get;
     }
 
     /// ```xmldoc

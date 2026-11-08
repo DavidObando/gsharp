@@ -909,7 +909,7 @@ internal partial class ExpressionBinder {
                             } else {
                                 staticType
                             }
-                            return BoundLiteralExpression(nil, symbolicConstant, literalType)
+                            return BoundLiteralExpression(nil, symbolicConstant, literalType, symbolicLiteral)
                         }
                         return ConversionClassifier.AutoDereferenceRefReturn(
                             BoundClrPropertyAccessExpression(
@@ -928,7 +928,7 @@ internal partial class ExpressionBinder {
                         literal,
                         out var constantValue
                     ) {
-                        return BoundLiteralExpression(nil, constantValue, staticType)
+                        return BoundLiteralExpression(nil, constantValue, staticType, literal)
                     }
                     return ConversionClassifier.AutoDereferenceRefReturn(
                         BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)

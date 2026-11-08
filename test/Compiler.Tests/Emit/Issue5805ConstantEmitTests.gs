@@ -43,6 +43,7 @@ namespace ConstantImports;
 public static class Foreign {
     [DecimalConstant(2, 128, 0, 0, 75)] public static readonly decimal Signed;
     [DecimalConstant(2, 0, 0u, 0u, 75u)] public static readonly decimal Unsigned;
+    [DecimalConstant(2, 0, 0u, 0u, 75u)] public static readonly decimal Bare;
     [DecimalConstant(2, 0, 0u, 0u, 100u)] public static readonly decimal Scaled;
     [DecimalConstant(2, 128, 0, 0, 0)] public static readonly decimal SignedZero;
     public static readonly decimal NotConstant = 2m;
@@ -61,16 +62,38 @@ public static class Foreign {
 import System
 import System.Globalization
 import ConstantImports
+import ConstantImports.Foreign
 const Signed decimal = Foreign.Signed
 const Unsigned decimal = Foreign.Unsigned
 const Wide decimal = Foreign.Wide
 const Scaled decimal = Foreign.Scaled
 const SignedZero decimal = Foreign.SignedZero
+func QualifiedLoop() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    if text == nil { return 0 }
+    for var i = 0; i < 1; i++ {
+        let amount = Foreign.Signed
+        return text.Length
+    }
+    return 0
+}
+func BareLoop() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    if text == nil { return 0 }
+    for var i = 0; i < 1; i++ {
+        let amount = Bare
+        return text.Length
+    }
+    return 0
+}
 Console.WriteLine(Signed == -0.75m && Unsigned == 0.75m && Wide == decimal.MaxValue)
 Console.WriteLine(Scaled.ToString(CultureInfo.InvariantCulture))
 Console.WriteLine(decimal.GetBits(SignedZero)[3])
+Console.WriteLine(QualifiedLoop() + BareLoop())
 `, references: []string{path})
-            Assert.Equal("True|1.00|-2147352576", program.Run())
+            Assert.Equal("True|1.00|-2147352576|4", program.Run())
             let rejected = Assert.ThrowsAny[Exception](
                 () -> {
                     using let invalid = Compile(

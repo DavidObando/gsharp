@@ -76,6 +76,48 @@ Read(nil)
     }
 
     @Theory
+    @InlineData("P.Nil")
+    @InlineData("Local")
+    @InlineData("Global")
+    func NullPatternInLoop_DoesNotInvalidateClosureAssignedNarrowing(pattern string) {
+        let result = EmittedOracle.Evaluate(`
+class C {}
+class P { public const Nil C? = nil }
+func Read(value object?) int32 {
+    const Local C? = nil
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    if text == nil { return 0 }
+    for var i = 0; i < 1; i++ {
+        let matches = value is (PATTERN)
+        return text.Length
+    }
+    return 0
+}
+const Global C? = nil
+Read(nil)
+`.Replace("PATTERN", pattern))
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("2", result.ValueText)
+    }
+
+    @Fact
+    func ConstFunctionLiteral_ConvertedToNamedDelegate_KeepsItsBinding() {
+        let result = EmittedOracle.Evaluate(`
+delegate D() void;
+func Read() int32 {
+    var count int32 = 0
+    const F D = func() void { count += 1 }
+    F()
+    return count
+}
+Read()
+`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("1", result.ValueText)
+    }
+
+    @Theory
     @InlineData("MaxValue", "79228162514264337593543950335")
     @InlineData("MinValue", "-79228162514264337593543950335")
     @InlineData("Zero", "0")
@@ -130,6 +172,7 @@ Read()
     @Theory
     @InlineData("func Read() int32 {\n    const Nil C = nil\n    return Nil.Number\n}\nRead()")
     @InlineData("func Read() int32 {\n    const Nil C = default\n    return Nil.Number\n}\nRead()")
+    @InlineData("func Read() int32 {\n    const Nil C = default(C?) ?? default(C)\n    return Nil.Number\n}\nRead()")
     @InlineData("class P {\n    public const First C = Last\n    public const Last C = nil\n}\nP.First.Number")
     func NullConstants_DoNotEstablishNonNullReceiverTypes(source string) {
         let result = EmittedOracle.Evaluate("class C {\n    prop Number int32 -> 1\n}\n" + source)

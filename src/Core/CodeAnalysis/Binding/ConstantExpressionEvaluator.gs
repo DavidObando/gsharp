@@ -83,6 +83,15 @@ internal shared class ConstantExpressionEvaluator {
         }
     }
 
+    /// Returns whether the symbol has a known null constant payload.
+    internal func IsNullConstantSymbol(symbol Symbol?) bool -> switch symbol {
+        case FieldSymbol{IsConst: true, HasConstantValue: true, ConstantValue: nil}: true
+        case LocalVariableSymbol{IsConst: true, ConstantValue: nil}: true
+        case GlobalVariableSymbol{IsConst: true, ConstantValue: nil}: true
+        case ImplicitStaticFieldVariableSymbol field: IsNullConstantSymbol(field.Field)
+        default: false
+    }
+
     /// Reads CLR constant metadata without running a field initializer.
     /// @param field The imported field.
     /// @param value The constant value on success.
