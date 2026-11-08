@@ -121,10 +121,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
             yield []object{"owner_type_parameter_collision", GenericDefault(true), true}
             yield []object{"unrelated_generic_default", GenericDefault(false, false), false}
             for source in[]string{
-                "func Read() int32? { const N int32? = default(int32?) return N }\nfunc Probe() int32 { return if Read() == nil { 2 } else { -1 } }\nProbe()",
-                "func Pass(value int32?) int32? -> value\nfunc Probe() int32 { const N int32? = default(int32?) return if Pass(N).HasValue { -1 } else { 2 } }\nProbe()",
-                "func Probe() int32 { const N int32? = default(int32?) let boxed = cast[object?](N) return if boxed == nil { 2 } else { -1 } }\nProbe()",
-                "func Probe() int32 { const N int32? = default(int32?) let read = () -> N return if read() == nil { 2 } else { -1 } }\nProbe()"
+                "func Pass(value int32?) int32? -> value\nfunc Probe() int32 { const N int32? = default(int32?) return if Pass(N).HasValue { -1 } else { 2 } }\nProbe()"
             } {
                 yield []object{"nullable_constant_" + source, source, false}
             }

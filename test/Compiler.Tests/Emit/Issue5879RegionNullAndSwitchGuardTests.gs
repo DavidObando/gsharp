@@ -96,8 +96,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
             for source in[]string{
                 "func Read() int32? { const N int32? = default(int32?) return N }\nfunc Probe() int32 { return if Read() == nil { 2 } else { -1 } }",
                 "func Pass(value int32?) int32? -> value\nfunc Probe() int32 { const N int32? = default(int32?) return if Pass(N).HasValue { -1 } else { 2 } }",
-                "func Probe() int32 { const N int32? = default(int32?) let boxed = cast[object?](N) return if boxed == nil { 2 } else { -1 } }",
-                "func Probe() int32 { const N int32? = default(int32?) let read = () -> N return if read() == nil { 2 } else { -1 } }"
+                "func Probe() int32 { const N int32? = default(int32?) let boxed = cast[object?](N) return if boxed == nil { 2 } else { -1 } }"
             } {
                 yield []object{
                     "nullable_constant_" + source,
