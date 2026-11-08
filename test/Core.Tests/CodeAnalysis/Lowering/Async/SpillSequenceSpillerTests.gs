@@ -18,6 +18,43 @@ import Xunit
 /// bound trees directly (no parsing) and verify the structural shape of the
 /// spilled output.
 open class SpillSequenceSpillerTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func AddressOfInlineAwait_PreservesSafetyProvenance(unmanaged bool, readOnly bool) {
+        let syntax = SyntaxTree.Parse("var value = 0").Root
+        let variable = LocalVariableSymbol("value", false, TypeSymbol.Int32)
+        let operand = BoundBlockExpression(
+            syntax,
+            ImmutableArray.Create[BoundStatement](
+                BoundExpressionStatement(
+                    nil,
+                    BoundAwaitExpression(nil, BoundLiteralExpression(nil, 0), TypeSymbol.Int32)
+                )
+            ),
+            BoundVariableExpression(nil, variable)
+        )
+        let address = BoundAddressOfExpression(syntax, operand, unmanaged, readOnly){FixedBufferEscapeSyntax = syntax}
+        let resultVariable = LocalVariableSymbol("result", false, address.Type)
+        let body = BoundBlockStatement(
+            nil,
+            ImmutableArray.Create[BoundStatement](BoundVariableDeclaration(nil, resultVariable, address))
+        )
+        let result = SpillSequenceSpiller.Rewrite(body)
+        let rebuilt = Assert.IsType[BoundAddressOfExpression](
+            Assert.IsType[BoundVariableDeclaration](result.Statements[^1]).Initializer
+        )
+        Assert.NotSame(address.Operand, rebuilt.Operand)
+        Assert.Same(variable, Assert.IsType[BoundVariableExpression](rebuilt.Operand).Variable)
+        Assert.Equal(address.Type, rebuilt.Type)
+        Assert.Equal(unmanaged, rebuilt.IsUnmanaged)
+        Assert.Equal(readOnly, rebuilt.IsReadOnly)
+        Assert.Same(syntax, rebuilt.Syntax)
+        Assert.Same(syntax, rebuilt.FixedBufferEscapeSyntax)
+    }
+
     @Fact
     func ConditionalReferenceResult_UsesTypePreservingDefault() {
         let referenceType = TypeSymbol.FromClrType(typeof(object))

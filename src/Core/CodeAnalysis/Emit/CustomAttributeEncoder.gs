@@ -355,6 +355,72 @@ internal class CustomAttributeEncoder {
         this.EmitTupleElementNamesAttribute(eventHandle, type)
     }
 
+    /// Issue #4996: emits a `[Nullable]` attribute on a `TypeDef` row for its
+    /// base type's type arguments when any position deviates from the enclosing
+    /// non-null context.
+    /// @param typeHandle The TypeDef row to attach the attribute to.
+    /// @param baseType The declared base type, if any.
+    func EmitNullableAttributeOnType(typeHandle TypeDefinitionHandle, baseType TypeSymbol?) {
+        if baseType == nil {
+            return
+        }
+        let flags = NullableFlagsBuilder.Build(baseType)
+        if ShouldEmitRelationshipNullable(baseType, flags) {
+            this.EmitNullableAttributeOnEntity(typeHandle, flags)
+        }
+        this.EmitTupleElementNamesAttribute(typeHandle, baseType)
+    }
+
+    /// Issue #4996: emits a `[Nullable]` attribute on an `InterfaceImpl` row
+    /// when any position deviates from the enclosing non-null context.
+    /// @param interfaceImplHandle The InterfaceImpl row to attach the attribute to.
+    /// @param interfaceType The implemented interface type, if any.
+    func EmitNullableAttributeOnInterfaceImpl(
+        interfaceImplHandle InterfaceImplementationHandle,
+        interfaceType TypeSymbol?
+    ) {
+        if interfaceType == nil {
+            return
+        }
+        let flags = NullableFlagsBuilder.Build(interfaceType)
+        if ShouldEmitRelationshipNullable(interfaceType, flags) {
+            this.EmitNullableAttributeOnEntity(interfaceImplHandle, flags)
+        }
+        this.EmitTupleElementNamesAttribute(interfaceImplHandle, interfaceType)
+    }
+
+    /// Issue #4996: emits a `[Nullable]` attribute on a
+    /// `GenericParamConstraint` row when any position deviates from the
+    /// enclosing non-null context.
+    /// @param constraintHandle The GenericParamConstraint row to attach the attribute to.
+    /// @param constraintType The declared constraint type, if any.
+    func EmitNullableAttributeOnGenericParamConstraint(
+        constraintHandle GenericParameterConstraintHandle,
+        constraintType TypeSymbol?
+    ) {
+        if constraintType == nil {
+            return
+        }
+        let flags = NullableFlagsBuilder.Build(constraintType)
+        if ShouldEmitRelationshipNullable(constraintType, flags) {
+            this.EmitNullableAttributeOnEntity(constraintHandle, flags)
+        }
+        this.EmitTupleElementNamesAttribute(constraintHandle, constraintType)
+    }
+
+    /// Issue #4996: emits a `[Nullable]` attribute on a `GenericParam` row for
+    /// the type parameter's own nullability (`class?` and unconstrained `T` vs
+    /// `class` / `notnull`).
+    /// @param paramHandle The GenericParam row to attach the attribute to.
+    /// @param tp The declared type-parameter symbol.
+    func EmitNullableAttributeOnGenericParam(paramHandle GenericParameterHandle, tp TypeParameterSymbol) {
+        if tp.RequiresNullableGenericParamAttribute {
+            this.EmitNullableAttributeOnEntity(paramHandle, ImmutableArray.Create(NullableFlagsBuilder.Annotated))
+        } else if tp.RequiresNotNullGenericParamAttribute {
+            this.EmitNullableAttributeOnEntity(paramHandle, ImmutableArray.Create(NullableFlagsBuilder.NotAnnotated))
+        }
+    }
+
     /// Issue #4988: stamps a method signature's nullability exactly as
     /// [`plan`](paramref) decided it — the method-level
     /// `[NullableContext]`, then a `[Nullable]` on each Param row whose
@@ -1568,6 +1634,33 @@ internal class CustomAttributeEncoder {
         internal func ShouldEmitPerPositionNullable(
             flags ImmutableArray[uint8]
         ) bool -> MethodNullabilityPlan.NeedsAttribute(flags, NullableFlagsBuilder.NotAnnotated)
+
+        internal func ShouldEmitRelationshipNullable(type TypeSymbol, flags ImmutableArray[uint8]) bool {
+            if flags.IsDefaultOrEmpty {
+                return false
+            }
+            for flag in flags {
+                if flag == NullableFlagsBuilder.Annotated {
+                    return true
+                }
+            }
+            return ContainsPlatformPosition(type)
+        }
+
+        private func ContainsPlatformPosition(type TypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type is PlatformTypeSymbol {
+                return true
+            }
+            for element in type.GetElementPositions() {
+                if ContainsPlatformPosition(element) {
+                    return true
+                }
+            }
+            return false
+        }
 
         private func GetSubstitutedConstructorParameters(
             attributeType StructSymbol,

@@ -229,7 +229,7 @@ Items found by the dry run that the plan did not list:
 | Teach the extension-based CI scripts `.gsproj` | `build/generate-ci-test-matrix.py` accepts only `*.tests.csproj` (it exits "Missing sharded test projects" on the migrated tree). Name rewriting cannot reach it; `EXTENSION_FIXES` patches it and the stage runs the matrix generator as a check. Other scripts that list `*.csproj` (`run-cs2gs-selfmig-pr-guard.sh`) are retired in Phase 4. | 2c |
 | Reformat with `gsfmt --write` | The plan expected `gsfmt --check` clean. After polish it is not: 394 of 4,350 `.gs` files re-wrap (#4858). The script writes them and requires a clean re-check; commit the result as its own commit. | gsfmt stage |
 | Keep the pin to the published artefacts | A source build of the C# solution (which `capture-test-oracle` triggers) packs `Gsharp.NET.Sdk.<v>-g<sha>` and `GSharp.CodeAnalysis.Analyzers.Testing.<v>-g<sha>`; a tool without `--sdk-version` then pins the whole tree to them (#4849). The script deletes every source-built copy before translating. | translate |
-| Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project. | 8 |
+| Regenerate `packages.lock.json` | Established from the mirror: the 35 translated product projects (src, test, tools) DO carry a `packages.lock.json`, copied from their C# projects, while samples and templates never had one. The copies are stale for the `.gsproj` projects: the locked-mode restore CI uses fails with NU1004 on the first test project (#4851). `GSharpProjectTransformer` now prunes suppressed `ReferenceOutputAssembly="false"` project entries from mirrored lock files, and `SdkCompileRunner.BuildMirroredBuildArguments` passes `-p:RestoreForceEvaluate=true` and `-p:RestoreLockedMode=false` so mirrored SDK builds re-evaluate lock files in place. | 8 |
 | Retain untranslated C# the mirror lacks | Since #4850 the mirror carries `ForeignCompile` and the fixtures, so nothing is expected; any tracked `.cs` with no mirror twin is retained, listed, and fails the step for review. | assemble |
 
 ## Validation sequence (what the script runs)
@@ -258,8 +258,12 @@ name parity against the tag's last C# nightly TRX files, the stage-2 job.
 those `.cs` files are gone from the tree, so the PR CI must check out the final C# commit (the
 `v0.4.NNNN` tag, or `cs2gs/csharp-0.4`) into a second directory and export that variable, or the
 tests must be rewritten or retired first (gate criterion 9). Do not rely on the migrated tree
-providing them. The checkout alone is not enough: the variable also locates the built toolchain, so the
-cut-over `build.yml` builds the checked-out C# solution before the `Cs2Gs.Tests` shards run.
+providing them. At the cut-over, `CS2GS_TEST_SOURCE_ROOT` also had to hold `out/bin/<Config>/nupkgs`
+until `GsharpTestProjectRunner` was updated (#4896) to fall back to the running G# checkout's built
+packages when `CS2GS_TEST_SOURCE_ROOT` is an unbuilt C# source checkout (restored for MSBuildWorkspace
+package resolution, without a C# build).
+The source checkout can stay read-only. The helpers stage packages in
+`AppContext.BaseDirectory/.cs2gs-local-feed` and use that same feed in generated compilation and test NuGet configuration.
 
 ## Rollback
 

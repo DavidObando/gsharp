@@ -214,12 +214,13 @@ open partial class TypeSymbol : Symbol {
             if currentClrType.IsSZArray && ClrNullability.ContainsFunctionPointer(clrType) {
                 return SliceTypeSymbol.Get(FromClrType(clrType.GetElementType()))
             }
-            // Issue #1922: a `System.ValueTuple<...>`/`System.Tuple<...>` CLR type
+            // Issue #1922 / #4401: a `System.ValueTuple<...>` CLR type
             // reaching here (e.g. the element type of `for x in list` over an
             // imported `List[(T1, T2)]`, resolved via reflection rather than
             // parsed from G# tuple-literal syntax) must map back onto GSharp's own
             // `TupleTypeSymbol` — not a plain `ImportedTypeSymbol` — so downstream
             // binders (deconstruction, member access) recognize it as a tuple.
+            // `System.Tuple<...>` is a reference type and stays an `ImportedTypeSymbol`.
             // Issue #2750: canonical Rest-chained arity-8+ shapes are flattened
             // back into the source-level positional tuple symbol.
             if TryGetTupleTypeSymbol(clrType, out var tupleTypeSymbol) {
@@ -1954,10 +1955,11 @@ open partial class TypeSymbol : Symbol {
             @NotNullWhen(true) out tupleTypeSymbol TupleTypeSymbol?
         ) bool -> TryGetTupleTypeSymbol(clrType, out tupleTypeSymbol)
 
-        /// Issue #1922: recognizes a closed generic `System.ValueTuple<...>`
-        /// or `System.Tuple<...>` CLR type and maps it onto the equivalent
+        /// Issue #1922 / #4401: recognizes a closed generic `System.ValueTuple<...>`
+        /// CLR type and maps it onto the equivalent
         /// flat (cref:TupleTypeSymbol), including canonical arity-8+
-        /// `TRest` nesting.
+        /// `TRest` nesting. `System.Tuple<...>` is a reference type and stays an
+        /// (cref:ImportedTypeSymbol).
         /// @param clrType The candidate CLR type.
         /// @param tupleTypeSymbol The resulting tuple symbol, if matched.
         /// @returns `true` if [`clrType`](paramref) is a supported tuple shape.
@@ -1983,9 +1985,7 @@ open partial class TypeSymbol : Symbol {
                 return false
             }
             let definitionName = clrType.UnderlyingSystemType.GetGenericTypeDefinition().FullName
-            let isValueTuple = definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
-            let isReferenceTuple = definitionName?.StartsWith("System.Tuple`", StringComparison.Ordinal) == true
-            if !isValueTuple && !isReferenceTuple {
+            if definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true {
                 return false
             }
             let arguments = clrType.GetGenericArguments()

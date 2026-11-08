@@ -18,17 +18,44 @@ import Xunit
 /// unverifiable (ilverify `InitOnly` "Cannot change initonly field outside
 /// its .ctor"). The runtime JIT accepts it but the IL is invalid.
 ///
-/// The fix teaches BOTH mirrored receiver-addressability predicates
-/// (`MethodBodyEmitter.IsAddressableFieldAccess` and
-/// `ReflectionMetadataEmitter.IsAddressableFieldAccessForReceiverSpill`) to
-/// treat a static readonly value-type field as NOT addressable outside its
-/// declaring type's `.cctor`, so the existing rvalue-receiver-spill
-/// machinery performs a defensive copy (`ldsfld; stloc; ldloca; call`) —
-/// exactly as C# does.
+/// Receiver emission and spill planning use
+/// `ReflectionMetadataEmitter.IsAddressableReceiverStorage` to reject illegal static-readonly addresses.
+/// The query follows user/CLR fields, tuple elements, blocks, and conditional storage.
+/// Non-addressable receivers use the planned copy (`ldsfld; stloc; ldloca; call`).
 ///
 /// Each test uses a UNIQUE package/type name because the in-process
 /// `FunctionTypeSymbol` cache is name-keyed.
 open class Issue1525StaticReadonlyFieldReceiverEmitTests {
+    @Theory
+    @InlineData("direct", "HOLDER.Span.Ticks", "0")
+    @InlineData("block", "({ HOLDER.Touch()\n HOLDER.Span }).Ticks", "1")
+    @InlineData("field", "HOLDER.Range.Span.Ticks", "0")
+    @InlineData("fieldblock", "({ HOLDER.Touch()\n HOLDER.Range }).Span.Ticks", "1")
+    @InlineData("resultblock", "({ HOLDER.Touch()\n HOLDER.Range.Span }).Ticks", "1")
+    @InlineData("clrfield", "HOLDER.Pair.Item1.Ticks", "0")
+    @InlineData("clrblock", "({ HOLDER.Touch()\n HOLDER.Pair }).Item1.Ticks", "1")
+    func ReadonlyClrMember_StaticLetStorage_VerifiesAndRuns(tag string, expression string, touches string) {
+        let source = ("package i1525readonly" + tag + `
+import System
+struct RANGE { var Span TimeSpan }
+class HOLDER {
+    func Compute() int64 -> ` + expression + `
+    shared {
+        private let Span TimeSpan = TimeSpan(1234567)
+        private let Range RANGE = RANGE{Span: TimeSpan(1234567)}
+        private let Pair ValueTuple[TimeSpan, int32] = ValueTuple[TimeSpan, int32](TimeSpan(1234567), 0)
+        private var Calls int32 = 0
+        func Touch() { Calls += 1 }
+        func Count() int32 -> Calls
+    }
+}
+func Main() {
+    Console.WriteLine(HOLDER().Compute())
+    Console.WriteLine(HOLDER.Count())
+}`).Replace("HOLDER", "Holder1525readonly" + tag).Replace("RANGE", "Range1525readonly" + tag)
+        Assert.Equal("1234567${Environment.NewLine}$touches${Environment.NewLine}", CompileAndRun(source))
+    }
+
     @Fact
     func EndToEnd_UserStruct_StaticReadonly_InstanceMethod_VerifiesAndRuns() {
         const source = `package i1525userstruct

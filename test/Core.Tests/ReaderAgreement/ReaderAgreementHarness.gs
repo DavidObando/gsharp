@@ -984,17 +984,10 @@ internal class ReaderAgreementHarness {
 
         /// Facts about a position that an allowlist entry can match on, so an entry
         /// excuses one known cause rather than one reader everywhere.
-        /// - `system-tuple`: the position mentions the reference type `System.Tuple<…>`.
         /// - `concrete-array-or-tuple`: the position contains an array or `ValueTuple` that mentions no type
         /// parameter.
         /// - `optional-null-default`: a reference parameter with a `null` default.
         private func Tags(openType Type, position Position, shapes IReadOnlyList[string]) ImmutableArray[string] {
-            let IsSystemTuple = func (type Type) bool {
-                return type.IsGenericType && GenericDefinitionName(type).StartsWith(
-                    "System.Tuple`",
-                    StringComparison.Ordinal
-                )
-            }
             let IsConcreteArrayOrValueTuple = func (type Type) bool {
                 return !type.ContainsGenericParameters &&
                     (
@@ -1022,9 +1015,6 @@ internal class ReaderAgreementHarness {
             // cannot excuse an unrelated drift elsewhere in the same position.
             let differing = DifferingPaths(shapes)
             let tags = ImmutableArray.CreateBuilder[string]()
-            if AllWithin(differing, NodePaths(openType, IsSystemTuple)) {
-                tags.Add("system-tuple")
-            }
             if AllWithin(differing, NodePaths(openType, IsConcreteArrayOrValueTuple)) {
                 tags.Add("concrete-array-or-tuple")
             }
@@ -1064,12 +1054,9 @@ internal class ReaderAgreementHarness {
                 let arguments = current.GetGenericArguments().ToList()
                 let name = GenericDefinitionName(current)
                 if arguments.Count == 8 &&
-                    (name is "System.ValueTuple`8" or "System.Tuple`8") &&
+                    name == "System.ValueTuple`8" &&
                     arguments[7].IsGenericType &&
-                    (
-                    GenericDefinitionName(arguments[7]).StartsWith("System.ValueTuple`", StringComparison.Ordinal) ||
-                        GenericDefinitionName(arguments[7]).StartsWith("System.Tuple`", StringComparison.Ordinal)
-                ) {
+                    GenericDefinitionName(arguments[7]).StartsWith("System.ValueTuple`", StringComparison.Ordinal) {
                     let rest = arguments[7]
                     arguments.RemoveAt(7)
                     arguments.AddRange(Children(rest))

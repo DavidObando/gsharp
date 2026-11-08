@@ -89,7 +89,7 @@ return 3`, 3, "top-return\n")}
                     } else {
                         output
                     }
-                    yield[]object{name, source, driver, exitCode, standardOutput}
+                    yield []object{name, source, driver, exitCode, standardOutput}
                 }
             }
         }

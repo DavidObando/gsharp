@@ -300,7 +300,7 @@ public class Box<T>
             // and the widened #2735 guard is what stops the CLR-assignability
             // fallback from readmitting it. Removing any one of the three makes
             // this row green again.
-            yield[]object{"a-slice-generic-does-not-reach-a-fixed-array-generic", `package P
+            yield []object{"a-slice-generic-does-not-reach-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -318,7 +318,7 @@ main2()`, "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'Sy
             // directions must be refused, because `List` is invariant in `T` and
             // these are two distinct arguments — the same reason #3962 gives for
             // `[3]` against `[4]`.
-            yield[]object{"a-fixed-array-generic-does-not-reach-a-slice-generic", `package P
+            yield []object{"a-fixed-array-generic-does-not-reach-a-slice-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -332,7 +332,7 @@ func main2() {
 main2()`, "Cannot convert type 'System.Collections.Generic.List[[3]int32]' to 'System.Collections.Generic.List[[]int32]'"}
             // At a PARAMETER rather than a declared local, so the diagnostic comes
             // from applicability (GS0154) rather than from assignment (GS0155).
-            yield[]object{"a-slice-generic-does-not-fill-a-fixed-array-generic-parameter", `package P
+            yield []object{"a-slice-generic-does-not-fill-a-fixed-array-generic-parameter", `package P
 import System
 import System.Collections.Generic
 
@@ -351,7 +351,7 @@ main2()`, "requires a value of type 'System.Collections.Generic.List[[3]int32]' 
             // (`TryResolveClrConstructionTypeArgs`) on the argument side — the
             // argument is a bare `List[[3]int32]()`, never assigned to a declared
             // local, so `Binder.ProjectGenericArgument` never sees it.
-            yield[]object{"a-constructed-fixed-array-generic-does-not-fill-a-slice-generic-parameter", `package P
+            yield []object{"a-constructed-fixed-array-generic-does-not-fill-a-slice-generic-parameter", `package P
 import System
 import System.Collections.Generic
 
@@ -366,7 +366,7 @@ func main2() {
 main2()`, "requires a value of type 'System.Collections.Generic.List[[]int32]' but was given a value of type 'System.Collections.Generic.List[[3]int32]'"}
             // NESTING. `ContainsSourceArrayShape` recurses exactly as
             // `ContainsFixedLengthArray` does, so the shape is seen at any depth.
-            yield[]object{"a-nested-slice-generic-does-not-reach-a-nested-fixed-array-generic", `package P
+            yield []object{"a-nested-slice-generic-does-not-reach-a-nested-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -382,7 +382,7 @@ func main2() {
 main2()`, "List[System.Collections.Generic.List[[]int32]]"}
             // The shape may be nested inside ANOTHER array spelling — `[][]T`
             // against `[][3]T` — which the recursion also covers.
-            yield[]object{"a-slice-of-slices-does-not-reach-a-slice-of-fixed-arrays", `package P
+            yield []object{"a-slice-of-slices-does-not-reach-a-slice-of-fixed-arrays", `package P
 import System
 import System.Collections.Generic
 
@@ -397,7 +397,7 @@ func main2() {
 main2()`, "requires a value of type 'System.Collections.Generic.List[[][3]int32]' but was given a value of type 'System.Collections.Generic.List[[][]int32]'"}
             // A MULTI-ARGUMENT generic, where the array shape is only the second
             // argument — the gate is per-argument, not per-type.
-            yield[]object{"a-slice-value-argument-does-not-reach-a-fixed-array-value-argument", `package P
+            yield []object{"a-slice-value-argument-does-not-reach-a-fixed-array-value-argument", `package P
 import System
 import System.Collections.Generic
 
@@ -413,7 +413,7 @@ main2()`, "Cannot convert type 'System.Collections.Generic.Dictionary[string, []
             // (`ExpressionBinder.Access` generic-name resolution) is its own
             // retention gate and needed its own widening — this row is green
             // without it, even with the other three in place.
-            yield[]object{"a-qualified-slice-construction-does-not-reach-a-fixed-array-generic", `package P
+            yield []object{"a-qualified-slice-construction-does-not-reach-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -428,7 +428,7 @@ main2()`, "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'Sy
             // the fourth gate. Without its widening `EqualityComparer[[]int32].Default`
             // is exposed as a metadata-only `EqualityComparer<int32[]>` and rides
             // the metadata leniency into a `[3]int32` slot.
-            yield[]object{"a-static-slice-receiver-does-not-reach-a-fixed-array-generic", `package P
+            yield []object{"a-static-slice-receiver-does-not-reach-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -448,7 +448,7 @@ main2()`, "requires a value of type 'System.Collections.Generic.EqualityComparer
             // conversion, where `[3]int32` to `[]int32` is implicit (see the
             // `bare-fixed-array-still-widens-to-a-slice` control): a generic's
             // type argument is matched by identity, not by convertibility.
-            yield[]object{"a-slice-generic-does-not-reach-a-variant-fixed-array-interface", `package P
+            yield []object{"a-slice-generic-does-not-reach-a-variant-fixed-array-interface", `package P
 import System
 import System.Collections.Generic
 
@@ -474,7 +474,7 @@ main2()`, "requires a value of type 'System.Collections.Generic.IEnumerable[[3]i
             // `IsRejectedFixedArrayShapeMismatch` predicate draws it. Both docs
             // state this rule explicitly; this row is what makes the statement
             // true.
-            yield[]object{"a-fixed-array-generic-does-not-reach-a-variant-slice-interface", `package P
+            yield []object{"a-fixed-array-generic-does-not-reach-a-variant-slice-interface", `package P
 import System
 import System.Collections.Generic
 
@@ -508,7 +508,7 @@ main2()`, "requires a value of type 'System.Collections.Generic.IEnumerable[[]in
             // correction. Note what did NOT move with it: the INDEXER — see
             // `a-slice-generics-indexer-still-surfaces-the-erased-element` in
             // <see cref="AcceptedCases"/>.
-            yield[]object{"a-slice-generics-method-return-follows-the-retained-slice", `package P
+            yield []object{"a-slice-generics-method-return-follows-the-retained-slice", `package P
 import System
 import System.Collections.Generic
 
@@ -536,7 +536,7 @@ main2()`, "Cannot convert type '[]int32' to '[3]int32'"}
             // indistinguishable from a metadata-recovered list, so the leniency
             // carve-out let it fill a `List[[3]int32]` slot. Exactly this issue's
             // hole, one route over.
-            yield[]object{"a-generic-factory-return-over-a-slice-does-not-reach-a-fixed-array-generic", `package P
+            yield []object{"a-generic-factory-return-over-a-slice-does-not-reach-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -558,7 +558,7 @@ main2()`, "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'Sy
         func AcceptedCases() sequence[[]object] {
             // The base case: one spelling is one type, assignable to itself and
             // usable through a parameter, with the element still a slice.
-            yield[]object{"a-slice-generic-is-one-type", `package P
+            yield []object{"a-slice-generic-is-one-type", `package P
 import System
 import System.Collections.Generic
 
@@ -579,7 +579,7 @@ main2()`, []string{"1", "4"}}
             // `TryGetValue`'s `out` slot, the indexer, and `Count` all come back
             // exactly as they did before retention, because
             // `HasSubstitutableTypeArgument` is still false for `List[[]T]`.
-            yield[]object{"a-slice-value-argument-keeps-its-member-slots", `package P
+            yield []object{"a-slice-value-argument-keeps-its-member-slots", `package P
 import System
 import System.Collections.Generic
 
@@ -600,7 +600,7 @@ main2()`, []string{"3", "1"}}
             // symbolic vector where it carried none: `ToArray`, a LINQ `Select`
             // over a `[]int32` lambda parameter, and the copy CONSTRUCTOR
             // `List[[]int32](IEnumerable[[]int32])`.
-            yield[]object{"inference-still-works-against-a-retained-slice-receiver", `package P
+            yield []object{"inference-still-works-against-a-retained-slice-receiver", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -625,7 +625,7 @@ main2()`, []string{"2", "5", "2"}}
             // being built while conversions run. This is the shape a projection
             // reaching a CONSTRAINT would break; it round-trips through a field and
             // two methods.
-            yield[]object{"a-same-compilation-generic-over-a-slice-round-trips", `package P
+            yield []object{"a-same-compilation-generic-over-a-slice-round-trips", `package P
 import System
 import System.Collections.Generic
 
@@ -655,7 +655,7 @@ main2()`, []string{"5"}}
             // `ContainsFixedLengthArray`. This is the boundary, stated as a
             // running program: retention makes the two INSTANTIATIONS distinct
             // without touching what a member slot accepts.
-            yield[]object{"a-fixed-array-still-fills-a-slice-generics-member-slot", `package P
+            yield []object{"a-fixed-array-still-fills-a-slice-generics-member-slot", `package P
 import System
 import System.Collections.Generic
 
@@ -680,7 +680,7 @@ main2()`, []string{"1", "3"}}
             // lose changed sides. Kept as a running row anyway, because it is the
             // sibling of #3962's `nullable-reference-element-inside-a-fixed-array`
             // and the pair reads as one rule.
-            yield[]object{"a-nullable-reference-element-inside-a-slice-survives", `package P
+            yield []object{"a-nullable-reference-element-inside-a-slice-survives", `package P
 import System
 import System.Collections.Generic
 
@@ -698,7 +698,7 @@ func main2() {
 main2()`, []string{"1", "2", "x"}}
             // The static-receiver gate's own green row: retaining the argument
             // must not break the receiver it closes.
-            yield[]object{"a-static-slice-receiver-still-works", `package P
+            yield []object{"a-static-slice-receiver-still-works", `package P
 import System
 import System.Collections.Generic
 
@@ -716,7 +716,7 @@ main2()`, []string{"True", "True"}}
             // a slice. `HasSubstitutableTypeArgument` gates the for-in enumerable
             // path, and it is still false here — this row proves that path did not
             // change under it.
-            yield[]object{"iteration-over-a-slice-generic-still-yields-slices", `package P
+            yield []object{"iteration-over-a-slice-generic-still-yields-slices", `package P
 import System
 import System.Collections.Generic
 
@@ -735,7 +735,7 @@ func main2() {
 main2()`, []string{"5"}}
             // COVARIANCE over the SAME argument still widens. The variance guard
             // rejects a shape MISMATCH, not variance itself.
-            yield[]object{"a-slice-generic-still-widens-to-its-own-variant-interface", `package P
+            yield []object{"a-slice-generic-still-widens-to-its-own-variant-interface", `package P
 import System
 import System.Collections.Generic
 
@@ -764,7 +764,7 @@ main2()`, []string{"5"}}
             // cannot; this row is the running proof, and it exercises the
             // constrained member (`tag.Size()`, a `constrained. callvirt`) and the
             // slice payload on the same instantiation.
-            yield[]object{"a-retained-slice-does-not-disturb-a-sibling-constraint", `package P
+            yield []object{"a-retained-slice-does-not-disturb-a-sibling-constraint", `package P
 import System
 import System.Collections.Generic
 
@@ -812,7 +812,7 @@ main2()`, []string{"7", "3"}}
             // is now. Nothing about that shape appears in the corpus, so it gets
             // its own row: a value moves all the way in and back out through the
             // map and the slice.
-            yield[]object{"a-slice-nested-under-another-wrapper-round-trips", `package P
+            yield []object{"a-slice-nested-under-another-wrapper-round-trips", `package P
 import System
 import System.Collections.Generic
 
@@ -839,7 +839,7 @@ main2()`, []string{"1", "3"}}
             // making the two agree is a member-surface change of #4012's kind, not
             // a type-identity one, and it belongs with a corpus measurement of its
             // own.
-            yield[]object{"a-slice-generics-indexer-still-surfaces-the-erased-element", `package P
+            yield []object{"a-slice-generics-indexer-still-surfaces-the-erased-element", `package P
 import System
 import System.Collections.Generic
 
@@ -861,7 +861,7 @@ main2()`, []string{"3"}}
             // disjunct is still narrowed to pairs where BOTH sides carry a G#
             // array spelling, so a future reordering of the arms above cannot make
             // the concern real.
-            yield[]object{"a-checked-cast-from-object-to-a-fixed-array-generic-still-works", `package P
+            yield []object{"a-checked-cast-from-object-to-a-fixed-array-generic-still-works", `package P
 import System
 import System.Collections.Generic
 
@@ -877,7 +877,7 @@ main2()`, []string{"0"}}
             // `[]int32` (#3962 correction 1, pinned green in
             // `Issue3962GenericOverFixedArrayIdentityTests`). This PR changes what
             // a generic's TYPE ARGUMENT matches, not what a value converts to.
-            yield[]object{"bare-fixed-array-still-widens-to-a-slice", `package P
+            yield []object{"bare-fixed-array-still-widens-to-a-slice", `package P
 import System
 
 func main2() {
@@ -898,7 +898,7 @@ main2()`, []string{"3"}}
             // The SLICE spelling, both directions plus a variant interface. This
             // is the row retention could most easily have broken: the G# side now
             // carries a symbolic `[]int32` the C# side has no answer for.
-            yield[]object{"interop-a-slice-generic-still-crosses-a-metadata-boundary", `package P
+            yield []object{"interop-a-slice-generic-still-crosses-a-metadata-boundary", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -920,7 +920,7 @@ main2()`, []string{"2", "5", "2", "3"}}
             // re-measured under retention. Both spellings reach the one
             // `List<int[]>`, which is only consistent because neither the length
             // nor the slice-ness exists in metadata to disagree with.
-            yield[]object{"interop-a-fixed-array-generic-still-crosses-a-metadata-boundary", `package P
+            yield []object{"interop-a-fixed-array-generic-still-crosses-a-metadata-boundary", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -938,7 +938,7 @@ main2()`, []string{"2", "1"}}
             // Review finding 2's GREEN side: retaining the factory return must not
             // make the legitimate use unreachable. The matching spelling still
             // lands, and the element is still a slice on the way out.
-            yield[]object{"a-generic-factory-return-over-a-slice-still-lands-in-its-own-spelling", `package P
+            yield []object{"a-generic-factory-return-over-a-slice-still-lands-in-its-own-spelling", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -956,7 +956,7 @@ main2()`, []string{"1", "3"}}
             // flag is also read by the imported generic object-LITERAL path, which
             // treated it as a rejection. Making every slice symbolic therefore
             // turned this valid program into GS0157 "Cannot find type Box".
-            yield[]object{"an-imported-generic-object-literal-over-a-slice-still-binds", `package P
+            yield []object{"an-imported-generic-object-literal-over-a-slice-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -973,7 +973,7 @@ main2()`, []string{"3"}}
             // GS0157 there; measured. The fix keys on "has a real closed CLR type"
             // rather than on the retention flag, so it closes all three at once,
             // and these two rows are green here and red on the parent commit.
-            yield[]object{"an-imported-generic-object-literal-over-a-fixed-array-now-binds", `package P
+            yield []object{"an-imported-generic-object-literal-over-a-fixed-array-now-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -984,7 +984,7 @@ func main2() {
 }
 
 main2()`, []string{"3"}}
-            yield[]object{"an-imported-generic-object-literal-over-a-named-tuple-now-binds", `package P
+            yield []object{"an-imported-generic-object-literal-over-a-named-tuple-now-binds", `package P
 import System
 import System.Collections.Generic
 import Interop

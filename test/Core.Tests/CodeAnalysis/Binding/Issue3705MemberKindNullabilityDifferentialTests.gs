@@ -923,7 +923,7 @@ public class ObliviousNullAtRuntimeSurface
                     // an annotated-nullable position still must not bind to a
                     // non-null local.
                     let bindsNonNull = state == "NonNull" || state.StartsWith("Oblivious", StringComparison.Ordinal)
-                    yield[]object{kind, state, bindsNonNull}
+                    yield []object{kind, state, bindsNonNull}
                 }
             }
         }

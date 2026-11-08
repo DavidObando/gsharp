@@ -850,7 +850,12 @@ class Conversion {
             // value, then checks the boxed reference against the interface. The
             // constraint-proven implicit case returned above; this arm covers the
             // otherwise-unconstrained checked cast.
-            if from is TypeParameterSymbol && IsInterfaceLikeType(to) {
+            if from is TypeParameterSymbol fromTpForInterface &&
+                IsInterfaceLikeType(to) &&
+                (
+                to is NullableTypeSymbol || Binder.SatisfiesNotNullConstraint(fromTpForInterface) ||
+                    !TypeParameterConvertsTo(fromTpForInterface, NullableTypeSymbol.Get(to))
+            ) {
                 return Conversion.Explicit
             }
             // Issue #1540: a generic type parameter `T` is ALWAYS implicitly
@@ -875,10 +880,14 @@ class Conversion {
             // emitter materialises it with `box !!T` (see MethodBodyEmitter.
             // Conversions.cs), verifier-correct for value, reference and
             // unconstrained `T` alike.
-            if from is TypeParameterSymbol && !(to is TypeParameterSymbol) && to?.ClrType?.IsSameAs(
+            if from is TypeParameterSymbol fromTpForObject && !(to is TypeParameterSymbol) && to?.ClrType?.IsSameAs(
                 typeof(object)
             ) == true {
-                return Conversion.Implicit
+                return if to is NullableTypeSymbol || !Binder.HasNullableConstraintWithoutNotNull(fromTpForObject) {
+                    Conversion.Implicit
+                } else {
+                    Conversion.None
+                }
             }
             if from is ByRefTypeSymbol || to is ByRefTypeSymbol {
                 return Conversion.None
@@ -3368,16 +3377,45 @@ class Conversion {
             if target == TypeSymbol.Object || target?.ClrType?.IsSameAs(typeof(object)) == true {
                 return false
             }
+            let targetIsNullable = target is NullableTypeSymbol || target is PlatformTypeSymbol
+            let lookupTarget = if target is NullableTypeSymbol nullableTarget {
+                nullableTarget.UnderlyingType
+            } else if target is PlatformTypeSymbol platformTarget {
+                platformTarget.UnderlyingType
+            } else {
+                target
+            }
+            if lookupTarget == TypeSymbol.Object || lookupTarget?.ClrType?.IsSameAs(typeof(object)) == true {
+                return false
+            }
+            let satisfiesNotNull = Binder.SatisfiesNotNullConstraint(typeParam)
             // G#-declared interface bound: include the bound and all of its
             // transitive base interfaces (plus any imported CLR base interfaces).
-            if typeParam.InterfaceConstraint is InterfaceSymbol gInterface {
+            if typeParam.InterfaceConstraint is InterfaceSymbol gInterface &&
+                (targetIsNullable || !typeParam.HasNullableInterfaceConstraint || satisfiesNotNull) {
+                if gInterface == lookupTarget || Classify(gInterface, lookupTarget).IsImplicit {
+                    return true
+                }
                 for iface in gInterface.SelfAndAllBaseInterfaces() {
-                    if iface == target || ClrInterfaceMatches(iface, target) {
+                    if iface == lookupTarget ||
+                        (
+                        iface
+                            .TypeArguments
+                            .IsDefaultOrEmpty &&
+                            lookupTarget
+                            ?.ClrType
+                            ?.IsGenericType != true &&
+                            ClrInterfaceMatches(iface, lookupTarget)
+                    ) {
                         return true
                     }
                     if !iface.BaseClrInterfaces.IsDefaultOrEmpty {
                         for clrBase in iface.BaseClrInterfaces {
-                            if ClrAssignableTarget(clrBase, target) {
+                            if clrBase == lookupTarget || Binder.SatisfiesClrInterfaceConstraint(
+                                clrBase,
+                                lookupTarget,
+                                typeParam
+                            ) {
                                 return true
                             }
                         }
@@ -3386,14 +3424,43 @@ class Conversion {
             }
             // Imported CLR interface bound: a `T : ISomeClrInterface` constraint.
             if typeParam.ClrInterfaceConstraint is TypeSymbol clrInterface &&
-                ClrAssignableTarget(clrInterface, target) {
-                return true
+                (targetIsNullable || !(clrInterface is NullableTypeSymbol) || satisfiesNotNull) {
+                let unwrappedClrInterface = if clrInterface is NullableTypeSymbol nullableClrIface {
+                    nullableClrIface.UnderlyingType
+                } else {
+                    clrInterface
+                }
+                if unwrappedClrInterface == lookupTarget || Binder.SatisfiesClrInterfaceConstraint(
+                    unwrappedClrInterface,
+                    lookupTarget,
+                    typeParam
+                ) {
+                    return true
+                }
             }
             // Base-class constraint: include the class, its transitive base
             // classes, and every interface it (transitively) implements.
-            if typeParam.ClassConstraint is TypeSymbol classConstraint {
-                if classConstraint == target {
+            if typeParam.EffectiveClassConstraint is TypeSymbol rawClassConstraint &&
+                (targetIsNullable || !(rawClassConstraint is NullableTypeSymbol) || satisfiesNotNull) {
+                let unwrappedClassConstraint = if rawClassConstraint is NullableTypeSymbol nullableClass {
+                    nullableClass.UnderlyingType
+                } else {
+                    rawClassConstraint
+                }
+                if unwrappedClassConstraint == lookupTarget {
                     return true
+                }
+                if unwrappedClassConstraint.ClrType != nil && lookupTarget?.ClrType is {} targetClr {
+                    return if targetClr.IsInterface {
+                        Binder.SatisfiesClrInterfaceConstraint(unwrappedClassConstraint, lookupTarget, typeParam)
+                    } else {
+                        Binder.SatisfiesClassConstraint(unwrappedClassConstraint, lookupTarget)
+                    }
+                }
+                let classConstraint = if satisfiesNotNull && rawClassConstraint is NullableTypeSymbol nc {
+                    nc.UnderlyingType
+                } else {
+                    rawClassConstraint
                 }
                 let underlyingConversion = Classify(
                     classConstraint,

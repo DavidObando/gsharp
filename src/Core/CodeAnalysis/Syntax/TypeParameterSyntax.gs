@@ -8,8 +8,11 @@ import System.Collections.Immutable
 
 /// A single type parameter in a generic declaration, e.g. `T any` in
 /// `func Map[T any, U any](…)` (Phase 4.1 / ADR-0020).
+@SyntaxChildSourceOrder
 partial class TypeParameterSyntax : SyntaxNode {
     private var constraintType TypeClauseSyntax?
+    private var classConstraintQuestionToken SyntaxToken?
+    private var notNullConstraintKeyword SyntaxToken?
 
     /// Initializes a new instance of the (cref:TypeParameterSyntax) class.
     /// @param syntaxTree The parent syntax tree.
@@ -230,10 +233,29 @@ partial class TypeParameterSyntax : SyntaxNode {
         get;
     }
 
+    /// Gets the optional `?` token following `class` in a `class?` constraint (issue #4996).
+    prop ClassConstraintQuestionToken SyntaxToken? {
+        get -> classConstraintQuestionToken
+        internal set {
+            classConstraintQuestionToken = value
+            InvalidateCachedSpan()
+        }
+    }
+
     /// Gets the optional `struct` keyword token introducing a non-nullable value-type constraint (ADR-0097
     /// / issue #775).
     prop StructConstraintKeyword SyntaxToken? {
         get;
+    }
+
+    /// Gets the optional `notnull` contextual keyword token introducing a non-null constraint (issue
+    /// #4996).
+    prop NotNullConstraintKeyword SyntaxToken? {
+        get -> notNullConstraintKeyword
+        internal set {
+            notNullConstraintKeyword = value
+            InvalidateCachedSpan()
+        }
     }
 
     /// Gets the optional `init` contextual keyword token of an `init()` default-constructor constraint
@@ -265,6 +287,8 @@ partial class TypeParameterSyntax : SyntaxNode {
     /// Gets a value indicating whether this type parameter carries a `class` constraint (ADR-0097).
     prop HasClassConstraint bool -> ClassConstraintKeyword != nil
 
+    internal prop HasNullableClassConstraint bool -> ClassConstraintQuestionToken != nil
+
     /// Gets a value indicating whether this type parameter carries a `struct` constraint (ADR-0097).
     prop HasStructConstraint bool -> StructConstraintKeyword != nil
 
@@ -274,4 +298,6 @@ partial class TypeParameterSyntax : SyntaxNode {
 
     /// Gets a value indicating whether this type parameter carries an `unmanaged` constraint (issue #1336).
     prop HasUnmanagedConstraint bool -> UnmanagedConstraintKeyword != nil
+
+    internal prop HasNotNullConstraint bool -> NotNullConstraintKeyword != nil
 }

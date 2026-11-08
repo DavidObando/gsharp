@@ -90,7 +90,7 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
             for sourceCase in DeclarationCases().Concat(CallCases()) {
                 for position in Enum.GetValues[SourcePosition]() {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
-                        yield[]object{sourceCase.Name, sourceCase.ValidSource, position, driver}
+                        yield []object{sourceCase.Name, sourceCase.ValidSource, position, driver}
                     }
                 }
             }
@@ -102,7 +102,7 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
             for sourceCase in DeclarationCases() {
                 for position in Enum.GetValues[SourcePosition]() {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
-                        yield[]object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
+                        yield []object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
                     }
                 }
             }
@@ -114,7 +114,7 @@ open class Issue3058OutParameterMemberDefiniteAssignmentTests {
             for sourceCase in CallCases().Where((sourceCase SourceCase) -> sourceCase.InvalidSource != nil) {
                 for position in Enum.GetValues[SourcePosition]() {
                     for driver in Enum.GetValues[Issue3058OutParameterMemberDefiniteAssignmentTests.Driver]() {
-                        yield[]object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
+                        yield []object{sourceCase.Name, sourceCase.InvalidSource!!, position, driver}
                     }
                 }
             }

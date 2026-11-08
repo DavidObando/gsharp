@@ -363,14 +363,14 @@ public sealed class AmbiguousIndexer
 
         func OutOfRangeLiterals() sequence[[]object] {
             for access in[]string{"read", "write"} {
-                yield[]object{"uint8-negative-" + access, "uint8", "-1", access}
-                yield[]object{"uint8-positive-" + access, "uint8", "256", access}
-                yield[]object{"int8-negative-" + access, "int8", "-129", access}
-                yield[]object{"int8-positive-" + access, "int8", "128", access}
-                yield[]object{"int16-negative-" + access, "int16", "-32769", access}
-                yield[]object{"int16-positive-" + access, "int16", "32768", access}
-                yield[]object{"uint16-negative-" + access, "uint16", "-1", access}
-                yield[]object{"uint16-positive-" + access, "uint16", "65536", access}
+                yield []object{"uint8-negative-" + access, "uint8", "-1", access}
+                yield []object{"uint8-positive-" + access, "uint8", "256", access}
+                yield []object{"int8-negative-" + access, "int8", "-129", access}
+                yield []object{"int8-positive-" + access, "int8", "128", access}
+                yield []object{"int16-negative-" + access, "int16", "-32769", access}
+                yield []object{"int16-positive-" + access, "int16", "32768", access}
+                yield []object{"uint16-negative-" + access, "uint16", "-1", access}
+                yield []object{"uint16-positive-" + access, "uint16", "65536", access}
             }
         }
 

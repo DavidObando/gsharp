@@ -356,7 +356,7 @@ Console.WriteLine(Fixture.Bare[string]("a") == nil)`
         func NilAccepted() sequence[[]object] {
             // THE ISSUE'S OWN REPRO, with the return value observed rather than
             // merely compiled.
-            yield[]object{"the-issues-repro-nil-returned-at-a-dependent-bound", `package P
+            yield []object{"the-issues-repro-nil-returned-at-a-dependent-bound", `package P
 
 import System
 
@@ -372,7 +372,7 @@ class Fixture {
 Console.WriteLine(Fixture.Take[object, string]("a") == nil)`, []string{"True"}}
             // A LOCAL initialiser rather than a return. Same predicate, different
             // sink — the #4027 lowering has to fire at every one of them.
-            yield[]object{"a-local-initialiser-at-a-dependent-bound", `package P
+            yield []object{"a-local-initialiser-at-a-dependent-bound", `package P
 
 import System
 
@@ -389,7 +389,7 @@ Console.WriteLine(Fixture.Take[object, string]("a"))`, []string{"True"}}
             // ARGUMENT position, which routes through
             // OverloadResolver.CallBinding rather than through the ordinary
             // conversion classifier.
-            yield[]object{"argument-position-at-a-dependent-bound", `package P
+            yield []object{"argument-position-at-a-dependent-bound", `package P
 
 import System
 
@@ -411,7 +411,7 @@ class Fixture {
 Console.WriteLine(Fixture.Pass[object, string]())`, []string{"got-nil"}}
             // ASSIGNMENT to an already-declared local — the fourth sink #4027
             // enumerated.
-            yield[]object{"assignment-to-a-declared-local-at-a-dependent-bound", `package P
+            yield []object{"assignment-to-a-declared-local-at-a-dependent-bound", `package P
 
 import System
 
@@ -427,7 +427,7 @@ class Fixture {
 
 Console.WriteLine(Fixture.Take[object, string]("a"))`, []string{"True"}}
             // A CHAIN of depth three, so the walk is a walk and not a single hop.
-            yield[]object{"a-three-link-chain-whose-root-carries-class", `package P
+            yield []object{"a-three-link-chain-whose-root-carries-class", `package P
 
 import System
 
@@ -444,7 +444,7 @@ Console.WriteLine(Fixture.Chain[object, object, string]("a") == nil)`, []string{
             // The ENCLOSING-TYPE shape (#4068's third placement): a generic
             // method's parameter bounded by its CLASS's parameter, which is where
             // the `class` constraint lives.
-            yield[]object{"a-method-parameter-bounded-by-the-enclosing-types-class-parameter", `package P
+            yield []object{"a-method-parameter-bounded-by-the-enclosing-types-class-parameter", `package P
 
 import System
 
@@ -462,7 +462,7 @@ Console.WriteLine(Box[object]().Accept[string]("a"))`, []string{"nil-ok"}}
             // The root carries a CLASS-BASE bound rather than the bare `class`
             // flag. `IsReferenceConstrainedTypeParameter` treats the two as equally
             // strong proof of reference-ness (#2188), and the chain walk must too.
-            yield[]object{"a-chain-whose-root-carries-a-class-base-bound", `package P
+            yield []object{"a-chain-whose-root-carries-a-class-base-bound", `package P
 
 import System
 
@@ -482,7 +482,7 @@ class Fixture {
 Console.WriteLine(Fixture.Take[Animal, Animal](Animal()) == nil)`, []string{"True"}}
             // CONTROL — #2354's own rule, which this must not disturb: a bare
             // `[T class]` still accepts nil, with the same #4027 lowering.
-            yield[]object{"control-a-bare-class-constraint-still-accepts-nil", `package P
+            yield []object{"control-a-bare-class-constraint-still-accepts-nil", `package P
 
 import System
 
@@ -499,7 +499,7 @@ Console.WriteLine(Fixture.Take[string]("a") == nil)`, []string{"True"}}
             // CONTROL — a dependent bound with no nil anywhere still compiles,
             // verifies and runs exactly as #4043 left it. The new property is read
             // only at a nil, so a program without one must be untouched.
-            yield[]object{"control-a-dependent-bound-without-a-nil-is-unchanged", `package P
+            yield []object{"control-a-dependent-bound-without-a-nil-is-unchanged", `package P
 
 import System
 
@@ -521,7 +521,7 @@ Console.WriteLine(Fixture.Take[object, string]("kept"))`, []string{"kept"}}
         /// @returns Case name, G# source.
         func NilStillRefused() sequence[[]object] {
             // The root is UNCONSTRAINED, so TDerived can be a struct.
-            yield[]object{"a-dependent-bound-over-an-unconstrained-root", `package P
+            yield []object{"a-dependent-bound-over-an-unconstrained-root", `package P
 
 import System
 
@@ -535,7 +535,7 @@ class Fixture {
 
 Console.WriteLine("x")`}
             // The root is `struct`, so TDerived is certainly a value type.
-            yield[]object{"a-dependent-bound-over-a-struct-constrained-root", `package P
+            yield []object{"a-dependent-bound-over-a-struct-constrained-root", `package P
 
 import System
 
@@ -550,7 +550,7 @@ class Fixture {
 Console.WriteLine("x")`}
             // A three-link chain whose ROOT is unconstrained. The walk must reach
             // the root before it answers, not stop at the first link.
-            yield[]object{"a-three-link-chain-whose-root-is-unconstrained", `package P
+            yield []object{"a-three-link-chain-whose-root-is-unconstrained", `package P
 
 import System
 
@@ -567,7 +567,7 @@ Console.WriteLine("x")`}
             // interface constraint as proof of reference-ness either — a struct
             // may implement it — so this stays refused, exactly as a bare
             // `[T IDisposable]` does.
-            yield[]object{"a-dependent-bound-over-an-interface-constrained-root", `package P
+            yield []object{"a-dependent-bound-over-an-interface-constrained-root", `package P
 
 import System
 
@@ -584,7 +584,7 @@ Console.WriteLine("x")`}
             // refuses nil. This is the rule the chain walk must not have widened
             // past — the walk starts at TypeParameterBound, so a parameter with no
             // bound at all is answered by the pre-existing predicate alone.
-            yield[]object{"control-a-bare-unconstrained-parameter-still-refuses-nil", `package P
+            yield []object{"control-a-bare-unconstrained-parameter-still-refuses-nil", `package P
 
 import System
 

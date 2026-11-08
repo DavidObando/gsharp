@@ -153,7 +153,7 @@ Console.WriteLine(fwdClassT[string]())`
         /// @returns Case name, G# source, expected stdout lines.
         func UnverifiableSinks() sequence[[]object] {
             // The issue's own repro: the CALL ARGUMENT. `ldnull` at a `!!0` slot.
-            yield[]object{"the-issues-repro-a-call-argument-at-an-open-class-constrained-slot", `package Demo
+            yield []object{"the-issues-repro-a-call-argument-at-an-open-class-constrained-slot", `package Demo
 import System
 
 func takesClassT[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
@@ -161,7 +161,7 @@ func fwdClassT[T class]() int32 { return takesClassT[T](nil) }
 
 Console.WriteLine(fwdClassT[string]())`, []string{"1"}}
             // A LOCAL DECLARATION whose declared type is the open parameter.
-            yield[]object{"a-local-declaration-of-the-open-type-parameter", `package Demo
+            yield []object{"a-local-declaration-of-the-open-type-parameter", `package Demo
 import System
 
 func localSink[T class]() int32 {
@@ -173,7 +173,7 @@ func localSink[T class]() int32 {
 Console.WriteLine(localSink[string]())`, []string{"1"}}
             // An ASSIGNMENT over a variable already holding a real value, so the
             // printed answer changes if the nil fails to land.
-            yield[]object{"an-assignment-over-a-live-value-of-the-open-type-parameter", `package Demo
+            yield []object{"an-assignment-over-a-live-value-of-the-open-type-parameter", `package Demo
 import System
 
 func assignSink[T class](seed T) int32 {
@@ -186,7 +186,7 @@ func assignSink[T class](seed T) int32 {
 
 Console.WriteLine(assignSink[string]("seed"))`, []string{"1"}}
             // A RETURN of the open type parameter.
-            yield[]object{"a-return-of-the-open-type-parameter", `package Demo
+            yield []object{"a-return-of-the-open-type-parameter", `package Demo
 import System
 
 func returnSink[T class]() T? {
@@ -196,7 +196,7 @@ func returnSink[T class]() T? {
 Console.WriteLine(returnSink[string]() == nil)`, []string{"True"}}
             // A generic CLASS's own type parameter is `!T`, not `!!T`. Both the
             // field write and the member return were red.
-            yield[]object{"a-generic-classs-own-type-parameter-field-write-and-member-return", `package Demo
+            yield []object{"a-generic-classs-own-type-parameter-field-write-and-member-return", `package Demo
 import System
 
 class Box[T class] {
@@ -226,7 +226,7 @@ Console.WriteLine(b.Get() == nil)`, []string{"False", "True", "True"}}
             // reference. Red on the parent for the same reason as the first row
             // (`1x StackUnexpected`), and it also carries a real `Payload` through
             // the same slot, so a timid gate would print a wrong first number.
-            yield[]object{"the-open-slot-closed-at-a-same-compilation-class", `package Demo
+            yield []object{"the-open-slot-closed-at-a-same-compilation-class", `package Demo
 import System
 
 class Payload { public var N int32 }
@@ -240,7 +240,7 @@ Console.WriteLine(takesClassT[Payload](p))
 Console.WriteLine(fwdNil[Payload]())`, []string{"2", "1"}}
             // The whole set in one assembly, which is how the six errors were
             // originally counted. Keeps the rows above from drifting apart.
-            yield[]object{"all-six-sinks-in-one-assembly", `package Demo
+            yield []object{"all-six-sinks-in-one-assembly", `package Demo
 import System
 
 class Box[T class] {
@@ -292,7 +292,7 @@ Console.WriteLine(b.Get() == nil)`, []string{"1", "1", "1", "True", "True"}}
         func GreenNeighbours() sequence[[]object] {
             // A CLOSED reference slot keeps emitting `ldnull`; the lowering is
             // keyed on the target being an open type parameter, not on `nil`.
-            yield[]object{"control-a-closed-reference-slot-still-takes-a-plain-nil", `package Demo
+            yield []object{"control-a-closed-reference-slot-still-takes-a-plain-nil", `package Demo
 import System
 
 class Node { public var Name string }
@@ -303,7 +303,7 @@ Console.WriteLine(takesNode(nil))`, []string{"1"}}
             // `T?` over an open parameter — the spelling #814 already lowered.
             // Both constraint kinds, because they take different representations
             // (`!!T` for [T class], `Nullable<!!T>` for [T struct]).
-            yield[]object{"control-the-nullable-spellings-over-an-open-parameter-are-unchanged", `package Demo
+            yield []object{"control-the-nullable-spellings-over-an-open-parameter-are-unchanged", `package Demo
 import System
 
 func takesNullableClass[T class](x T?) int32 { if x == nil { return 1 } else { return 2 } }
@@ -316,7 +316,7 @@ Console.WriteLine(fwdNullableClass[string]())
 Console.WriteLine(fwdNullableStruct[int32]())`, []string{"1", "3"}}
             // The gate must not become timid: a REAL value still forwards through
             // the very open parameter the repro used, and is read back out.
-            yield[]object{"control-a-real-value-still-forwards-through-the-open-class-constrained-slot", `package Demo
+            yield []object{"control-a-real-value-still-forwards-through-the-open-class-constrained-slot", `package Demo
 import System
 
 func lengthOf[T class](x T) int32 { if x == nil { return -1 } else { return 7 } }
@@ -325,7 +325,7 @@ func forward[T class](x T) int32 { return lengthOf[T](x) }
 Console.WriteLine(forward[string]("hello"))`, []string{"7"}}
             // An UNCONSTRAINED `T` still refuses `nil` (#4010). The lowering must
             // not have re-opened that hole by materialising a default.
-            yield[]object{"control-an-unconstrained-open-parameter-still-refuses-nil", `package Demo
+            yield []object{"control-an-unconstrained-open-parameter-still-refuses-nil", `package Demo
 import System
 
 func takesBareT[T](x T) int32 { return 1 }

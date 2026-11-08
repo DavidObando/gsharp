@@ -783,7 +783,7 @@ func Main() { DECLARATION }`.Replace(
             ).Replace(
                 "STORAGE",
                 if genericField {
-                    "private var Nested T"
+                    "private prop Nested T { get; init; }"
                 } else {
                     "public prop Nested Inner { get; init; }"
                 },
@@ -964,8 +964,10 @@ func Main() {
         )
     }
 
-    @Fact
-    func ClosedGenericZero_RetainedRequiredChildUsesItsValidatedConstructor() {
+    @Theory
+    @InlineData("public")
+    @InlineData("private")
+    func ClosedGenericZero_RetainedRequiredChildUsesItsValidatedConstructor(visibility string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package RetainedRequiredChild
 import System
@@ -978,14 +980,15 @@ struct Inner {
     public func Read() int32 -> *Reference
 }
 data struct Outer[T](Value int32) {
-    public var Nested T
+    VISIBILITY var Nested T
     private var Items []int32
+    public func ReadNested() T -> Nested
 }
 func Main() {
     var outer Outer[Inner]
-    Console.WriteLine(outer.Nested.Read())
+    Console.WriteLine(outer.ReadNested().Read())
     Console.WriteLine(outer.Value)
-}`, "RetainedRequiredChild", true)
+}`.Replace("VISIBILITY", visibility, StringComparison.Ordinal), "RetainedRequiredChild", true)
         IlVerifier.Verify(dll)
         Assert.Equal(`7
 0
@@ -998,12 +1001,13 @@ func Main() {
     @InlineData(true, false)
     @InlineData(true, true)
     func PrivateClosedGenericZero_RejectsAChildWithoutAnInTypeStore(privateCollection bool, nested bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
         let declaration = if nested {
             "var outer Envelope"
         } else {
             "var outer Outer[Inner]"
         }
-        Reject(
+        let dll = fixture.Compile(
             PrivateClosedZeroSource(privateCollection, "T", declaration).Replace(
                 "outer.Read().Items.Length",
                 if nested {
@@ -1013,8 +1017,23 @@ func Main() {
                 },
                 StringComparison.Ordinal
             ),
-            declaration,
-            "GS0472"
+            "PrivateClosedGenericZero",
+            true
+        )
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            if nested {
+                `0
+0
+`
+            } else {
+                `0
+0
+0
+0
+`
+            },
+            fixture.Run(dll)
         )
     }
 

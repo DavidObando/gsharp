@@ -252,8 +252,8 @@ partial class CSharpToGSharpTranslator {
                 this
                 .context
                 .GetSymbolInfo(identifier)
-                .Symbol is IParameterSymbol {
-                return IdentifierExpression("__underscore")
+                .Symbol is IParameterSymbol underscoreParam {
+                return IdentifierExpression(this.EmittedName(underscoreParam, "underscore"))
             }
             if identifier.Identifier.ValueText == "_" && this.context.GetSymbolInfo(identifier).Symbol == nil {
                 return IdentifierExpression("_")
@@ -5844,7 +5844,8 @@ partial class CSharpToGSharpTranslator {
                 )
                 if convertsValue && !resultAcceptsNil && this.TargetWillRemainNonNullableReference(
                     targetType,
-                    targetSymbol
+                    targetSymbol,
+                    value
                 ) {
                     var resultType GTypeReference? = this.MapDelegateLikeReturnType(
                         conversionOperator,
@@ -16207,7 +16208,8 @@ partial class CSharpToGSharpTranslator {
             let returnDeclaredInThisCompilation = invoke.DeclaringSyntaxReferences.Any(
                 (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
             )
-            if returnDeclaredInThisCompilation && this.ShouldPromoteToNullableReference(invoke) {
+            if (returnDeclaredInThisCompilation && this.ShouldPromoteToNullableReference(invoke)) ||
+                this.IsImportedObliviousNullableTarget(invoke, returnType, use) {
                 return false
             }
             // ADR-0186 step 6 (PR 0): an oblivious-metadata result is `T!`,

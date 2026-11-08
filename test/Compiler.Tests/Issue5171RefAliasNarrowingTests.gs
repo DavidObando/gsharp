@@ -24,6 +24,73 @@ import Xunit
 /// code, the diagnostic and its location. Every accepted case compiles,
 /// IL-verifies, runs and asserts the output.
 open class Issue5171RefAliasNarrowingTests {
+    @Theory
+    @InlineData("let")
+    @InlineData("var")
+    func GuardedRefAlias_CannotNarrowNullableStorage(keyword string) {
+        let source = `import System
+func Run() {
+    var text string? = "x"
+    if text != nil {
+        ` + keyword + ` ref alias string = text
+        alias = "keep"
+    }
+}
+Run()
+`
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue4726", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let output = Path.Combine(directory, "NonNullableAlias.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.NotEqual(0, exit)
+            Assert.False(File.Exists(output))
+            let column = source.Split('\n')[4].IndexOf("text", StringComparison.Ordinal) + 1
+            Assert.Contains(
+                Path.Combine(directory, "NonNullableAlias.gs") + "(5,$column,5,${column + 4}): error GS0155",
+                log
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Theory
+    @InlineData("let", "string?")
+    @InlineData("var", "string?")
+    @InlineData("let", "")
+    @InlineData("var", "")
+    func GuardedRefAlias_UsesDeclaredStorageAndInvalidatesReferent(keyword string, typeClause string) {
+        let source = `import System
+func Run() {
+    var text string? = "x"
+    if text != nil {
+        ` + keyword + ` ref alias ` + typeClause + ` = text
+        alias = nil
+        Console.WriteLine(text ?? "null")
+    }
+}
+Run()
+`
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue4726", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let output = Path.Combine(directory, "GuardedAlias.dll")
+            let (exit, log) = Compile(directory, source, output)
+            Assert.True(exit == 0, log)
+            Assert.DoesNotContain("GS0612", log)
+            IlVerifier.Verify(output)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.Equal(0, runExit)
+            Assert.Equal(
+                System.Text.Encoding.UTF8.GetBytes("null" + Environment.NewLine),
+                System.Text.Encoding.UTF8.GetBytes(stdout)
+            )
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     /// A write that can change the aliased storage makes the later read through
     /// the alias report the nullable-receiver diagnostic.
     /// @param name The case name.
@@ -101,7 +168,7 @@ open class Issue5171RefAliasNarrowingTests {
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"ref-local-root-write", `
+            yield []object{"ref-local-root-write", `
 import System
 
 class C {
@@ -116,7 +183,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-local-root-write-loop", `
+            yield []object{"ref-local-root-write-loop", `
 import System
 
 class C {
@@ -135,7 +202,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-local-sibling-write", `
+            yield []object{"ref-local-sibling-write", `
 import System
 
 class C {
@@ -151,7 +218,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"aliased-root-fact-after-alias-write", `
+            yield []object{"aliased-root-fact-after-alias-write", `
 import System
 
 class C {
@@ -166,7 +233,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-local-element-index-write", `
+            yield []object{"ref-local-element-index-write", `
 import System
 
 class C {
@@ -181,7 +248,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-local-field-member-write", `
+            yield []object{"ref-local-field-member-write", `
 import System
 
 class C {
@@ -199,7 +266,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-parameter-index-write", `
+            yield []object{"ref-parameter-index-write", `
 import System
 
 class C {
@@ -215,7 +282,7 @@ func Main() {
     Console.WriteLine(Run(ref xs[0], xs))
 }
 `}
-            yield[]object{"ref-parameters-overlap", `
+            yield []object{"ref-parameters-overlap", `
 import System
 
 class C {
@@ -231,7 +298,7 @@ func Main() {
     Console.WriteLine(Run(ref x, ref x))
 }
 `}
-            yield[]object{"ref-locals-same-element", `
+            yield []object{"ref-locals-same-element", `
 import System
 
 class C {
@@ -247,7 +314,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"branch-join-alias-write", `
+            yield []object{"branch-join-alias-write", `
 import System
 
 class C {
@@ -266,7 +333,7 @@ func Run(flag bool) int32 {
 }
 func Main() { Console.WriteLine(Run(true)) }
 `}
-            yield[]object{"long-alias-chain", `
+            yield []object{"long-alias-chain", `
 import System
 
 class C {
@@ -297,7 +364,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"guard-let-assignment-in-initializer", `
+            yield []object{"guard-let-assignment-in-initializer", `
 import System
 
 class C {
@@ -314,7 +381,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-return-provenance", `
+            yield []object{"ref-return-provenance", `
 import System
 
 class C {
@@ -330,7 +397,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"loop-root-and-alias-write", `
+            yield []object{"loop-root-and-alias-write", `
 import System
 
 class C {
@@ -350,7 +417,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"whole-struct-assignment", `
+            yield []object{"whole-struct-assignment", `
 import System
 
 class C {
@@ -369,7 +436,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"global-aliased-by-ref-parameter", `
+            yield []object{"global-aliased-by-ref-parameter", `
 import System
 
 class C {
@@ -384,7 +451,7 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref g))
 `}
-            yield[]object{"getter-clears-aliased-member", `
+            yield []object{"getter-clears-aliased-member", `
 import System
 
 class C {
@@ -409,7 +476,7 @@ func Main() {
     Console.WriteLine(Run(ref box.Field, box))
 }
 `}
-            yield[]object{"nested-alias-write-in-assignment", `
+            yield []object{"nested-alias-write-in-assignment", `
 import System
 
 class C {
@@ -429,7 +496,7 @@ func Run(flag bool) int32 {
 }
 func Main() { Console.WriteLine(Run(true)) }
 `}
-            yield[]object{"alias-of-global-call", `
+            yield []object{"alias-of-global-call", `
 import System
 
 class C {
@@ -445,7 +512,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"read-only-alias-closure-write", `
+            yield []object{"read-only-alias-closure-write", `
 import System
 
 class C {
@@ -461,7 +528,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `}
-            yield[]object{"ref-parameter-and-mutable-global", `
+            yield []object{"ref-parameter-and-mutable-global", `
 import System
 
 class C {
@@ -475,7 +542,7 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref g))
 `}
-            yield[]object{"guard-let-getter-clears-aliased-member", `
+            yield []object{"guard-let-getter-clears-aliased-member", `
 import System
 
 class C {
@@ -498,7 +565,7 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
-            yield[]object{"literal-initializer-clears-aliased-element", `
+            yield []object{"literal-initializer-clears-aliased-element", `
 import System
 
 class C {
@@ -519,7 +586,7 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref store[0]))
 `}
-            yield[]object{"member-not-null-field-and-ref-parameter", `
+            yield []object{"member-not-null-field-and-ref-parameter", `
 import System
 
 class C {
@@ -542,7 +609,7 @@ class Box {
 let box = Box{}
 Console.WriteLine(box.Run(ref box.Field))
 `}
-            yield[]object{"member-not-null-field-and-other-receiver-write", `
+            yield []object{"member-not-null-field-and-other-receiver-write", `
 import System
 
 class C {
@@ -565,7 +632,7 @@ class Box {
 let box = Box{}
 Console.WriteLine(box.Run(box))
 `}
-            yield[]object{"member-not-null-field-and-other-receiver-multi-write-loop", `
+            yield []object{"member-not-null-field-and-other-receiver-multi-write-loop", `
 import System
 
 class C {
@@ -592,7 +659,7 @@ class Box {
 let box = Box{}
 Console.WriteLine(box.Run(box))
 `}
-            yield[]object{"member-not-null-field-and-other-receiver-call", `
+            yield []object{"member-not-null-field-and-other-receiver-call", `
 import System
 
 class C {
@@ -619,7 +686,7 @@ class Box {
 let box = Box{}
 Console.WriteLine(box.Run(box))
 `}
-            yield[]object{"using-let-getter-clears-aliased-member", `
+            yield []object{"using-let-getter-clears-aliased-member", `
 import System
 
 class C {
@@ -645,7 +712,7 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
-            yield[]object{"struct-receiver-and-ref-parameter", `
+            yield []object{"struct-receiver-and-ref-parameter", `
 import System
 
 class C {
@@ -663,7 +730,7 @@ struct S {
 var s = S{Field: C{}}
 Console.WriteLine(s.Read(ref s, S{}))
 `}
-            yield[]object{"persistent-address-alias", `
+            yield []object{"persistent-address-alias", `
 import System
 
 class C {
@@ -679,7 +746,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"property-pattern-getter-clears-aliased-member", `
+            yield []object{"property-pattern-getter-clears-aliased-member", `
 import System
 
 class C {
@@ -702,7 +769,7 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
-            yield[]object{"callable-stored-through-ref-alias", `
+            yield []object{"callable-stored-through-ref-alias", `
 import System
 
 class C {
@@ -723,7 +790,7 @@ func Run(callback () -> void) int32 {
 }
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
-            yield[]object{"guard-let-getter-before-else", `
+            yield []object{"guard-let-getter-before-else", `
 import System
 
 class C {
@@ -751,7 +818,7 @@ Console.WriteLine(Run(ref box.Field, box))
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
-            yield[]object{"conditional-in-argument-of-imported-call-keeps-the-fact", `
+            yield []object{"conditional-in-argument-of-imported-call-keeps-the-fact", `
 import System
 import System.Runtime.CompilerServices
 
@@ -769,7 +836,7 @@ func Main() {
     Console.WriteLine(Run(true))
 }
 `, []string{"1"}}
-            yield[]object{"in-argument-keeps-the-fact", `
+            yield []object{"in-argument-keeps-the-fact", `
 import System
 
 class C {
@@ -786,7 +853,7 @@ func Main() {
     Console.WriteLine(Run())
 }
 `, []string{"1"}}
-            yield[]object{"conditional-in-argument-keeps-the-fact", `
+            yield []object{"conditional-in-argument-keeps-the-fact", `
 import System
 
 class C {
@@ -803,7 +870,7 @@ func Main() {
     Console.WriteLine(Run(true))
 }
 `, []string{"1"}}
-            yield[]object{"conditional-address-argument-counts-the-variable-once", `
+            yield []object{"conditional-address-argument-counts-the-variable-once", `
 import System
 
 class C {
@@ -821,7 +888,7 @@ func Main() {
     Console.WriteLine(Run(ref x, ref y, true))
 }
 `, []string{"1"}}
-            yield[]object{"object-and-class-by-reference-parameters-do-not-overlap", `
+            yield []object{"object-and-class-by-reference-parameters-do-not-overlap", `
 import System
 
 class C {
@@ -838,7 +905,7 @@ func Main() {
     Console.WriteLine(Run(ref x, ref y))
 }
 `, []string{"1"}}
-            yield[]object{"out-parameters-of-interface-and-string-types-do-not-overlap", `
+            yield []object{"out-parameters-of-interface-and-string-types-do-not-overlap", `
 import System
 
 func Describe(items []IDisposable?, out symbol IDisposable?, out name string?) bool {
@@ -858,7 +925,7 @@ func Main() {
     Console.WriteLine(Describe(items, out symbol, out name))
 }
 `, []string{"False"}}
-            yield[]object{"ref-argument-to-another-variable-keeps-fact", `
+            yield []object{"ref-argument-to-another-variable-keeps-fact", `
 import System
 
 class C {
@@ -876,7 +943,7 @@ func Main() {
     Console.WriteLine(Run(ref x, ref y))
 }
 `, []string{"1"}}
-            yield[]object{"ref-parameter-survives-read-only-calls", `
+            yield []object{"ref-parameter-survives-read-only-calls", `
 import System
 
 class C {
@@ -894,7 +961,7 @@ func Main() {
     Console.WriteLine(Run(ref x))
 }
 `, []string{"3"}}
-            yield[]object{"out-parameter-survives-calls-in-a-loop", `
+            yield []object{"out-parameter-survives-calls-in-a-loop", `
 import System
 
 class C {
@@ -915,7 +982,7 @@ func Main() {
     Console.WriteLine(Run(out x))
 }
 `, []string{"6"}}
-            yield[]object{"out-parameters-of-different-types-do-not-overlap", `
+            yield []object{"out-parameters-of-different-types-do-not-overlap", `
 import System
 import System.Collections.Generic
 
@@ -946,7 +1013,7 @@ func Main() {
     Console.WriteLine(Find(d, c, out p, out t))
 }
 `, []string{"True"}}
-            yield[]object{"ref-local-unrelated-write", `
+            yield []object{"ref-local-unrelated-write", `
 import System
 
 class C {
@@ -962,7 +1029,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"1"}}
-            yield[]object{"ref-local-reguard-after-write", `
+            yield []object{"ref-local-reguard-after-write", `
 import System
 
 class C {
@@ -978,7 +1045,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"-1"}}
-            yield[]object{"ref-local-of-local-survives-index-write", `
+            yield []object{"ref-local-of-local-survives-index-write", `
 import System
 
 class C {
@@ -994,7 +1061,7 @@ func Run() int32 {
 }
 func Main() { Console.WriteLine(Run()) }
 `, []string{"1"}}
-            yield[]object{"ref-parameter-unrelated-assignment", `
+            yield []object{"ref-parameter-unrelated-assignment", `
 import System
 
 class C {
@@ -1011,7 +1078,7 @@ func Main() {
     Console.WriteLine(Run(ref x))
 }
 `, []string{"2"}}
-            yield[]object{"long-alias-chain-no-write", `
+            yield []object{"long-alias-chain-no-write", `
 import System
 
 class C {

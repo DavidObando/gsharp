@@ -404,7 +404,7 @@ public class Surface
                     for isFriend in[]bool{true, false} {
                         let visible = accessibility == "Public" ||
                             ((accessibility == "Internal" || accessibility == "ProtectedInternal") && isFriend)
-                        yield[]object{kind, accessibility, isFriend, visible}
+                        yield []object{kind, accessibility, isFriend, visible}
                     }
                 }
             }
@@ -414,134 +414,149 @@ public class Surface
         /// not whichever accessor reflection happens to return first.
         /// @returns The derived-member probe cases.
         func DerivedMemberCases() sequence[[]object] {
-            yield[]object{"this-protected-read", "let value = this.ProtectedProperty", StrangerAssemblyName, true}
-            yield[]object{"bare-protected-read", "let value = ProtectedProperty", StrangerAssemblyName, true}
-            yield[]object{"base-protected-read", "let value = base.ProtectedProperty", StrangerAssemblyName, true}
-            yield[]object{"this-protected-write", "this.ProtectedProperty = 7", StrangerAssemblyName, true}
-            yield[]object{"bare-protected-write", "ProtectedProperty = 7", StrangerAssemblyName, true}
-            yield[]object{"base-protected-write", "base.ProtectedProperty = 7", StrangerAssemblyName, true}
-            yield[]object{"this-protected-method", "let value = this.ProtectedMethod()", StrangerAssemblyName, true}
-            yield[]object{"bare-protected-method", "let value = ProtectedMethod()", StrangerAssemblyName, true}
-            yield[]object{"base-protected-method", "let value = base.ProtectedMethod()", StrangerAssemblyName, true}
-            yield[]object{
+            yield []object{"this-protected-read", "let value = this.ProtectedProperty", StrangerAssemblyName, true}
+            yield []object{"bare-protected-read", "let value = ProtectedProperty", StrangerAssemblyName, true}
+            yield []object{"base-protected-read", "let value = base.ProtectedProperty", StrangerAssemblyName, true}
+            yield []object{"this-protected-write", "this.ProtectedProperty = 7", StrangerAssemblyName, true}
+            yield []object{"bare-protected-write", "ProtectedProperty = 7", StrangerAssemblyName, true}
+            yield []object{"base-protected-write", "base.ProtectedProperty = 7", StrangerAssemblyName, true}
+            yield []object{"this-protected-method", "let value = this.ProtectedMethod()", StrangerAssemblyName, true}
+            yield []object{"bare-protected-method", "let value = ProtectedMethod()", StrangerAssemblyName, true}
+            yield []object{"base-protected-method", "let value = base.ProtectedMethod()", StrangerAssemblyName, true}
+            yield []object{
                 "protected-internal-property",
                 "let value = this.ProtectedInternalProperty",
                 StrangerAssemblyName,
                 true
             }
-            yield[]object{
+            yield []object{
                 "protected-internal-field",
                 "let value = this.ProtectedInternalField",
                 StrangerAssemblyName,
                 true
             }
-            yield[]object{
+            yield []object{
                 "protected-internal-method",
                 "let value = this.ProtectedInternalMethod()",
                 StrangerAssemblyName,
                 true
             }
-            yield[]object{
+            yield []object{
                 "this-private-getter-read",
                 "let value = this.PublicSetterPrivateGetter",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "bare-private-getter-read",
                 "let value = PublicSetterPrivateGetter",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "base-private-getter-read",
                 "let value = base.PublicSetterPrivateGetter",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{"this-public-setter-write", "this.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
-            yield[]object{"bare-public-setter-write", "PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
-            yield[]object{"base-public-setter-write", "base.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
-            yield[]object{
+            yield []object{"this-public-setter-write", "this.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
+            yield []object{"bare-public-setter-write", "PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
+            yield []object{"base-public-setter-write", "base.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true}
+            yield []object{
                 "this-friend-internal-property-read",
                 "let value = this.InternalProperty",
                 FriendAssemblyName,
                 true
             }
-            yield[]object{
+            yield []object{
                 "bare-friend-internal-property-read",
                 "let value = InternalProperty",
                 FriendAssemblyName,
                 true
             }
-            yield[]object{
+            yield []object{
                 "base-friend-internal-property-read",
                 "let value = base.InternalProperty",
                 FriendAssemblyName,
                 true
             }
-            yield[]object{"this-friend-internal-property-write", "this.InternalProperty = 7", FriendAssemblyName, true}
-            yield[]object{"bare-friend-internal-property-write", "InternalProperty = 7", FriendAssemblyName, true}
-            yield[]object{"base-friend-internal-property-write", "base.InternalProperty = 7", FriendAssemblyName, true}
-            yield[]object{"this-friend-internal-field-read", "let value = this.InternalField", FriendAssemblyName, true}
-            yield[]object{"bare-friend-internal-field-read", "let value = InternalField", FriendAssemblyName, true}
-            yield[]object{"this-friend-internal-field-write", "this.InternalField = 7", FriendAssemblyName, true}
-            yield[]object{"bare-friend-internal-field-write", "InternalField = 7", FriendAssemblyName, true}
-            yield[]object{"this-friend-internal-method", "let value = this.InternalMethod()", FriendAssemblyName, true}
-            yield[]object{"bare-friend-internal-method", "let value = InternalMethod()", FriendAssemblyName, true}
-            yield[]object{"base-friend-internal-method", "let value = base.InternalMethod()", FriendAssemblyName, true}
-            yield[]object{
+            yield []object{"this-friend-internal-property-write", "this.InternalProperty = 7", FriendAssemblyName, true}
+            yield []object{"bare-friend-internal-property-write", "InternalProperty = 7", FriendAssemblyName, true}
+            yield []object{"base-friend-internal-property-write", "base.InternalProperty = 7", FriendAssemblyName, true}
+            yield []object{
+                "this-friend-internal-field-read",
+                "let value = this.InternalField",
+                FriendAssemblyName,
+                true
+            }
+            yield []object{"bare-friend-internal-field-read", "let value = InternalField", FriendAssemblyName, true}
+            yield []object{"this-friend-internal-field-write", "this.InternalField = 7", FriendAssemblyName, true}
+            yield []object{"bare-friend-internal-field-write", "InternalField = 7", FriendAssemblyName, true}
+            yield []object{"this-friend-internal-method", "let value = this.InternalMethod()", FriendAssemblyName, true}
+            yield []object{"bare-friend-internal-method", "let value = InternalMethod()", FriendAssemblyName, true}
+            yield []object{"base-friend-internal-method", "let value = base.InternalMethod()", FriendAssemblyName, true}
+            yield []object{
                 "friend-private-protected-property",
                 "let value = this.PrivateProtectedProperty",
                 FriendAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "friend-private-protected-field",
                 "let value = this.PrivateProtectedField",
                 FriendAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "friend-private-protected-method",
                 "let value = this.PrivateProtectedMethod()",
                 FriendAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "nonfriend-internal-property-read",
                 "let value = this.InternalProperty",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{"nonfriend-internal-property-write", "this.InternalProperty = 7", StrangerAssemblyName, false}
-            yield[]object{
+            yield []object{
+                "nonfriend-internal-property-write",
+                "this.InternalProperty = 7",
+                StrangerAssemblyName,
+                false
+            }
+            yield []object{
                 "nonfriend-internal-field-read",
                 "let value = this.InternalField",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{"nonfriend-internal-field-write", "this.InternalField = 7", StrangerAssemblyName, false}
-            yield[]object{"nonfriend-internal-method", "let value = this.InternalMethod()", StrangerAssemblyName, false}
-            yield[]object{
+            yield []object{"nonfriend-internal-field-write", "this.InternalField = 7", StrangerAssemblyName, false}
+            yield []object{
+                "nonfriend-internal-method",
+                "let value = this.InternalMethod()",
+                StrangerAssemblyName,
+                false
+            }
+            yield []object{
                 "nonfriend-private-protected-property",
                 "let value = this.PrivateProtectedProperty",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "nonfriend-private-protected-field",
                 "let value = this.PrivateProtectedField",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{
+            yield []object{
                 "nonfriend-private-protected-method",
                 "let value = this.PrivateProtectedMethod()",
                 StrangerAssemblyName,
                 false
             }
-            yield[]object{"private-method", "let value = this.PrivateMethod()", StrangerAssemblyName, false}
+            yield []object{"private-method", "let value = this.PrivateMethod()", StrangerAssemblyName, false}
         }
 
         private func BuildSource(kind string, accessibility string, consumer string) string {

@@ -13,7 +13,9 @@ import System.Reflection.PortableExecutable
 
 /// Reads annotations attached to CLR relationship rows, which reflection omits.
 internal shared class ClrSignatureMetadata {
-    internal func Interfaces(declaration Type) ImmutableArray[(Layout Type, Flags ImmutableArray[uint8])] {
+    internal func Interfaces(declaration Type) ImmutableArray[
+        (Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])
+    ] {
         using let image = ReferenceResolver.OpenAssemblyImage(declaration.Assembly)
         if image == nil {
             throw InvalidDataException("interface annotations require an available metadata image")
@@ -25,20 +27,26 @@ internal shared class ClrSignatureMetadata {
         )
         let matcher = SignatureMatcher(declaration, nil)
         let candidates = declaration.GetInterfaces()
-        let result = ImmutableArray.CreateBuilder[(Layout Type, Flags ImmutableArray[uint8])]()
+        let result = ImmutableArray.CreateBuilder[
+            (Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])
+        ]()
         for handle in definition.GetInterfaceImplementations() {
             let row = reader.GetInterfaceImplementation(handle)
+            let attrs = row.GetCustomAttributes()
             result.Add(
                 (
                     Match(reader, row.Interface, matcher, candidates),
-                    ReadFlags(reader, row.GetCustomAttributes(), declaration)
+                    ReadFlags(reader, attrs, declaration),
+                    ReadTupleElementNames(reader, attrs)
                 )
             )
         }
         return result.ToImmutable()
     }
 
-    internal func Constraints(parameter Type) ImmutableArray[(Layout Type, Flags ImmutableArray[uint8])] {
+    internal func Constraints(parameter Type) ImmutableArray[
+        (Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])
+    ] {
         using let image = ReferenceResolver.OpenAssemblyImage(parameter.Assembly)
         if image == nil {
             throw InvalidDataException("constraint annotations require an available metadata image")
@@ -51,11 +59,18 @@ internal shared class ClrSignatureMetadata {
         let enclosing MemberInfo = parameter.DeclaringMethod ?? cast[MemberInfo](parameter.DeclaringType!!)
         let matcher = SignatureMatcher(parameter.DeclaringType!!, parameter.DeclaringMethod)
         let candidates = parameter.GetGenericParameterConstraints()
-        let result = ImmutableArray.CreateBuilder[(Layout Type, Flags ImmutableArray[uint8])]()
+        let result = ImmutableArray.CreateBuilder[
+            (Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])
+        ]()
         for handle in definition.GetConstraints() {
             let row = reader.GetGenericParameterConstraint(handle)
+            let attrs = row.GetCustomAttributes()
             result.Add(
-                (Match(reader, row.Type, matcher, candidates), ReadFlags(reader, row.GetCustomAttributes(), enclosing))
+                (
+                    Match(reader, row.Type, matcher, candidates),
+                    ReadFlags(reader, attrs, enclosing),
+                    ReadTupleElementNames(reader, attrs)
+                )
             )
         }
         return result.ToImmutable()
@@ -244,6 +259,50 @@ internal shared class ClrSignatureMetadata {
         }
     }
 
+    private func ReadTupleElementNames(
+        reader MetadataReader,
+        attributes CustomAttributeHandleCollection
+    ) ImmutableArray[string?] {
+        for handle in attributes {
+            let attribute = reader.GetCustomAttribute(handle)
+            let parent = switch attribute.Constructor.Kind {
+                case HandleKind.MemberReference: reader.GetMemberReference(
+                    cast[MemberReferenceHandle](attribute.Constructor)
+                )
+                    .Parent
+                case HandleKind.MethodDefinition:
+                cast[EntityHandle](
+                    reader.GetMethodDefinition(cast[MethodDefinitionHandle](attribute.Constructor)).GetDeclaringType()
+                )
+                default: default(EntityHandle)
+            }
+            if parent.IsNil ||
+                TypeName(reader, parent) != "System.Runtime.CompilerServices.TupleElementNamesAttribute" {
+                continue
+            }
+            try {
+                var blob = reader.GetBlobReader(attribute.Value)
+                if blob.RemainingBytes < 6 || blob.ReadUInt16() != 1 {
+                    return ImmutableArray[string?].Empty
+                }
+                let count = blob.ReadInt32()
+                if count <= 0 || count > blob.RemainingBytes {
+                    return ImmutableArray[string?].Empty
+                }
+                let names = ImmutableArray.CreateBuilder[string?](count)
+                for var index = 0; index < count; index++ {
+                    names.Add(blob.ReadSerializedString())
+                }
+                return names.MoveToImmutable()
+            } catch (BadImageFormatException) {
+                return ImmutableArray[string?].Empty
+            } catch (ArgumentOutOfRangeException) {
+                return ImmutableArray[string?].Empty
+            }
+        }
+        return ImmutableArray[string?].Empty
+    }
+
     private func TypeName(reader MetadataReader, handle EntityHandle) string {
         if handle.Kind == HandleKind.TypeReference {
             let type = reader.GetTypeReference(cast[TypeReferenceHandle](handle))
@@ -298,7 +357,7 @@ internal shared class ClrSignatureMetadata {
         while forwarded.DeclaringType is {} declaring {
             forwarded = declaring
         }
-        using let image = ReferenceResolver.OpenReferencedAssemblyImage(origin, assemblyScope)
+        using let image = OpenReferencedImage(origin, assemblyScope, actual)
         if image == nil {
             return false
         }
@@ -320,6 +379,22 @@ internal shared class ClrSignatureMetadata {
             return HasForwardedIdentity(origin, reader.GetString(target.Name), actual, depth + 1)
         }
         return false
+    }
+
+    private func OpenReferencedImage(origin Assembly, assemblyScope string, actual Type) Stream? {
+        if ReferenceResolver.OpenReferencedAssemblyImage(origin, assemblyScope) is {} stream {
+            return stream
+        }
+        try {
+            let actualLocation = actual.Assembly.Location
+            if !string.IsNullOrEmpty(actualLocation) && Path.GetDirectoryName(actualLocation) is {} dir {
+                let candidate = Path.Combine(dir, assemblyScope + ".dll")
+                if File.Exists(candidate) {
+                    return File.OpenRead(candidate)
+                }
+            }
+        } catch (Exception) { }
+        return nil
     }
 
     private class SignatureMatcher : ISignatureTypeProvider[Func[Type, bool], object] {

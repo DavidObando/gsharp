@@ -239,41 +239,41 @@ public readonly struct Fahrenheit
         func ConversionIsApplied() sequence[[]object] {
             // THE ISSUE'S OWN REPRO. Threw ArgumentException from
             // List`1.System.Collections.IList.Add.
-            yield[]object{"the-issues-author-written-add", `let list = List[float64]()
+            yield []object{"the-issues-author-written-add", `let list = List[float64]()
 list.Add(Celsius{ Degrees: 2.5 })
 Console.WriteLine(list[0])`, []string{"2.5"}}
             // THE SPREAD FORM the issue contrasts it with. Green before and after.
-            yield[]object{"the-spread-form-that-always-worked", `let source = []Celsius{ Celsius{ Degrees: 2.5 } }
+            yield []object{"the-spread-form-that-always-worked", `let source = []Celsius{ Celsius{ Degrees: 2.5 } }
 let list = List[float64](){ ...source }
 Console.WriteLine(list[0])`, []string{"2.5"}}
             // ISSUE #4054: the pinned ordinary-CLR-call failure. There is no
             // widening interface member beside Math.Abs(double); symbolic
             // conversion classification now makes the overload applicable.
-            yield[]object{
+            yield []object{
                 "an-ordinary-static-clr-parameter",
                 "Console.WriteLine(Math.Abs(Celsius{ Degrees: 0.0 - 2.5 }))",
                 []string{"2.5"}
             }
             // NOT IN THE ISSUE: the collection LITERAL threw the same way.
-            yield[]object{
+            yield []object{
                 "the-collection-literal-form",
                 "let list = List[float64]{ Celsius{ Degrees: 2.5 } }\nConsole.WriteLine(list[0])",
                 []string{"2.5"}
             }
             // NOT IN THE ISSUE: a two-argument widening member, where only the
             // SECOND position needs repairing.
-            yield[]object{"a-two-argument-add-where-only-the-value-converts", `let lookup = Dictionary[string, float64]()
+            yield []object{"a-two-argument-add-where-only-the-value-converts", `let lookup = Dictionary[string, float64]()
 lookup.Add("a", Celsius{ Degrees: 2.5 })
 Console.WriteLine(lookup["a"])`, []string{"2.5"}}
             // NOT IN THE ISSUE, and worse than a throw: `IList.Contains(object)`
             // answered False and `IList.IndexOf(object)` answered -1, silently.
-            yield[]object{"contains-answered-false-in-silence", `let list = List[float64]()
+            yield []object{"contains-answered-false-in-silence", `let list = List[float64]()
 list.Add(2.5)
 Console.WriteLine(list.Contains(Celsius{ Degrees: 2.5 }))
 Console.WriteLine(list.IndexOf(Celsius{ Degrees: 2.5 }))`, []string{"True", "0"}}
             // NOT IN THE ISSUE: Insert threw; Remove reported GS0124 because
             // `IList.Remove` is void while `ICollection<T>.Remove` returns bool.
-            yield[]object{"insert-and-remove", `let list = List[float64]()
+            yield []object{"insert-and-remove", `let list = List[float64]()
 list.Insert(0, Celsius{ Degrees: 2.5 })
 Console.WriteLine(list[0])
 Console.WriteLine(list.Remove(Celsius{ Degrees: 2.5 }))
@@ -284,16 +284,16 @@ Console.WriteLine(list.Count)`, []string{"2.5", "True", "0"}}
             // luck — with one argument any mapping is the identity — but the two
             // multi-argument forms were not, and `Dictionary.Add` reordered was the
             // reviewer's repro.
-            yield[]object{"named-arguments-reordered-on-a-two-argument-add", `let lookup = Dictionary[string, float64]()
+            yield []object{"named-arguments-reordered-on-a-two-argument-add", `let lookup = Dictionary[string, float64]()
 lookup.Add(value: Celsius{ Degrees: 2.5 }, key: "a")
 Console.WriteLine(lookup["a"])`, []string{"2.5"}}
-            yield[]object{"named-arguments-in-source-order-on-a-two-argument-add", `let lookup = Dictionary[string, float64]()
+            yield []object{"named-arguments-in-source-order-on-a-two-argument-add", `let lookup = Dictionary[string, float64]()
 lookup.Add(key: "a", value: Celsius{ Degrees: 2.5 })
 Console.WriteLine(lookup["a"])`, []string{"2.5"}}
-            yield[]object{"named-arguments-reordered-on-insert", `let list = List[float64]()
+            yield []object{"named-arguments-reordered-on-insert", `let list = List[float64]()
 list.Insert(item: Celsius{ Degrees: 2.5 }, index: 0)
 Console.WriteLine(list[0])`, []string{"2.5"}}
-            yield[]object{"named-arguments-on-the-single-argument-forms", `let list = List[float64]()
+            yield []object{"named-arguments-on-the-single-argument-forms", `let list = List[float64]()
 list.Add(item: Celsius{ Degrees: 2.5 })
 Console.WriteLine(list[0])
 Console.WriteLine(list.Contains(item: Celsius{ Degrees: 2.5 }))
@@ -309,21 +309,21 @@ Console.WriteLine(list.Remove(item: Celsius{ Degrees: 2.5 }))`, []string{"2.5", 
             // The receiver genuinely wants `object`, and `Celsius -> object` is an
             // ordinary boxing conversion — so no position needs repairing and the
             // element stays a boxed Celsius.
-            yield[]object{"a-list-of-object-still-boxes", `let list = List[object]()
+            yield []object{"a-list-of-object-still-boxes", `let list = List[object]()
 list.Add(Celsius{ Degrees: 2.5 })
 Console.WriteLine(list.Count)`, []string{"1"}}
             // The element type IS the same-compilation type, so the RECEIVER is
             // erased and nothing here may judge the call.
-            yield[]object{"an-erased-receiver-is-not-judged", `let list = List[Celsius]()
+            yield []object{"an-erased-receiver-is-not-judged", `let list = List[Celsius]()
 list.Add(Celsius{ Degrees: 2.5 })
 Console.WriteLine(list.Count)`, []string{"1"}}
             // A conversion at a CLR parameter with a REAL argument CLR type
             // already worked; this row proves the fix did not change how.
-            yield[]object{"an-imported-argument-with-a-conversion-was-already-right", `let list = List[float64]()
+            yield []object{"an-imported-argument-with-a-conversion-was-already-right", `let list = List[float64]()
 list.Add(Fahrenheit(2.5))
 Console.WriteLine(list[0])`, []string{"2.5"}}
             // A plain float64 argument needs no repair at all.
-            yield[]object{"a-plain-float64-argument-is-untouched", `let list = List[float64]()
+            yield []object{"a-plain-float64-argument-is-untouched", `let list = List[float64]()
 list.Add(2.5)
 Console.WriteLine(list[0])`, []string{"2.5"}}
         }
@@ -336,18 +336,18 @@ Console.WriteLine(list[0])`, []string{"2.5"}}
             // #4028's row: a same-compilation Celsius at an int32 it does not
             // convert to. No conversion exists, so no repair, and the widening
             // member is still removed by the #4028 filter.
-            yield[]object{"a-same-compilation-argument-with-no-conversion", `let list = List[int32]()
+            yield []object{"a-same-compilation-argument-with-no-conversion", `let list = List[int32]()
 list.Add(Celsius{ Degrees: 2.5 })
 Console.WriteLine(list.Count)`, "GS0159"}
             // #4013's row: a genuine string at a genuine int32.
-            yield[]object{"a-genuine-string-at-a-genuine-int32", `let list = List[int32]()
+            yield []object{"a-genuine-string-at-a-genuine-int32", `let list = List[int32]()
 list.Add("x")
 Console.WriteLine(list.Count)`, "GS0159"}
             // REVIEW FINDING (#4060), negative control. Reordering the names must
             // not become a way to smuggle a conversion that does not exist: the
             // repair reorders in order to ask the RIGHT question, not to stop
             // asking it.
-            yield[]object{"named-arguments-reordered-with-no-conversion-to-the-value-type", `let lookup = Dictionary[string, int32]()
+            yield []object{"named-arguments-reordered-with-no-conversion-to-the-value-type", `let lookup = Dictionary[string, int32]()
 lookup.Add(value: Celsius{ Degrees: 2.5 }, key: "a")
 Console.WriteLine(lookup.Count)`, "GS0159"}
         }

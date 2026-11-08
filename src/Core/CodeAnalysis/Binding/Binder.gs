@@ -1056,8 +1056,14 @@ partial class Binder {
     ) BoundExpression {
         let plans = $scope.GetRichAnonymousObjectPlans()
         let planKey = RichAnonymousObjectBindingKey(classSymbol, function)
-        if plans.TryGetValue(planKey, out var existing) {
-            return BoundConstructorCallExpression(syntax, existing.ConstructedType, existing.Arguments)
+        if !plans.TryGetValue(planKey, out var existing) {
+            let _ = $scope.GetLatestRichAnonymousObjectPlans().TryGetValue(classSymbol, out existing)
+        }
+        // Rebind methods that require synthesized types and bodies from the current binding.
+        if existing != nil && !classSymbol.Methods.Any(
+            (method FunctionSymbol) -> method.Declaration?.Body is {} body && ContainsSyntheticBodySideEffects(body)
+        ) {
+            return BindRichAnonymousObjectFromPlan(syntax, classSymbol, existing)
         }
         let (outerToClassTypeParameters, classToOuterTypeParameters) = BuildRichTypeParameterMaps(classSymbol)
         let snapshotFields = ImmutableArray.CreateBuilder[FieldSymbol]()
@@ -1214,6 +1220,7 @@ partial class Binder {
             baseParameters.Concat(snapshotParameters).ToImmutableArray()
         )
         let methodBodies = Dictionary[FunctionSymbol, BoundBlockStatement]()
+        let methodDiagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
         for method in classSymbol.Methods {
             if method.IsAbstract || method.Declaration?.Body == nil {
                 continue
@@ -1243,13 +1250,16 @@ partial class Binder {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
             AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
-            Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
+            let bodyDiagnostics = child.Diagnostics.ToImmutableArray()
+            Diagnostics.AddRange(bodyDiagnostics)
+            methodDiagnostics.AddRange(bodyDiagnostics)
             methodBodies[method] = lowered
         }
         let captures = RichAnonymousCaptureCollector.Collect(methodBodies)
         let captureFields = ImmutableArray.CreateBuilder[FieldSymbol]()
         let captureParameters = ImmutableArray.CreateBuilder[ParameterSymbol]()
         let captureArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+        let captureDescriptors = ImmutableArray.CreateBuilder[(Name string, IsMutable bool, Field FieldSymbol)]()
         let captureMap = Dictionary[VariableSymbol, RichAnonymousCapture]()
         var captureIndex = 0
         for variable in captures {
@@ -1326,6 +1336,7 @@ partial class Binder {
             captureFields.Add(field)
             captureParameters.Add(parameter)
             captureArguments.Add(argument)
+            captureDescriptors.Add((variable.Name, mutable, field))
             captureMap.Add(variable, RichAnonymousCapture(field, mutable))
         }
         if syntax.IsData && captureMap.Count > 0 {
@@ -1375,7 +1386,127 @@ partial class Binder {
             .CollectOrdered(referencedTypes)
             .Where((parameter TypeParameterSymbol) -> !ownMethodTypeParameters.Contains(parameter))
             .ToImmutableArray()
-        var constructedType StructSymbol
+        let constructedType = ConstructRichAnonymousObjectType(
+            classSymbol,
+            classToOuterTypeParameters,
+            referencedTypeParameters
+        )
+        UpdateInferredRichAnonymousReturn(syntax, classSymbol, constructedType)
+        let plan = RichAnonymousObjectPlan(
+            captureDescriptors.ToImmutable(),
+            referencedTypeParameters,
+            methodBodies,
+            methodDiagnostics.ToImmutable()
+        )
+        plans[planKey] = plan
+        $scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan
+        return BoundConstructorCallExpression(syntax, constructedType, arguments)
+    }
+
+    private func BindRichAnonymousObjectFromPlan(
+        syntax AnonymousClassExpressionSyntax,
+        classSymbol StructSymbol,
+        plan RichAnonymousObjectPlan
+    ) BoundExpression {
+        Diagnostics.AddRange(plan.MethodDiagnostics)
+        let (_, classToOuterTypeParameters) = BuildRichTypeParameterMaps(classSymbol)
+        let snapshotArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+        for member in syntax.Members.OfType[AnonymousClassMemberInitializerSyntax]() {
+            let declaredType TypeSymbol? = if member.TypeClause == nil {
+                default(TypeSymbol?)
+            } else {
+                BindTypeClause(member.TypeClause)
+            }
+            var value = if declaredType == nil {
+                Expressions.BindExpression(member.Value)
+            } else {
+                Expressions.BindExpression(member.Value, declaredType)
+            }
+            if declaredType == nil {
+                if value is not BoundErrorExpression && value.Type is TupleTypeSymbol{HasNilElement: true} {
+                    value = Conversions.BindConversion(
+                        member.Value.Location,
+                        value,
+                        TupleTypeSymbol.ResolveNilElements(value.Type)
+                    )
+                }
+                let materializedFieldType = TypeSymbol.MaterializeNeverFunctionReturns(value.Type)
+                if !object.ReferenceEquals(materializedFieldType, value.Type) {
+                    value = Conversions.BindConversion(member.Value.Location, value, materializedFieldType)
+                }
+            }
+            if value is BoundErrorExpression {
+                return BoundErrorExpression(syntax)
+            }
+            snapshotArguments.Add(value)
+        }
+        let baseArguments = ImmutableArray.CreateBuilder[BoundExpression]()
+        for argument in syntax.BaseConstructorArguments {
+            let boundArgument = Expressions.BindExpression(argument)
+            if boundArgument is BoundErrorExpression {
+                return BoundErrorExpression(syntax)
+            }
+            baseArguments.Add(boundArgument)
+        }
+        var baseInitializer BaseConstructorInitializer? = nil
+        if syntax.HasBaseType {
+            baseInitializer = declarations.ResolveRichAnonymousBaseConstructor(
+                classSymbol,
+                baseArguments.ToImmutable(),
+                syntax
+                    .BaseConstructorOpenParenthesisToken
+                    ?.Location ??
+                    syntax
+                    .BaseTypeClause
+                    ?.Location ??
+                    syntax.Location
+            )
+        }
+        let captureArguments = ImmutableArray.CreateBuilder[BoundExpression](plan.CaptureDescriptors.Length)
+        for descriptor in plan.CaptureDescriptors {
+            let variable VariableSymbol? = $scope.TryLookupSymbol(descriptor.Name) as VariableSymbol
+            if variable == nil {
+                return BoundErrorExpression(syntax)
+            }
+            var argument BoundExpression = BoundVariableExpression(syntax, variable)
+            if descriptor.IsMutable {
+                if !ManagedReferenceTypes.TryResolveDefinition(
+                    $scope.References!!,
+                    readOnly: false,
+                    out var definition
+                ) {
+                    return BoundErrorExpression(syntax)
+                }
+                let argumentType = ManagedReferenceTypes.Construct(definition, variable.Type, $scope.References!!)
+                argument = BoundManagedReferenceExpression(
+                    syntax,
+                    ManagedReferenceOrigins.PrepareAliases(argument, $scope.References!!),
+                    argumentType,
+                    readOnly: false,
+                    retainForCapture: true
+                )
+            }
+            captureArguments.Add(argument)
+        }
+        let arguments = captureArguments
+            .Concat(baseInitializer?.Arguments ?? baseArguments.ToImmutable())
+            .Concat(snapshotArguments)
+            .ToImmutableArray()
+        let constructedType = ConstructRichAnonymousObjectType(
+            classSymbol,
+            classToOuterTypeParameters,
+            plan.ReferencedTypeParameters
+        )
+        UpdateInferredRichAnonymousReturn(syntax, classSymbol, constructedType)
+        $scope.GetRichAnonymousObjectPlans()[RichAnonymousObjectBindingKey(classSymbol, function)] = plan
+        return BoundConstructorCallExpression(syntax, constructedType, arguments)
+    }
+
+    private func ConstructRichAnonymousObjectType(
+        classSymbol StructSymbol,
+        classToOuterTypeParameters Dictionary[TypeParameterSymbol, TypeSymbol],
+        referencedTypeParameters ImmutableArray[TypeParameterSymbol]
+    ) StructSymbol {
         let shellTypeParameterCount = classSymbol
             .Declaration
             ?.RichAnonymousShellTypeParameterCount ??
@@ -1394,36 +1525,48 @@ partial class Binder {
             )
                 .ToImmutableArray()
             if !classSymbol.ReifiedFromTypeParameters.IsDefaultOrEmpty {
-                constructedType = StructSymbol.Construct(
+                return StructSymbol.Construct(
                     classSymbol,
                     argumentsForConstruction.AddRange(classSymbol.ReifiedFromTypeParameters.Cast[TypeSymbol]()),
                     $scope.References!!.MapClrTypeToReferences
                 )!!
-            } else if !appendedParameters.IsDefaultOrEmpty {
-                constructedType = SynthesizedClosureReifier.ReifyAppending(
+            }
+            if !appendedParameters.IsDefaultOrEmpty {
+                return SynthesizedClosureReifier.ReifyAppending(
                     classSymbol,
                     argumentsForConstruction,
                     appendedParameters,
                     $scope.References!!.MapClrTypeToReferences
                 )
-            } else {
-                constructedType = StructSymbol.Construct(
-                    classSymbol,
-                    argumentsForConstruction,
-                    $scope.References!!.MapClrTypeToReferences
-                )!!
             }
-        } else {
-            constructedType = if referencedTypeParameters.IsDefaultOrEmpty {
-                classSymbol
-            } else {
-                SynthesizedClosureReifier.Reify(
-                    classSymbol,
-                    referencedTypeParameters,
-                    $scope.References!!.MapClrTypeToReferences
-                )
-            }
+            return StructSymbol.Construct(
+                classSymbol,
+                argumentsForConstruction,
+                $scope.References!!.MapClrTypeToReferences
+            )!!
         }
+        return if referencedTypeParameters.IsDefaultOrEmpty {
+            classSymbol
+        } else if !classSymbol.ReifiedFromTypeParameters.IsDefaultOrEmpty {
+            StructSymbol.Construct(
+                classSymbol,
+                classSymbol.ReifiedFromTypeParameters.Cast[TypeSymbol]().ToImmutableArray(),
+                $scope.References!!.MapClrTypeToReferences
+            )!!
+        } else {
+            SynthesizedClosureReifier.Reify(
+                classSymbol,
+                referencedTypeParameters,
+                $scope.References!!.MapClrTypeToReferences
+            )
+        }
+    }
+
+    private func UpdateInferredRichAnonymousReturn(
+        syntax AnonymousClassExpressionSyntax,
+        classSymbol StructSymbol,
+        constructedType StructSymbol
+    ) {
         if function?.Type is StructSymbol inferredReturn &&
             (
             object.ReferenceEquals(inferredReturn, classSymbol) || object.ReferenceEquals(
@@ -1436,10 +1579,6 @@ partial class Binder {
             object.ReferenceEquals(returned, syntax) {
             function!!.SetRichAnonymousReturnType(constructedType)
         }
-        let plan = RichAnonymousObjectPlan(constructedType, arguments, methodBodies)
-        plans[planKey] = plan
-        $scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan
-        return BoundConstructorCallExpression(syntax, constructedType, arguments)
     }
 
     private func BuildRichTypeParameterMaps(classSymbol StructSymbol)(
@@ -1598,102 +1737,14 @@ partial class Binder {
             )
             return BoundErrorExpression(syntax)
         }
-        let sourceSyntax = syntax.Arguments[0]
-        let handleMode = sourceSyntax is RefArgumentExpressionSyntax
-        var source BoundExpression
-        var sourceMemberType TypeSymbol
-        var readOnlyHandle = false
-        if sourceSyntax is RefArgumentExpressionSyntax refArgument {
-            if refArgument.RefKindModifier.Text != "ref" || refArgument.Expression == nil {
-                Diagnostics.ReportStructuralAdaptation(
-                    syntax.Location,
-                    "<invalid>",
-                    target.Name,
-                    "persistent-location adaptation requires 'ref' followed by a managed handle"
-                )
-                return BoundErrorExpression(syntax)
-            }
-            source = Expressions.BindExpression(refArgument.Expression!!)
-            if !ManagedReferenceTypes.TryGetElement(source.Type, out var element, out readOnlyHandle) {
-                Diagnostics.ReportStructuralAdaptation(
-                    syntax.Location,
-                    source.Type.Name,
-                    target.Name,
-                    "the 'ref' operand must have type managed[T] or readonly managed[T]"
-                )
-                return BoundErrorExpression(syntax)
-            }
-            sourceMemberType = element
-            if !sourceMemberType.IsValueType {
-                Diagnostics.ReportStructuralAdaptation(
-                    syntax.Location,
-                    source.Type.Name,
-                    target.Name,
-                    "class-valued handles are ambiguous; adapt the explicit dereference instead"
-                )
-                return BoundErrorExpression(syntax)
-            }
-            if ManagedReferenceOrigins.IsScopedHandle(source) {
-                Diagnostics.ReportStructuralAdaptation(
-                    syntax.Location,
-                    source.Type.Name,
-                    target.Name,
-                    "a scoped managed handle cannot be retained by an adapter"
-                )
-                return BoundErrorExpression(syntax)
-            }
-        } else {
-            source = Expressions.BindExpression(sourceSyntax)
-            sourceMemberType = source.Type
-        }
-        if source is BoundErrorExpression {
-            return source
-        }
-        if NativeProtocolSafety.ContainsSavedProtocol(sourceMemberType) {
-            Diagnostics.ReportNativeProtocol(
-                syntax.Location,
-                "native protocol values cannot escape through nominal adapt bridges"
-            )
-            return BoundErrorExpression(syntax)
-        }
-        if sourceMemberType == TypeSymbol.Null {
-            Diagnostics.ReportStructuralAdaptation(
-                syntax.Location,
-                sourceMemberType.Name,
-                target.Name,
-                "the null literal cannot be adapted to a non-null interface"
-            )
-            return BoundErrorExpression(syntax)
-        }
-        if sourceMemberType is NullableTypeSymbol {
-            Diagnostics.ReportStructuralAdaptation(
-                syntax.Location,
-                sourceMemberType.Name,
-                target.Name,
-                "nullable sources must be narrowed before adaptation"
-            )
-            return BoundErrorExpression(syntax)
-        }
-        if sourceMemberType is ByRefTypeSymbol ||
-            sourceMemberType is PointerTypeSymbol ||
-            sourceMemberType is FunctionPointerTypeSymbol ||
-            TypeSymbol
-            .IsByRefLike(sourceMemberType) {
-            Diagnostics.ReportStructuralAdaptation(
-                syntax.Location,
-                sourceMemberType.Name,
-                target.Name,
-                "borrowed and ref-like sources cannot be retained by a heap adapter"
-            )
-            return BoundErrorExpression(syntax)
-        }
-        if readOnlyHandle && sourceMemberType.ClrType == nil {
-            Diagnostics.ReportStructuralAdaptation(
-                syntax.Location,
-                sourceMemberType.Name,
-                target.Name,
-                "readonly managed-handle adaptation requires metadata-proven readonly source members"
-            )
+        if !TryValidateStructuralAdaptationSource(
+            syntax,
+            target,
+            out var source,
+            out var sourceMemberType,
+            out var handleMode,
+            out var readOnlyHandle
+        ) {
             return BoundErrorExpression(syntax)
         }
         let registry = $scope.GetStructuralAdapterRegistry()
@@ -1731,6 +1782,7 @@ partial class Binder {
         if userTarget != nil {
             let unmatchedDefaults = List[(Owner InterfaceSymbol, Slot FunctionSymbol)]()
             let unmatchedDefaultProperties = List[(Owner InterfaceSymbol, Slot PropertySymbol)]()
+            let unmatchedDefaultEvents = List[(Owner InterfaceSymbol, Slot EventSymbol)]()
             for iface in userTarget.SelfAndAllBaseInterfaces() {
                 iface.EnsureMembersResolved()
                 if !iface.StaticMethods.IsDefaultOrEmpty {
@@ -1749,17 +1801,34 @@ partial class Binder {
                 }
                 for slot in eventSlots {
                     let contract = GetUserAdapterEventContract(iface, slot)
-                    if sourceMemberType.ClrType is Type importedSource {
-                        if readOnlyHandle {
+                    if slot.IsStatic {
+                        if slot
+                            .AddMethodSymbol
+                            ?.IsAbstract == true ||
+                            slot
+                            .RemoveMethodSymbol
+                            ?.IsAbstract == true ||
+                            slot.IsVirtual ||
+                            !iface
+                            .IsSealed {
                             Diagnostics.ReportStructuralAdaptation(
                                 syntax.Location,
                                 sourceMemberType.Name,
                                 target.Name,
-                                "readonly managed-handle adaptation cannot forward event '${slot.Name}'"
+                                "static interface event requirement '${slot.Name}' is unsupported"
                             )
                             failed = true
-                            continue
                         }
+                        continue
+                    }
+                    let eventRequired = slot.IsFieldLike ||
+                        slot
+                        .AddMethodSymbol
+                        ?.IsAbstract != false ||
+                        slot
+                        .RemoveMethodSymbol
+                        ?.IsAbstract != false
+                    if sourceMemberType.ClrType is Type importedSource {
                         let importedCandidates = GetImportedSourceEvents(importedSource).Where(
                             (candidate EventInfo) -> candidate.Name == slot.Name &&
                                 ImportedEventMetadataSupported(candidate) &&
@@ -1770,11 +1839,25 @@ partial class Binder {
                         )
                             .ToArray()
                         if importedCandidates.Length == 0 {
+                            if !eventRequired {
+                                unmatchedDefaultEvents.Add((iface, contract))
+                                continue
+                            }
                             Diagnostics.ReportStructuralAdaptation(
                                 syntax.Location,
                                 sourceMemberType.Name,
                                 target.Name,
                                 "missing public event '${slot.Name}' with exact add/remove contract"
+                            )
+                            failed = true
+                            continue
+                        }
+                        if readOnlyHandle {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                "readonly managed-handle adaptation cannot forward event '${slot.Name}'"
                             )
                             failed = true
                             continue
@@ -1805,16 +1888,21 @@ partial class Binder {
                         }
                         continue
                     }
-                    let candidates = TypeMemberModel
-                        .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Event))
-                        .OfType[EventSymbol]()
-                        .Where(
-                        (candidate EventSymbol) -> candidate.Name == slot.Name &&
-                            candidate.Accessibility == Accessibility.Public &&
-                            EventContractsMatch(contract, candidate)
+                    let candidates = GetUserSourceAdapterEvents(sourceMemberType).Where(
+                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate
+                            .Event
+                            .Name == slot.Name &&
+                            candidate
+                            .Event
+                            .Accessibility == Accessibility.Public &&
+                            EventContractsMatch(contract, candidate.Event, candidate.Owner)
                     )
                         .ToImmutableArray()
                     if candidates.Length == 0 {
+                        if !eventRequired {
+                            unmatchedDefaultEvents.Add((iface, contract))
+                            continue
+                        }
                         Diagnostics.ReportStructuralAdaptation(
                             syntax.Location,
                             sourceMemberType.Name,
@@ -1842,7 +1930,8 @@ partial class Binder {
                         contract,
                         iface,
                         slot,
-                        candidates[0]
+                        candidates[0].Event,
+                        candidates[0].Owner
                     )
                     events.Add(generated.Event)
                     for body in generated.Bodies {
@@ -1902,7 +1991,7 @@ partial class Binder {
                                 .SetterSymbol
                                 ?.IsAbstract == true
                             if !importedRequired {
-                                unmatchedDefaultProperties.Add((iface, slot))
+                                unmatchedDefaultProperties.Add((iface, contract))
                                 continue
                             }
                             Diagnostics.ReportStructuralAdaptation(
@@ -1940,19 +2029,20 @@ partial class Binder {
                         }
                         continue
                     }
-                    let candidates = TypeMemberModel
-                        .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Property))
-                        .OfType[PropertySymbol]()
-                        .Where(
-                        (candidate PropertySymbol) -> candidate.Name == slot.Name &&
-                            candidate.Accessibility == Accessibility.Public &&
-                            PropertyContractsMatch(contract, candidate)
+                    let candidates = GetUserSourceAdapterProperties(sourceMemberType).Where(
+                        (candidate(Owner TypeSymbol, Property PropertySymbol)) -> candidate
+                            .Property
+                            .Name == slot.Name &&
+                            candidate
+                            .Property
+                            .Accessibility == Accessibility.Public &&
+                            PropertyContractsMatch(contract, candidate.Property, candidate.Owner)
                     )
                         .ToImmutableArray()
                     if candidates.Length == 0 {
                         let required = slot.GetterSymbol?.IsAbstract == true || slot.SetterSymbol?.IsAbstract == true
                         if !required {
-                            unmatchedDefaultProperties.Add((iface, slot))
+                            unmatchedDefaultProperties.Add((iface, contract))
                             continue
                         }
                         Diagnostics.ReportStructuralAdaptation(
@@ -1982,14 +2072,16 @@ partial class Binder {
                         contract,
                         iface,
                         slot,
-                        candidates[0]
+                        candidates[0].Property,
+                        candidates[0].Owner
                     )
                     properties.Add(generated.Property)
                     for body in generated.Bodies {
                         registry.MethodBodies[body.Key] = body.Value
                     }
                 }
-                for slot in iface.Methods {
+                for rawSlot in iface.Methods {
+                    let slot = GetUserAdapterMethodContract(iface, rawSlot)
                     if sourceMemberType.ClrType is Type importedSource {
                         let importedCandidates = MemberLookup
                             .SafeGetMethodsIncludingSelfAndInterfaces(importedSource, slot.Name)
@@ -1997,6 +2089,7 @@ partial class Binder {
                             (candidate MethodInfo) -> candidate.IsPublic &&
                                 !candidate.IsStatic &&
                                 ImportedMethodMetadataSupported(candidate) &&
+                                !TryDescribeUnsupportedImportedAdapterConstraints(candidate, out _) &&
                                 (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate)) &&
                                 MethodContractsMatch(
                                 slot,
@@ -2006,7 +2099,7 @@ partial class Binder {
                         )
                             .ToArray()
                         if importedCandidates.Length == 0 {
-                            if slot.Declaration?.Body != nil {
+                            if rawSlot.Declaration?.Body != nil {
                                 unmatchedDefaults.Add((iface, slot))
                                 continue
                             }
@@ -2037,21 +2130,23 @@ partial class Binder {
                             handleMode,
                             slot,
                             iface,
-                            importedCandidates[0]
+                            importedCandidates[0],
+                            rawSlot
                         )
                         methods.Add(importedGenerated.Method)
                         registry.MethodBodies[importedGenerated.Method] = importedGenerated.Body
                         continue
                     }
-                    let candidates = TypeMemberModel
-                        .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
-                        .Where(
-                        (candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public &&
-                            MethodContractsMatch(slot, candidate, sourceMemberType)
+                    let candidates = GetUserSourceAdapterMethods(sourceMemberType, slot.Name).Where(
+                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> MethodContractsMatch(
+                            slot,
+                            candidate.Method,
+                            candidate.Owner
+                        )
                     )
                         .ToImmutableArray()
                     if candidates.Length == 0 {
-                        if slot.Declaration?.Body != nil {
+                        if rawSlot.Declaration?.Body != nil {
                             unmatchedDefaults.Add((iface, slot))
                             continue
                         }
@@ -2082,7 +2177,8 @@ partial class Binder {
                         handleMode,
                         slot,
                         iface,
-                        candidates[0]
+                        candidates[0].Method,
+                        rawSlot
                     )
                     methods.Add(generated.Method)
                     registry.MethodBodies[generated.Method] = generated.Body
@@ -2158,6 +2254,43 @@ partial class Binder {
                     failed = true
                 }
             }
+            for var i = 0; i < unmatchedDefaultEvents.Count; i++ {
+                let current = unmatchedDefaultEvents[i]
+                let conflicts = unmatchedDefaultEvents.Where(
+                    (candidate(Owner InterfaceSymbol, Slot EventSymbol)) -> current
+                        .Slot
+                        .Name == candidate
+                        .Slot
+                        .Name &&
+                        AdapterTypesMatch(current.Slot.Type, candidate.Slot.Type)
+                )
+                    .ToArray()
+                if conflicts.Length < 2 || !object.ReferenceEquals(conflicts[0].Slot, current.Slot) {
+                    continue
+                }
+                let mostSpecific = conflicts.Where(
+                    (candidate(Owner InterfaceSymbol, Slot EventSymbol)) -> conflicts.All(
+                        (other(Owner InterfaceSymbol, Slot EventSymbol)) -> object.ReferenceEquals(
+                            candidate.Owner,
+                            other.Owner
+                        ) ||
+                            candidate
+                            .Owner
+                            .SelfAndAllBaseInterfaces()
+                            .Contains(other.Owner)
+                    )
+                )
+                    .ToArray()
+                if mostSpecific.Length != 1 {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        "default interface event '${current.Slot.Name}' has no unique most-specific implementation"
+                    )
+                    failed = true
+                }
+            }
             failed |= BindImportedAdapterInterfaceSlots(
                 syntax,
                 target,
@@ -2177,509 +2310,20 @@ partial class Binder {
                 events
             )
         } else {
-            let targetClr = if MemberLookup.TryGetSymbolicClrGenericInterface(target, out var openTarget, out _) {
-                Invariant.Required(
-                    openTarget,
-                    "a symbolic imported interface has an open definition",
-                    expression: "openTarget"
-                )
-            } else {
-                Invariant.Required(target.ClrType, "an imported interface has a CLR type", expression: "target.ClrType")
-            }
-            let unmatchedDefaults = List[(Owner Type, Slot MethodInfo)]()
-            let unmatchedDefaultProperties = List[(Owner Type, Slot PropertyInfo)]()
-            let unmatchedDefaultEvents = List[(Owner Type, Slot EventInfo)]()
-            for targetInterface in targetClr.GetInterfaces().Prepend(targetClr) {
-                for slot in targetInterface.GetMethods() {
-                    let slotOwner = if ClrTypeUtilities.AreSame(targetInterface, targetClr) {
-                        target
-                    } else {
-                        MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot)
-                    }
-                    if slot.IsStatic {
-                        if slot.IsAbstract || slot.IsVirtual {
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "static interface requirement '${slot.Name}' is unsupported"
-                            )
-                            failed = true
-                        }
-                        continue
-                    }
-                    if slot.IsSpecialName {
-                        continue
-                    }
-                    if !ImportedMethodMetadataSupported(slot) {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "method '${slot.Name}' has unsupported required/custom modifier metadata"
-                        )
-                        failed = true
-                        continue
-                    }
-                    if TryDescribeUnsupportedImportedAdapterConstraints(slot, out var constraintReason) {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            constraintReason
-                        )
-                        failed = true
-                        continue
-                    }
-                    let sourceClr Type? = sourceMemberType.ClrType
-                    if sourceClr == nil {
-                        let contract = CreateImportedAdapterContractMethod(slot, slotOwner)
-                        let userCandidates = TypeMemberModel
-                            .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
-                            .Where(
-                            (candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public &&
-                                MethodContractsMatch(contract, candidate, sourceMemberType)
-                        )
-                            .ToImmutableArray()
-                        if userCandidates.Length == 0 {
-                            if !slot.IsAbstract {
-                                unmatchedDefaults.Add((targetInterface, slot))
-                                continue
-                            }
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "missing public instance method '$slot'"
-                            )
-                            failed = true
-                            continue
-                        }
-                        if userCandidates.Length > 1 {
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "method '$slot' is ambiguous"
-                            )
-                            failed = true
-                            continue
-                        }
-                        let userGenerated = CreateImportedTargetUserSourceAdapterMethod(
-                            adapter,
-                            sourceField,
-                            sourceMemberType,
-                            handleMode,
-                            slot,
-                            slotOwner,
-                            userCandidates[0]
-                        )
-                        methods.Add(userGenerated.Method)
-                        registry.MethodBodies[userGenerated.Method] = userGenerated.Body
-                        continue
-                    }
-                    let candidates = MemberLookup
-                        .SafeGetMethodsIncludingSelfAndInterfaces(sourceClr, slot.Name)
-                        .Where(
-                        (candidate MethodInfo) -> candidate.IsPublic &&
-                            !candidate.IsStatic &&
-                            (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate)) &&
-                            ImportedMethodContractsMatch(slot, slotOwner, candidate, sourceMemberType)
-                    )
-                        .ToArray()
-                    if candidates.Length == 0 {
-                        if !slot.IsAbstract {
-                            unmatchedDefaults.Add((targetInterface, slot))
-                            continue
-                        }
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "missing public instance method '$slot'"
-                        )
-                        failed = true
-                        continue
-                    }
-                    if candidates.Length > 1 {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "method '$slot' is ambiguous"
-                        )
-                        failed = true
-                        continue
-                    }
-                    let generated = CreateImportedAdapterMethod(
-                        adapter,
-                        sourceField,
-                        sourceMemberType,
-                        handleMode,
-                        slot,
-                        slotOwner,
-                        candidates[0]
-                    )
-                    methods.Add(generated.Method)
-                    registry.MethodBodies[generated.Method] = generated.Body
-                }
-                for slot in targetInterface.GetProperties() {
-                    let slotOwner = if ClrTypeUtilities.AreSame(targetInterface, targetClr) {
-                        target
-                    } else {
-                        MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot)
-                    }
-                    if slot.GetMethod?.IsStatic == true || slot.SetMethod?.IsStatic == true {
-                        continue
-                    }
-                    if !ImportedPropertyMetadataSupported(slot) {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "property/indexer '${slot.Name}' has unsupported required/custom modifier metadata"
-                        )
-                        failed = true
-                        continue
-                    }
-                    let sourceClr Type? = sourceMemberType.ClrType
-                    if sourceClr == nil {
-                        let contract = CreateImportedAdapterContractProperty(slot, slotOwner)
-                        let userCandidates = TypeMemberModel
-                            .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Property))
-                            .OfType[PropertySymbol]()
-                            .Where(
-                            (candidate PropertySymbol) -> candidate.Name == slot.Name &&
-                                candidate.Accessibility == Accessibility.Public &&
-                                PropertyContractsMatch(contract, candidate)
-                        )
-                            .ToImmutableArray()
-                        let userRequired = (slot.GetMethod?.IsAbstract ?? false) ||
-                            (slot.SetMethod?.IsAbstract ?? false)
-                        if userCandidates.Length == 0 {
-                            if !userRequired {
-                                unmatchedDefaultProperties.Add((targetInterface, slot))
-                                continue
-                            }
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "missing public property/indexer '${slot.Name}' with the required accessor contract"
-                            )
-                            failed = true
-                            continue
-                        }
-                        if userCandidates.Length > 1 {
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "property/indexer '${slot.Name}' is ambiguous"
-                            )
-                            failed = true
-                            continue
-                        }
-                        let userGenerated = CreateImportedTargetUserSourceAdapterProperty(
-                            adapter,
-                            sourceField,
-                            sourceMemberType,
-                            handleMode,
-                            slot,
-                            slotOwner,
-                            userCandidates[0]
-                        )
-                        properties.Add(userGenerated.Property)
-                        for body in userGenerated.Bodies {
-                            registry.MethodBodies[body.Key] = body.Value
-                        }
-                        continue
-                    }
-                    let candidates = if sourceClr == nil {
-                        Array.Empty[PropertyInfo]()
-                    } else {
-                        GetImportedSourceProperties(sourceClr).Where(
-                            (candidate PropertyInfo) -> candidate.Name == slot.Name &&
-                                (
-                                !readOnlyHandle ||
-                                    (
-                                    !slot.CanWrite && candidate.GetMethod != nil && RefCapabilities.IsReadOnlyMethod(
-                                        candidate.GetMethod!!
-                                    )
-                                )
-                            ) &&
-                                ImportedPropertyContractsMatch(slot, slotOwner, candidate, sourceMemberType)
-                        )
-                            .ToArray()
-                    }
-                    let required = (slot.GetMethod?.IsAbstract ?? false) || (slot.SetMethod?.IsAbstract ?? false)
-                    if candidates.Length == 0 {
-                        if !required {
-                            unmatchedDefaultProperties.Add((targetInterface, slot))
-                            continue
-                        }
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "missing public property/indexer '${slot.Name}' with the required accessor contract"
-                        )
-                        failed = true
-                        continue
-                    }
-                    if candidates.Length > 1 {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "property/indexer '${slot.Name}' is ambiguous"
-                        )
-                        failed = true
-                        continue
-                    }
-                    let generated = CreateImportedAdapterProperty(
-                        adapter,
-                        sourceField,
-                        sourceMemberType,
-                        handleMode,
-                        slot,
-                        slotOwner,
-                        candidates[0]
-                    )
-                    properties.Add(generated.Property)
-                    for body in generated.Bodies {
-                        registry.MethodBodies[body.Key] = body.Value
-                    }
-                }
-                for slot in targetInterface.GetEvents() {
-                    if slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true {
-                        continue
-                    }
-                    if !ImportedEventMetadataSupported(slot) {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "event '${slot.Name}' has unsupported required/custom modifier metadata"
-                        )
-                        failed = true
-                        continue
-                    }
-                    let slotOwner = if ClrTypeUtilities.AreSame(targetInterface, targetClr) {
-                        target
-                    } else {
-                        MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot)
-                    }
-                    let sourceClr Type? = sourceMemberType.ClrType
-                    if sourceClr == nil {
-                        let contract = CreateImportedAdapterContractEvent(slot, slotOwner)
-                        let userCandidates = TypeMemberModel
-                            .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Event))
-                            .OfType[EventSymbol]()
-                            .Where(
-                            (candidate EventSymbol) -> candidate.Name == slot.Name &&
-                                candidate.Accessibility == Accessibility.Public &&
-                                EventContractsMatch(contract, candidate)
-                        )
-                            .ToImmutableArray()
-                        if userCandidates.Length == 0 {
-                            if slot.AddMethod is {IsAbstract: false} && slot.RemoveMethod is {IsAbstract: false} {
-                                unmatchedDefaultEvents.Add((targetInterface, slot))
-                                continue
-                            }
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "missing public event '${slot.Name}' with exact add/remove contract"
-                            )
-                            failed = true
-                            continue
-                        }
-                        if userCandidates.Length > 1 {
-                            Diagnostics.ReportStructuralAdaptation(
-                                syntax.Location,
-                                sourceMemberType.Name,
-                                target.Name,
-                                "event '${slot.Name}' is ambiguous"
-                            )
-                            failed = true
-                            continue
-                        }
-                        let userGenerated = CreateImportedTargetUserSourceAdapterEvent(
-                            adapter,
-                            sourceField,
-                            sourceMemberType,
-                            handleMode,
-                            slot,
-                            slotOwner,
-                            userCandidates[0]
-                        )
-                        events.Add(userGenerated.Event)
-                        for body in userGenerated.Bodies {
-                            registry.MethodBodies[body.Key] = body.Value
-                        }
-                        continue
-                    }
-                    let candidates = if sourceClr == nil {
-                        Array.Empty[EventInfo]()
-                    } else {
-                        GetImportedSourceEvents(sourceClr).Where(
-                            (candidate EventInfo) -> candidate.Name == slot.Name &&
-                                ImportedEventContractsMatch(slot, slotOwner, candidate, sourceMemberType)
-                        )
-                            .ToArray()
-                    }
-                    if candidates.Length == 0 {
-                        if slot.AddMethod is {IsAbstract: false} && slot.RemoveMethod is {IsAbstract: false} {
-                            unmatchedDefaultEvents.Add((targetInterface, slot))
-                            continue
-                        }
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "missing public event '${slot.Name}' with exact add/remove contract"
-                        )
-                        failed = true
-                        continue
-                    }
-                    if readOnlyHandle {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "readonly managed-handle adaptation cannot forward event '${slot.Name}'"
-                        )
-                        failed = true
-                        continue
-                    }
-                    if candidates.Length > 1 {
-                        Diagnostics.ReportStructuralAdaptation(
-                            syntax.Location,
-                            sourceMemberType.Name,
-                            target.Name,
-                            "event '${slot.Name}' is ambiguous"
-                        )
-                        failed = true
-                        continue
-                    }
-                    let generated = CreateImportedAdapterEvent(
-                        adapter,
-                        sourceField,
-                        sourceMemberType,
-                        handleMode,
-                        slot,
-                        slotOwner,
-                        candidates[0]
-                    )
-                    events.Add(generated.Event)
-                    for body in generated.Bodies {
-                        registry.MethodBodies[body.Key] = body.Value
-                    }
-                }
-            }
-            for var i = 0; i < unmatchedDefaults.Count; i++ {
-                let current = unmatchedDefaults[i]
-                let conflicts = unmatchedDefaults.Where(
-                    (candidate(Owner Type, Slot MethodInfo)) -> current
-                        .Slot
-                        .Name == candidate
-                        .Slot
-                        .Name &&
-                        ImportedMethodContractsMatch(current.Slot, candidate.Slot)
-                )
-                    .ToArray()
-                if conflicts.Length < 2 || !object.ReferenceEquals(conflicts[0].Slot, current.Slot) {
-                    continue
-                }
-                let mostSpecific = conflicts.Where(
-                    (candidate(Owner Type, Slot MethodInfo)) -> conflicts.All(
-                        (other(Owner Type, Slot MethodInfo)) -> ClrTypeUtilities.AreSame(
-                            candidate.Owner,
-                            other.Owner
-                        ) ||
-                            other
-                            .Owner
-                            .IsAssignableFrom(candidate.Owner)
-                    )
-                )
-                    .ToArray()
-                if mostSpecific.Length != 1 {
-                    Diagnostics.ReportStructuralAdaptation(
-                        syntax.Location,
-                        sourceMemberType.Name,
-                        target.Name,
-                        "default interface method '${current.Slot.Name}' has no unique most-specific implementation"
-                    )
-                    failed = true
-                }
-            }
-            for var i = 0; i < unmatchedDefaultEvents.Count; i++ {
-                let current = unmatchedDefaultEvents[i]
-                let conflicts = unmatchedDefaultEvents.Where(
-                    (candidate(Owner Type, Slot EventInfo)) -> ImportedEventSlotsEquivalent(
-                        current.Slot,
-                        candidate.Slot
-                    )
-                )
-                    .ToArray()
-                if conflicts.Length < 2 || !object.ReferenceEquals(conflicts[0].Slot, current.Slot) {
-                    continue
-                }
-                let mostSpecific = conflicts.Where(
-                    (candidate(Owner Type, Slot EventInfo)) -> conflicts.All(
-                        (other(Owner Type, Slot EventInfo)) -> ClrTypeUtilities.AreSame(candidate.Owner, other.Owner) ||
-                            other
-                            .Owner
-                            .IsAssignableFrom(candidate.Owner)
-                    )
-                )
-                    .ToArray()
-                if mostSpecific.Length != 1 {
-                    Diagnostics.ReportStructuralAdaptation(
-                        syntax.Location,
-                        sourceMemberType.Name,
-                        target.Name,
-                        "default interface event '${current.Slot.Name}' has no unique most-specific implementation"
-                    )
-                    failed = true
-                }
-            }
-            for var i = 0; i < unmatchedDefaultProperties.Count; i++ {
-                let current = unmatchedDefaultProperties[i]
-                let conflicts = unmatchedDefaultProperties.Where(
-                    (candidate(Owner Type, Slot PropertyInfo)) -> ImportedPropertySlotsEquivalent(
-                        current.Slot,
-                        candidate.Slot
-                    )
-                )
-                    .ToArray()
-                if conflicts.Length < 2 || !object.ReferenceEquals(conflicts[0].Slot, current.Slot) {
-                    continue
-                }
-                let mostSpecific = conflicts.Where(
-                    (candidate(Owner Type, Slot PropertyInfo)) -> conflicts.All(
-                        (other(Owner Type, Slot PropertyInfo)) -> ClrTypeUtilities.AreSame(
-                            candidate.Owner,
-                            other.Owner
-                        ) ||
-                            other
-                            .Owner
-                            .IsAssignableFrom(candidate.Owner)
-                    )
-                )
-                    .ToArray()
-                if mostSpecific.Length != 1 {
-                    Diagnostics.ReportStructuralAdaptation(
-                        syntax.Location,
-                        sourceMemberType.Name,
-                        target.Name,
-                        "default interface property/indexer '${current.Slot.Name}' has no unique most-specific implementation"
-                    )
-                    failed = true
-                }
-            }
+            failed |= BindImportedAdapterInterfaceSlots(
+                syntax,
+                target,
+                ImmutableArray.Create(target),
+                sourceMemberType,
+                readOnlyHandle,
+                handleMode,
+                adapter,
+                sourceField,
+                registry,
+                methods,
+                properties,
+                events
+            )
         }
         if failed {
             return BoundErrorExpression(syntax)
@@ -2889,11 +2533,12 @@ partial class Binder {
                         continue
                     }
                     let contract = CreateImportedAdapterContractMethod(slot, slotOwner)
-                    let userCandidates = TypeMemberModel
-                        .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
-                        .Where(
-                        (candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public &&
-                            MethodContractsMatch(contract, candidate, sourceMemberType)
+                    let userCandidates = GetUserSourceAdapterMethods(sourceMemberType, slot.Name).Where(
+                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> MethodContractsMatch(
+                            contract,
+                            candidate.Method,
+                            candidate.Owner
+                        )
                     )
                         .ToImmutableArray()
                     if userCandidates.Length == 0 {
@@ -2927,7 +2572,7 @@ partial class Binder {
                         handleMode,
                         slot,
                         slotOwner,
-                        userCandidates[0]
+                        userCandidates[0].Method
                     )
                     methods.Add(userGenerated.Method)
                     registry.MethodBodies[userGenerated.Method] = userGenerated.Body
@@ -3007,13 +2652,14 @@ partial class Binder {
                         continue
                     }
                     let contract = CreateImportedAdapterContractProperty(slot, slotOwner)
-                    let userCandidates = TypeMemberModel
-                        .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Property))
-                        .OfType[PropertySymbol]()
-                        .Where(
-                        (candidate PropertySymbol) -> candidate.Name == slot.Name &&
-                            candidate.Accessibility == Accessibility.Public &&
-                            PropertyContractsMatch(contract, candidate)
+                    let userCandidates = GetUserSourceAdapterProperties(sourceMemberType).Where(
+                        (candidate(Owner TypeSymbol, Property PropertySymbol)) -> candidate
+                            .Property
+                            .Name == slot.Name &&
+                            candidate
+                            .Property
+                            .Accessibility == Accessibility.Public &&
+                            PropertyContractsMatch(contract, candidate.Property, candidate.Owner)
                     )
                         .ToImmutableArray()
                     if userCandidates.Length == 0 {
@@ -3047,7 +2693,8 @@ partial class Binder {
                         handleMode,
                         slot,
                         slotOwner,
-                        userCandidates[0]
+                        userCandidates[0].Property,
+                        userCandidates[0].Owner
                     )
                     properties.Add(userGenerated.Property)
                     for body in userGenerated.Bodies {
@@ -3130,13 +2777,14 @@ partial class Binder {
                         continue
                     }
                     let contract = CreateImportedAdapterContractEvent(slot, slotOwner)
-                    let userCandidates = TypeMemberModel
-                        .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Event))
-                        .OfType[EventSymbol]()
-                        .Where(
-                        (candidate EventSymbol) -> candidate.Name == slot.Name &&
-                            candidate.Accessibility == Accessibility.Public &&
-                            EventContractsMatch(contract, candidate)
+                    let userCandidates = GetUserSourceAdapterEvents(sourceMemberType).Where(
+                        (candidate(Owner TypeSymbol, Event EventSymbol)) -> candidate
+                            .Event
+                            .Name == slot.Name &&
+                            candidate
+                            .Event
+                            .Accessibility == Accessibility.Public &&
+                            EventContractsMatch(contract, candidate.Event, candidate.Owner)
                     )
                         .ToImmutableArray()
                     if userCandidates.Length == 0 {
@@ -3170,7 +2818,8 @@ partial class Binder {
                         handleMode,
                         slot,
                         slotOwner,
-                        userCandidates[0]
+                        userCandidates[0].Event,
+                        userCandidates[0].Owner
                     )
                     events.Add(userGenerated.Event)
                     for body in userGenerated.Bodies {
@@ -3340,7 +2989,13 @@ partial class Binder {
             ApplyImportedGenericConstraints(
                 slot.GetGenericArguments(),
                 typeParameters,
-                CreateImportedMethodTypeParameterMap(slot.GetGenericArguments(), typeParameters)
+                CreateImportedMethodTypeParameterMap(
+                    slot.GetGenericArguments(),
+                    typeParameters,
+                    slot.DeclaringType,
+                    slotOwner
+                ),
+                slotOwner
             )
         }
         let parameters = slotParameters.Select(
@@ -3365,7 +3020,7 @@ partial class Binder {
             ExplicitInterfaceSlot = slot,
             ExplicitInterfaceSlotContainingType = slotOwner
         }
-        if HasAdapterUnscopedRef(slot.ReturnParameter) {
+        if HasAdapterMethodUnscopedRef(slot) {
             method.MarkUnscopedRef()
         }
         method.TypeParameters = typeParameters
@@ -3407,7 +3062,13 @@ partial class Binder {
             ApplyImportedGenericConstraints(
                 method.GetGenericArguments(),
                 typeParameters,
-                CreateImportedMethodTypeParameterMap(method.GetGenericArguments(), typeParameters)
+                CreateImportedMethodTypeParameterMap(
+                    method.GetGenericArguments(),
+                    typeParameters,
+                    method.DeclaringType,
+                    owner
+                ),
+                owner
             )
         }
         let parameters = method
@@ -3428,7 +3089,7 @@ partial class Binder {
             $package: nil,
             Accessibility.Public
         ){ReturnRefKind = RefCapabilities.GetReturnRefKind(method), TypeParameters = typeParameters}
-        if HasAdapterUnscopedRef(method.ReturnParameter) {
+        if HasAdapterMethodUnscopedRef(method) {
             contract.MarkUnscopedRef()
         }
         return contract
@@ -3477,6 +3138,9 @@ partial class Binder {
                 $package: nil,
                 Accessibility.Public
             ){IsSpecialName = true, ReturnRefKind = contract.ReturnRefKind}
+            if HasAdapterMethodUnscopedRef(property.GetMethod!!) {
+                getter.MarkUnscopedRef()
+            }
             contract.GetterSymbol = getter
         }
         if property.SetMethod?.IsPublic == true {
@@ -3499,7 +3163,8 @@ partial class Binder {
         handleMode bool,
         slot PropertyInfo,
         slotOwner TypeSymbol,
-        sourceProperty PropertySymbol
+        sourceProperty PropertySymbol,
+        sourcePropertyOwner TypeSymbol
     )(Property PropertySymbol, Bodies Dictionary[FunctionSymbol, BoundBlockStatement]) {
         let contract = CreateImportedAdapterContractProperty(slot, slotOwner)
         let indexParameters = contract
@@ -3535,13 +3200,21 @@ partial class Binder {
                 Accessibility.Private,
                 adapter
             ){ReturnRefKind = contract.ReturnRefKind, IsSpecialName = true}
+            if contract.GetterSymbol?.HasUnscopedRef == true {
+                getter.MarkUnscopedRef()
+            }
             property.GetterSymbol = getter
             let receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode)
+            let indexerReceiver = if !object.ReferenceEquals(sourcePropertyOwner, receiver.Type) {
+                cast[BoundExpression](BoundConversionExpression(nil, sourcePropertyOwner, receiver))
+            } else {
+                receiver
+            }
             let access BoundExpression = if contract.IsIndexer {
                 cast[BoundExpression](
                     BoundUserInstanceCallExpression(
                         nil,
-                        receiver,
+                        indexerReceiver,
                         Invariant.Required(
                             sourceProperty.GetterSymbol,
                             "a matched getter contract has a source getter",
@@ -3559,11 +3232,11 @@ partial class Binder {
                     BoundPropertyAccessExpression(
                         nil,
                         receiver,
-                        sourceMemberType as StructSymbol,
+                        sourcePropertyOwner as StructSymbol,
                         sourceProperty,
-                        substitutedType: nil,
+                        substitutedType: contract.Type,
                         narrowedType: nil,
-                        interfaceType: sourceMemberType as InterfaceSymbol
+                        interfaceType: sourcePropertyOwner as InterfaceSymbol
                     )
                 )
             }
@@ -3582,11 +3255,16 @@ partial class Binder {
             ){IsSpecialName = true, IsInitOnlySetter = contract.IsInitOnly}
             property.SetterSymbol = setter
             let receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode)
+            let indexerReceiver = if !object.ReferenceEquals(sourcePropertyOwner, receiver.Type) {
+                cast[BoundExpression](BoundConversionExpression(nil, sourcePropertyOwner, receiver))
+            } else {
+                receiver
+            }
             let assignment BoundExpression = if contract.IsIndexer {
                 cast[BoundExpression](
                     BoundUserInstanceCallExpression(
                         nil,
-                        receiver,
+                        indexerReceiver,
                         Invariant.Required(
                             sourceProperty.SetterSymbol,
                             "a matched setter contract has a source setter",
@@ -3604,11 +3282,11 @@ partial class Binder {
                     BoundPropertyAssignmentExpression(
                         nil,
                         receiver,
-                        sourceMemberType as StructSymbol,
+                        sourcePropertyOwner as StructSymbol,
                         sourceProperty,
                         BoundVariableExpression(nil, value),
-                        substitutedType: nil,
-                        interfaceType: sourceMemberType as InterfaceSymbol
+                        substitutedType: contract.Type,
+                        interfaceType: sourcePropertyOwner as InterfaceSymbol
                     )
                 )
             }
@@ -3624,7 +3302,8 @@ partial class Binder {
         handleMode bool,
         slot EventInfo,
         slotOwner TypeSymbol,
-        sourceEvent EventSymbol
+        sourceEvent EventSymbol,
+        sourceEventOwner TypeSymbol
     )(Event EventSymbol, Bodies Dictionary[FunctionSymbol, BoundBlockStatement]) {
         let contract = CreateImportedAdapterContractEvent(slot, slotOwner)
         let eventSymbol = EventSymbol(
@@ -3656,10 +3335,11 @@ partial class Binder {
             let call = BoundEventSubscriptionExpression(
                 nil,
                 receiver,
-                sourceMemberType,
+                sourceEventOwner,
                 sourceEvent,
                 BoundVariableExpression(nil, parameter),
-                isAdd: true
+                isAdd: true,
+                contract.Type
             )
             bodies[add] = AdapterMethodBody(call, TypeSymbol.Void)
         }
@@ -3679,14 +3359,98 @@ partial class Binder {
             let call = BoundEventSubscriptionExpression(
                 nil,
                 receiver,
-                sourceMemberType,
+                sourceEventOwner,
                 sourceEvent,
                 BoundVariableExpression(nil, parameter),
-                isAdd: false
+                isAdd: false,
+                contract.Type
             )
             bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void)
         }
         return (eventSymbol, bodies)
+    }
+
+    private func GetUserSourceAdapterMethods(sourceMemberType TypeSymbol, name string) ImmutableArray[
+        (Owner TypeSymbol, Method FunctionSymbol)
+    ] {
+        if sourceMemberType is InterfaceSymbol sourceInterface {
+            let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
+            for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                iface.EnsureMembersResolved()
+                for method in iface.Methods {
+                    if method.Name != name ||
+                        method.Accessibility != Accessibility.Public ||
+                        method.HasExplicitInterfaceClause ||
+                        method.ExplicitInterfaceClauseTarget != nil {
+                        continue
+                    }
+                    if results.Any(
+                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> UserInterfaceAdapterMethodHides(
+                            cast[InterfaceSymbol](candidate.Owner),
+                            candidate.Method,
+                            iface,
+                            method
+                        )
+                    ) {
+                        continue
+                    }
+                    // A base can precede its redeclaration through another inheritance branch.
+                    for var i = results.Count - 1; i >= 0; i-- {
+                        let candidate = results[i]
+                        if UserInterfaceAdapterMethodHides(
+                            iface,
+                            method,
+                            cast[InterfaceSymbol](candidate.Owner),
+                            candidate.Method
+                        ) {
+                            results.RemoveAt(i)
+                        }
+                    }
+                    results.Add((iface, method))
+                }
+            }
+            return results.ToImmutable()
+        }
+        if sourceMemberType is StructSymbol sourceStruct {
+            let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
+            let effectiveMethods = TypeMemberModel.GetMethods(
+                sourceStruct,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .ToHashSet()
+            for ancestor in sourceStruct.GetHierarchy() {
+                for method in ancestor.GetDeclaredInstanceMethods() {
+                    if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
+                        results.Add((ancestor, method))
+                    }
+                }
+            }
+            return results.ToImmutable()
+        }
+        return TypeMemberModel
+            .GetMethods(sourceMemberType, name, MemberQuery.Instance(MemberKinds.Method))
+            .Where((candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public)
+            .Select((candidate FunctionSymbol) -> (candidate.ContainingType ?? sourceMemberType, candidate))
+            .ToImmutableArray()
+    }
+
+    private func UserInterfaceAdapterMethodHides(
+        owner InterfaceSymbol,
+        method FunctionSymbol,
+        inheritedOwner InterfaceSymbol,
+        inheritedMethod FunctionSymbol
+    ) bool {
+        if object.ReferenceEquals(owner, inheritedOwner) {
+            return object.ReferenceEquals(method, inheritedMethod)
+        }
+        // Equal contracts on unrelated constructed owners retain independent dispatch slots (ADR-0189).
+        return owner.SelfAndAllBaseInterfaces().Any(
+            (ancestor InterfaceSymbol) -> object.ReferenceEquals(ancestor, inheritedOwner)
+        ) &&
+            BoundScope.FunctionSignaturesEqual(method, inheritedMethod) &&
+            MethodContractsMatch(GetUserAdapterMethodContract(owner, method), inheritedMethod, inheritedOwner) &&
+            MethodContractsMatch(GetUserAdapterMethodContract(inheritedOwner, inheritedMethod), method, owner)
     }
 
     private func MethodContractsMatch(
@@ -3709,22 +3473,7 @@ partial class Binder {
             return false
         }
         let substitutions = Dictionary[TypeParameterSymbol, TypeSymbol]()
-        if sourceContainingType is StructSymbol sourceConstruction &&
-            sourceConstruction.Definition is {} sourceDefinition &&
-            !sourceConstruction
-            .TypeArguments
-            .IsDefaultOrEmpty {
-            for var i = 0;
-                i < sourceDefinition
-                .TypeParameters
-                .Length &&
-                i < sourceConstruction
-                .TypeArguments
-                .Length;
-                i++ {
-                substitutions[sourceDefinition.TypeParameters[i]] = sourceConstruction.TypeArguments[i]
-            }
-        }
+        AddAdapterOwnerSubstitutions(sourceContainingType, substitutions)
         for var i = 0; i < target.TypeParameters.Length; i++ {
             substitutions[source.TypeParameters[i]] = target.TypeParameters[i]
         }
@@ -3758,24 +3507,70 @@ partial class Binder {
     ) bool {
         if target.Constraint != source.Constraint ||
             target.HasReferenceTypeConstraint != source.HasReferenceTypeConstraint ||
+            target.HasNullableReferenceTypeConstraint != source.HasNullableReferenceTypeConstraint ||
+            target.HasNotNullConstraint != source.HasNotNullConstraint ||
             target.HasValueTypeConstraint != source.HasValueTypeConstraint ||
             target.HasDefaultConstructorConstraint != source.HasDefaultConstructorConstraint ||
             target.HasUnmanagedConstraint != source.HasUnmanagedConstraint {
             return false
         }
-        let targetReference TypeSymbol? = target.ConstraintReferenceType
-        let sourceReference TypeSymbol? = source.ConstraintReferenceType
-        if targetReference == nil || sourceReference == nil {
-            return targetReference == nil && sourceReference == nil
+        let targetBounds = GetAdapterTypeParameterBounds(target, nil)
+        let sourceBounds = GetAdapterTypeParameterBounds(source, substitutions)
+        if targetBounds.Length != sourceBounds.Length {
+            return false
         }
-        return AdapterTypesMatch(
-            targetReference,
-            SubstituteType(
-                sourceReference,
-                Dictionary[TypeParameterSymbol, TypeSymbol](substitutions),
-                $scope.References!!.MapClrTypeToReferences
+        for targetBound in targetBounds {
+            if !sourceBounds.Any((sourceBound TypeSymbol) -> AdapterTypesMatch(targetBound, sourceBound)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func GetAdapterTypeParameterBounds(
+        parameter TypeParameterSymbol,
+        substitutions IReadOnlyDictionary[TypeParameterSymbol, TypeSymbol]?
+    ) ImmutableArray[TypeSymbol] {
+        let builder = ImmutableArray.CreateBuilder[TypeSymbol](3)
+        let subst = if substitutions == nil {
+            default(Dictionary[TypeParameterSymbol, TypeSymbol]?)
+        } else {
+            Dictionary[TypeParameterSymbol, TypeSymbol](substitutions)
+        }
+        let mapClrType = $scope.References!!.MapClrTypeToReferences
+        if parameter.ConstraintInterfaceType is {} interfaceBound {
+            builder.Add(
+                if subst == nil {
+                    interfaceBound
+                } else {
+                    SubstituteType(interfaceBound, subst, mapClrType)
+                }
             )
-        )
+        }
+        if parameter.EffectiveClassConstraint is {} classBound {
+            builder.Add(
+                if subst == nil {
+                    classBound
+                } else {
+                    SubstituteType(classBound, subst, mapClrType)
+                }
+            )
+        }
+        if parameter.TypeParameterBound is {} dependentBound {
+            let effectiveDependent TypeSymbol = if parameter.HasNullableClassBound {
+                NullableTypeSymbol.Get(dependentBound)
+            } else {
+                dependentBound
+            }
+            builder.Add(
+                if subst == nil {
+                    effectiveDependent
+                } else {
+                    SubstituteType(effectiveDependent, subst, mapClrType)
+                }
+            )
+        }
+        return builder.ToImmutable()
     }
 
     private func ImportedMethodContractsMatch(
@@ -3789,10 +3584,12 @@ partial class Binder {
             .GetGenericArguments().Length || RefCapabilities.GetReturnRefKind(
             target
         ) != RefCapabilities.GetReturnRefKind(source) ||
+            HasAdapterMethodUnscopedRef(target) != HasAdapterMethodUnscopedRef(source) ||
             !AdapterParameterMetadataSupported(target.ReturnParameter) ||
             !AdapterParameterMetadataSupported(source.ReturnParameter) ||
             !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter) ||
-            !ImportedGenericConstraintsMatch(target, source) {
+            TryDescribeUnsupportedImportedAdapterConstraints(target, out _) ||
+            TryDescribeUnsupportedImportedAdapterConstraints(source, out _) {
             return false
         }
         let methodTypeParameters = target
@@ -3806,6 +3603,54 @@ partial class Binder {
             ){IsMethodTypeParameter = true}
         )
             .ToImmutableArray()
+        if !methodTypeParameters.IsDefaultOrEmpty {
+            let sourceTypeParameters = source
+                .GetGenericArguments()
+                .Select(
+                (parameter Type, index int32) -> TypeParameterSymbol(
+                    parameter.Name,
+                    index,
+                    TypeParameterConstraint.Any,
+                    TypeParameterVariance.None
+                ){IsMethodTypeParameter = true}
+            )
+                .ToImmutableArray()
+            ApplyImportedGenericConstraints(
+                target.GetGenericArguments(),
+                methodTypeParameters,
+                CreateImportedMethodTypeParameterMap(
+                    target.GetGenericArguments(),
+                    methodTypeParameters,
+                    target.DeclaringType,
+                    targetOwner
+                ),
+                targetOwner
+            )
+            ApplyImportedGenericConstraints(
+                source.GetGenericArguments(),
+                sourceTypeParameters,
+                CreateImportedMethodTypeParameterMap(
+                    source.GetGenericArguments(),
+                    sourceTypeParameters,
+                    source.DeclaringType,
+                    sourceOwner
+                ),
+                sourceOwner
+            )
+            let constraintSubstitutions = Dictionary[TypeParameterSymbol, TypeSymbol]()
+            for var i = 0; i < methodTypeParameters.Length; i++ {
+                constraintSubstitutions[sourceTypeParameters[i]] = methodTypeParameters[i]
+            }
+            for var i = 0; i < methodTypeParameters.Length; i++ {
+                if !AdapterGenericConstraintsMatch(
+                    methodTypeParameters[i],
+                    sourceTypeParameters[i],
+                    constraintSubstitutions
+                ) {
+                    return false
+                }
+            }
+        }
         if !AdapterTypesMatch(
             GetImportedAdapterMethodType(targetOwner, target, parameterIndex: nil, methodTypeParameters),
             GetImportedAdapterMethodType(sourceOwner, source, parameterIndex: nil, methodTypeParameters)
@@ -3879,6 +3724,11 @@ partial class Binder {
                     RemapImportedMethodTypeParameters(nullable.UnderlyingType, methodTypeParameters)
                 )
             }
+            case platform is PlatformTypeSymbol {
+                return PlatformTypeSymbol.Get(
+                    RemapImportedMethodTypeParameters(platform.UnderlyingType, methodTypeParameters)
+                )
+            }
             case annotated is NullabilityAnnotatedTypeSymbol {
                 return NullabilityAnnotatedTypeSymbol(
                     RemapImportedMethodTypeParameters(annotated.BaseType, methodTypeParameters),
@@ -3900,22 +3750,155 @@ partial class Binder {
                         .ToImmutableArray()
                 )
             }
-            case slice is SliceTypeSymbol {
-                return SliceTypeSymbol.Get(RemapImportedMethodTypeParameters(slice.ElementType, methodTypeParameters))
-            }
-            case array is RectangularArrayTypeSymbol {
-                return RectangularArrayTypeSymbol.Get(
-                    RemapImportedMethodTypeParameters(array.ElementType, methodTypeParameters),
-                    array.Rank
-                )
-            }
-            case byRef is ByRefTypeSymbol {
-                return ByRefTypeSymbol.Get(RemapImportedMethodTypeParameters(byRef.PointeeType, methodTypeParameters))
-            }
             default {
+                if TypeSymbol.TrySubstituteCompositeType(
+                    type,
+                    (nested TypeSymbol) -> RemapImportedMethodTypeParameters(nested, methodTypeParameters),
+                    out var composite
+                ) {
+                    return composite
+                }
                 return type
             }
         }
+    }
+
+    private func TryValidateStructuralAdaptationSource(
+        syntax CallExpressionSyntax,
+        target TypeSymbol,
+        out source BoundExpression,
+        out sourceMemberType TypeSymbol,
+        out handleMode bool,
+        out readOnlyHandle bool
+    ) bool {
+        let sourceSyntax = syntax.Arguments[0]
+        handleMode = sourceSyntax is RefArgumentExpressionSyntax
+        readOnlyHandle = false
+        if sourceSyntax is RefArgumentExpressionSyntax refArgument {
+            if refArgument.RefKindModifier.Text != "ref" || refArgument.Expression == nil {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    "<invalid>",
+                    target.Name,
+                    "persistent-location adaptation requires 'ref' followed by a managed handle"
+                )
+                source = BoundErrorExpression(syntax)
+                sourceMemberType = TypeSymbol.Error
+                return false
+            }
+            source = Expressions.BindExpression(refArgument.Expression!!)
+            if source is BoundErrorExpression {
+                sourceMemberType = TypeSymbol.Error
+                return false
+            }
+            if !ManagedReferenceTypes.TryGetElement(source.Type, out var element, out readOnlyHandle) {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    source.Type.Name,
+                    target.Name,
+                    "the 'ref' operand must have type managed[T] or readonly managed[T]"
+                )
+                sourceMemberType = TypeSymbol.Error
+                return false
+            }
+            sourceMemberType = element
+            if !sourceMemberType.IsValueType {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    source.Type.Name,
+                    target.Name,
+                    "class-valued handles are ambiguous; adapt the explicit dereference instead"
+                )
+                return false
+            }
+        } else {
+            source = Expressions.BindExpression(sourceSyntax)
+            sourceMemberType = source.Type
+            if source is BoundErrorExpression {
+                return false
+            }
+        }
+        if ManagedReferenceOrigins.IsScopedHandle(source) {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                source.Type.Name,
+                target.Name,
+                "a scoped managed handle cannot be retained by an adapter"
+            )
+            return false
+        }
+        if NativeProtocolSafety.ContainsSavedProtocol(sourceMemberType) || NativeProtocolSafety.ContainsSavedProtocol(
+            source.Type
+        ) {
+            Diagnostics.ReportNativeProtocol(
+                syntax.Location,
+                "native protocol values cannot escape through nominal adapt bridges"
+            )
+            return false
+        }
+        if sourceMemberType == TypeSymbol.Null || IsDefinitelyNullAdaptationSource(source) {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "the null literal cannot be adapted to a non-null interface"
+            )
+            return false
+        }
+        if sourceMemberType is NullableTypeSymbol {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "nullable sources must be narrowed before adaptation"
+            )
+            return false
+        }
+        if sourceMemberType == TypeSymbol.Void || TypeSymbol.ContainsNeverType(sourceMemberType) ||
+            sourceMemberType is StructSymbol{IsSharedClass: true} ||
+            sourceMemberType.ClrType is {IsAbstract: true, IsSealed: true} {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "the source value cannot be retained as an adapter field"
+            )
+            return false
+        }
+        if sourceMemberType is ByRefTypeSymbol ||
+            sourceMemberType is PointerTypeSymbol ||
+            sourceMemberType is FunctionPointerTypeSymbol ||
+            TypeSymbol
+            .IsByRefLike(sourceMemberType) {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "borrowed and ref-like sources cannot be retained by a heap adapter"
+            )
+            return false
+        }
+        if readOnlyHandle && sourceMemberType.ClrType == nil {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "readonly managed-handle adaptation requires metadata-proven readonly source members"
+            )
+            return false
+        }
+        return true
+    }
+
+    private func IsDefinitelyNullAdaptationSource(expression BoundExpression) bool -> switch expression {
+        case BoundLiteralExpression{Value: nil}: true
+        case conversion is BoundConversionExpression: conversion
+            .Expression
+            .Type == TypeSymbol.Null ||
+            IsDefinitelyNullAdaptationSource(conversion.Expression)
+        case conditional is BoundConditionalExpression: IsDefinitelyNullAdaptationSource(conditional.WhenTrue) &&
+            IsDefinitelyNullAdaptationSource(conditional.WhenFalse)
+        default: false
     }
 
     private data class RichAnonymousCapture(Field FieldSymbol, IsMutable bool) : IEquatable[RichAnonymousCapture] { }
@@ -7996,6 +7979,9 @@ partial class Binder {
             // in globalScope.Functions (they're addressed via the dot operator),
             // so we walk Structs explicitly here. globalScope is this method's
             // own non-nullable parameter, never reassigned above.
+            for kv in parentScope.GetLatestRichAnonymousObjectPlans() {
+                globalScope.LatestRichAnonymousObjectPlans[kv.Key] = kv.Value
+            }
             for structSym in globalScope.Structs {
                 if structSym.Methods.IsDefaultOrEmpty {
                     continue
@@ -9468,7 +9454,8 @@ partial class Binder {
             handleMode bool,
             slot FunctionSymbol,
             slotOwner InterfaceSymbol,
-            sourceMethod FunctionSymbol
+            sourceMethod FunctionSymbol,
+            interfaceSlot FunctionSymbol? = nil
         )(Method FunctionSymbol, Body BoundBlockStatement) {
             let parameters = slot
                 .Parameters
@@ -9484,7 +9471,7 @@ partial class Binder {
                 adapter
             ){
                 ReturnRefKind = slot.ReturnRefKind,
-                ExplicitInterfaceMember = slot,
+                ExplicitInterfaceMember = interfaceSlot ?? slot,
                 ExplicitInterfaceClauseTarget = slotOwner
             }
             if slot.HasUnscopedRef {
@@ -9510,7 +9497,8 @@ partial class Binder {
             handleMode bool,
             slot FunctionSymbol,
             slotOwner InterfaceSymbol,
-            sourceMethod MethodInfo
+            sourceMethod MethodInfo,
+            interfaceSlot FunctionSymbol? = nil
         )(Method FunctionSymbol, Body BoundBlockStatement) {
             let parameters = slot
                 .Parameters
@@ -9526,7 +9514,7 @@ partial class Binder {
                 adapter
             ){
                 ReturnRefKind = slot.ReturnRefKind,
-                ExplicitInterfaceMember = slot,
+                ExplicitInterfaceMember = interfaceSlot ?? slot,
                 ExplicitInterfaceClauseTarget = slotOwner,
                 TypeParameters = slot.TypeParameters
             }
@@ -9596,7 +9584,8 @@ partial class Binder {
             slot PropertySymbol,
             slotOwner InterfaceSymbol,
             interfaceSlot PropertySymbol,
-            sourceProperty PropertySymbol
+            sourceProperty PropertySymbol,
+            sourcePropertyOwner TypeSymbol
         )(Property PropertySymbol, Bodies Dictionary[FunctionSymbol, BoundBlockStatement]) {
             let indexParameters = slot
                 .Parameters
@@ -9635,11 +9624,16 @@ partial class Binder {
                 }
                 property.GetterSymbol = getter
                 let receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode)
+                let indexerReceiver = if !object.ReferenceEquals(sourcePropertyOwner, receiver.Type) {
+                    cast[BoundExpression](BoundConversionExpression(nil, sourcePropertyOwner, receiver))
+                } else {
+                    receiver
+                }
                 let access BoundExpression = if slot.IsIndexer {
                     cast[BoundExpression](
                         BoundUserInstanceCallExpression(
                             nil,
-                            receiver,
+                            indexerReceiver,
                             Invariant.Required(
                                 sourceProperty.GetterSymbol,
                                 "a matched getter contract has a source getter",
@@ -9657,11 +9651,11 @@ partial class Binder {
                         BoundPropertyAccessExpression(
                             nil,
                             receiver,
-                            sourceMemberType as StructSymbol,
+                            sourcePropertyOwner as StructSymbol,
                             sourceProperty,
-                            substitutedType: nil,
+                            substitutedType: slot.Type,
                             narrowedType: nil,
-                            interfaceType: sourceMemberType as InterfaceSymbol
+                            interfaceType: sourcePropertyOwner as InterfaceSymbol
                         )
                     )
                 }
@@ -9681,11 +9675,16 @@ partial class Binder {
                 ){IsSpecialName = true, IsInitOnlySetter = slot.IsInitOnly}
                 property.SetterSymbol = setter
                 let receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode)
+                let indexerReceiver = if !object.ReferenceEquals(sourcePropertyOwner, receiver.Type) {
+                    cast[BoundExpression](BoundConversionExpression(nil, sourcePropertyOwner, receiver))
+                } else {
+                    receiver
+                }
                 let assignment BoundExpression = if slot.IsIndexer {
                     cast[BoundExpression](
                         BoundUserInstanceCallExpression(
                             nil,
-                            receiver,
+                            indexerReceiver,
                             Invariant.Required(
                                 sourceProperty.SetterSymbol,
                                 "a matched setter contract has a source setter",
@@ -9703,11 +9702,11 @@ partial class Binder {
                         BoundPropertyAssignmentExpression(
                             nil,
                             receiver,
-                            sourceMemberType as StructSymbol,
+                            sourcePropertyOwner as StructSymbol,
                             sourceProperty,
                             BoundVariableExpression(nil, value),
-                            substitutedType: nil,
-                            interfaceType: sourceMemberType as InterfaceSymbol
+                            substitutedType: slot.Type,
+                            interfaceType: sourcePropertyOwner as InterfaceSymbol
                         )
                     )
                 }
@@ -9758,6 +9757,9 @@ partial class Binder {
                     Accessibility.Private,
                     adapter
                 ){ReturnRefKind = slot.ReturnRefKind, IsSpecialName = true}
+                if slot.GetterSymbol?.HasUnscopedRef == true {
+                    getter.MarkUnscopedRef()
+                }
                 property.GetterSymbol = getter
                 let receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode)
                 let access BoundExpression = if slot.IsIndexer {
@@ -9885,7 +9887,7 @@ partial class Binder {
                     Accessibility.Private,
                     adapter
                 ){ReturnRefKind = property.ReturnRefKind, IsSpecialName = true}
-                if HasAdapterUnscopedRef(slot.GetMethod!!.ReturnParameter) {
+                if HasAdapterMethodUnscopedRef(slot.GetMethod!!) {
                     getter.MarkUnscopedRef()
                 }
                 property.GetterSymbol = getter
@@ -9968,7 +9970,8 @@ partial class Binder {
             slot EventSymbol,
             slotOwner InterfaceSymbol,
             interfaceSlot EventSymbol,
-            sourceEvent EventSymbol
+            sourceEvent EventSymbol,
+            sourceEventOwner TypeSymbol
         )(Event EventSymbol, Bodies Dictionary[FunctionSymbol, BoundBlockStatement]) {
             let eventSymbol = EventSymbol(
                 slot.Name,
@@ -9995,10 +9998,11 @@ partial class Binder {
                 let call = BoundEventSubscriptionExpression(
                     nil,
                     receiver,
-                    sourceMemberType,
+                    sourceEventOwner,
                     sourceEvent,
                     BoundVariableExpression(nil, parameter),
-                    isAdd: true
+                    isAdd: true,
+                    slot.Type
                 )
                 bodies[add] = AdapterMethodBody(call, TypeSymbol.Void)
             }
@@ -10018,10 +10022,11 @@ partial class Binder {
                 let call = BoundEventSubscriptionExpression(
                     nil,
                     receiver,
-                    sourceMemberType,
+                    sourceEventOwner,
                     sourceEvent,
                     BoundVariableExpression(nil, parameter),
-                    isAdd: false
+                    isAdd: false,
+                    slot.Type
                 )
                 bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void)
             }
@@ -10330,9 +10335,49 @@ partial class Binder {
             return true
         }
 
-        private func ImportedGenericConstraintsMatch(target MethodInfo, source MethodInfo) bool {
+        private func ImportedGenericConstraintsMatch(
+            target MethodInfo,
+            source MethodInfo,
+            targetOwner TypeSymbol? = nil,
+            sourceOwner TypeSymbol? = nil
+        ) bool {
             let targetParameters = target.GetGenericArguments()
             let sourceParameters = source.GetGenericArguments()
+            let targetMap = Dictionary[Type, TypeSymbol]()
+            let sourceMap = Dictionary[Type, TypeSymbol]()
+            for var i = 0; i < targetParameters.Length; i++ {
+                let parameter = TypeParameterSymbol(
+                    targetParameters[i].Name,
+                    i,
+                    TypeParameterConstraint.Any,
+                    TypeParameterVariance.None
+                ){IsMethodTypeParameter = true}
+                targetMap[targetParameters[i]] = parameter
+                sourceMap[sourceParameters[i]] = parameter
+            }
+            let receiverArity = Math.Max(
+                target.DeclaringType?.GetGenericArguments().Length ?? 0,
+                source.DeclaringType?.GetGenericArguments().Length ?? 0
+            )
+            let canonicalReceivers = ImmutableArray.CreateBuilder[TypeParameterSymbol](receiverArity)
+            for var r = 0; r < receiverArity; r++ {
+                canonicalReceivers.Add(
+                    TypeParameterSymbol("TReceiver$r", r, TypeParameterConstraint.Any, TypeParameterVariance.None)
+                )
+            }
+            let receiverParameters = canonicalReceivers.ToImmutable()
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                target.DeclaringType,
+                targetOwner,
+                receiverParameters,
+                targetMap
+            )
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                source.DeclaringType,
+                sourceOwner,
+                receiverParameters,
+                sourceMap
+            )
             for var i = 0; i < targetParameters.Length; i++ {
                 const specialMask = GenericParameterAttributes.SpecialConstraintMask
                 if (targetParameters[i].GenericParameterAttributes & specialMask) != (
@@ -10343,6 +10388,20 @@ partial class Binder {
                 if HasAdapterUnmanagedConstraint(targetParameters[i]) != HasAdapterUnmanagedConstraint(
                     sourceParameters[i]
                 ) {
+                    return false
+                }
+                if ClrNullability.HasNotNullConstraint(targetParameters[i]) != ClrNullability.HasNotNullConstraint(
+                    sourceParameters[i]
+                ) {
+                    return false
+                }
+                if (
+                    targetParameters[i].GenericParameterAttributes & GenericParameterAttributes.ReferenceTypeConstraint
+                ) != 0 &&
+                    ClrNullability
+                    .GetGenericParameterTypeSymbol(targetParameters[i])
+                    .ReferenceNullability != ClrNullability
+                    .GetGenericParameterTypeSymbol(sourceParameters[i]).ReferenceNullability {
                     return false
                 }
                 let targetConstraints = targetParameters[i].GetGenericParameterConstraints()
@@ -10357,6 +10416,29 @@ partial class Binder {
                         return false
                     }
                 }
+                let targetConstraintSymbols = GetImportedAdapterConstraintTypeSymbols(
+                    targetParameters[i],
+                    targetOwner,
+                    targetMap
+                )
+                let sourceConstraintSymbols = GetImportedAdapterConstraintTypeSymbols(
+                    sourceParameters[i],
+                    sourceOwner,
+                    sourceMap
+                )
+                if targetConstraintSymbols.Length != sourceConstraintSymbols.Length {
+                    return false
+                }
+                for targetConstraintSymbol in targetConstraintSymbols {
+                    if !sourceConstraintSymbols.Any(
+                        (sourceConstraintSymbol TypeSymbol) -> AdapterTypesMatch(
+                            targetConstraintSymbol,
+                            sourceConstraintSymbol
+                        )
+                    ) {
+                        return false
+                    }
+                }
             }
             return true
         }
@@ -10366,11 +10448,20 @@ partial class Binder {
             @NotNullWhen(true) out reason string?
         ) bool {
             for parameter in method.GetGenericArguments() {
-                let interfaceBounds = parameter.GetGenericParameterConstraints().Count(
-                    (constraint Type) -> constraint.IsInterface
-                )
+                let hasValueTypeConstraint = (
+                    parameter.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint
+                ) != 0
+                let bounds = parameter
+                    .GetGenericParameterConstraints()
+                    .Where((constraint Type) -> !(hasValueTypeConstraint && constraint.IsSameAs(typeof(ValueType))))
+                    .ToArray()
+                let interfaceBounds = bounds.Count((constraint Type) -> constraint.IsInterface)
                 if interfaceBounds > 1 {
                     reason = "generic method '${method.Name}' type parameter '${parameter.Name}' has $interfaceBounds interface bounds; exact adapter metadata currently supports at most one"
+                    return true
+                }
+                if bounds.Length > 1 {
+                    reason = "generic method '${method.Name}' type parameter '${parameter.Name}' has ${bounds.Length} type bounds; exact adapter metadata currently supports at most one"
                     return true
                 }
             }
@@ -10482,8 +10573,21 @@ partial class Binder {
         }
 
         private func MapAdapterMethodType(type Type, typeParameters IReadOnlyDictionary[Type, TypeSymbol]) TypeSymbol {
-            if type.IsGenericParameter && typeParameters.TryGetValue(type, out var parameter) {
-                return parameter
+            if type.IsGenericParameter {
+                if typeParameters.TryGetValue(type, out var parameter) {
+                    return parameter
+                }
+                for pair in typeParameters {
+                    if pair
+                        .Key
+                        .IsGenericParameter &&
+                        (pair.Key.DeclaringMethod != nil) == (type.DeclaringMethod != nil) &&
+                        pair
+                        .Key
+                        .GenericParameterPosition == type.GenericParameterPosition {
+                        return pair.Value
+                    }
+                }
             }
             if type.IsByRef {
                 return ByRefTypeSymbol.Get(MapAdapterMethodType(RequiredAdapterElementType(type), typeParameters))
@@ -10509,7 +10613,32 @@ partial class Binder {
                     .GetGenericArguments()
                     .Select((argument Type) -> MapAdapterMethodType(argument, typeParameters))
                     .ToImmutableArray()
-                return ImportedTypeSymbol.GetConstructed(type, definition, arguments)
+                var closed = type
+                if closed.ContainsGenericParameters && !arguments.Any(TypeSymbol.ContainsTypeParameter) {
+                    let clrArguments = [arguments.Length]Type
+                    var allClr = true
+                    for var i = 0; i < arguments.Length; i++ {
+                        let clr = NullableLifting.GetEffectiveClrType(arguments[i])
+                        if clr == nil {
+                            allClr = false
+                            break
+                        }
+                        clrArguments[i] = if clr.FullName is string fullName && definition.Assembly.GetType(
+                            fullName,
+                            throwOnError: false
+                        ) is Type projected {
+                            projected
+                        } else {
+                            clr
+                        }
+                    }
+                    if allClr {
+                        try {
+                            closed = definition.MakeGenericType(clrArguments)
+                        } catch (ArgumentException) { }
+                    }
+                }
+                return ImportedTypeSymbol.GetConstructed(closed, definition, arguments)
             }
             return TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.TypeStructure)
         }
@@ -10520,22 +10649,25 @@ partial class Binder {
             typeParameters IReadOnlyDictionary[Type, TypeSymbol]
         ) TypeSymbol {
             let mapped = MapAdapterMethodType(rawType, typeParameters)
-            if annotatedType is NullableTypeSymbol && !(mapped is NullableTypeSymbol) {
-                return NullableTypeSymbol.Get(mapped)
-            }
             let expectedFlags = NullableFlagsBuilder.Build(annotatedType)
             if mapped is TypeParameterSymbol {
-                return if expectedFlags.Length > 0 && expectedFlags[0] == NullableFlagsBuilder.Annotated {
+                return if (annotatedType is NullableTypeSymbol) ||
+                    (expectedFlags.Length > 0 && expectedFlags[0] == NullableFlagsBuilder.Annotated) {
                     cast[TypeSymbol](NullableTypeSymbol.Get(mapped))
                 } else {
                     mapped
                 }
             }
             let mappedFlags = NullableFlagsBuilder.Build(mapped)
-            return if expectedFlags.SequenceEqual(mappedFlags) {
+            let withInnerFlags TypeSymbol = if expectedFlags.SequenceEqual(mappedFlags) {
                 mapped
             } else {
-                cast[TypeSymbol](NullabilityAnnotatedTypeSymbol(mapped, expectedFlags))
+                NullabilityAnnotatedTypeSymbol(mapped, expectedFlags)
+            }
+            return if annotatedType is NullableTypeSymbol && !(withInnerFlags is NullableTypeSymbol) {
+                NullableTypeSymbol.Get(withInnerFlags)
+            } else {
+                withInnerFlags
             }
         }
 
@@ -10547,19 +10679,404 @@ partial class Binder {
 
         private func CreateImportedMethodTypeParameterMap(
             source[]Type,
-            target ImmutableArray[TypeParameterSymbol]
+            target ImmutableArray[TypeParameterSymbol],
+            declaringType Type? = nil,
+            owner TypeSymbol? = nil
         ) Dictionary[Type, TypeSymbol] {
             let map_ = Dictionary[Type, TypeSymbol]()
+            if owner != nil {
+                var openDeclaring Type? = nil
+                var declaringArguments = ImmutableArray[TypeSymbol].Empty
+                let importedOwner = MemberLookup.GetProjectionReceiverImportedType(owner)
+                if importedOwner != nil && declaringType != nil && MemberLookup.TryGetSymbolicDeclaringContext(
+                    importedOwner,
+                    declaringType,
+                    out openDeclaring,
+                    out declaringArguments
+                ) &&
+                    openDeclaring != nil {
+                    let openParameters = openDeclaring.GetGenericArguments()
+                    for var i = 0; i < openParameters.Length && i < declaringArguments.Length; i++ {
+                        map_[openParameters[i]] = declaringArguments[i]
+                    }
+                } else if importedOwner != nil &&
+                    importedOwner.OpenDefinition != nil &&
+                    !importedOwner
+                    .TypeArguments
+                    .IsDefaultOrEmpty {
+                    let openParameters = importedOwner.OpenDefinition.GetGenericArguments()
+                    for var i = 0; i < openParameters.Length && i < importedOwner.TypeArguments.Length; i++ {
+                        map_[openParameters[i]] = importedOwner.TypeArguments[i]
+                    }
+                }
+            }
             for var i = 0; i < source.Length && i < target.Length; i++ {
                 map_[source[i]] = target[i]
             }
+            PopulateImportedAdapterReceiverTypeParameterMap(
+                declaringType,
+                owner,
+                ImmutableArray[TypeParameterSymbol].Empty,
+                map_
+            )
             return map_
+        }
+
+        private func PopulateImportedAdapterReceiverTypeParameterMap(
+            declaringType Type?,
+            owner TypeSymbol?,
+            canonicalReceivers ImmutableArray[TypeParameterSymbol],
+            $map Dictionary[Type, TypeSymbol]
+        ) {
+            if declaringType == nil {
+                return
+            }
+            if owner != nil && MemberLookup.GetProjectionReceiverImportedType(owner) is {} importedOwner &&
+                MemberLookup.TryGetSymbolicDeclaringContext(
+                importedOwner,
+                declaringType,
+                out var contextDef,
+                out var declaringArgs
+            ) &&
+                contextDef != nil {
+                let openParams = contextDef.GetGenericArguments()
+                for var r = 0; r < Math.Min(openParams.Length, declaringArgs.Length); r++ {
+                    $map[openParams[r]] = declaringArgs[r]
+                }
+                if declaringType.IsGenericType {
+                    let closedArgs = declaringType.GetGenericArguments()
+                    for var r = 0; r < Math.Min(closedArgs.Length, declaringArgs.Length); r++ {
+                        if closedArgs[r].IsGenericParameter {
+                            $map[closedArgs[r]] = declaringArgs[r]
+                        }
+                    }
+                }
+                return
+            }
+            if declaringType.IsGenericType {
+                let openDef = if declaringType.IsGenericTypeDefinition {
+                    declaringType
+                } else {
+                    declaringType.GetGenericTypeDefinition()
+                }
+                let openParams = openDef.GetGenericArguments()
+                for var r = 0; r < Math.Min(openParams.Length, canonicalReceivers.Length); r++ {
+                    $map[openParams[r]] = canonicalReceivers[r]
+                }
+                let closedArgs = declaringType.GetGenericArguments()
+                for var r = 0; r < Math.Min(closedArgs.Length, canonicalReceivers.Length); r++ {
+                    if closedArgs[r].IsGenericParameter {
+                        $map[closedArgs[r]] = canonicalReceivers[r]
+                    }
+                }
+            }
+        }
+
+        private func GetImportedAdapterConstraintTypeSymbols(
+            parameter Type,
+            owner TypeSymbol?,
+            typeParameterMap IReadOnlyDictionary[Type, TypeSymbol]
+        ) ImmutableArray[TypeSymbol] {
+            var openParameter = parameter
+            if parameter.DeclaringType is {IsGenericType: true, IsGenericTypeDefinition: false} closedDeclaring &&
+                parameter.DeclaringMethod is MethodInfo declaringMethod &&
+                MemberLookup.TryGetOpenMethodOnDeclaringType(
+                closedDeclaring.GetGenericTypeDefinition(),
+                declaringMethod
+            ) is MethodInfo openMethod {
+                let openArgs = openMethod.GetGenericArguments()
+                if uint32(parameter.GenericParameterPosition) < uint32(openArgs.Length) {
+                    openParameter = openArgs[parameter.GenericParameterPosition]
+                }
+            }
+            let rawConstraints = openParameter.GetGenericParameterConstraints()
+            if rawConstraints.Length == 0 {
+                return ImmutableArray[TypeSymbol].Empty
+            }
+            var annotatedConstraints = ImmutableArray[TypeSymbol].Empty
+            try {
+                annotatedConstraints = if owner != nil {
+                    MemberLookup.GetClrGenericParameterConstraintTypeSymbols(owner, parameter)
+                } else {
+                    ClrNullability.GetGenericParameterConstraintTypeSymbols(openParameter)
+                }
+            } catch (Exception) { }
+            let builder = ImmutableArray.CreateBuilder[TypeSymbol](rawConstraints.Length)
+            for var c = 0; c < rawConstraints.Length; c++ {
+                let constraint = rawConstraints[c]
+                builder.Add(
+                    if c < annotatedConstraints.Length {
+                        MapAdapterMethodTypeWithNullability(constraint, annotatedConstraints[c], typeParameterMap)
+                    } else {
+                        MapAdapterMethodType(constraint, typeParameterMap)
+                    }
+                )
+            }
+            return builder.ToImmutable()
+        }
+
+        private func AddAdapterOwnerSubstitutions(
+            sourceContainingType TypeSymbol,
+            substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+        ) {
+            if sourceContainingType is StructSymbol sourceConstruction {
+                for ancestor in sourceConstruction.GetHierarchy() {
+                    if ancestor.Definition is {} ancestorDefinition {
+                        if !ancestor.EnclosingTypeArguments.IsDefaultOrEmpty {
+                            let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(ancestorDefinition)
+                            let enclosingCount = Math.Min(
+                                enclosingParams.Length,
+                                ancestor.EnclosingTypeArguments.Length
+                            )
+                            for var i = 0; i < enclosingCount; i++ {
+                                substitutions.TryAdd(enclosingParams[i], ancestor.EnclosingTypeArguments[i])
+                            }
+                        }
+                        if !ancestor.TypeArguments.IsDefaultOrEmpty {
+                            for var i = 0;
+                                i < ancestorDefinition
+                                .TypeParameters
+                                .Length &&
+                                i < ancestor
+                                .TypeArguments
+                                .Length;
+                                i++ {
+                                substitutions.TryAdd(ancestorDefinition.TypeParameters[i], ancestor.TypeArguments[i])
+                            }
+                        }
+                    }
+                }
+            } else if sourceContainingType is InterfaceSymbol sourceInterface {
+                if sourceInterface.Definition is {} ifaceDefinition {
+                    if !sourceInterface.EnclosingTypeArguments.IsDefaultOrEmpty {
+                        let enclosingParams = StructSymbol.CollectEnclosingTypeParameters(ifaceDefinition)
+                        let enclosingCount = Math.Min(
+                            enclosingParams.Length,
+                            sourceInterface.EnclosingTypeArguments.Length
+                        )
+                        for var i = 0; i < enclosingCount; i++ {
+                            substitutions.TryAdd(enclosingParams[i], sourceInterface.EnclosingTypeArguments[i])
+                        }
+                    }
+                    if !sourceInterface.TypeArguments.IsDefaultOrEmpty {
+                        for var i = 0;
+                            i < ifaceDefinition
+                            .TypeParameters
+                            .Length &&
+                            i < sourceInterface
+                            .TypeArguments
+                            .Length;
+                            i++ {
+                            substitutions.TryAdd(ifaceDefinition.TypeParameters[i], sourceInterface.TypeArguments[i])
+                        }
+                    }
+                }
+            }
+        }
+
+        private func GetUserAdapterMethodContract(owner InterfaceSymbol, slot FunctionSymbol) FunctionSymbol {
+            if slot.TypeParameters.IsDefaultOrEmpty || owner.Definition == nil || object.ReferenceEquals(
+                owner.Definition,
+                owner
+            ) ||
+                (owner.TypeArguments.IsDefaultOrEmpty && owner.EnclosingTypeArguments.IsDefaultOrEmpty) {
+                return slot
+            }
+            var changed = false
+            for parameter in slot.TypeParameters {
+                let reference = if parameter.ConstraintReferenceType == nil {
+                    default(TypeSymbol?)
+                } else {
+                    owner.SubstituteMemberType(parameter.ConstraintReferenceType!!)
+                }
+                let classBound = if parameter.ClassConstraint == nil {
+                    default(TypeSymbol?)
+                } else {
+                    owner.SubstituteMemberType(parameter.ClassConstraint!!)
+                }
+                let clrInterfaceBound = if parameter.ClrInterfaceConstraint == nil {
+                    default(TypeSymbol?)
+                } else {
+                    owner.SubstituteMemberType(parameter.ClrInterfaceConstraint!!)
+                }
+                if !object.ReferenceEquals(reference, parameter.ConstraintReferenceType) || !object.ReferenceEquals(
+                    classBound,
+                    parameter.ClassConstraint
+                ) ||
+                    !object.ReferenceEquals(clrInterfaceBound, parameter.ClrInterfaceConstraint) {
+                    changed = true
+                    break
+                }
+            }
+            if !changed {
+                return slot
+            }
+            let clonedTypeParameters = ImmutableArray.CreateBuilder[TypeParameterSymbol](slot.TypeParameters.Length)
+            let methodSubstitutions = Dictionary[TypeParameterSymbol, TypeSymbol](ReferenceEqualityComparer.Instance)
+            for parameter in slot.TypeParameters {
+                let clone = TypeParameterSymbol(
+                    parameter.Name,
+                    parameter.Ordinal,
+                    parameter.Constraint,
+                    parameter.Variance
+                ){
+                    IsMethodTypeParameter = parameter.IsMethodTypeParameter,
+                    HasReferenceTypeConstraint = parameter.HasReferenceTypeConstraint,
+                    HasNullableReferenceTypeConstraint = parameter.HasNullableReferenceTypeConstraint,
+                    HasNotNullConstraint = parameter.HasNotNullConstraint,
+                    HasNullableInterfaceConstraint = parameter.HasNullableInterfaceConstraint,
+                    HasNullableClassBound = parameter.HasNullableClassBound,
+                    HasValueTypeConstraint = parameter.HasValueTypeConstraint,
+                    HasDefaultConstructorConstraint = parameter.HasDefaultConstructorConstraint,
+                    HasUnmanagedConstraint = parameter.HasUnmanagedConstraint
+                }
+                clonedTypeParameters.Add(clone)
+                methodSubstitutions[parameter] = clone
+            }
+            for var i = 0; i < slot.TypeParameters.Length; i++ {
+                let parameter = slot.TypeParameters[i]
+                let clone = clonedTypeParameters[i]
+                if parameter.InterfaceConstraint is {} ifaceBound {
+                    let substitutedIface = SubstituteType(owner.SubstituteMemberType(ifaceBound), methodSubstitutions)
+                    clone.InterfaceConstraint = substitutedIface as InterfaceSymbol
+                    if clone.InterfaceConstraint == nil {
+                        clone.ClrInterfaceConstraint = substitutedIface
+                    }
+                }
+                if parameter.ClrInterfaceConstraint is {} clrIfaceBound {
+                    clone.ClrInterfaceConstraint = SubstituteType(
+                        owner.SubstituteMemberType(clrIfaceBound),
+                        methodSubstitutions
+                    )
+                }
+                if parameter.ClassConstraint is {} classBound {
+                    clone.ClassConstraint = SubstituteType(owner.SubstituteMemberType(classBound), methodSubstitutions)
+                }
+                if parameter.TypeParameterBound is {} dependentBound {
+                    let substitutedDependent = SubstituteType(
+                        owner.SubstituteMemberType(dependentBound),
+                        methodSubstitutions
+                    )
+                    if substitutedDependent is TypeParameterSymbol mappedDependent {
+                        clone.TypeParameterBound = mappedDependent
+                    } else if substitutedDependent is InterfaceSymbol mappedIface {
+                        clone.InterfaceConstraint = mappedIface
+                    } else if substitutedDependent.ClrType?.IsInterface == true {
+                        clone.ClrInterfaceConstraint = substitutedDependent
+                    } else {
+                        clone.ClassConstraint = substitutedDependent
+                    }
+                }
+            }
+            let substitutedParameters = slot
+                .Parameters
+                .Select(
+                (parameter ParameterSymbol) -> ParameterSymbol(
+                    parameter,
+                    SubstituteType(parameter.Type, methodSubstitutions)
+                )
+            )
+                .ToImmutableArray()
+            let substitutedReturn = SubstituteType(slot.Type, methodSubstitutions)
+            let cloneMethod = FunctionSymbol(
+                slot.Name,
+                substitutedParameters,
+                substitutedReturn,
+                slot.Declaration,
+                slot.Package,
+                slot.Accessibility
+            ){ReturnRefKind = slot.ReturnRefKind, TypeParameters = clonedTypeParameters.MoveToImmutable()}
+            if slot.HasUnscopedRef {
+                cloneMethod.MarkUnscopedRef()
+            }
+            return cloneMethod
+        }
+
+        private func GetUserSourceAdapterProperties(sourceMemberType TypeSymbol) ImmutableArray[
+            (Owner TypeSymbol, Property PropertySymbol)
+        ] {
+            if sourceMemberType is InterfaceSymbol sourceInterface {
+                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Property PropertySymbol)]()
+                for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                    let def = iface.Definition ?? iface
+                    def.EnsureMembersResolved()
+                    for prop in def.Properties {
+                        if !prop.IsStatic {
+                            results.Add((iface, prop))
+                        }
+                    }
+                }
+                return results.ToImmutable()
+            }
+            if sourceMemberType is StructSymbol sourceStruct {
+                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Property PropertySymbol)]()
+                for ancestor in sourceStruct.GetHierarchy() {
+                    let def = ancestor.Definition ?? ancestor
+                    for prop in def.Properties {
+                        if !prop.IsStatic {
+                            results.Add((ancestor, prop))
+                        }
+                    }
+                }
+                return results.ToImmutable()
+            }
+            return TypeMemberModel
+                .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Property))
+                .OfType[PropertySymbol]()
+                .Select((prop PropertySymbol) -> (sourceMemberType, prop))
+                .ToImmutableArray()
+        }
+
+        private func GetUserSourceAdapterEvents(sourceMemberType TypeSymbol) ImmutableArray[
+            (Owner TypeSymbol, Event EventSymbol)
+        ] {
+            if sourceMemberType is InterfaceSymbol sourceInterface {
+                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Event EventSymbol)]()
+                for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                    let def = iface.Definition ?? iface
+                    def.EnsureMembersResolved()
+                    for evt in def.Events {
+                        if !evt.IsStatic {
+                            results.Add((iface, evt))
+                        }
+                    }
+                }
+                return results.ToImmutable()
+            }
+            if sourceMemberType is StructSymbol sourceStruct {
+                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Event EventSymbol)]()
+                for ancestor in sourceStruct.GetHierarchy() {
+                    let def = ancestor.Definition ?? ancestor
+                    for evt in def.Events {
+                        if !evt.IsStatic {
+                            results.Add((ancestor, evt))
+                        }
+                    }
+                }
+                return results.ToImmutable()
+            }
+            return TypeMemberModel
+                .EnumerateMembers(sourceMemberType, MemberQuery.Instance(MemberKinds.Event))
+                .OfType[EventSymbol]()
+                .Select((evt EventSymbol) -> (sourceMemberType, evt))
+                .ToImmutableArray()
+        }
+
+        private func SubstituteAdapterOwnerMemberType(owner TypeSymbol?, type TypeSymbol) TypeSymbol {
+            if owner is InterfaceSymbol iface {
+                return iface.SubstituteMemberType(type)
+            }
+            if owner is StructSymbol structOwner {
+                return structOwner.SubstituteMemberType(type) ?? type
+            }
+            return type
         }
 
         private func ApplyImportedGenericConstraints(
             source[]Type,
             target ImmutableArray[TypeParameterSymbol],
-            $map IReadOnlyDictionary[Type, TypeSymbol]
+            $map IReadOnlyDictionary[Type, TypeSymbol],
+            owner TypeSymbol? = nil
         ) {
             for var i = 0; i < source.Length; i++ {
                 let attributes = source[i].GenericParameterAttributes
@@ -10573,11 +11090,41 @@ partial class Binder {
                     attributes & GenericParameterAttributes.DefaultConstructorConstraint
                 ) != 0
                 target[i].HasUnmanagedConstraint = HasAdapterUnmanagedConstraint(source[i])
-                for constraint in source[i].GetGenericParameterConstraints() {
-                    let mapped = MapAdapterMethodType(constraint, $map)
+                let rawConstraints = source[i].GetGenericParameterConstraints()
+                let parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(source[i]).ReferenceNullability
+                if target[i].HasReferenceTypeConstraint && parameterNullability == ReferenceNullabilityKind.Nullable {
+                    target[i].HasNullableReferenceTypeConstraint = true
+                } else if ClrNullability.HasNotNullConstraint(source[i]) {
+                    target[i].HasNotNullConstraint = true
+                }
+                let mappedConstraints = GetImportedAdapterConstraintTypeSymbols(source[i], owner, $map)
+                for var c = 0; c < rawConstraints.Length && c < mappedConstraints.Length; c++ {
+                    let constraint = rawConstraints[c]
+                    if target[i].HasValueTypeConstraint && constraint.IsSameAs(typeof(ValueType)) {
+                        continue
+                    }
+                    let mapped = mappedConstraints[c]
                     if mapped is TypeParameterSymbol dependent {
                         target[i].TypeParameterBound = dependent
-                    } else if constraint.IsInterface {
+                    } else if mapped is NullableTypeSymbol{UnderlyingType: TypeParameterSymbol nullableDependent} {
+                        target[i].TypeParameterBound = nullableDependent
+                        target[i].HasNullableClassBound = true
+                    } else if mapped is InterfaceSymbol userInterface {
+                        target[i].InterfaceConstraint = userInterface
+                    } else if mapped is NullableTypeSymbol{UnderlyingType: InterfaceSymbol nullableUserInterface} {
+                        target[i].InterfaceConstraint = nullableUserInterface
+                        target[i].HasNullableInterfaceConstraint = true
+                    } else if constraint.IsInterface ||
+                        mapped
+                        .ClrType
+                        ?.IsInterface == true ||
+                        (
+                        mapped is NullableTypeSymbol nullableClr &&
+                            nullableClr
+                            .UnderlyingType
+                            .ClrType
+                            ?.IsInterface == true
+                    ) {
                         target[i].ClrInterfaceConstraint = mapped
                     } else {
                         target[i].ClassConstraint = mapped
@@ -10586,7 +11133,12 @@ partial class Binder {
             }
         }
 
-        internal func PropertyContractsMatch(target PropertySymbol, source PropertySymbol) bool {
+        internal func PropertyContractsMatch(
+            target PropertySymbol,
+            source PropertySymbol,
+            sourceOwner TypeSymbol? = nil
+        ) bool {
+            let sourceType = SubstituteAdapterOwnerMemberType(sourceOwner, source.Type)
             if target.IsIndexer != source.IsIndexer ||
                 target
                 .Parameters
@@ -10601,12 +11153,13 @@ partial class Binder {
                     (target.GetterSymbol?.HasUnscopedRef == true) != (source.GetterSymbol?.HasUnscopedRef == true)
             ) ||
                 (target.HasSetter && (!source.HasSetter || source.SetterAccessibility != Accessibility.Public)) ||
-                !AdapterTypesMatch(target.Type, source.Type) {
+                !AdapterTypesMatch(target.Type, sourceType) {
                 return false
             }
             for var i = 0; i < target.Parameters.Length; i++ {
+                let sourceParameterType = SubstituteAdapterOwnerMemberType(sourceOwner, source.Parameters[i].Type)
                 if !target.Parameters[i].HasSameRefContract(source.Parameters[i]) ||
-                    !AdapterTypesMatch(target.Parameters[i].Type, source.Parameters[i].Type) {
+                    !AdapterTypesMatch(target.Parameters[i].Type, sourceParameterType) {
                     return false
                 }
             }
@@ -10849,10 +11402,11 @@ partial class Binder {
 
         private func EventContractsMatch(
             target EventSymbol,
-            source EventSymbol
+            source EventSymbol,
+            sourceOwner TypeSymbol? = nil
         ) bool -> source.AddMethodSymbol != nil &&
             source.RemoveMethodSymbol != nil &&
-            AdapterTypesMatch(target.Type, source.Type)
+            AdapterTypesMatch(target.Type, SubstituteAdapterOwnerMemberType(sourceOwner, source.Type))
 
         private func ImportedEventContractsMatch(
             target EventInfo,
@@ -10922,7 +11476,8 @@ partial class Binder {
         )
 
         private func AdapterMethodMetadataMatches(target MethodInfo, source MethodInfo) bool {
-            if !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter) {
+            if HasAdapterMethodUnscopedRef(target) != HasAdapterMethodUnscopedRef(source) ||
+                !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter) {
                 return false
             }
             let targetParameters = target.GetParameters()
@@ -10940,6 +11495,20 @@ partial class Binder {
             source ParameterInfo
         ) bool -> AdapterParameterMetadataSupported(target) &&
             AdapterParameterMetadataSupported(source) &&
+            (
+            // Parameter ref-safety defaults do not apply to return metadata.
+            if target.Position < 0 {
+                HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source) &&
+                    IsAdapterScoped(target) == IsAdapterScoped(source)
+            } else {
+                RefCapabilities.ImportedParameterContractsMatch(
+                    target,
+                    ClrNullability.GetParameterTypeSymbol(target),
+                    source,
+                    ClrNullability.GetParameterTypeSymbol(source)
+                )
+            }
+        ) &&
             AdapterModifierSequenceMatches(target.GetRequiredCustomModifiers(), source.GetRequiredCustomModifiers()) &&
             AdapterModifierSequenceMatches(target.GetOptionalCustomModifiers(), source.GetOptionalCustomModifiers())
 
@@ -10952,10 +11521,9 @@ partial class Binder {
         private func ImportedPropertyMetadataSupported(property PropertyInfo) bool -> (
             property.GetMethod == nil ||
                 (
-                ImportedMethodMetadataSupported(property.GetMethod!!) &&
-                    !HasAdapterUnscopedRef(property.GetMethod!!.ReturnParameter) &&
-                    !property.GetMethod!!
-                    .GetParameters().Any(IsAdapterScoped)
+                ImportedMethodMetadataSupported(property.GetMethod!!) && !property.GetMethod!!.GetParameters().Any(
+                    IsAdapterScoped
+                )
             )
         ) &&
             (
@@ -10998,6 +11566,9 @@ partial class Binder {
         ) bool -> target.Length == source.Length &&
             target
             .Zip(source).All((pair(First Type, Second Type)) -> ClrTypeUtilities.AreSame(pair.First, pair.Second))
+
+        private func HasAdapterMethodUnscopedRef(method MethodInfo) bool -> RefCapabilities.HasUnscopedRef(method) ||
+            HasAdapterUnscopedRef(method.ReturnParameter)
 
         private func HasAdapterUnscopedRef(parameter ParameterInfo) bool -> parameter.GetCustomAttributesData().Any(
             (attribute CustomAttributeData) -> KnownAttributes.IsUnscopedRef(attribute.AttributeType)
@@ -12262,8 +12833,22 @@ partial class Binder {
                 failedConstraint = "unmanaged"
                 return false
             }
-            if declared.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(argument) {
-                failedConstraint = "class"
+            if declared.HasReferenceTypeConstraint {
+                if !IsReferenceTypeForConstraint(argument) {
+                    failedConstraint = if declared.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                    return false
+                }
+                if !declared.HasNullableReferenceTypeConstraint && !SatisfiesNotNullConstraint(argument) {
+                    failedConstraint = "class"
+                    return false
+                }
+            }
+            if declared.HasNotNullConstraint && !SatisfiesNotNullConstraint(argument) {
+                failedConstraint = "notnull"
                 return false
             }
             if declared.HasDefaultConstructorConstraint &&
@@ -12277,27 +12862,37 @@ partial class Binder {
                 failedConstraint = "new()"
                 return false
             }
-            if declared.Constraint == TypeParameterConstraint.Comparable && !AnyBound(parameters, IsComparable) {
+            if declared.Constraint == TypeParameterConstraint.Comparable && !AnyBound(argument, IsComparable) {
                 failedConstraint = "comparable"
                 return false
             }
-            if declared.ClassConstraint is {} classBound && !TypeSymbol.ContainsTypeParameter(classBound) &&
-                !AnyBound(parameters, (candidate TypeSymbol) -> SatisfiesClassConstraint(candidate, classBound)) {
+            if declared.EffectiveClassConstraint is {} classBound && !TypeSymbol.ContainsTypeParameter(classBound) &&
+                !AnyBound(argument, (candidate TypeSymbol) -> SatisfiesClassConstraint(candidate, classBound)) {
                 failedConstraint = SymbolDisplay.ToTypeDisplayString(classBound)
                 return false
             }
             if declared.InterfaceConstraint is {} userInterfaceBound && !TypeSymbol.ContainsTypeParameter(
                 userInterfaceBound
-            ) &&
-                !AnyBound(parameters, (candidate TypeSymbol) -> ImplementsInterface(candidate, userInterfaceBound)) {
-                failedConstraint = SymbolDisplay.ToTypeDisplayString(userInterfaceBound)
-                return false
+            ) {
+                let allowNullableInterface = declared.HasNullableInterfaceConstraint
+                if !AnyBound(
+                    argument,
+                    (candidate TypeSymbol) -> ImplementsInterface(candidate, userInterfaceBound, allowNullableInterface)
+                ) {
+                    let displayType TypeSymbol = if allowNullableInterface {
+                        NullableTypeSymbol.Get(userInterfaceBound)
+                    } else {
+                        userInterfaceBound
+                    }
+                    failedConstraint = SymbolDisplay.ToTypeDisplayString(displayType)
+                    return false
+                }
             }
             if declared.ClrInterfaceConstraint is {} clrInterfaceBound && !TypeSymbol.ContainsTypeParameter(
                 clrInterfaceBound
             ) &&
                 !AnyBound(
-                parameters,
+                argument,
                 (candidate TypeSymbol) -> SatisfiesClrInterfaceConstraint(candidate, clrInterfaceBound, declared)
             ) {
                 failedConstraint = SymbolDisplay.ToTypeDisplayString(clrInterfaceBound)
@@ -12345,6 +12940,25 @@ partial class Binder {
             return chain
         }
 
+        internal func EnumerateForwardedParameterChainWithNullability(argument TypeParameterSymbol) List[
+            (Parameter TypeParameterSymbol, CrossedNullableLink bool)
+        ] {
+            let chain = List[(Parameter TypeParameterSymbol, CrossedNullableLink bool)]{(argument, false)}
+            let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance){argument}
+            for var i = 0; i < chain.Count; i++ {
+                let (current, crossedNullable) = chain[i]
+                let nextNullable = crossedNullable ||
+                    (current.TypeParameterBound != nil && current.HasNullableClassBound)
+                if current.TypeParameterBound is {} tpBound && visited.Add(tpBound) {
+                    chain.Add((tpBound, nextNullable))
+                }
+                if current.ClassConstraint is TypeParameterSymbol classTp && visited.Add(classTp) {
+                    chain.Add((classTp, crossedNullable || current.HasNullableClassBound))
+                }
+            }
+            return chain
+        }
+
         /// Issue #4067: appends [`candidate`](paramref) to
         /// [`chain`](paramref) when it is present and not already there.
         /// @remarks This deduplication is what makes
@@ -12382,22 +12996,50 @@ partial class Binder {
         /// bound those parameters carry, answers [`predicate`](paramref). A
         /// type bound is implied by the class or interface a parameter is bounded
         /// by, which is why the concrete bounds are asked too.
-        /// @param parameters The forwarded-bound chain.
+        /// @param argument The original type parameter argument.
         /// @param predicate The relation asked of each candidate.
         /// @returns `true` when one answers.
-        private func AnyBound(parameters List[TypeParameterSymbol], predicate(TypeSymbol) -> bool) bool {
-            for parameter in parameters {
-                if predicate(parameter) {
+        private func AnyBound(argument TypeParameterSymbol, predicate(TypeSymbol) -> bool) bool {
+            let argProvesNotNull = SatisfiesNotNullConstraint(argument)
+            for (parameter, crossedNullable) in EnumerateForwardedParameterChainWithNullability(argument) {
+                let candidateParam TypeSymbol = if crossedNullable && !argProvesNotNull {
+                    NullableTypeSymbol.Get(parameter)
+                } else {
+                    parameter
+                }
+                if predicate(candidateParam) {
                     return true
                 }
-                if parameter.ClassConstraint is {} classBound && predicate(classBound) {
-                    return true
+                if parameter.EffectiveClassConstraint is {} rawClassBound {
+                    let classBound TypeSymbol = if crossedNullable && !argProvesNotNull {
+                        NullableTypeSymbol.Get(rawClassBound)
+                    } else {
+                        UnwrapTopLevelBoundForNotNullParameter(rawClassBound, argProvesNotNull)
+                    }
+                    if predicate(classBound) {
+                        return true
+                    }
                 }
-                if parameter.InterfaceConstraint is {} userInterfaceBound && predicate(userInterfaceBound) {
-                    return true
+                if parameter.InterfaceConstraint is {} userInterfaceBound {
+                    let bound TypeSymbol = if (parameter.HasNullableInterfaceConstraint || crossedNullable) &&
+                        !argProvesNotNull {
+                        NullableTypeSymbol.Get(userInterfaceBound)
+                    } else {
+                        userInterfaceBound
+                    }
+                    if predicate(bound) {
+                        return true
+                    }
                 }
-                if parameter.ClrInterfaceConstraint is {} clrInterfaceBound && predicate(clrInterfaceBound) {
-                    return true
+                if parameter.ClrInterfaceConstraint is {} rawClrInterfaceBound {
+                    let clrInterfaceBound TypeSymbol = if crossedNullable && !argProvesNotNull {
+                        NullableTypeSymbol.Get(rawClrInterfaceBound)
+                    } else {
+                        UnwrapTopLevelBoundForNotNullParameter(rawClrInterfaceBound, argProvesNotNull)
+                    }
+                    if predicate(clrInterfaceBound) {
+                        return true
+                    }
                 }
             }
             return false
@@ -12475,11 +13117,26 @@ partial class Binder {
                 return typeParameter.Name
             }
             let special = attributes & GenericParameterAttributes.SpecialConstraintMask
+            var parameterNullability = ReferenceNullabilityKind.Platform
+            try {
+                parameterNullability = ClrNullability.GetGenericParameterTypeSymbol(typeParameter).ReferenceNullability
+            } catch (Exception) { }
             if (special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0 {
                 return "struct"
             }
             if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
-                return "class"
+                return if parameterNullability == ReferenceNullabilityKind.Nullable {
+                    "class?"
+                } else {
+                    "class"
+                }
+            }
+            var hasNotNull = false
+            try {
+                hasNotNull = ClrNullability.HasNotNullConstraint(typeParameter)
+            } catch (Exception) { }
+            if hasNotNull {
+                return "notnull"
             }
             if (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 {
                 return "new()"
@@ -13639,7 +14296,7 @@ partial class Binder {
                     substitution
                 ) as InterfaceSymbol ??
                     tp.InterfaceConstraint!!
-                if !ImplementsInterface(typeArgument, expectedIface) {
+                if !ImplementsInterface(typeArgument, expectedIface, tp.HasNullableInterfaceConstraint) {
                     return false
                 }
             }
@@ -13659,8 +14316,13 @@ partial class Binder {
             }
             // Issue #1056 / #4744: substitute self-referential and sibling type
             // arguments into the base-class constraint before checking derivation.
-            if tp.ClassConstraint != nil {
-                let expectedClass = SubstituteConstraintType(tp.ClassConstraint!!, tp, typeArgument, substitution)
+            if tp.EffectiveClassConstraint != nil {
+                let expectedClass = SubstituteConstraintType(
+                    tp.EffectiveClassConstraint!!,
+                    tp,
+                    typeArgument,
+                    substitution
+                )
                 if !SatisfiesClassConstraint(typeArgument, expectedClass) {
                     return false
                 }
@@ -13668,9 +14330,26 @@ partial class Binder {
             if tp.Constraint == TypeParameterConstraint.Comparable && !IsComparable(typeArgument) {
                 return false
             }
-            // ADR-0097 / issue #775: enforce the `class` / `struct` / `new()`
-            // flag-style constraints introduced by the G# spelling.
-            if tp.HasReferenceTypeConstraint && !IsReferenceTypeForConstraint(typeArgument) {
+            // ADR-0097 / issue #775 / issue #4996: enforce the `class` / `class?` /
+            // `notnull` / `struct` / `new()` flag-style constraints.
+            if tp.HasReferenceTypeConstraint {
+                let candidate = if tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is NullableTypeSymbol nullableArg &&
+                    !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                    nullableArg.UnderlyingType
+                } else {
+                    typeArgument
+                }
+                if !IsReferenceTypeForConstraint(candidate) {
+                    return false
+                }
+                if !tp.HasNullableReferenceTypeConstraint &&
+                    typeArgument is TypeParameterSymbol argTp &&
+                    !SatisfiesNotNullConstraint(argTp) {
+                    return false
+                }
+            }
+            if tp.HasNotNullConstraint && !SatisfiesNotNullConstraint(typeArgument) {
                 return false
             }
             if tp.HasValueTypeConstraint && !IsNonNullableValueTypeForConstraint(typeArgument) {
@@ -13722,7 +14401,24 @@ partial class Binder {
             boundArgument TypeSymbol?,
             tp TypeParameterSymbol?
         ) bool {
+            var typeArgument = typeArgument
             if typeArgument == nil || boundArgument == nil {
+                return true
+            }
+            if (
+                ((tp == nil || !tp.HasNullableClassBound) && SatisfiesNotNullConstraint(boundArgument)) ||
+                    (tp != nil && SatisfiesNotNullConstraint(tp))
+            ) &&
+                !SatisfiesNotNullConstraint(typeArgument) {
+                return false
+            }
+            if tp != nil &&
+                tp.HasNullableClassBound &&
+                typeArgument is NullableTypeSymbol nullableArg &&
+                !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                typeArgument = nullableArg.UnderlyingType
+            }
+            if typeArgument == nil {
                 return true
             }
             if object.ReferenceEquals(typeArgument, boundArgument) ||
@@ -13926,23 +14622,58 @@ partial class Binder {
             if typeArgument == nil || classConstraint == nil {
                 return false
             }
+            let strippedArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if strippedArgument is NullableTypeSymbol &&
+                classConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
+            }
+            let effectiveClassConstraint = if classConstraint is NullableTypeSymbol nullableClassConstraint {
+                nullableClassConstraint.UnderlyingType
+            } else {
+                classConstraint
+            }
+            if strippedArgument is NullableTypeSymbol nullableTypeArg && !NullableLifting.IsAnyValueTypeNullable(
+                nullableTypeArg
+            ) {
+                typeArgument = nullableTypeArg.UnderlyingType
+            }
             // Constraint propagation: follow both ordinary class constraints and
             // #4043's separate dependent-bound slot. Reference-identity tracking
             // protects against malformed cycles without limiting valid chain depth.
             if typeArgument is TypeParameterSymbol {
+                let argProvesNotNull = SatisfiesNotNullConstraint(typeArgument)
+                if effectiveClassConstraint.ClrType is {} objConstraintClr && string.Equals(
+                    objConstraintClr.FullName,
+                    "System.Object",
+                    StringComparison.Ordinal
+                ) {
+                    return classConstraint.ReferenceNullability != ReferenceNullabilityKind.NotNull || argProvesNotNull
+                }
+                var crossedNullable = false
                 let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
                 while typeArgument is TypeParameterSymbol tpArg {
                     if !visited.Add(tpArg) {
                         return false
                     }
-                    let next TypeSymbol? = tpArg.ClassConstraint ?? tpArg.TypeParameterBound
+                    crossedNullable |= tpArg.HasNullableClassBound
+                    let next TypeSymbol? = tpArg.EffectiveClassConstraint ?? tpArg.TypeParameterBound
                     if next == nil {
                         return false
                     }
                     typeArgument = next
                 }
+                if (typeArgument is NullableTypeSymbol || crossedNullable) &&
+                    !argProvesNotNull &&
+                    classConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                    return false
+                }
+                if typeArgument is NullableTypeSymbol nullableBound && !NullableLifting.IsAnyValueTypeNullable(
+                    nullableBound
+                ) {
+                    typeArgument = nullableBound.UnderlyingType
+                }
             }
-            if classConstraint is StructSymbol classDef {
+            if effectiveClassConstraint is StructSymbol classDef {
                 let constraintDef = classDef.Definition ?? classDef
                 let constraintArgs = Conversion.GetEffectiveStructTypeArguments(classDef)
                 let checkConstructedArguments = !constraintArgs.IsDefaultOrEmpty && !constraintArgs.Any(
@@ -13951,7 +14682,7 @@ partial class Binder {
                 if typeArgument is StructSymbol argClass {
                     for current in argClass.GetHierarchy() {
                         let currentDef = current.Definition ?? current
-                        if object.ReferenceEquals(current, classConstraint) {
+                        if object.ReferenceEquals(current, effectiveClassConstraint) {
                             return true
                         }
                         if !object.ReferenceEquals(currentDef, constraintDef) {
@@ -13968,9 +14699,9 @@ partial class Binder {
             }
             // Imported reference class: use CLR assignability and compare
             // symbolic generic arguments when both project to a CLR type.
-            if classConstraint.ClrType is {} constraintClr {
+            if effectiveClassConstraint.ClrType is {} constraintClr {
                 if typeArgument!!.ClrType != nil {
-                    return SatisfiesImportedClassConstraint(typeArgument!!, classConstraint, constraintClr)
+                    return SatisfiesImportedClassConstraint(typeArgument!!, effectiveClassConstraint, constraintClr)
                 }
                 let constraintFullName = constraintClr.FullName
                 if string.Equals(constraintFullName, "System.Object", StringComparison.Ordinal) {
@@ -13993,7 +14724,7 @@ partial class Binder {
                 if typeArgument is StructSymbol sourceClass {
                     for current in sourceClass.GetHierarchy() {
                         if current.ImportedBaseType is {} importedBase &&
-                            SatisfiesImportedClassConstraint(importedBase, classConstraint, constraintClr) {
+                            SatisfiesImportedClassConstraint(importedBase, effectiveClassConstraint, constraintClr) {
                             return true
                         }
                     }
@@ -14014,7 +14745,7 @@ partial class Binder {
                 return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             let constraintPositions = GetClrSlotAlignedArguments(classConstraint)
-            if constraintPositions.IsDefaultOrEmpty || TypeSymbol.ContainsTypeParameter(classConstraint) {
+            if constraintPositions.IsDefaultOrEmpty {
                 return ClrLoadContext.IsAssignable(constraintClr, candidateClr)
             }
             return TryFindMatchingClrRelationship(
@@ -14090,28 +14821,6 @@ partial class Binder {
             return false
         }
 
-        private func IsReferenceClassConstraint(classConstraint TypeSymbol?) bool {
-            if classConstraint == nil {
-                return false
-            }
-            if classConstraint is StructSymbol structSym {
-                return structSym.IsClass
-            }
-            if classConstraint.ClrType is {} clr {
-                if !clr.IsClass || clr.IsValueType {
-                    return false
-                }
-                let fullName = clr.FullName
-                return !string.Equals(fullName, "System.Object", StringComparison.Ordinal) && !string.Equals(
-                    fullName,
-                    "System.ValueType",
-                    StringComparison.Ordinal
-                ) &&
-                    !string.Equals(fullName, "System.Enum", StringComparison.Ordinal)
-            }
-            return false
-        }
-
         /// ADR-0097: returns `true` when [`type`](paramref)
         /// satisfies a `where T : class` constraint — i.e. it is a reference
         /// type at the CLR level. Includes G# interfaces and reference-shaped
@@ -14131,6 +14840,9 @@ partial class Binder {
             }
             // ADR-0186: `T!` is a reference type exactly when `T` is.
             type = PlatformTypeSymbol.StripTopLevel(type)
+            if type is NullabilityAnnotatedTypeSymbol annotated {
+                return IsReferenceTypeForConstraint(annotated.BaseType)
+            }
             if type is TypeParameterSymbol tp {
                 // Direct `class` on `tp` itself, or a non-universal reference class
                 // bound anywhere in `tp`'s forwarded chain, proves `tp` cannot be
@@ -14138,13 +14850,7 @@ partial class Binder {
                 // parameter (`[A class, B A]`) or `System.Object`/`System.Enum`
                 // does not, because `A = object, B = int32` and `B = Color` are
                 // valid instantiations.
-                if tp.HasReferenceTypeConstraint {
-                    return true
-                }
-                return AnyParameter(
-                    EnumerateForwardedParameterChain(tp),
-                    (p TypeParameterSymbol) -> IsReferenceClassConstraint(p.ClassConstraint)
-                )
+                return tp.ProvesNonUniversalReferenceConstraint
             }
             if type is StructSymbol structSym {
                 return structSym.IsClass
@@ -14173,6 +14879,24 @@ partial class Binder {
             }
             return false
         }
+
+        internal func SatisfiesNotNullConstraint(type TypeSymbol?) bool {
+            if type == nil || object.ReferenceEquals(type, TypeSymbol.Null) {
+                return false
+            }
+            let stripped = PlatformTypeSymbol.StripTopLevel(type)
+            if stripped is NullableTypeSymbol {
+                return false
+            }
+            if stripped is TypeParameterSymbol tp {
+                return tp.ProvesNotNullConstraint
+            }
+            return true
+        }
+
+        internal func HasNullableConstraintWithoutNotNull(
+            tp TypeParameterSymbol
+        ) bool -> tp.HasNullableConstraintWithoutNotNull
 
         /// ADR-0097: returns `true` when [`type`](paramref)
         /// satisfies a `where T : struct` constraint — i.e. it is a
@@ -14242,6 +14966,12 @@ partial class Binder {
             if type == nil {
                 return false
             }
+            if type is NullableTypeSymbol nullable {
+                if NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    return false
+                }
+                return HasDefaultConstructorForConstraint(nullable.UnderlyingType)
+            }
             if IsNonNullableValueTypeForConstraint(type) {
                 return true
             }
@@ -14281,7 +15011,18 @@ partial class Binder {
             return false
         }
 
-        internal func ImplementsInterface(typeArgument TypeSymbol, iface InterfaceSymbol) bool {
+        internal func ImplementsInterface(
+            typeArgument TypeSymbol,
+            iface InterfaceSymbol,
+            allowNullableBound bool = false
+        ) bool {
+            var typeArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if typeArgument is NullableTypeSymbol nullableArg {
+                if !allowNullableBound || NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                    return false
+                }
+                typeArgument = nullableArg.UnderlyingType
+            }
             // Issue #1113: an interface constraint is satisfied when the type
             // argument implements the interface ANYWHERE in its hierarchy — directly,
             // through a base class, or via a transitively-inherited base interface
@@ -14311,17 +15052,27 @@ partial class Binder {
                 }
             }
             if typeArgument is TypeParameterSymbol tp {
+                let effectiveAllowNullable = allowNullableBound || SatisfiesNotNullConstraint(tp)
                 // Constraint propagation: follow the parameter's forwarded chain
                 // and check both interface and class constraints.
-                for chainParam in EnumerateForwardedParameterChain(tp) {
-                    if chainParam.InterfaceConstraint is {} paramIface {
+                for (chainParam, crossedNullable) in EnumerateForwardedParameterChainWithNullability(tp) {
+                    if crossedNullable && !effectiveAllowNullable {
+                        continue
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface &&
+                        (effectiveAllowNullable || !chainParam.HasNullableInterfaceConstraint) {
                         for candidate in paramIface.SelfAndAllBaseInterfaces() {
                             if candidate == iface || SameConstructedInterface(candidate, iface) {
                                 return true
                             }
                         }
                     }
-                    if chainParam.ClassConstraint is StructSymbol classBound && ImplementsInterface(classBound, iface) {
+                    let classBound = if effectiveAllowNullable || !chainParam.HasNullableClassBound {
+                        chainParam.UnwrappedClassConstraintStruct
+                    } else {
+                        nil
+                    }
+                    if classBound != nil && ImplementsInterface(classBound, iface, effectiveAllowNullable) {
                         return true
                     }
                 }
@@ -14501,7 +15252,7 @@ partial class Binder {
                 return positions
             }
             let defName = clr.GetGenericTypeDefinition().FullName
-            if defName is not("System.ValueTuple`8" or "System.Tuple`8") {
+            if defName != "System.ValueTuple`8" {
                 return positions
             }
             return PackTupleClrSlotArguments(clr, positions, 0)
@@ -14683,7 +15434,69 @@ partial class Binder {
             constraint TypeSymbol,
             tp TypeParameterSymbol?
         ) bool {
-            if SatisfiesClrInterfaceConstraintReflectively(typeArgument, constraint, tp) {
+            var typeArgument = typeArgument
+            let strippedArgument = PlatformTypeSymbol.StripTopLevel(typeArgument)
+            if strippedArgument is NullableTypeSymbol &&
+                constraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
+            }
+            if strippedArgument is TypeParameterSymbol argTp {
+                let argProvesNotNull = SatisfiesNotNullConstraint(argTp)
+                for (chainParam, crossedNullable) in EnumerateForwardedParameterChainWithNullability(argTp) {
+                    if chainParam.ClrInterfaceConstraint is {} paramClrIface && !object.ReferenceEquals(
+                        paramClrIface,
+                        typeArgument
+                    ) {
+                        let bound = if crossedNullable && !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramClrIface)
+                        } else {
+                            UnwrapTopLevelBoundForNotNullParameter(paramClrIface, argProvesNotNull)
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface && !object.ReferenceEquals(
+                        paramIface,
+                        typeArgument
+                    ) {
+                        let bound TypeSymbol = if (chainParam.HasNullableInterfaceConstraint || crossedNullable) &&
+                            !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramIface)
+                        } else {
+                            paramIface
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                    if chainParam.EffectiveClassConstraint is {} paramClass && !object.ReferenceEquals(
+                        paramClass,
+                        typeArgument
+                    ) {
+                        let bound = if crossedNullable && !argProvesNotNull {
+                            NullableTypeSymbol.Get(paramClass)
+                        } else {
+                            UnwrapTopLevelBoundForNotNullParameter(paramClass, argProvesNotNull)
+                        }
+                        if SatisfiesClrInterfaceConstraint(bound, constraint, tp) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            let effectiveConstraint = if constraint is NullableTypeSymbol nullableConstraint {
+                nullableConstraint.UnderlyingType
+            } else {
+                constraint
+            }
+            if strippedArgument is NullableTypeSymbol nullableTypeArg && !NullableLifting.IsAnyValueTypeNullable(
+                nullableTypeArg
+            ) {
+                typeArgument = nullableTypeArg.UnderlyingType
+            }
+            if SatisfiesClrInterfaceConstraintReflectively(typeArgument, effectiveConstraint, tp) {
                 return true
             }
             // Issue #4124: the SAME blindness #4061, #4068 and #4092 each repaired
@@ -14694,8 +15507,18 @@ partial class Binder {
             // that walk already answers changes.
             return typeArgument != nil &&
                 typeArgument.ClrType == nil &&
-                constraint.ClrType is {IsInterface: true} constraintInterfaceClr &&
-                SourceSymbolImplementsImportedInterface(typeArgument, constraint, constraintInterfaceClr, tp)
+                effectiveConstraint.ClrType is {IsInterface: true} constraintInterfaceClr &&
+                SourceSymbolImplementsImportedInterface(typeArgument, effectiveConstraint, constraintInterfaceClr, tp)
+        }
+
+        private func UnwrapTopLevelBoundForNotNullParameter(bound TypeSymbol, argProvesNotNull bool) TypeSymbol {
+            return if argProvesNotNull &&
+                bound is NullableTypeSymbol nullableBound &&
+                !NullableLifting.IsAnyValueTypeNullable(nullableBound) {
+                nullableBound.UnderlyingType
+            } else {
+                bound
+            }
         }
 
         /// The reflective half of (cref:SatisfiesClrInterfaceConstraint):
@@ -14720,6 +15543,20 @@ partial class Binder {
                         typeArgument
                     ) &&
                         SatisfiesClrInterfaceConstraint(paramClrIface, constraint, tp) {
+                        return true
+                    }
+                    if chainParam.InterfaceConstraint is {} paramIface && !object.ReferenceEquals(
+                        paramIface,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramIface, constraint, tp) {
+                        return true
+                    }
+                    if chainParam.ClassConstraint is {} paramClass && !object.ReferenceEquals(
+                        paramClass,
+                        typeArgument
+                    ) &&
+                        SatisfiesClrInterfaceConstraint(paramClass, constraint, tp) {
                         return true
                     }
                 }
@@ -15010,13 +15847,18 @@ partial class Binder {
             // human-readable description so diagnostics are unambiguous.
             let flags = List[string]()
             if tp.InterfaceConstraint != nil {
-                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.InterfaceConstraint!!))
+                let ifaceType TypeSymbol = if tp.HasNullableInterfaceConstraint {
+                    NullableTypeSymbol.Get(tp.InterfaceConstraint!!)
+                } else {
+                    tp.InterfaceConstraint!!
+                }
+                flags.Add(SymbolDisplay.ToTypeDisplayString(ifaceType))
             }
             if tp.ClrInterfaceConstraint != nil {
                 flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClrInterfaceConstraint!!))
             }
-            if tp.ClassConstraint != nil {
-                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClassConstraint!!))
+            if tp.EffectiveClassConstraint != nil {
+                flags.Add(SymbolDisplay.ToTypeDisplayString(tp.EffectiveClassConstraint!!))
             }
             // Issue #4043: a dependent bound reads as the NAME of the bounding type
             // parameter — `TBase`, not whatever it happened to be substituted with
@@ -15029,7 +15871,16 @@ partial class Binder {
                 flags.Add("comparable")
             }
             if tp.HasReferenceTypeConstraint {
-                flags.Add("class")
+                flags.Add(
+                    if tp.HasNullableReferenceTypeConstraint {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                )
+            }
+            if tp.HasNotNullConstraint {
+                flags.Add("notnull")
             }
             if tp.HasValueTypeConstraint && !tp.HasUnmanagedConstraint {
                 flags.Add("struct")

@@ -42,10 +42,10 @@ import System.Reflection
 /// suspension-liveness analysis proves they do not cross a suspension.
 shared class RefInitializationHoister {
     private class Rewriter : BoundTreeRewriter {
-        private let refLocals Dictionary[LocalVariableSymbol, BoundExpression]
+        private let refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression]
         private var tempCounter int32
 
-        init(refLocals Dictionary[LocalVariableSymbol, BoundExpression]) {
+        init(refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression]) {
             this.refLocals = refLocals
         }
 
@@ -68,11 +68,9 @@ shared class RefInitializationHoister {
                         BoundDereferenceExpression{Operand: BoundConditionalAddressExpression} or
                         BoundDereferenceExpression{Operand: BoundClrIndexExpression}
                 ) {
-                    prelude.Add(
-                        BoundExpressionStatement(node.Syntax, BoundAddressOfExpression(addressOf.Syntax, template))
-                    )
+                    prelude.Add(BoundExpressionStatement(node.Syntax, addressOf.Update(template)))
                 }
-                refLocals[local] = template
+                refLocals[local] = addressOf.Update(template)
                 return BoundBlockStatement(nil, prelude.ToImmutable())
             }
             return base.RewriteVariableDeclaration(node)
@@ -87,7 +85,7 @@ shared class RefInitializationHoister {
                 // The template only references hoisted temps and trivially
                 // repeatable leaves, so no further rewriting is required and
                 // every inlining is side-effect-free.
-                return template
+                return template.Operand
             }
             return base.RewriteDereferenceExpression(node)
         }
@@ -95,7 +93,7 @@ shared class RefInitializationHoister {
         protected override func RewriteVariableExpression(node BoundVariableExpression) BoundExpression {
             // Bare ref local usage (e.g., passed to a ref parameter) → &lvalue.
             if node.Variable is LocalVariableSymbol local && refLocals.TryGetValue(local, out var template) {
-                return BoundAddressOfExpression(nil, template)
+                return template
             }
             return base.RewriteVariableExpression(node)
         }
@@ -113,7 +111,7 @@ shared class RefInitializationHoister {
                     // operand directly. Spilling earlier in the pipeline will
                     // already have flattened complex re-seats, so in practice
                     // the operand is simple.
-                    refLocals[local] = RewriteExpression(newAddr.Operand)
+                    refLocals[local] = newAddr.Update(RewriteExpression(newAddr.Operand))
                 }
                 return BoundLiteralExpression(nil, 0)
             }
@@ -371,7 +369,7 @@ shared class RefInitializationHoister {
         // which locals are ref so the rewriter can recognize their uses). The
         // operand template is computed in the second pass at the declaration
         // site itself, where we also emit the hoisting prelude.
-        let refLocals = Dictionary[LocalVariableSymbol, BoundExpression]()
+        let refLocals = Dictionary[LocalVariableSymbol, BoundAddressOfExpression]()
         if !CollectRefLocals(body, refLocals) {
             return body
         }
@@ -380,7 +378,7 @@ shared class RefInitializationHoister {
             refLocals.Keys.Cast[VariableSymbol]()
         )
         for local in refLocals.Keys.ToArray() {
-            if !crossing.Contains(local) && RefCapabilities.IsBorrowedLocation(refLocals[local]) {
+            if !crossing.Contains(local) && RefCapabilities.IsBorrowedLocation(refLocals[local].Operand) {
                 // Keep an opaque address in a MoveNext local when no suspension needs it.
                 refLocals.Remove(local)
             }
@@ -399,7 +397,7 @@ shared class RefInitializationHoister {
 
     private func CollectRefLocals(
         statement BoundStatement,
-        refLocals Dictionary[LocalVariableSymbol, BoundExpression]
+        refLocals Dictionary[LocalVariableSymbol, BoundAddressOfExpression]
     ) bool {
         var found = false
         if statement is BoundBlockStatement block {
@@ -410,9 +408,8 @@ shared class RefInitializationHoister {
             let local = decl.Variable as LocalVariableSymbol
             let addressOf BoundAddressOfExpression? = decl.Initializer as BoundAddressOfExpression
             if local?.Type is ByRefTypeSymbol && addressOf != nil {
-                // Seed with the raw operand; the rewriter replaces this with the
-                // hoisted template when it visits the declaration.
-                refLocals[local!!] = addressOf.Operand
+                // Retain the original address permissions with the operand template.
+                refLocals[local!!] = addressOf
                 found = true
             }
         } else if statement is BoundIfStatement ifStmt {

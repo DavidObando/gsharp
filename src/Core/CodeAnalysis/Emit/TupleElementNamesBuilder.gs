@@ -101,6 +101,16 @@ internal shared class TupleElementNamesBuilder {
                     Append(argument, builder, &anyName)
                 }
             }
+            case InterfaceSymbol{TypeArguments: {IsDefaultOrEmpty: false}} iface {
+                for argument in iface.TypeArguments {
+                    Append(argument, builder, &anyName)
+                }
+            }
+            case DelegateTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} del {
+                for argument in del.TypeArguments {
+                    Append(argument, builder, &anyName)
+                }
+            }
             case ImportedTypeSymbol{TypeArguments: {IsDefaultOrEmpty: false}} imported {
                 for argument in imported.TypeArguments {
                     Append(argument, builder, &anyName)

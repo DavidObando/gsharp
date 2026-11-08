@@ -207,7 +207,7 @@ class Issue3723PolishConvergenceTests {
                 for var i = 0; i < lines.Length; i++ {
                     let index = lines[i].IndexOf("!!", StringComparison.Ordinal)
                     if index >= 0 {
-                        yield(file, i + 1, index + 1)
+                        yield (file, i + 1, index + 1)
                     }
                 }
             }

@@ -4,8 +4,10 @@
 
 package GSharp.Formatting.Tests
 
+import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import GSharp.Formatting
+import System.Linq
 import Xunit
 
 class InterfaceAdaptationFormattingTests {
@@ -51,5 +53,29 @@ func Read()int32->source.Value+Snapshot}
         let second = GSharpFormatter.Format(first.Text!!)
         Assert.Empty(second.Diagnostics)
         Assert.Equal(text, second.Text!!.ToString())
+    }
+
+    @Fact
+    func NullableClassAndNotNullTypeParameterConstraintsFormatAndTraverseChildren() {
+        let formatted = GSharpFormatter.Format(
+            SourceText.From("package P\nfunc F[T class ?, U notnull](x T, y U) T { return x }\n")
+        )
+        Assert.Empty(formatted.Diagnostics)
+        let text = formatted.Text!!.ToString()
+        Assert.Contains("func F[T class?, U notnull](x T, y U) T", text)
+        let tree = SyntaxTree.Parse(text)
+        let fn = tree.Root.GetChildren().OfType[FunctionDeclarationSyntax]().Single()
+        let parameters = fn.TypeParameterList!!.Parameters
+        Assert.Equal(2, parameters.Count)
+        Assert.Equal(
+            []string{"T", "class", "?"},
+            parameters[0].GetChildren().OfType[SyntaxToken]().Select((t SyntaxToken) -> t.Text).ToArray()
+        )
+        Assert.Equal("T class?".Length, parameters[0].Span.Length)
+        Assert.Equal(
+            []string{"U", "notnull"},
+            parameters[1].GetChildren().OfType[SyntaxToken]().Select((t SyntaxToken) -> t.Text).ToArray()
+        )
+        Assert.Equal("U notnull".Length, parameters[1].Span.Length)
     }
 }

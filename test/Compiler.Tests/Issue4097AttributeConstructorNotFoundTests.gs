@@ -1239,29 +1239,29 @@ class NoteAttribute(Text string) : Attribute {
         /// @returns Row name and the annotated declaration.
         func UnmatchedRows() sequence[[]object] {
             // The issue's own row, verbatim.
-            yield[]object{"ObjectContainerAtTypeArray", "@Many([]object{1})"}
+            yield []object{"ObjectContainerAtTypeArray", "@Many([]object{1})"}
             // PR #4087's narrowing: a source `object[]` at a `string[]` parameter
             // is a call the author could not have written.
-            yield[]object{"WidenedStringsAtStringArray", "@Names([]object{\"x\"})"}
+            yield []object{"WidenedStringsAtStringArray", "@Names([]object{\"x\"})"}
             // Same narrowing, the `Type[]` parameter it was introduced for.
-            yield[]object{"ObjectContainerOfTypesAtTypeArray", "@Many([]object{typeof(Status)})"}
+            yield []object{"ObjectContainerOfTypesAtTypeArray", "@Many([]object{typeof(Status)})"}
             // No constructor of that arity at all — C#'s CS1729.
-            yield[]object{"TooManyArguments", "@Marker(typeof(Status), typeof(Status))"}
+            yield []object{"TooManyArguments", "@Marker(typeof(Status), typeof(Status))"}
             // Right arity, unassignable scalar — C#'s CS1503.
-            yield[]object{"WrongScalarType", "@Marker(1)"}
+            yield []object{"WrongScalarType", "@Marker(1)"}
             // The same-compilation user-attribute path (issue #1921).
-            yield[]object{"UserAttributeWrongArity", "@Note(\"a\", \"b\")"}
-            yield[]object{"UserAttributeWrongScalarType", "@Note(1)"}
+            yield []object{"UserAttributeWrongArity", "@Note(\"a\", \"b\")"}
+            yield []object{"UserAttributeWrongScalarType", "@Note(1)"}
             // Review feedback on PR #4137: `ManyAttribute(Type[] values)` declares
             // an ORDINARY array parameter, not `params`. Supplying two arguments
             // must not be absorbed into it — `csc` reports CS1729 for the same
             // program. Before the fix the matcher tested the parameter's shape
             // rather than `ParamArrayAttribute` and emitted a call the source
             // cannot write.
-            yield[]object{"NonParamsArrayAbsorbingArguments", "@Many(typeof(Status), typeof(Status))"}
+            yield []object{"NonParamsArrayAbsorbingArguments", "@Many(typeof(Status), typeof(Status))"}
             // The same rule with one argument: a bare scalar at an ordinary array
             // parameter is not a one-element params call either.
-            yield[]object{"NonParamsArraySingleArgument", "@Many(typeof(Status))"}
+            yield []object{"NonParamsArraySingleArgument", "@Many(typeof(Status))"}
         }
 
         /// Shapes that DO match a constructor. They must keep compiling clean and
@@ -1269,18 +1269,18 @@ class NoteAttribute(Text string) : Attribute {
         /// be a far worse regression than the silence it replaces.
         /// @returns Row name, annotated declaration, expected attribute names.
         func MatchedRows() sequence[[]object] {
-            yield[]object{"FaithfulStringArray", "@Names([]string{\"x\"})", []string{"NamesAttribute"}}
+            yield []object{"FaithfulStringArray", "@Names([]string{\"x\"})", []string{"NamesAttribute"}}
             // The container #3684 widened, at the parameter it was widened FOR.
-            yield[]object{"WidenedTypeArray", "@Many([]Type{typeof(Status)})", []string{"ManyAttribute"}}
-            yield[]object{"ScalarType", "@Marker(typeof(Status))", []string{"MarkerAttribute"}}
-            yield[]object{"UserAttributeMatched", "@Note(\"hello\")", []string{"NoteAttribute"}}
-            yield[]object{"OptOrObjectStringMatched", "@OptOrObject(\"ok\")", []string{"OptOrObjectAttribute"}}
-            yield[]object{
+            yield []object{"WidenedTypeArray", "@Many([]Type{typeof(Status)})", []string{"ManyAttribute"}}
+            yield []object{"ScalarType", "@Marker(typeof(Status))", []string{"MarkerAttribute"}}
+            yield []object{"UserAttributeMatched", "@Note(\"hello\")", []string{"NoteAttribute"}}
+            yield []object{"OptOrObjectStringMatched", "@OptOrObject(\"ok\")", []string{"OptOrObjectAttribute"}}
+            yield []object{
                 "ValueOrNullableValueIntMatched",
                 "@ValueOrNullableValue(5)",
                 []string{"ValueOrNullableValueAttribute"}
             }
-            yield[]object{
+            yield []object{
                 "ValueOrNullableValueEnumMatched",
                 "@ValueOrNullableValue(DayOfWeek.Monday)",
                 []string{"ValueOrNullableValueAttribute"}
@@ -1293,31 +1293,39 @@ class NoteAttribute(Text string) : Attribute {
             // pinned. The first draft of this fix reported GS0583 here, which is
             // the wrong answer: the program is one the language accepts, so the
             // attribute must be EMITTED with the default filled in.
-            yield[]object{"OmittedTrailingOptional", "@ToString(typeof(Status))", []string{"ToStringAttribute"}}
+            yield []object{"OmittedTrailingOptional", "@ToString(typeof(Status))", []string{"ToStringAttribute"}}
             // Two omitted optionals, one of them a value type with a non-zero
             // default — the blob carries a value per parameter, so `7` and `"d"`
             // have to be read out of the metadata, not merely tolerated.
-            yield[]object{"OmittedTrailingOptionals", "@Optionals(1)", []string{"OptionalsAttribute"}}
+            yield []object{"OmittedTrailingOptionals", "@Optionals(1)", []string{"OptionalsAttribute"}}
             // Issue #4097, caught by the cs2gs corpus gate: a params tail absorbing
             // ZERO trailing elements supplies fewer arguments than there are slots,
             // exactly as an omitted optional does. Conflating the two wrote `nil`
             // into the array slot instead of an empty array, and xunit stopped
             // seeing any data rows for the theory.
-            yield[]object{
+            yield []object{
                 "ParamsTailAbsorbingNothing",
                 "@MemberDataLike(\"ShapeAreas\")",
                 []string{"MemberDataLikeAttribute"}
             }
             // The same constructor with elements to absorb: the expanded form.
-            yield[]object{
+            yield []object{
                 "ParamsTailAbsorbingElements",
                 "@MemberDataLike(\"Cases\", 1, 2)",
                 []string{"MemberDataLikeAttribute"}
             }
             // A bare params constructor, the `[InlineData(...)]` shape.
-            yield[]object{"BareParamsConstructor", "@InlineDataLike(1, \"small\")", []string{"InlineDataLikeAttribute"}}
+            yield []object{
+                "BareParamsConstructor",
+                "@InlineDataLike(1, \"small\")",
+                []string{"InlineDataLikeAttribute"}
+            }
             // Supplying an optional explicitly must keep the exact-arity path.
-            yield[]object{"SuppliedTrailingOptional", "@ToString(typeof(Status), \"G\")", []string{"ToStringAttribute"}}
+            yield []object{
+                "SuppliedTrailingOptional",
+                "@ToString(typeof(Status), \"G\")",
+                []string{"ToStringAttribute"}
+            }
         }
 
         /// Reads the positional constructor arguments of the helper attribute on one type.

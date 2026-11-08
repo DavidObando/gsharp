@@ -270,7 +270,7 @@ public static class ArrayProbes
             // Sub-case 1, the reported row. `List[T]` also exposes the non-generic
             // `IList.Add(object)`, so this row alone is not proof — see the
             // `Stack` row below, which has no such sibling.
-            yield[]object{"a-generic-member-slot-enforces-the-receivers-declared-length", `package P
+            yield []object{"a-generic-member-slot-enforces-the-receivers-declared-length", `package P
 import System
 import System.Collections.Generic
 
@@ -284,7 +284,7 @@ main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
             // `Stack[T].Push(T)` has no `object` sibling at all, so this isolates
             // the projection gap by itself. It is the row the issue named as the
             // one that proves the fix.
-            yield[]object{"a-member-with-no-object-overload-enforces-the-declared-length", `package P
+            yield []object{"a-member-with-no-object-overload-enforces-the-declared-length", `package P
 import System
 import System.Collections.Generic
 
@@ -299,7 +299,7 @@ main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
             // argument into overload resolution at all; sub-case 1's projection is
             // what makes the target `[3]Foo` once it is there. Before this PR the
             // outer call reported GS0159 and the length was never examined.
-            yield[]object{"a-same-compilation-element-enforces-the-declared-length-too", `package P
+            yield []object{"a-same-compilation-element-enforces-the-declared-length-too", `package P
 import System
 import System.Collections.Generic
 
@@ -316,7 +316,7 @@ main2()`, "Cannot convert type '[4]Foo' to '[3]Foo'"}
             // nothing converts implicitly INTO a `[N]T` except a `[N]T` of the
             // same length, and an unknown length is not a matching one. Measured
             // as ACCEPTED before this PR — the erased `object[]` slot took it.
-            yield[]object{"a-slice-argument-does-not-fill-a-projected-fixed-array-slot", `package P
+            yield []object{"a-slice-argument-does-not-fill-a-projected-fixed-array-slot", `package P
 import System
 import System.Collections.Generic
 
@@ -332,7 +332,7 @@ main2()`, "Cannot convert type '[]Foo' to '[3]Foo'"}
             // The same rule at a G#-DECLARED parameter, unchanged by this PR and
             // restated here as the control: the projected slot must agree with the
             // bare one, which is the whole claim of the fix.
-            yield[]object{"control-a-declared-fixed-array-parameter-still-rejects-a-slice", `package P
+            yield []object{"control-a-declared-fixed-array-parameter-still-rejects-a-slice", `package P
 import System
 
 struct Foo { var X int32 }
@@ -352,7 +352,7 @@ main2()`, "requires a value of type '[3]Foo'"}
         /// @returns Name, G# source, expected stdout lines.
         func NewlyAcceptedCases() sequence[[]object] {
             // Sub-case 2, the reported row: `List[[N]Foo].Add` was unreachable.
-            yield[]object{"a-fixed-array-over-a-same-compilation-element-reaches-a-generic-member", `package P
+            yield []object{"a-fixed-array-over-a-same-compilation-element-reaches-a-generic-member", `package P
 import System
 import System.Collections.Generic
 
@@ -369,7 +369,7 @@ func main2() {
 main2()`, []string{"1", "3", "2"}}
             // `Stack[T].Push(T)` again — no `object` sibling, so this is the
             // ride-through by itself rather than a lucky match on a wider slot.
-            yield[]object{"a-fixed-array-over-a-user-struct-reaches-a-member-with-no-object-overload", `package P
+            yield []object{"a-fixed-array-over-a-user-struct-reaches-a-member-with-no-object-overload", `package P
 import System
 import System.Collections.Generic
 
@@ -386,7 +386,7 @@ func main2() {
 main2()`, []string{"1", "3", "9"}}
             // The argument does not have to be a literal: a local of the same type
             // took the identical path and failed the identical way.
-            yield[]object{"a-fixed-array-local-over-a-user-struct-reaches-a-generic-member", `package P
+            yield []object{"a-fixed-array-local-over-a-user-struct-reaches-a-generic-member", `package P
 import System
 import System.Collections.Generic
 
@@ -402,7 +402,7 @@ func main2() {
 main2()`, []string{"1"}}
             // An OPEN element is the other half of "no CLR identity". Inside a
             // generic function a `[3]T` argument had no effective CLR type either.
-            yield[]object{"a-fixed-array-over-an-open-type-parameter-reaches-a-generic-member", `package P
+            yield []object{"a-fixed-array-over-an-open-type-parameter-reaches-a-generic-member", `package P
 import System
 import System.Collections.Generic
 
@@ -426,7 +426,7 @@ main2()`, []string{"1", "1"}}
         func UnchangedCases() sequence[[]object] {
             // The matching length still binds, now through the PROJECTED
             // `[3]int32` slot rather than the erased `int32[]` one.
-            yield[]object{"a-matching-length-still-reaches-every-member-on-the-same-receiver", `package P
+            yield []object{"a-matching-length-still-reaches-every-member-on-the-same-receiver", `package P
 import System
 import System.Collections.Generic
 
@@ -446,7 +446,7 @@ func main2() {
 main2()`, []string{"2", "3", "9", "2", "4"}}
             // A fixed array still WIDENS to a slice at a generic member slot —
             // #3998's implicit direction, which the projection must not withdraw.
-            yield[]object{"a-fixed-array-still-widens-to-a-slice-type-argument", `package P
+            yield []object{"a-fixed-array-still-widens-to-a-slice-type-argument", `package P
 import System
 import System.Collections.Generic
 
@@ -476,7 +476,7 @@ main2()`, []string{"1", "3"}}
             // and `Issue3962GenericOverFixedArrayIdentityTests.FlippedByIssue4024Cases`.
             // A tuple type argument on the same receiver still projects the way
             // #3560/#4000 left it — the widened gate is additive, not a rewrite.
-            yield[]object{"a-tuple-type-argument-still-projects-on-the-same-gate", `package P
+            yield []object{"a-tuple-type-argument-still-projects-on-the-same-gate", `package P
 import System
 import System.Collections.Generic
 
@@ -518,7 +518,7 @@ main2()`, []string{"1", "x"}}
             // are the four in `NewlyAcceptedCases`, all of which are instance
             // calls and all of which are red on the parent. This one is here as a
             // MUST-NOT-CHANGE row for the static path, not as proof.
-            yield[]object{"interop-a-fixed-array-still-reaches-a-genuine-clr-array-parameter", `package P
+            yield []object{"interop-a-fixed-array-still-reaches-a-genuine-clr-array-parameter", `package P
 import System
 import Interop
 
@@ -538,7 +538,7 @@ main2()`, []string{"3", "3", "3"}}
             // A `List<int[]>` built on the C# side comes back with no length
             // anywhere in it, so its member slot stays the lenient reflected one —
             // the projection this PR adds fires only on a G#-native `[N]T`.
-            yield[]object{"interop-a-metadata-recovered-list-keeps-its-length-free-member-slot", `package P
+            yield []object{"interop-a-metadata-recovered-list-keeps-its-length-free-member-slot", `package P
 import System
 import Interop
 
@@ -570,7 +570,7 @@ main2()`, []string{"2", "4"}}
         /// (cref:UnchangedCases) is the running proof.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue4024Cases() sequence[[]object] {
-            yield[]object{"a-slice-type-argument-no-longer-reaches-a-fixed-array-generic", `package P
+            yield []object{"a-slice-type-argument-no-longer-reaches-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 

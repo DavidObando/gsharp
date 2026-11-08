@@ -97,7 +97,7 @@ class EmptyEnum[T] : IAsyncEnumerator[T] {
             // GetAsyncEnumerator, one per instantiation. The program dispatches
             // through EACH interface and the method itself reports which slot ran,
             // so a mis-wired MethodImpl row is observable.
-            yield[]object{"two-instantiations-of-one-imported-generic-interface", Preamble + `
+            yield []object{"two-instantiations-of-one-imported-generic-interface", Preamble + `
 class Fwd : IAsyncEnumerable[int32], IAsyncEnumerable[string] {
     func (IAsyncEnumerable[int32]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[int32] {
         Console.WriteLine("int-slot")
@@ -118,7 +118,7 @@ let _eb = b.GetAsyncEnumerator(CancellationToken.None)
 `, []string{"int-slot", "string-slot"}}
             // The declaration order is reversed: on `origin/main` the diagnostic
             // followed whichever method came SECOND, so both orders must be proved.
-            yield[]object{"two-instantiations-reversed-declaration-order", Preamble + `
+            yield []object{"two-instantiations-reversed-declaration-order", Preamble + `
 class Fwd : IAsyncEnumerable[int32], IAsyncEnumerable[string] {
     func (IAsyncEnumerable[string]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[string] {
         Console.WriteLine("string-slot")
@@ -139,7 +139,7 @@ let _eb = b.GetAsyncEnumerator(CancellationToken.None)
 `, []string{"int-slot", "string-slot"}}
             // Three instantiations: the hiding rule dropped every method after the
             // first, so a two-case fix that only special-cased a pair would fail.
-            yield[]object{"three-instantiations-of-one-imported-generic-interface", Preamble + `
+            yield []object{"three-instantiations-of-one-imported-generic-interface", Preamble + `
 class Fwd3 : IAsyncEnumerable[int32], IAsyncEnumerable[int64], IAsyncEnumerable[string] {
     func (IAsyncEnumerable[int32]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[int32] {
         Console.WriteLine("i32")
@@ -168,7 +168,7 @@ let _ec = c.GetAsyncEnumerator(CancellationToken.None)
             // ANTI-VACUITY (passes on `origin/main` too): a SINGLE explicit clause
             // on an imported generic interface already worked — only the second
             // same-signature sibling was dropped. It must keep working.
-            yield[]object{"single-explicit-clause-on-imported-generic-still-works", Preamble + `
+            yield []object{"single-explicit-clause-on-imported-generic-still-works", Preamble + `
 class One : IAsyncEnumerable[int32] {
     func (IAsyncEnumerable[int32]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[int32] {
         Console.WriteLine("only-slot")
@@ -185,7 +185,7 @@ let _ea = a.GetAsyncEnumerator(CancellationToken.None)
             // `IEquatable[object]`, so the slot search saw `Equals(object)` against a
             // declaration saying `Equals(T)` and reported GS0494; the resolver now
             // matches through the open definition with the symbolic argument.
-            yield[]object{"clause-on-imported-generic-closed-over-own-type-parameter", `
+            yield []object{"clause-on-imported-generic-closed-over-own-type-parameter", `
 package P
 import System
 
@@ -200,7 +200,7 @@ Console.WriteLine(e.Equals(1).ToString())
             // The `List[T]` shape from the real corpus: an explicit non-generic
             // `IEnumerable.GetEnumerator()` alongside two generic instantiations,
             // reached through an inherited interface (`IReadOnlyCollection[T]`).
-            yield[]object{"two-instantiations-reached-through-an-inherited-interface", `
+            yield []object{"two-instantiations-reached-through-an-inherited-interface", `
 package P
 import System
 import System.Collections
@@ -232,7 +232,7 @@ Console.WriteLine(b.Count.ToString())
             // narrows is what makes a real OVERRIDE replace its base method rather
             // than sit beside it as an ambiguous overload. A derived override must
             // still win, and the base entry must stay hidden.
-            yield[]object{"derived-override-still-hides-the-base-method", `
+            yield []object{"derived-override-still-hides-the-base-method", `
 package P
 import System
 
@@ -258,7 +258,7 @@ Console.WriteLine(b.Speak())
             // ANTI-VACUITY: two same-signature methods with NO explicit-interface
             // clause are still a duplicate overload (GS0264). The fix keys strictly
             // on the clause target.
-            yield[]object{"plain-duplicate-overloads-still-rejected", `
+            yield []object{"plain-duplicate-overloads-still-rejected", `
 package P
 import System
 
@@ -271,7 +271,7 @@ Console.WriteLine("unreachable")
 `}
             // ANTI-VACUITY: two clauses naming the SAME interface instantiation are
             // still duplicates — the clause target has to actually differ.
-            yield[]object{"two-clauses-on-the-same-instantiation-still-rejected", Preamble + `
+            yield []object{"two-clauses-on-the-same-instantiation-still-rejected", Preamble + `
 class SameTwice : IAsyncEnumerable[int32] {
     func (IAsyncEnumerable[int32]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[int32] {
         return EmptyEnum[int32]()
@@ -287,7 +287,7 @@ Console.WriteLine("unreachable")
             // ANTI-VACUITY: a clause naming a member the imported generic interface
             // does NOT declare is still GS0494 — the symbolic slot search widened
             // which signatures match, not whether a match is required.
-            yield[]object{"clause-naming-a-nonexistent-member-still-rejected", `
+            yield []object{"clause-naming-a-nonexistent-member-still-rejected", `
 package P
 import System
 
@@ -301,7 +301,7 @@ Console.WriteLine("unreachable")
             // ANTI-VACUITY: an interface instantiation left with NO implementation
             // at all is still reported unimplemented — the fix must not have made
             // GS0187 unreachable for this shape.
-            yield[]object{"unimplemented-second-instantiation-still-rejected", Preamble + `
+            yield []object{"unimplemented-second-instantiation-still-rejected", Preamble + `
 class Missing : IAsyncEnumerable[int32], IAsyncEnumerable[string] {
     func (IAsyncEnumerable[int32]) GetAsyncEnumerator(ct CancellationToken) IAsyncEnumerator[int32] {
         return EmptyEnum[int32]()

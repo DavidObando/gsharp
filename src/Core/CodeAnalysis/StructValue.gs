@@ -425,13 +425,13 @@ class StructValue {
         private func GetDisplayMembers(type StructSymbol) sequence[(DisplayName string, StorageKey string)] {
             if !type.Fields.IsDefaultOrEmpty {
                 for field in type.Fields {
-                    yield(field.Name, field.Name)
+                    yield (field.Name, field.Name)
                 }
                 yield break
             }
             for property in type.Properties {
                 if property.IsAutoProperty && property.BackingField != nil {
-                    yield(property.Name, property.BackingField!!.Name)
+                    yield (property.Name, property.BackingField!!.Name)
                 }
             }
         }

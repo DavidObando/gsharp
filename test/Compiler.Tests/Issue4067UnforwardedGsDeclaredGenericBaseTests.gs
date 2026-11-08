@@ -304,45 +304,45 @@ class EnumerableSource : ArrayList {
         /// @returns Case name, the G# body appended to the prelude, expected diagnostic id.
         func UnforwardedConstraints() sequence[[]object] {
             // The issue's own repro, verbatim.
-            yield[]object{"the-issues-own-repro-a-gs-declared-constrained-base", `class Unf[T] : GsHandler[T] {
+            yield []object{"the-issues-own-repro-a-gs-declared-constrained-base", `class Unf[T] : GsHandler[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // A bound that exists but does not imply the declared one.
-            yield[]object{"a-class-bound-that-does-not-imply-the-declared-one", `class Unf[T Unrelated] : GsHandler[T] {
+            yield []object{"a-class-bound-that-does-not-imply-the-declared-one", `class Unf[T Unrelated] : GsHandler[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // An INTERFACE bound does not imply a CLASS bound.
-            yield[]object{"an-interface-bound-against-a-class-bound", `class Unf[T IPing] : GsHandler[T] {
+            yield []object{"an-interface-bound-against-a-class-bound", `class Unf[T IPing] : GsHandler[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // ... and a CLASS bound does not imply an interface the class does not
             // carry. `SchemeOptions` does not implement `IPing`; `PingOptions`
             // does, and that spelling is a green row.
-            yield[]object{"a-class-bound-against-an-interface-the-class-lacks", `class Unf[T SchemeOptions] : GsPing[T] {
+            yield []object{"a-class-bound-against-an-interface-the-class-lacks", `class Unf[T SchemeOptions] : GsPing[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // The special constraints, one row each. `csc` reports CS0314 for all
             // three, and the CLR refuses all three.
-            yield[]object{"an-unforwarded-default-constructor-constraint", `class Unf[T] : GsNew[T] {
+            yield []object{"an-unforwarded-default-constructor-constraint", `class Unf[T] : GsNew[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
-            yield[]object{"an-unforwarded-reference-type-constraint", `class Unf[T] : GsClass[T] {
+            yield []object{"an-unforwarded-reference-type-constraint", `class Unf[T] : GsClass[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
-            yield[]object{"an-unforwarded-value-type-constraint", `class Unf[T] : GsStruct[T] {
+            yield []object{"an-unforwarded-value-type-constraint", `class Unf[T] : GsStruct[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // A class bound gives the parameter reference-ness but NOT a public
             // parameterless constructor: this is the false accept the two-walk
             // split exists to prevent, and it is a red row rather than a comment.
-            yield[]object{"a-class-bound-does-not-supply-a-default-constructor", `class Unf[T SchemeOptions] : GsNew[T] {
+            yield []object{"a-class-bound-does-not-supply-a-default-constructor", `class Unf[T SchemeOptions] : GsNew[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
@@ -350,26 +350,26 @@ Console.WriteLine("x")`, "GS0580"}
             // `unmanaged` — a value type may hold a reference — so a forwarded
             // `struct` does not carry it, and this is the row that separates the
             // two flags.
-            yield[]object{"an-unforwarded-unmanaged-constraint", `class Unf[T struct] : GsUnmanaged[T] {
+            yield []object{"an-unforwarded-unmanaged-constraint", `class Unf[T struct] : GsUnmanaged[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // Review finding (#4092): the `comparable` branch (ADR-0020's legacy
             // constraint), which has its own implication rule and had no row.
-            yield[]object{"an-unforwarded-comparable-constraint", `class Unf[T] : GsComparable[T] {
+            yield []object{"an-unforwarded-comparable-constraint", `class Unf[T] : GsComparable[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // NOT only the base clause. `csc` reports CS0314 at a field type too,
             // which is why the check sits at the shared construction site rather
             // than in the base-clause binder.
-            yield[]object{"a-field-typed-by-an-unforwarded-instantiation", `class Holder[T] {
+            yield []object{"a-field-typed-by-an-unforwarded-instantiation", `class Holder[T] {
     public var H GsHandler[T]
 }
 
 Console.WriteLine("x")`, "GS0580"}
             // ... and at a return type.
-            yield[]object{"a-return-type-that-is-an-unforwarded-instantiation", `func take[T]() GsHandler[T] {
+            yield []object{"a-return-type-that-is-an-unforwarded-instantiation", `func take[T]() GsHandler[T] {
     return nil
 }
 
@@ -383,12 +383,12 @@ Console.WriteLine("x")`, "GS0580"}
         /// @returns Case name, the G# body appended to the prelude, expected stdout lines.
         func ForwardedConstraints() sequence[[]object] {
             // The issue's own control, verbatim.
-            yield[]object{"the-issues-own-control-the-forwarded-spelling", `class Fwd[T SchemeOptions] : GsHandler[T] {
+            yield []object{"the-issues-own-control-the-forwarded-spelling", `class Fwd[T SchemeOptions] : GsHandler[T] {
 }
 
 Console.WriteLine(Fwd[SchemeOptions]().Tag)`, []string{"g"}}
             // A DERIVED class bound implies the declared base bound.
-            yield[]object{"a-derived-class-bound-implies-the-declared-base", `class Fwd[T DerivedOptions] : GsHandler[T] {
+            yield []object{"a-derived-class-bound-implies-the-declared-base", `class Fwd[T DerivedOptions] : GsHandler[T] {
 }
 
 Console.WriteLine(Fwd[DerivedOptions]().Tag)`, []string{"g"}}
@@ -397,63 +397,63 @@ Console.WriteLine(Fwd[DerivedOptions]().Tag)`, []string{"g"}}
             // slot rather than through `ClassConstraint`. Measured legal — it
             // compiles, IL-verifies and runs on the parent — so a checker that
             // could not see the chain would have turned it into a GS0580.
-            yield[]object{"a-bound-forwarded-through-a-chain-of-type-parameters", `class Fwd[U SchemeOptions, T U] : GsHandler[T] {
+            yield []object{"a-bound-forwarded-through-a-chain-of-type-parameters", `class Fwd[U SchemeOptions, T U] : GsHandler[T] {
 }
 
 Console.WriteLine(Fwd[SchemeOptions, SchemeOptions]().Tag)`, []string{"g"}}
             // A CLASS bound implies every interface that class carries. This is
             // #4037's own review defect, asked of the symbolic surface.
-            yield[]object{"a-class-bound-implies-the-interfaces-it-carries", `class Fwd[T PingOptions] : GsPing[T] {
+            yield []object{"a-class-bound-implies-the-interfaces-it-carries", `class Fwd[T PingOptions] : GsPing[T] {
 }
 
 Console.WriteLine(Fwd[PingOptions]().Tag)`, []string{"p"}}
             // The interface bound spelled directly.
-            yield[]object{"the-interface-bound-forwarded-directly", `class Fwd[T IPing] : GsPing[T] {
+            yield []object{"the-interface-bound-forwarded-directly", `class Fwd[T IPing] : GsPing[T] {
 }
 
 Console.WriteLine(Fwd[PingOptions]().Tag)`, []string{"p"}}
             // The special constraints, forwarded.
-            yield[]object{"a-forwarded-default-constructor-constraint", `class Fwd[T init()] : GsNew[T] {
+            yield []object{"a-forwarded-default-constructor-constraint", `class Fwd[T init()] : GsNew[T] {
 }
 
 Console.WriteLine(Fwd[SchemeOptions]().Tag)`, []string{"n"}}
-            yield[]object{"a-forwarded-reference-type-constraint", `class Fwd[T class] : GsClass[T] {
+            yield []object{"a-forwarded-reference-type-constraint", `class Fwd[T class] : GsClass[T] {
 }
 
 Console.WriteLine(Fwd[SchemeOptions]().Tag)`, []string{"c"}}
-            yield[]object{"a-forwarded-value-type-constraint", `class Fwd[T struct] : GsStruct[T] {
+            yield []object{"a-forwarded-value-type-constraint", `class Fwd[T struct] : GsStruct[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"s"}}
             // `struct` implies a public parameterless constructor at the CLR level
             // (ECMA-335 II.10.1.7), so it forwards `init()`.
-            yield[]object{"a-value-type-constraint-implies-the-default-constructor-one", `class Fwd[T struct] : GsNew[T] {
+            yield []object{"a-value-type-constraint-implies-the-default-constructor-one", `class Fwd[T struct] : GsNew[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"n"}}
             // A CLASS bound proves reference-ness, so it forwards `class`.
-            yield[]object{"a-class-bound-implies-the-reference-type-constraint", `class Fwd[T SchemeOptions] : GsClass[T] {
+            yield []object{"a-class-bound-implies-the-reference-type-constraint", `class Fwd[T SchemeOptions] : GsClass[T] {
 }
 
 Console.WriteLine(Fwd[SchemeOptions]().Tag)`, []string{"c"}}
             // Review finding (#4092): the `unmanaged` branch, forwarded.
-            yield[]object{"a-forwarded-unmanaged-constraint", `class Fwd[T unmanaged] : GsUnmanaged[T] {
+            yield []object{"a-forwarded-unmanaged-constraint", `class Fwd[T unmanaged] : GsUnmanaged[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"u"}}
             // `unmanaged` is a value-type constraint, so it forwards BOTH `struct`
             // and — through `struct` — `init()`. Two rows, because the two flags
             // are read from different slots.
-            yield[]object{"an-unmanaged-constraint-implies-the-value-type-one", `class Fwd[T unmanaged] : GsStruct[T] {
+            yield []object{"an-unmanaged-constraint-implies-the-value-type-one", `class Fwd[T unmanaged] : GsStruct[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"s"}}
-            yield[]object{"an-unmanaged-constraint-implies-the-default-constructor-one", `class Fwd[T unmanaged] : GsNew[T] {
+            yield []object{"an-unmanaged-constraint-implies-the-default-constructor-one", `class Fwd[T unmanaged] : GsNew[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"n"}}
             // Review finding (#4092): the `comparable` branch, forwarded.
-            yield[]object{"a-forwarded-comparable-constraint", `class Fwd[T comparable] : GsComparable[T] {
+            yield []object{"a-forwarded-comparable-constraint", `class Fwd[T comparable] : GsComparable[T] {
 }
 
 Console.WriteLine(Fwd[int32]().Tag)`, []string{"k"}}
@@ -466,7 +466,7 @@ Console.WriteLine(Fwd[int32]().Tag)`, []string{"k"}}
             // falls back to `SourceSymbolImplementsImportedInterface`, which is
             // #4068's repair for the SAME defect on the dependent-bound path
             // rather than a fourth private copy of it.
-            yield[]object{"review-a-source-class-bound-implies-the-imported-interface-it-implements", `class Fwd[T DisposableSource] : GsDisposable[T] {
+            yield []object{"review-a-source-class-bound-implies-the-imported-interface-it-implements", `class Fwd[T DisposableSource] : GsDisposable[T] {
 }
 
 Console.WriteLine(Fwd[DisposableSource]().Tag)`, []string{"d"}}
@@ -475,7 +475,7 @@ Console.WriteLine(Fwd[DisposableSource]().Tag)`, []string{"d"}}
             // rather than in `BaseClass` — so the shared walk saw an empty
             // interface list for `class EnumerableSource : ArrayList` and rejected
             // it for not carrying `IEnumerable`, which `ArrayList` plainly does.
-            yield[]object{"review-a-source-class-bound-implies-the-interface-its-imported-base-carries", `open class GsEnumerable[TE IEnumerable] {
+            yield []object{"review-a-source-class-bound-implies-the-interface-its-imported-base-carries", `open class GsEnumerable[TE IEnumerable] {
     public var Tag string = "e"
 }
 
@@ -484,14 +484,14 @@ class Fwd[T EnumerableSource] : GsEnumerable[T] {
 
 Console.WriteLine(Fwd[EnumerableSource]().Tag)`, []string{"e"}}
             // SKIP: a COMPOSITE open argument has no forwarding question to ask.
-            yield[]object{"control-a-composite-open-argument-is-not-asked", `class Composite[T] : GsList[[]T] {
+            yield []object{"control-a-composite-open-argument-is-not-asked", `class Composite[T] : GsList[[]T] {
 }
 
 Console.WriteLine(Composite[int32]().Tag)`, []string{"l"}}
             // SKIP: the declared bound MENTIONS another of the definition's own
             // parameters — #4031/#4041's dependent shape, where answering on an
             // unsubstituted parameter is exactly what goes wrong.
-            yield[]object{"control-a-dependent-bound-is-not-asked", `class Dependent[A, B] {
+            yield []object{"control-a-dependent-bound-is-not-asked", `class Dependent[A, B] {
     public var C GsPair[A, B]
 }
 
@@ -501,7 +501,7 @@ Console.WriteLine("x")`, []string{"x"}}
             // symbol, so there is nothing to forward and the question is not asked
             // — a checker that asked it anyway would reject every recursive
             // declaration in the corpus.
-            yield[]object{"control-a-definition-writing-its-own-parameter-at-its-own-position", `open class SelfRef[TS SchemeOptions] {
+            yield []object{"control-a-definition-writing-its-own-parameter-at-its-own-position", `open class SelfRef[TS SchemeOptions] {
     public var Tag string = "r"
     public var Next SelfRef[TS]
 }
@@ -511,7 +511,7 @@ Console.WriteLine(SelfRef[SchemeOptions]().Tag)`, []string{"r"}}
             // parameter, so it MENTIONS a type parameter and the implication test
             // declines — the same skip as the dependent bound above, reached
             // through `ClassConstraint` rather than `TypeParameterBound`.
-            yield[]object{"control-a-crtp-bound-is-not-asked", `open class Crtp[TC Crtp[TC]] {
+            yield []object{"control-a-crtp-bound-is-not-asked", `open class Crtp[TC Crtp[TC]] {
     public var Tag string = "y"
 }
 
@@ -520,7 +520,7 @@ class Node : Crtp[Node] {
 
 Console.WriteLine(Node().Tag)`, []string{"y"}}
             // An unconstrained definition asks nothing of its arguments.
-            yield[]object{"control-an-unconstrained-definition-asks-nothing", `class Plain[T] : GsList[T] {
+            yield []object{"control-an-unconstrained-definition-asks-nothing", `class Plain[T] : GsList[T] {
 }
 
 Console.WriteLine(Plain[int32]().Tag)`, []string{"l"}}
@@ -529,7 +529,7 @@ Console.WriteLine(Plain[int32]().Tag)`, []string{"l"}}
             // and the forwarded spelling must keep binding either way. The
             // UNforwarded spelling is now a red row in
             // Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests.
-            yield[]object{"a-forwarded-gs-declared-generic-interface", `class Holder[T SchemeOptions] {
+            yield []object{"a-forwarded-gs-declared-generic-interface", `class Holder[T SchemeOptions] {
     public var B IGsBox[T]
 }
 

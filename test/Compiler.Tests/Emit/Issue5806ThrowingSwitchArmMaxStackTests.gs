@@ -284,31 +284,31 @@ Console.WriteLine(result.ToString())`
 
     shared {
         func ThrowingBranchShapes() sequence[[]object] {
-            yield[]object{"switch-non-default-throw", `switch value {
+            yield []object{"switch-non-default-throw", `switch value {
     case "bad": throw ArgumentException("Bad selection")
     default: Selection.Enabled
   }`}
-            yield[]object{"switch-block-throw", `switch value {
+            yield []object{"switch-block-throw", `switch value {
     case "enabled": Selection.Enabled
     default: {
       throw ArgumentException("Unknown selection")
     }
   }`}
-            yield[]object{"if-else-throw", `if value == "enabled" {
+            yield []object{"if-else-throw", `if value == "enabled" {
     Selection.Enabled
   } else {
     throw ArgumentException("Unknown selection")
   }`}
-            yield[]object{
+            yield []object{
                 "ternary-throw",
                 `value == "bad" ? throw ArgumentException("Bad selection") : Selection.Enabled`
             }
-            yield[]object{"if-let-throw", `if let v = value && v == "enabled" {
+            yield []object{"if-let-throw", `if let v = value && v == "enabled" {
     Selection.Enabled
   } else {
     throw ArgumentException("Unknown selection")
   }`}
-            yield[]object{"null-coalesce-block-throw", `{
+            yield []object{"null-coalesce-block-throw", `{
     let nonNull = value ?? {
       throw ArgumentException("Unknown selection")
     }
@@ -317,22 +317,22 @@ Console.WriteLine(result.ToString())`
         }
 
         func AsyncThrowingSwitchShapes() sequence[[]object] {
-            yield[]object{"async-guarded-await-throwing-arm", `switch value {
+            yield []object{"async-guarded-await-throwing-arm", `switch value {
     case "enabled" when await CheckAsync(value): Selection.Enabled
     case "bad" when await CheckAsync(value): throw ArgumentException("Bad selection")
     default: throw ArgumentException("Unknown selection")
   }`}
-            yield[]object{"async-pattern-await-throwing-arm", `switch value {
+            yield []object{"async-pattern-await-throwing-arm", `switch value {
     case == await ExpectedAsync("enabled"): Selection.Enabled
     case == await ExpectedAsync("bad"): throw ArgumentException("Bad selection")
     default: throw ArgumentException("Unknown selection")
   }`}
-            yield[]object{"async-guarded-await-never-guard", `switch value {
+            yield []object{"async-guarded-await-never-guard", `switch value {
     case "bad" when await CheckAsync(value) ? throw ArgumentException("Bad selection") : throw ArgumentException("Other"): Selection.None
     case "enabled" when await CheckAsync(value): Selection.Enabled
     default: throw ArgumentException("Unknown selection")
   }`}
-            yield[]object{"async-pattern-await-never-guard", `switch value {
+            yield []object{"async-pattern-await-never-guard", `switch value {
     case == await ExpectedAsync("bad") when await CheckAsync(value) ? throw ArgumentException("Bad selection") : throw ArgumentException("Other"): Selection.None
     case == await ExpectedAsync("enabled"): Selection.Enabled
     default: throw ArgumentException("Unknown selection")

@@ -222,7 +222,7 @@ Console.WriteLine("after")`)
             // The reported repro, map half: the substituted parameter still
             // mentions K and V, so the argument took the `ContainsTypeParameter`
             // bypass and `Conversion.Classify` was never asked.
-            yield[]object{"the-reported-repro-a-nullable-open-map-at-an-open-map-parameter", `package P
+            yield []object{"the-reported-repro-a-nullable-open-map-at-an-open-map-parameter", `package P
 import System
 
 func takes[K, V](m map[K, V]) int32 {
@@ -235,7 +235,7 @@ func caller[K, V](m (map[K, V])?) int32 {
 
 Console.WriteLine("x")`, "GS0154", "map[K,V]?"}
             // The reported repro, sequence half.
-            yield[]object{"the-reported-repro-a-nullable-open-sequence-at-an-open-sequence-parameter", `package P
+            yield []object{"the-reported-repro-a-nullable-open-sequence-at-an-open-sequence-parameter", `package P
 import System
 
 func takes[T](s sequence[T]) int32 {
@@ -250,7 +250,7 @@ Console.WriteLine("x")`, "GS0154", "sequence[T]?"}
             // `async sequence[T]` is a THIRD symbol kind the issue did not name.
             // `AsyncSequenceTypeSymbol.MakeClrType` produces `IAsyncEnumerable<T>`
             // and returns null on an open element for exactly the same reason.
-            yield[]object{"a-nullable-open-async-sequence-at-an-open-async-sequence-parameter", `package P
+            yield []object{"a-nullable-open-async-sequence-at-an-open-async-sequence-parameter", `package P
 import System
 
 func takes[T](s async sequence[T]) int32 {
@@ -268,7 +268,7 @@ Console.WriteLine("x")`, "GS0154", "sequence[T]?"}
             // `IEnumerable<int32>`, so the predicate of cause one always answered
             // `true` here; the #3093 identity-alias arm returned IDENTITY before
             // any null-safety rule could run.
-            yield[]object{"a-nullable-closed-sequence-at-a-closed-sequence-parameter", `package P
+            yield []object{"a-nullable-closed-sequence-at-a-closed-sequence-parameter", `package P
 import System
 
 func takes(s sequence[int32]) int32 {
@@ -280,7 +280,7 @@ func caller(s (sequence[int32])?) int32 {
 }
 
 Console.WriteLine("x")`, "GS0154", "sequence[int32]?"}
-            yield[]object{"a-nullable-closed-async-sequence-at-a-closed-async-sequence-parameter", `package P
+            yield []object{"a-nullable-closed-async-sequence-at-a-closed-async-sequence-parameter", `package P
 import System
 
 func takes(s async sequence[int32]) int32 {
@@ -296,7 +296,7 @@ Console.WriteLine("x")`, "GS0154", "sequence[int32]?"}
             // the alias arm is consulted by `Conversion.Classify` itself, so a
             // plain `var` declaration inherited it. Note the id is GS0155 here —
             // an initializer reports the conversion failure, not the parameter one.
-            yield[]object{"a-nullable-closed-sequence-assigned-to-a-non-nullable-local", `package P
+            yield []object{"a-nullable-closed-sequence-assigned-to-a-non-nullable-local", `package P
 import System
 
 func caller(src (sequence[int32])?) int32 {
@@ -307,7 +307,7 @@ func caller(src (sequence[int32])?) int32 {
 Console.WriteLine("x")`, "GS0155", "sequence[int32]?"}
             // The alias arm matched ANY two enumerable shapes, so the G# alias and
             // the imported interface leaked into each other in both directions.
-            yield[]object{"a-nullable-sequence-at-an-imported-enumerable-parameter", `package P
+            yield []object{"a-nullable-sequence-at-an-imported-enumerable-parameter", `package P
 import System
 import System.Collections.Generic
 
@@ -320,7 +320,7 @@ func caller(s (sequence[int32])?) int32 {
 }
 
 Console.WriteLine("x")`, "GS0154", "sequence[int32]?"}
-            yield[]object{"a-nullable-imported-enumerable-at-a-sequence-parameter", `package P
+            yield []object{"a-nullable-imported-enumerable-at-a-sequence-parameter", `package P
 import System
 import System.Collections.Generic
 
@@ -338,7 +338,7 @@ Console.WriteLine("x")`, "GS0154", "IEnumerable[int32]?"}
             // `List[int32]?` below was not. That is how far the alias arm reached,
             // and it is why this half of the fix is a language rule rather than a
             // `sequence` special case.
-            yield[]object{"a-nullable-imported-enumerable-at-its-own-non-nullable-form", `package P
+            yield []object{"a-nullable-imported-enumerable-at-its-own-non-nullable-form", `package P
 import System
 import System.Collections.Generic
 
@@ -355,7 +355,7 @@ Console.WriteLine("x")`, "GS0154", "IEnumerable[int32]?"}
             // `Dictionary<string, int32>`, so cause one never applied to it and
             // there is no alias arm for a map. This row is the oracle the issue
             // reasoned from, and it is unchanged.
-            yield[]object{"control-a-nullable-closed-map-at-a-closed-map-parameter", `package P
+            yield []object{"control-a-nullable-closed-map-at-a-closed-map-parameter", `package P
 import System
 
 func takes(m map[string, int32]) int32 {
@@ -370,7 +370,7 @@ Console.WriteLine("x")`, "GS0154", "map[string,int32]?"}
             // Rejected on the parent commit too, and the row that proves the
             // enumerable shapes were the outlier rather than the model: an ordinary
             // imported reference type has always been gated.
-            yield[]object{"control-a-nullable-imported-list-at-its-own-non-nullable-form", `package P
+            yield []object{"control-a-nullable-imported-list-at-its-own-non-nullable-form", `package P
 import System
 import System.Collections.Generic
 
@@ -393,7 +393,7 @@ Console.WriteLine("x")`, "GS0154", "List[int32]?"}
             // `!!` is the first remedy the diagnostic names. The count is asserted
             // so a dropped or mis-substituted handle prints the wrong number rather
             // than merely compiling.
-            yield[]object{"bang-bang-lets-an-open-nullable-map-reach-the-parameter", `package P
+            yield []object{"bang-bang-lets-an-open-nullable-map-reach-the-parameter", `package P
 import System
 
 func takes[K, V](m map[K, V]) int32 {
@@ -410,7 +410,7 @@ d["b"] = 2
 Console.WriteLine(caller[string, int32](d))`, []string{"2"}}
             // A nullable-typed parameter is the second remedy: nothing is dropped,
             // so nothing is gated.
-            yield[]object{"a-nullable-typed-parameter-still-accepts-an-open-nullable-map", `package P
+            yield []object{"a-nullable-typed-parameter-still-accepts-an-open-nullable-map", `package P
 import System
 
 func takes[K, V](m (map[K, V])?) int32 {
@@ -434,7 +434,7 @@ Console.WriteLine(caller[string, int32](nil))`, []string{"1", "-1"}}
             // is the remedy the diagnostic points at, and #3988 showed it is not
             // free — the fourth copy of the predicate had to be unified before the
             // structural shapes narrowed at all.
-            yield[]object{"condition-narrowing-lifts-an-open-map-and-satisfies-the-parameter", `package P
+            yield []object{"condition-narrowing-lifts-an-open-map-and-satisfies-the-parameter", `package P
 import System
 
 func takes[K, V](m map[K, V]) int32 {
@@ -457,7 +457,7 @@ d["c"] = 3
 Console.WriteLine(caller[string, int32](d))
 Console.WriteLine(caller[string, int32](nil))`, []string{"3", "-1"}}
             // Assignment narrowing over an OPEN map — the other narrowing door.
-            yield[]object{"assignment-narrowing-lifts-an-open-map-and-satisfies-the-parameter", `package P
+            yield []object{"assignment-narrowing-lifts-an-open-map-and-satisfies-the-parameter", `package P
 import System
 
 func takes[K, V](m map[K, V]) int32 {
@@ -475,7 +475,7 @@ d["a"] = 1
 Console.WriteLine(caller[string, int32](d))`, []string{"1"}}
             // Both narrowing doors again over an OPEN sequence, with the elements
             // actually enumerated so a wrong handle fails rather than compiles.
-            yield[]object{"condition-narrowing-lifts-an-open-sequence-and-satisfies-the-parameter", `package P
+            yield []object{"condition-narrowing-lifts-an-open-sequence-and-satisfies-the-parameter", `package P
 import System
 
 func total[T](s sequence[T]) int32 {
@@ -498,7 +498,7 @@ func caller[T](src (sequence[T])?) int32 {
 
 Console.WriteLine(caller[int32]([]int32{1, 2, 3}))
 Console.WriteLine(caller[int32](nil))`, []string{"3", "-1"}}
-            yield[]object{"assignment-narrowing-lifts-an-open-sequence-and-satisfies-the-parameter", `package P
+            yield []object{"assignment-narrowing-lifts-an-open-sequence-and-satisfies-the-parameter", `package P
 import System
 
 func total[T](s sequence[T]) int32 {
@@ -521,7 +521,7 @@ Console.WriteLine(caller[int32]([]int32{1, 2, 3, 4}))`, []string{"4"}}
             // bare `sequence[int32]` and a `(sequence[int32])?` both reach an
             // `IEnumerable[int32]?` slot, because ADDING or PRESERVING the
             // annotation drops nothing. Only the dropping direction is restricted.
-            yield[]object{"the-sequence-alias-still-reaches-a-nullable-enumerable-slot", `package P
+            yield []object{"the-sequence-alias-still-reaches-a-nullable-enumerable-slot", `package P
 import System
 import System.Collections.Generic
 
@@ -552,7 +552,7 @@ Console.WriteLine(fromNullable(nil))`, []string{"2", "3", "-1"}}
             // The non-nullable alias identity itself (issue #3093), both
             // directions, unchanged: 2 elements through the sequence parameter plus
             // 2 x 10 through the enumerable one.
-            yield[]object{"the-sequence-alias-identity-still-holds-in-both-directions", `package P
+            yield []object{"the-sequence-alias-identity-still-holds-in-both-directions", `package P
 import System
 import System.Collections.Generic
 
@@ -583,7 +583,7 @@ Console.WriteLine(caller(xs, xs))`, []string{"22"}}
             // LINQ is what actually flows through the alias arm in real code, so it
             // is asserted directly: a nullability-annotated BCL result must still
             // arrive non-nullable at a `sequence[int32]` parameter.
-            yield[]object{"a-linq-result-still-reaches-a-non-nullable-sequence-parameter", `package P
+            yield []object{"a-linq-result-still-reaches-a-non-nullable-sequence-parameter", `package P
 import System
 import System.Linq
 
@@ -601,7 +601,7 @@ Console.WriteLine(total(nums))
 Console.WriteLine(total(nums.Where(func(v int32) bool { return v > 2 })))`, []string{"10", "7"}}
             // The ADR-0159 slice -> sequence projection is a different arm and must
             // not have been disturbed by either edit.
-            yield[]object{"the-slice-to-sequence-projection-is-untouched", `package P
+            yield []object{"the-slice-to-sequence-projection-is-untouched", `package P
 import System
 
 func total[T](s sequence[T]) int32 {
@@ -623,7 +623,7 @@ Console.WriteLine(caller[int32]([]int32{1, 2, 3, 4, 5}))`, []string{"5"}}
             // nil-comparison path (`MethodBodyEmitter.Conversions`) through the
             // reference arm for the open spelling, so the answers are asserted
             // rather than assumed.
-            yield[]object{"nil-comparison-over-an-open-nullable-map-and-sequence", `package P
+            yield []object{"nil-comparison-over-an-open-nullable-map-and-sequence", `package P
 import System
 
 func mapIsNil[K, V](m (map[K, V])?) bool {
@@ -641,7 +641,7 @@ Console.WriteLine(seqIsNotNil[int32]([]int32{1}))
 Console.WriteLine(seqIsNotNil[int32](nil))`, []string{"True", "False", "True", "False"}}
             // The same comparison on a BARE (non-`?`) open slot, which is where the
             // predicate change could most plausibly have altered emission.
-            yield[]object{"nil-comparison-over-a-bare-open-map-and-sequence", `package P
+            yield []object{"nil-comparison-over-a-bare-open-map-and-sequence", `package P
 import System
 
 func mapCount[K, V](m map[K, V]) int32 {
@@ -686,7 +686,7 @@ Console.WriteLine(seqCount[int32]([]int32{1, 2, 3}))`, []string{"1", "3"}}
             // wrong number rather than merely compiling — and, like every other
             // accepted row here, it compiled, ran and IL-verified on the parent
             // too: its job is to keep those paths from regressing, not to turn red.
-            yield[]object{"an-open-async-sequence-through-every-newly-routed-path", `package P
+            yield []object{"an-open-async-sequence-through-every-newly-routed-path", `package P
 import System
 import System.Collections.Generic
 
@@ -761,7 +761,7 @@ run().Wait()`, []string{"3", "-1", "3", "3", "3", "-1", "True", "False"}}
             // instantiation. The closed map is the one shape whose `ClrType`
             // already answered `true` before this change, so narrowing and the
             // `T -> T?` wrap over it must be bit-for-bit unaffected.
-            yield[]object{"narrowing-and-the-nullable-wrap-over-a-closed-map-are-unaffected", `package P
+            yield []object{"narrowing-and-the-nullable-wrap-over-a-closed-map-are-unaffected", `package P
 import System
 
 func takes(m map[string, int32]) int32 {

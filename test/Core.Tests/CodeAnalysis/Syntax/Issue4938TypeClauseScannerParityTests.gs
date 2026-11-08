@@ -322,7 +322,7 @@ open class Issue4938TypeClauseScannerParityTests {
 
         func FormRows() sequence[[]object] {
             for form in Forms {
-                yield[]object{form}
+                yield []object{form}
             }
         }
 

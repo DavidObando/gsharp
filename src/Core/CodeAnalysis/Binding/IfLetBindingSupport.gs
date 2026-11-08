@@ -131,6 +131,11 @@ internal shared class IfLetBindingSupport {
             }
             underlying = declaredUnderlying
             nullableStorageType = NullableTypeSymbol.Get(declaredUnderlying)
+        } else if initializerType is TypeParameterSymbol tpInitializer && !Binder.SatisfiesNotNullConstraint(
+            tpInitializer
+        ) {
+            underlying = tpInitializer
+            nullableStorageType = tpInitializer
         } else {
             if reportNonNullableInitializer != nil {
                 reportNonNullableInitializer(binding, initializerExpr)

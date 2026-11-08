@@ -195,7 +195,7 @@ public static class Probes
         func BindingCases() sequence[[]object] {
             // RED BEFORE (ILVerify). Face 2, the issue's own "working control":
             // inferred type arguments on the `map` spelling.
-            yield[]object{"an-inferred-map-of-a-derived-class-emits-over-the-real-element", `package P
+            yield []object{"an-inferred-map-of-a-derived-class-emits-over-the-real-element", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -208,7 +208,7 @@ entries["k"] = Derived{}
 Console.WriteLine(Probes.CountAnyMap(entries))`, []string{"anymap:1"}}
             // RED BEFORE (ILVerify). Face 2 is not imported-base-specific: a
             // base-less class emitted `object` where it should have emitted itself.
-            yield[]object{"an-inferred-map-of-a-base-less-class-emits-over-it-too", `package P
+            yield []object{"an-inferred-map-of-a-base-less-class-emits-over-it-too", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -220,7 +220,7 @@ let entries = map[string, Standalone]{}
 entries["k"] = Standalone{}
 Console.WriteLine(Probes.CountAnyMap(entries))`, []string{"anymap:1"}}
             // RED BEFORE (ILVerify). The KEY position, same mechanism.
-            yield[]object{"an-inferred-map-with-a-derived-key-emits-over-the-real-key", `package P
+            yield []object{"an-inferred-map-with-a-derived-key-emits-over-the-real-key", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -232,7 +232,7 @@ let entries = map[Derived, string]{}
 Console.WriteLine(Probes.CountAnyMap(entries))`, []string{"anymap:0"}}
             // GREEN BEFORE. The other half of the follow-up comment's asymmetry:
             // #4016 made the EXPLICIT map spelling verify, and it still does.
-            yield[]object{"the-explicit-map-spelling-keeps-verifying", `package P
+            yield []object{"the-explicit-map-spelling-keeps-verifying", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -245,7 +245,7 @@ entries["k"] = Derived{}
 Console.WriteLine(Probes.CountAnyMap[string, Derived](entries))`, []string{"anymap:1"}}
             // GREEN BEFORE. An explicit type argument that IS the real element is a
             // surrogate, not a genuine pin, so face 1's rule leaves it alone.
-            yield[]object{"an-explicit-type-argument-naming-the-real-element-still-binds", `package P
+            yield []object{"an-explicit-type-argument-naming-the-real-element-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -258,7 +258,7 @@ items.Add(Derived{})
 Console.WriteLine(Probes.CountAny[Derived](items))`, []string{"any:1"}}
             // GREEN BEFORE, and the issue names it: a COVARIANT slot really does
             // accept a base type argument, so this must not be caught by face 1.
-            yield[]object{"a-covariant-sequence-slot-still-takes-a-base-type-argument", `package P
+            yield []object{"a-covariant-sequence-slot-still-takes-a-base-type-argument", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -272,7 +272,7 @@ Console.WriteLine(Probes.CountSeq[ImportedBase](items))`, []string{"seq:1"}}
             // GREEN BEFORE. The #3989 lesson, pinned: one concrete nested position
             // beside one open one, with a GENUINE explicit type argument, which is
             // exactly the combination face 1's flag vector newly reasons about.
-            yield[]object{"a-mixed-concrete-and-open-delegate-slot-still-binds-with-a-genuine-pin", `package P
+            yield []object{"a-mixed-concrete-and-open-delegate-slot-still-binds-with-a-genuine-pin", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -286,7 +286,7 @@ Console.WriteLine(Probes.Mixed[string]((xs List[int32]) -> "n=" + xs.Count.ToStr
             // measurement said otherwise. Face 1's rule removes an exemption and
             // leaves the verdict to `Conversion`, which is why this one survives
             // while the invariant `List` and `Dictionary` slots do not.
-            yield[]object{"an-explicit-base-at-a-covariant-array-slot-still-binds", `package P
+            yield []object{"an-explicit-base-at-a-covariant-array-slot-still-binds", `package P
 import System
 import Interop
 
@@ -302,7 +302,7 @@ Console.WriteLine(Probes.CountArray[ImportedBase](items))`, []string{"arr:1"}}
             // CLR inference has reordered since #343; this pins the symbolic side
             // doing the same, with the in-order spelling beside it as the control
             // that was green throughout.
-            yield[]object{"a-named-argument-call-out-of-source-order-still-emits-over-the-real-element", `package P
+            yield []object{"a-named-argument-call-out-of-source-order-still-emits-over-the-real-element", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -324,7 +324,7 @@ Console.WriteLine(Probes.Marked(7, entries))`, []string{"marked:0:1", "marked:7:
             // parameter whose other position is concrete, compiling, verifying and
             // running. It stays green because the gate declines to judge a lambda
             // argument at all.
-            yield[]object{"the-task-continuewith-shape-with-a-genuine-pin-still-binds", `package P
+            yield []object{"the-task-continuewith-shape-with-a-genuine-pin-still-binds", `package P
 import System
 import System.Threading.Tasks
 
@@ -332,7 +332,7 @@ let t = Task.Run(() -> Console.WriteLine("ran"))
 let r = t.ContinueWith[string]((prev Task) -> "done")
 Console.WriteLine(r.Result)`, []string{"ran", "done"}}
             // GREEN BEFORE. Primitives never reached the placeholder branch.
-            yield[]object{"a-primitive-map-is-untouched-inferred-and-explicit", `package P
+            yield []object{"a-primitive-map-is-untouched-inferred-and-explicit", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -342,7 +342,7 @@ Console.WriteLine(Probes.CountAnyMap(entries))
 Console.WriteLine(Probes.CountAnyMap[string, int32](entries))`, []string{"anymap:1", "anymap:1"}}
             // GREEN BEFORE. The slice spelling reached Pattern B on its own and is
             // the row `Issue4016…Tests` carries as its inferred control.
-            yield[]object{"a-slice-at-an-inferred-array-slot-is-untouched", `package P
+            yield []object{"a-slice-at-an-inferred-array-slot-is-untouched", `package P
 import System
 import Interop
 
@@ -360,7 +360,7 @@ Console.WriteLine(Probes.CountArray[Derived](items))`, []string{"arr:1", "arr:1"
         func RejectedCases() sequence[[]object] {
             // RED BEFORE: compiled, ran, printed `any:0`, and ILVerify reported
             // StackUnexpected (List<Derived> found, List<ImportedBase> expected).
-            yield[]object{"an-explicit-base-of-the-real-element-does-not-satisfy-an-invariant-list-slot", `package P
+            yield []object{"an-explicit-base-of-the-real-element-does-not-satisfy-an-invariant-list-slot", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -378,7 +378,7 @@ Console.WriteLine(Probes.CountAny[ImportedBase](items))`, "GS0159"}
             // `Dictionary<ImportedBase, Derived>`. No CLR-level correlation can see
             // it — the argument's erased key IS `ImportedBase`, exactly what the
             // pin says — so the verdict is asked on the REAL symbols instead.
-            yield[]object{"one-genuine-pin-beside-one-surrogate-still-checks-the-genuine-position", `package P
+            yield []object{"one-genuine-pin-beside-one-surrogate-still-checks-the-genuine-position", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -390,7 +390,7 @@ let entries = map[Derived, Derived]{}
 Console.WriteLine(Probes.TakeMap[ImportedBase, Derived](entries))`, "GS0159"}
             // RED BEFORE: the `map` spelling of the same mistake, identical
             // StackUnexpected on the Dictionary shape.
-            yield[]object{"an-explicit-base-of-the-real-value-does-not-satisfy-an-invariant-dictionary-slot", `package P
+            yield []object{"an-explicit-base-of-the-real-value-does-not-satisfy-an-invariant-dictionary-slot", `package P
 import System
 import System.Collections.Generic
 import Interop

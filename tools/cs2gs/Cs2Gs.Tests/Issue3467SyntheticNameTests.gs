@@ -548,13 +548,15 @@ public class C
 {
     public int Run(Func<int, int> _)
     {
-        return _(0) + __underscore(0);
-        static int __underscore(int n) =>
+        return _(0) + underscore(0);
+        static int underscore(int n) =>
             n == 0 ? 7 : Other<int>(n - 1);
-        static int Other<T>(int n) => __underscore(n);
+        static int Other<T>(int n) => underscore(n);
     }
 }`)
-        Assert.Contains("func __underscore_2(", printed, StringComparison.Ordinal)
+        Assert.Contains("func Run(underscore_2 (int32) -> int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("func underscore(", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(C().Run((value int32) -> 100))",
@@ -998,7 +1000,7 @@ public class C
     public static int Run() => Apply(_ => 7);
 }`)
         Assert.Contains("(_ string)", printed, StringComparison.Ordinal)
-        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("underscore", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 
@@ -1012,11 +1014,188 @@ public class C
 
     public static int Run() => Apply(_ => _ + 1);
 }`)
-        Assert.Contains("__underscore", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 
+    @Fact
+    func ReferencedUnderscoreParameter_DisambiguatesAgainstExistingUnderscoreInScope() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int WithParameter(int _, int underscore) => _ + underscore;
+
+    public int WithLocal(int _)
+    {
+        int underscore = 10;
+        int underscore_2 = 20;
+        return _ + underscore + underscore_2;
+    }
+}`)
+        Assert.Contains("func WithParameter(underscore_2 int32, underscore int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore_2 + underscore", printed, StringComparison.Ordinal)
+        Assert.Contains("func WithLocal(underscore_3 int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("return underscore_3 + underscore + underscore_2", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Fact
+    func UnderscoreParameter_NamedArgumentsAgreeWithDeclarationAndPreserveImportedMetadataNames() {
+        let external = CompileExternalReference(`
+public static class ExternalUnderscore
+{
+    public static int Imported(int _) => _ + 10;
+}
+`)
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int Unreferenced(int _) => 7;
+
+    public int Referenced(int _) => _ + 20;
+
+    public int Run() => Unreferenced(_: 1) + Referenced(_: 2) + ExternalUnderscore.Imported(_: 3);
+}`, external)
+        Assert.Contains("func Unreferenced(_ int32) int32 -> 7", printed, StringComparison.Ordinal)
+        Assert.Contains("func Referenced(underscore int32) int32 -> underscore + 20", printed, StringComparison.Ordinal)
+        Assert.Contains("Unreferenced(_: 1)", printed, StringComparison.Ordinal)
+        Assert.Contains("Referenced(underscore: 2)", printed, StringComparison.Ordinal)
+        Assert.Contains("ExternalUnderscore.Imported(_: 3)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+
+        let sourceOnly = Translate(`using System;
+
+public class C
+{
+    public int Unreferenced(int _) => 7;
+
+    public int Referenced(int _) => _ + 20;
+
+    public int Run() => Unreferenced(_: 1) + Referenced(_: 2);
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(sourceOnly, "Console.WriteLine(C().Run())", "29")
+    }
+
+    @Fact
+    func ReferencedUnderscoreIndexerParameter_DisambiguatesAgainstAccessorLocal() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int this[int _]
+    {
+        get
+        {
+            int underscore = 10;
+            return _ + underscore;
+        }
+    }
+
+    public int Run() => this[32];
+}`)
+        Assert.Contains("prop this[underscore_2 int32] int32", printed, StringComparison.Ordinal)
+        Assert.Contains("return underscore_2 + underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("return underscore + underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "42")
+    }
+
+    @Fact
+    func UsingStaticMemberNamedUnderscore_DoesNotGetShadowedByReferencedUnderscoreParameter() {
+        let printed = Translate(`using System;
+using static H;
+
+public static class H
+{
+    public static int underscore = 10;
+}
+
+public class C
+{
+    public int M(int _) => _ + underscore;
+
+    public int Run() => M(2);
+}`)
+        Assert.Contains("func M(underscore_2 int32)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("func M(underscore int32)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "12")
+    }
+
+    @Fact
+    func LocalFunctionNamedUnderscore_NonLiftedAndCapturing_DisambiguatesReferencedUnderscoreParameter() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int NonCapturing(int _)
+    {
+        int underscore() => 10;
+        return _ + underscore();
+    }
+
+    public int Capturing(int _, int bias)
+    {
+        int underscore() => bias + 10;
+        return _ + underscore();
+    }
+
+    public int Run() => NonCapturing(2) * 100 + Capturing(3, 4);
+}`)
+        Assert.Contains("func NonCapturing(underscore_2 int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("func Capturing(underscore_2 int32, bias int32)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "1217")
+    }
+
+    @Fact
+    func ReducedExtensionMethodWithReferencedUnderscoreParameter_RenamesNamedArgumentInInstanceCall() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int Base = 10;
+
+    public int Run() => this.Add(_: 2) + this.Unreferenced(_: 3) + this.Base.AddInt(_: 4);
+}
+
+public static class CExtensions
+{
+    public static int Add(this C c, int _) => c.Base + _ + 1;
+
+    public static int Unreferenced(this C c, int _) => c.Base + 5;
+
+    public static int AddInt(this int x, int _) => x + _ + 1;
+}`)
+        Assert.Contains("CExtensions.Add(this, underscore: 2)", printed, StringComparison.Ordinal)
+        Assert.Contains("CExtensions.Unreferenced(this, _: 3)", printed, StringComparison.Ordinal)
+        Assert.Contains("this.Base.AddInt(underscore: 4)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Add(this, _: 2)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("AddInt(_: 4)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "43")
+    }
+
     shared {
+        private func CompileExternalReference(source string) MetadataReference {
+            let project = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "External snippet should bind with no C# errors: " + string.Join(
+                    Environment.NewLine,
+                    project.ErrorDiagnostics
+                )
+            )
+            using let stream = System.IO.MemoryStream()
+            let emit = project.Compilation.Emit(stream)
+            Assert.True(
+                emit.Success,
+                "External snippet should emit: " + string.Join(Environment.NewLine, emit.Diagnostics)
+            )
+            return MetadataReference.CreateFromImage(stream.ToArray())
+        }
+
         private func Translate(source string, additionalReferences ...MetadataReference) string {
             let references IReadOnlyList[MetadataReference]? = if additionalReferences.Length == 0 {
                 default(List[MetadataReference]?)

@@ -1991,7 +1991,10 @@ internal class UserTokenResolver {
         if def.IsClass {
             return false
         }
-        let defField = def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == field.Name) ?? field
+        let defField = structType.GetDefinitionField(field) ?? def.Fields.FirstOrDefault(
+            (f FieldSymbol) -> f.Name == field.Name
+        ) ??
+            field
         if !this.cache.StructLetFieldCtorHandles.TryGetValue(defField, out var entry) {
             return false
         }

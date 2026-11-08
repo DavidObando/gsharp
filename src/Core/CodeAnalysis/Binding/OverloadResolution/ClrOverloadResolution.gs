@@ -4436,9 +4436,28 @@ internal shared class ClrOverloadResolution {
             !argument.HasUnmanagedConstraint {
             return false
         }
-        if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 &&
-            !argument.HasReferenceTypeConstraint &&
-            !TypeParameterHasClassBound(argument) {
+        let parameterNullability = GetDeclaredGenericParameterNullability(declaredParameter)
+        if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
+            if !argument.HasReferenceTypeConstraint && !TypeParameterHasClassBound(argument) {
+                return false
+            }
+            if parameterNullability == ReferenceNullabilityKind.NotNull &&
+                !GSharp
+                .Core
+                .CodeAnalysis
+                .Binding
+                .Binder
+                .SatisfiesNotNullConstraint(argument) {
+                return false
+            }
+        } else if HasDeclaredNotNullConstraint(declaredParameter) &&
+            !IsMapReferenceKeyView(declaredParameter, argument) &&
+            !GSharp
+            .Core
+            .CodeAnalysis
+            .Binding
+            .Binder
+            .SatisfiesNotNullConstraint(argument) {
             return false
         }
         if (special & GenericParameterAttributes.DefaultConstructorConstraint) != 0 &&
@@ -4448,7 +4467,8 @@ internal shared class ClrOverloadResolution {
             !argument.HasUnmanagedConstraint {
             return false
         }
-        for constraint in typeConstraints {
+        for var c = 0; c < typeConstraints.Length; c++ {
+            let constraint = typeConstraints[c]
             if constraint == nil {
                 continue
             }
@@ -4463,7 +4483,16 @@ internal shared class ClrOverloadResolution {
             if dependent {
                 continue
             }
-            if TypeParameterSatisfiesClrBound(argument, constraint) {
+            if TypeParameterSatisfiesClrBound(argument, constraint) &&
+                SatisfiesAnnotatedClrTypeConstraint(
+                declaredParameter,
+                c,
+                constraint,
+                siblings,
+                Array.Empty[Type](),
+                default(ImmutableArray[TypeSymbol?]),
+                argument
+            ) {
                 continue
             }
             failedConstraint = constraint
@@ -4512,6 +4541,9 @@ internal shared class ClrOverloadResolution {
                     continue
                 }
                 case structSymbol is StructSymbol when structSymbol.IsClass == true {
+                    return true
+                }
+                case nullable is NullableTypeSymbol when nullable.UnderlyingType is StructSymbol{IsClass: true} {
                     return true
                 }
                 default {
@@ -4585,7 +4617,12 @@ internal shared class ClrOverloadResolution {
             if ClassBoundReachesImportedType(parameter.ClassConstraint, constraint) {
                 return true
             }
-            if parameter.ClassConstraint is StructSymbol userClass &&
+            let unwrappedClass = if parameter.ClassConstraint is NullableTypeSymbol nullableClass {
+                nullableClass.UnderlyingType
+            } else {
+                parameter.ClassConstraint
+            }
+            if unwrappedClass is StructSymbol userClass &&
                 UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(userClass, constraint) {
                 return true
             }
@@ -4679,7 +4716,12 @@ internal shared class ClrOverloadResolution {
             }
             // A same-compilation class bound: its own interface list and
             // imported base chain answer this.
-            if parameter.ClassConstraint is StructSymbol userClassBound &&
+            let unwrappedClass = if parameter.ClassConstraint is NullableTypeSymbol nullableClass {
+                nullableClass.UnderlyingType
+            } else {
+                parameter.ClassConstraint
+            }
+            if unwrappedClass is StructSymbol userClassBound &&
                 ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint) {
                 return true
             }
@@ -7955,14 +7997,51 @@ internal shared class ClrOverloadResolution {
                 return false
             }
             let special = attrs & GenericParameterAttributes.SpecialConstraintMask
+            let unwrappedArgSymbol = if argSymbol is NullableTypeSymbol nullableArg &&
+                !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                nullableArg.UnderlyingType
+            } else {
+                argSymbol
+            }
             let argIsUserValueType = argSymbol != nil && IsValueTypeErasedSymbol(argSymbol)
-            let argIsUserReferenceType = argSymbol is StructSymbol &&
-                argSymbol.IsClass == true &&
-                argSymbol.ClrType == nil
+            let argIsUserReferenceType = unwrappedArgSymbol is StructSymbol &&
+                unwrappedArgSymbol.IsClass == true &&
+                unwrappedArgSymbol.ClrType == nil
+            var typeConstraints[]Type
+            try {
+                typeConstraints = param.GetGenericParameterConstraints()
+            } catch (ex Exception) when IsMetadataLoadFailure(ex) {
+                continue
+            }
+            let parameterNullability = GetDeclaredGenericParameterNullability(param)
             if (special & GenericParameterAttributes.ReferenceTypeConstraint) != 0 {
                 // `where T : class` — arg must be a reference type (not a
                 // value type, not Nullable<T>).
                 if arg.IsValueType || argIsUserValueType {
+                    return false
+                }
+                if parameterNullability == ReferenceNullabilityKind.NotNull &&
+                    argSymbol != nil &&
+                    !GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Binding
+                    .Binder
+                    .SatisfiesNotNullConstraint(argSymbol) {
+                    return false
+                }
+            } else if HasDeclaredNotNullConstraint(param) {
+                if NullableLifting.IsValueTypeNullableClr(arg) ||
+                    (
+                    argSymbol != nil &&
+                        !IsMapReferenceKeyView(param, argSymbol) &&
+                        !GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Binding
+                        .Binder
+                        .SatisfiesNotNullConstraint(argSymbol)
+                ) {
                     return false
                 }
             }
@@ -7980,7 +8059,13 @@ internal shared class ClrOverloadResolution {
                 // constructor. Value types always satisfy this implicitly;
                 // reference types require an actual ctor.
                 if !arg.IsValueType && !argIsUserValueType {
-                    if argIsUserReferenceType && argSymbol is StructSymbol userClass {
+                    let unwrappedArgSymbol = if argSymbol is NullableTypeSymbol nullableArg &&
+                        !NullableLifting.IsAnyValueTypeNullable(nullableArg) {
+                        nullableArg.UnderlyingType
+                    } else {
+                        argSymbol
+                    }
+                    if unwrappedArgSymbol is StructSymbol{IsClass: true, ClrType: nil} userClass {
                         if userClass.IsAbstract ||
                             userClass.HasPrimaryConstructor ||
                             (
@@ -8018,12 +8103,6 @@ internal shared class ClrOverloadResolution {
             // `where T : ISomething`, or a dependent bound such as
             // `where TResult : T`. Substitute the complete type-argument
             // vector before testing the constraint.
-            var typeConstraints[]Type
-            try {
-                typeConstraints = param.GetGenericParameterConstraints()
-            } catch (ex Exception) when IsMetadataLoadFailure(ex) {
-                continue
-            }
             for var c = 0; c < typeConstraints.Length; c++ {
                 var constraint Type? = typeConstraints[c]
                 if constraint == nil {
@@ -8059,6 +8138,26 @@ internal shared class ClrOverloadResolution {
                 // is a type-BOUND constraint failure, so name the bound that
                 // failed. Callers that only want a yes/no discard it.
                 failedConstraint = constraint
+                let annotatedCandidate = argSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(
+                    arg,
+                    NullabilityFreeReason.TypeStructure
+                )
+                if (
+                    rawConstraint.IsGenericType ||
+                        annotatedCandidate is NullableTypeSymbol ||
+                        annotatedCandidate is TypeParameterSymbol
+                ) &&
+                    !SatisfiesAnnotatedClrTypeConstraint(
+                    param,
+                    c,
+                    rawConstraint,
+                    typeParams,
+                    typeArgs,
+                    typeArgSymbols,
+                    annotatedCandidate
+                ) {
+                    return false
+                }
                 // Issue #4041: a DEPENDENT bound over an ERASED vector is
                 // answered on the SYMBOLS, never on the projected `Type[]`.
                 // Three-state on purpose: a definitive no rejects, a definitive
@@ -8071,7 +8170,11 @@ internal shared class ClrOverloadResolution {
                     rawConstraint,
                     typeParams,
                     typeArgSymbols,
-                    argSymbol,
+                    if rawConstraint.IsGenericParameter && IsNullableDependentConstraintRow(param, c) {
+                        unwrappedArgSymbol ?? argSymbol
+                    } else {
+                        argSymbol
+                    },
                     out var dependentSatisfied
                 ) {
                     if dependentSatisfied {
@@ -8093,7 +8196,9 @@ internal shared class ClrOverloadResolution {
                 // interface constraints against the symbol's declared interfaces
                 // instead of the placeholder. This is the Oahu
                 // SettingsManager.GetUserSettings[UserSettings]() shape.
-                if constraint!!.IsInterface && argSymbol is {} interfaceSymbol && interfaceSymbol.ClrType == nil {
+                if constraint!!.IsInterface &&
+                    unwrappedArgSymbol is {} interfaceSymbol &&
+                    interfaceSymbol.ClrType == nil {
                     if ErasedSymbolSatisfiesInterfaceConstraint(interfaceSymbol, constraint!!) {
                         continue
                     }
@@ -8167,7 +8272,7 @@ internal shared class ClrOverloadResolution {
                 // binding and is represented by an object placeholder. Check
                 // its symbolic base chain for concrete class constraints.
                 if argIsUserReferenceType && !constraint!!.IsInterface {
-                    if argSymbol is StructSymbol userReferenceType &&
+                    if unwrappedArgSymbol is StructSymbol userReferenceType &&
                         UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(userReferenceType, constraint) {
                         continue
                     }
@@ -8216,6 +8321,240 @@ internal shared class ClrOverloadResolution {
         failedIndex = -1
         failedConstraint = nil
         return true
+    }
+
+    private func GetDeclaredGenericParameterNullability(param Type) ReferenceNullabilityKind {
+        try {
+            return ClrNullability.GetGenericParameterTypeSymbol(param).ReferenceNullability
+        } catch (Exception) {
+            return ReferenceNullabilityKind.Platform
+        }
+    }
+
+    private func HasDeclaredNotNullConstraint(param Type) bool {
+        try {
+            return ClrNullability.HasNotNullConstraint(param)
+        } catch (Exception) {
+            return false
+        }
+    }
+
+    /// ADR-0104 / ADR-0186 §3 rule 2 (#5413): `map[K, V]` and `Dictionary[K, V]`
+    /// are one type in G#, and widening an oblivious `map[K!, V]` container to
+    /// `Dictionary[K?, V]` requires a reference-nullable key view to remain
+    /// constructible as a type clause (`Issue4776CopyProvenanceEmitTests`).
+    private func IsMapReferenceKeyView(param Type, argSymbol TypeSymbol) bool {
+        if param.GenericParameterPosition != 0 ||
+            param
+            .DeclaringType
+            ?.FullName != "System.Collections.Generic.Dictionary`2" {
+            return false
+        }
+        return if argSymbol is NullableTypeSymbol nullable {
+            !NullableLifting.IsAnyValueTypeNullable(nullable)
+        } else if argSymbol is TypeParameterSymbol tp {
+            !tp.HasNullableReferenceTypeConstraint
+        } else {
+            false
+        }
+    }
+
+    private func IsNullableDependentConstraintRow(param Type, constraintIndex int32) bool {
+        try {
+            let metadataRows = ClrSignatureMetadata.Constraints(param)
+            return uint32(constraintIndex) < uint32(metadataRows.Length) &&
+                !metadataRows[constraintIndex]
+                .Flags
+                .IsDefaultOrEmpty &&
+                metadataRows[constraintIndex].Flags[0] == NullableFlagsBuilder.Annotated
+        } catch (Exception) {
+            return false
+        }
+    }
+
+    private func OpenMethodConstraintMentionsDeclaringTypeParameter(param Type, constraintIndex int32) bool {
+        try {
+            if param.DeclaringMethod is not MethodInfo declaringMethod ||
+                declaringMethod.DeclaringType is not{IsGenericType: true} declaringType {
+                return false
+            }
+            let openDeclaringType = if declaringType.IsGenericTypeDefinition {
+                declaringType
+            } else {
+                declaringType.GetGenericTypeDefinition()
+            }
+            let methodDef = if declaringMethod.IsGenericMethodDefinition {
+                declaringMethod
+            } else {
+                declaringMethod.GetGenericMethodDefinition()
+            }
+            let openMethod = MemberLookup.TryGetOpenMethodOnDeclaringType(openDeclaringType, methodDef)
+            if openMethod == nil || !openMethod.IsGenericMethodDefinition {
+                return false
+            }
+            let openMethodParams = openMethod.GetGenericArguments()
+            if uint32(param.GenericParameterPosition) >= uint32(openMethodParams.Length) {
+                return false
+            }
+            let openConstraints = openMethodParams[param.GenericParameterPosition].GetGenericParameterConstraints()
+            if uint32(constraintIndex) >= uint32(openConstraints.Length) {
+                return false
+            }
+            return MentionsDeclaringTypeGenericParameter(openConstraints[constraintIndex])
+        } catch (Exception) {
+            return false
+        }
+    }
+
+    private func MentionsDeclaringTypeGenericParameter(type Type?) bool {
+        if type == nil {
+            return false
+        }
+        if type.IsGenericParameter {
+            return type.DeclaringMethod == nil
+        }
+        if type.HasElementType {
+            return MentionsDeclaringTypeGenericParameter(type.GetElementType())
+        }
+        if type.IsGenericType {
+            for arg in type.GetGenericArguments() {
+                if MentionsDeclaringTypeGenericParameter(arg) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func SatisfiesAnnotatedClrTypeConstraint(
+        param Type,
+        constraintIndex int32,
+        rawConstraint Type,
+        typeParams[]Type,
+        typeArgs[]Type,
+        typeArgSymbols ImmutableArray[TypeSymbol?],
+        argSymbol TypeSymbol
+    ) bool {
+        try {
+            if !typeParams.Any((tp Type) -> tp.DeclaringMethod == nil) &&
+                OpenMethodConstraintMentionsDeclaringTypeParameter(param, constraintIndex) {
+                return true
+            }
+            let candidate = PlatformTypeSymbol.StripTopLevel(argSymbol)
+            let metadataRows = ClrSignatureMetadata.Constraints(param)
+            let hasRowFlags = uint32(constraintIndex) < uint32(metadataRows.Length) &&
+                !metadataRows[constraintIndex]
+                .Flags
+                .IsDefaultOrEmpty
+            let rowRootFlag uint8 = if hasRowFlags {
+                metadataRows[constraintIndex].Flags[0]
+            } else {
+                uint8(0)
+            }
+            if rawConstraint.IsGenericParameter &&
+                candidate is NullableTypeSymbol &&
+                rowRootFlag != NullableFlagsBuilder
+                .Annotated {
+                let boundIndex = IndexOfGenericParameter(typeParams, rawConstraint)
+                let boundSymbol = if boundIndex >= 0 &&
+                    !typeArgSymbols.IsDefaultOrEmpty &&
+                    boundIndex < typeArgSymbols.Length &&
+                    typeArgSymbols[boundIndex] is {} s {
+                    s
+                } else if boundIndex >= 0 && boundIndex < typeArgs.Length {
+                    TypeSymbol.FromClrTypeWithoutNullability(typeArgs[boundIndex], NullabilityFreeReason.TypeStructure)
+                } else {
+                    nil
+                }
+                if HasDeclaredNotNullConstraint(rawConstraint) ||
+                    GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Binding
+                    .Binder
+                    .SatisfiesNotNullConstraint(boundSymbol) {
+                    return false
+                }
+            }
+            if !hasRowFlags || rawConstraint.IsGenericParameter {
+                return true
+            }
+            var project Func[Type, TypeSymbol]? = nil
+            if rawConstraint.ContainsGenericParameters &&
+                typeParams.Length == typeArgs.Length &&
+                typeParams.Length > 0 {
+                let openDef = param.DeclaringType ?? (param.DeclaringMethod as MethodInfo)?.DeclaringType
+                let openMethod = param.DeclaringMethod as MethodInfo
+                let typeArgBuilder = ImmutableArray.CreateBuilder[TypeSymbol]()
+                let methodArgBuilder = ImmutableArray.CreateBuilder[TypeSymbol?]()
+                for var p = 0; p < typeParams.Length; p++ {
+                    let sym TypeSymbol = if !typeArgSymbols.IsDefaultOrEmpty &&
+                        p < typeArgSymbols.Length &&
+                        typeArgSymbols[p] is {} s {
+                        s
+                    } else {
+                        TypeSymbol.FromClrTypeWithoutNullability(typeArgs[p], NullabilityFreeReason.TypeStructure)
+                    }
+                    if typeParams[p].DeclaringMethod != nil {
+                        methodArgBuilder.Add(sym)
+                    } else {
+                        typeArgBuilder.Add(sym)
+                    }
+                }
+                let declaringTypeArgs = typeArgBuilder.ToImmutable()
+                let methodTypeArgs = methodArgBuilder.ToImmutable()
+                project = (layout Type) -> MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                    layout,
+                    openDef,
+                    declaringTypeArgs,
+                    openMethod,
+                    methodTypeArgs,
+                    NullabilityFreeReason.TypeStructure
+                )
+            }
+            let constraints = ClrNullability.GetGenericParameterConstraintTypeSymbols(param, project)
+            if uint32(constraintIndex) >= uint32(constraints.Length) {
+                return true
+            }
+            let annotatedConstraint = constraints[constraintIndex]
+            if candidate is NullableTypeSymbol &&
+                annotatedConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+                return false
+            }
+            if !rawConstraint.IsGenericType {
+                if candidate is TypeParameterSymbol &&
+                    annotatedConstraint.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                    rawConstraint.FullName != "System.ValueType" &&
+                    rawConstraint.FullName != "System.Object" {
+                    return if rawConstraint.IsInterface {
+                        GSharp
+                            .Core
+                            .CodeAnalysis
+                            .Binding
+                            .Binder
+                            .SatisfiesClrInterfaceConstraint(candidate, annotatedConstraint, tp: nil)
+                    } else {
+                        GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesClassConstraint(candidate, annotatedConstraint)
+                    }
+                }
+                return true
+            }
+            if rawConstraint.ContainsGenericParameters && project == nil {
+                return true
+            }
+            return if rawConstraint.IsInterface {
+                GSharp
+                    .Core
+                    .CodeAnalysis
+                    .Binding
+                    .Binder
+                    .SatisfiesClrInterfaceConstraint(candidate, annotatedConstraint, tp: nil)
+            } else {
+                GSharp.Core.CodeAnalysis.Binding.Binder.SatisfiesClassConstraint(candidate, annotatedConstraint)
+            }
+        } catch (Exception) {
+            return true
+        }
     }
 
     private func RejectConstraintFailureOrThrowCompilerInvariant(

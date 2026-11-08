@@ -514,12 +514,7 @@ internal partial class ExpressionBinder {
                 spilledValue.Type
             }
             let spilledLocal = DeclareRangeTemp("index", tempType, spilledValue, statements)
-            return BoundAddressOfExpression(
-                address.Syntax,
-                BoundVariableExpression(address.Syntax, spilledLocal),
-                unmanaged: false,
-                address.IsReadOnly
-            )
+            return address.Update(BoundVariableExpression(address.Syntax, spilledLocal))
         }
         let referenceLocal = DeclareRangeTemp("index", address.Type, address, statements)
         referenceLocal.ManagedReferenceOrigin = address

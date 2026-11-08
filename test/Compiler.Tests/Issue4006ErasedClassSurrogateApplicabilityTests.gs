@@ -199,7 +199,7 @@ public static class Probes
             // The issue's own repro. Compiled on `main`, printed `baselist:1`, and
             // ilverify reported StackUnexpected
             // [found List`1<P.Derived>] [expected List`1<Interop.ImportedBase>].
-            yield[]object{"the-reported-repro-is-rejected", `package P
+            yield []object{"the-reported-repro-is-rejected", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -213,7 +213,7 @@ Console.WriteLine(Probes.CountBaseList(derived))`, "GS0159"}
             // The map spelling: a DIFFERENT path (the argument erases to the
             // imported base, not to `object`, so the CLR comparison reports
             // identity and #3989's gate is the one that has to refuse it).
-            yield[]object{"the-map-spelling-of-the-same-hole-is-rejected", `package P
+            yield []object{"the-map-spelling-of-the-same-hole-is-rejected", `package P
 import System
 import Interop
 
@@ -226,7 +226,7 @@ Console.WriteLine(Probes.CountBaseMap(entries))`, "GS0159"}
             // The same unsound bind reached from inside a G# function rather than
             // from a local: the argument's type is spelled by a parameter, so the
             // refusal cannot depend on how the value was introduced.
-            yield[]object{"a-derived-list-does-not-reach-a-genuine-base-list-through-a-generic-function", `package P
+            yield []object{"a-derived-list-does-not-reach-a-genuine-base-list-through-a-generic-function", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -242,7 +242,7 @@ Console.WriteLine(hand(List[Derived]()))`, "GS0159"}
             // The enum surrogate control. Refused BEFORE this change too, by
             // `ExcludeErasureOnlyEnumCandidates` — pinned so the asymmetry between
             // surrogates stays measured rather than assumed.
-            yield[]object{"the-enum-surrogate-was-and-remains-refused", `package P
+            yield []object{"the-enum-surrogate-was-and-remains-refused", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -264,7 +264,7 @@ Console.WriteLine(Probes.CountIntList(values))`, "GS0159"}
             // IS an `ImportedBase`, so this conversion is real and must survive.
             // A genuine `List[ImportedBase]` at the invariant slot must too, and an
             // inferred generic slot is never second-guessed.
-            yield[]object{"covariance-a-genuine-argument-and-an-inferred-slot-all-still-bind", `package P
+            yield []object{"covariance-a-genuine-argument-and-an-inferred-slot-all-still-bind", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -302,7 +302,7 @@ Console.WriteLine(Probes.CountAny[Derived](derived))`, []string{"baseseq:1", "ba
             // spellings that failed with it, live in
             // `Issue4016ExplicitTypeArgumentErasureTests` rather than being
             // duplicated here; the rejections below are what THIS issue pins.
-            yield[]object{"a-genuine-imported-base-dictionary-still-binds", `package P
+            yield []object{"a-genuine-imported-base-dictionary-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -313,7 +313,7 @@ Console.WriteLine(Probes.CountBaseMap(genuine))`, []string{"basemap:1"}}
             // The ADR-0148 projection doing its real job, at an imported METHOD
             // PARAMETER — the exact callback this change edits. Without this row
             // the fix would only have been shown to say no.
-            yield[]object{"a-genuine-structural-projection-at-an-imported-parameter-still-binds", `package P
+            yield []object{"a-genuine-structural-projection-at-an-imported-parameter-still-binds", `package P
 import System
 import Interop
 
@@ -330,7 +330,7 @@ Console.WriteLine(Probes.DescribePoint(PtSource{x: 3, y: 4}))`, []string{"point:
             // CLR arrays are COVARIANT, so `Conversion` reports a real conversion
             // and the verdict lets it through. Invariance is what made the map row
             // unsound, not the erasure.
-            yield[]object{"the-covariant-array-spelling-still-binds", `package P
+            yield []object{"the-covariant-array-spelling-still-binds", `package P
 import System
 import Interop
 
@@ -347,7 +347,7 @@ Console.WriteLine(Probes.TakeBaseArray([]ImportedBase{ImportedBase{}}))`, []stri
             // `Conversion.Classify(...).Exists` as its verdict rather than
             // second-guessing the planner: a real projection EXISTS, so the gate
             // lets it through.
-            yield[]object{"a-genuine-projection-onto-an-imported-clr-target-still-lowers", `package P
+            yield []object{"a-genuine-projection-onto-an-imported-clr-target-still-lowers", `package P
 import System
 import System.Text
 
@@ -370,7 +370,7 @@ Console.WriteLine(builder.Capacity.ToString())`, []string{"24"}}
             // the erased-argument question at the SLOT instead is what keeps both
             // right. Also in `Issue2889LambdaThunkNestedGenericTests`; kept here
             // because it is this change's counterexample, not that one's.
-            yield[]object{"an-imported-delegates-erased-invoke-slot-still-accepts-a-user-enum-list", `package P
+            yield []object{"an-imported-delegates-erased-invoke-slot-still-accepts-a-user-enum-list", `package P
 import System
 import System.Collections.Generic
 
@@ -385,7 +385,7 @@ enumAction(List[Mode]{ Mode.Second })`, []string{"1"}}
             // `Dictionary[T, List[object]]`. #4004 implemented a per-position
             // version of #3989's gate, this broke, and it was reverted. Kept green
             // here so any future per-position attempt trips over it immediately.
-            yield[]object{"task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
+            yield []object{"task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
 import System
 import System.Threading.Tasks
 

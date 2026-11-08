@@ -276,7 +276,7 @@ public static class MapProbes
         /// @returns Name, G# source, expected stdout lines.
         func AcceptedCases() sequence[[]object] {
             // The reported row, and the full family beside it.
-            yield[]object{"an-open-map-reaches-every-dictionary-interface", `package Demo
+            yield []object{"an-open-map-reaches-every-dictionary-interface", `package Demo
 import System
 import System.Collections.Generic
 
@@ -309,7 +309,7 @@ main2()`, []string{"12"}}
             // The CLOSED spelling of the same conversions, which already worked.
             // Kept beside the open one so the two are read together: the whole
             // claim of this issue is that they must agree.
-            yield[]object{"the-closed-spelling-still-reaches-every-dictionary-interface", `package Demo
+            yield []object{"the-closed-spelling-still-reaches-every-dictionary-interface", `package Demo
 import System
 import System.Collections.Generic
 
@@ -329,7 +329,7 @@ func main2() {
 main2()`, []string{"6"}}
             // The class arm #3987 fixed, restated as the control: this PR extends
             // that rule to the interfaces and must not disturb it.
-            yield[]object{"control-an-open-map-still-reaches-the-concrete-dictionary", `package Demo
+            yield []object{"control-an-open-map-still-reaches-the-concrete-dictionary", `package Demo
 import System
 import System.Collections.Generic
 
@@ -347,7 +347,7 @@ main2()`, []string{"3"}}
             // A SAME-COMPILATION element is the other half of "no CLR identity",
             // and takes the identical path: the map's ClrType is null for the same
             // reason, so the same arm has to answer.
-            yield[]object{"a-map-over-a-same-compilation-element-reaches-the-interfaces", `package Demo
+            yield []object{"a-map-over-a-same-compilation-element-reaches-the-interfaces", `package Demo
 import System
 import System.Collections.Generic
 
@@ -371,7 +371,7 @@ main2()`, []string{"2", "2"}}
             // because NO conversion existed at all; the moment one did, the
             // emitter crashed with GS9998 until the wrappers were stripped, which
             // is why this row executes rather than merely compiling.
-            yield[]object{"a-nullable-open-map-reaches-a-nullable-interface", `package Demo
+            yield []object{"a-nullable-open-map-reaches-a-nullable-interface", `package Demo
 import System
 import System.Collections.Generic
 
@@ -401,7 +401,7 @@ main2()`, []string{"1"}}
         func RejectedCases() sequence[[]object] {
             // The reverse direction. An `IDictionary[K, V]` is not necessarily a
             // `Dictionary[K, V]`, so nothing here may make it one.
-            yield[]object{"an-open-dictionary-interface-does-not-flow-back-into-a-map", `package Demo
+            yield []object{"an-open-dictionary-interface-does-not-flow-back-into-a-map", `package Demo
 import System
 import System.Collections.Generic
 
@@ -414,7 +414,7 @@ Console.WriteLine("x")`, "Cannot convert type"}
             // Element-exact: the interface's own arguments must be the map's own
             // key and value, not merely something the erasure could confuse them
             // with.
-            yield[]object{"an-open-map-does-not-reach-a-dictionary-interface-of-other-elements", `package Demo
+            yield []object{"an-open-map-does-not-reach-a-dictionary-interface-of-other-elements", `package Demo
 import System
 import System.Collections.Generic
 
@@ -429,7 +429,7 @@ Console.WriteLine("x")`, "Cannot convert type"}
             // form would not have reached the parameter either — for exactly the
             // reason this issue exists. With the conversion in place the row is
             // now a plain nullability error, which is the correct answer.
-            yield[]object{"a-nullable-open-map-at-a-non-nullable-interface-is-a-nullability-error", `package Demo
+            yield []object{"a-nullable-open-map-at-a-non-nullable-interface-is-a-nullability-error", `package Demo
 import System
 import System.Collections.Generic
 
@@ -465,7 +465,7 @@ Console.WriteLine("x")`, "GS0154"}
         /// — every one of those rows IS red on the parent.
         /// @returns Name, G# source, expected stdout lines.
         func InteropCases() sequence[[]object] {
-            yield[]object{"interop-an-open-map-reaches-an-imported-dictionary-interface-parameter", `package Demo
+            yield []object{"interop-an-open-map-reaches-an-imported-dictionary-interface-parameter", `package Demo
 import System
 import System.Collections.Generic
 import Interop

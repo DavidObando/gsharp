@@ -374,7 +374,7 @@ Console.WriteLine(trace)`
 
         /// Gets fixed source kinds whose old conv.u lowering failed verification.
         func PinKinds() sequence[[]object] {
-            yield[]object{"Slice", `package Issue2922.Slice
+            yield []object{"Slice", `package Issue2922.Slice
 import System
 func F(x int32, xs []int32) int32 {
     unsafe {
@@ -387,7 +387,7 @@ func F(x int32, xs []int32) int32 {
     }
 }
 Console.WriteLine(F(0, []int32{1, 2}))`, "2\n", Array.Empty[string]()}
-            yield[]object{"String", `package Issue2922.String
+            yield []object{"String", `package Issue2922.String
 import System
 func F(x int32, text string) int32 {
     unsafe {
@@ -403,7 +403,7 @@ Console.WriteLine(F(0, "AB"))
 Console.WriteLine(F(0, ""))`, `2
 0
 `, Array.Empty[string]()}
-            yield[]object{"Span", `package Issue2922.Span
+            yield []object{"Span", `package Issue2922.Span
 import System
 func F(x int32, xs []int32) int32 {
     var span Span[int32] = xs

@@ -115,7 +115,7 @@ func Run(b ClrBox) int32 {
         private const RunTimeout int32 = 30000
 
         func Rows() IEnumerable[[]object] {
-            yield[]object{"r01_5637_call_in_left_operand_removes_global_fact_for_right_operand", `import System
+            yield []object{"r01_5637_call_in_left_operand_removes_global_fact_for_right_operand", `import System
 
 class C {
     var Value int32 = 7
@@ -130,7 +130,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@12:24", "reject", ""}
-            yield[]object{"r02_5637_computed_getter_in_left_operand_removes_byref_fact_for_right_operand", `import System
+            yield []object{"r02_5637_computed_getter_in_left_operand_removes_byref_fact_for_right_operand", `import System
 
 class Box {
     shared {
@@ -148,7 +148,7 @@ func Run(ref text string?, b Box) int32 {
     return b.P + text.Length
 }
 Console.WriteLine(Run(ref Box.G, Box{}))`, "GS0158@16:23", "reject", ""}
-            yield[]object{"r03_5637_open_auto_property_in_left_operand_removes_byref_fact_for_right_operand", `import System
+            yield []object{"r03_5637_open_auto_property_in_left_operand_removes_byref_fact_for_right_operand", `import System
 
 open class Base {
     shared {
@@ -170,7 +170,7 @@ func Run(ref text string?, b Base) int32 {
     return b.Auto + text.Length
 }
 Console.WriteLine(Run(ref Base.G, Derived()))`, "GS0158@20:26", "reject", ""}
-            yield[]object{"r04_5637_call_in_first_argument_removes_global_fact_for_second_argument", `import System
+            yield []object{"r04_5637_call_in_first_argument_removes_global_fact_for_second_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -188,7 +188,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@15:27", "reject", ""}
-            yield[]object{"r05_5637_control_read_in_first_operand_before_call_in_second_operand_is_accepted", `import System
+            yield []object{"r05_5637_control_read_in_first_operand_before_call_in_second_operand_is_accepted", `import System
 
 class C {
     var Value int32 = 7
@@ -203,7 +203,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "8"}
-            yield[]object{"r06_5637_control_read_in_first_argument_before_call_in_second_argument_is_accepted", `import System
+            yield []object{"r06_5637_control_read_in_first_argument_before_call_in_second_argument_is_accepted", `import System
 
 class C {
     var Value int32 = 7
@@ -221,7 +221,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "8"}
-            yield[]object{"r07_5637_ref_call_in_first_argument_removes_local_fact_for_second_argument", `import System
+            yield []object{"r07_5637_ref_call_in_first_argument_removes_local_fact_for_second_argument", `import System
 
 func ClearRef(ref s string?) int32 {
     s = nil
@@ -236,7 +236,7 @@ func Run(seed string?) int32 {
     return Use(ClearRef(ref s), s.Length)
 }
 Console.WriteLine(Run("abc"))`, "GS0612@13:25 GS0158@13:35", "reject", ""}
-            yield[]object{"r08_5637_control_ref_address_in_first_argument_keeps_local_fact_for_second_argument", `import System
+            yield []object{"r08_5637_control_ref_address_in_first_argument_keeps_local_fact_for_second_argument", `import System
 
 func ClearAfter(ref s string?, len int32) int32 {
     s = nil
@@ -248,7 +248,7 @@ func Run(seed string?) int32 {
     return ClearAfter(ref s, s.Length)
 }
 Console.WriteLine(Run("abcd"))`, "GS0612@10:23", "run", "4"}
-            yield[]object{
+            yield []object{
                 "r09_5238_enclosing_catch_filter_write_after_call_in_left_operand_removes_fact_for_right_operand",
                 `import System
 
@@ -277,7 +277,7 @@ Console.WriteLine(First("abc"))`,
                 "reject",
                 ""
             }
-            yield[]object{"r10_5238_enclosing_catch_filter_write_in_if_condition_removes_fact_for_then_branch", `import System
+            yield []object{"r10_5238_enclosing_catch_filter_write_in_if_condition_removes_fact_for_then_branch", `import System
 
 func Resume() int32 {
     try {
@@ -303,7 +303,7 @@ func Second(seed string?) int32 {
     }
 }
 Console.WriteLine(Second("abc"))`, "GS0158@19:22", "reject", ""}
-            yield[]object{"r11_5238_control_read_before_call_in_try_with_enclosing_catch_filter_is_accepted", `import System
+            yield []object{"r11_5238_control_read_before_call_in_try_with_enclosing_catch_filter_is_accepted", `import System
 
 func Resume() int32 {
     try {
@@ -326,7 +326,7 @@ func FirstControl(seed string?) int32 {
     }
 }
 Console.WriteLine(FirstControl("abc"))`, "", "run", "3"}
-            yield[]object{"r12_5637_call_in_left_operand_of_short_circuit_and_removes_fact_for_right_operand", `import System
+            yield []object{"r12_5637_call_in_left_operand_of_short_circuit_and_removes_fact_for_right_operand", `import System
 
 class C {
     var Value int32 = 7
@@ -344,7 +344,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@12:26", "reject", ""}
-            yield[]object{"r13_5637_control_read_in_left_operand_of_short_circuit_and_before_call_in_right_operand", `import System
+            yield []object{"r13_5637_control_read_in_left_operand_of_short_circuit_and_before_call_in_right_operand", `import System
 
 class C {
     var Value int32 = 7
@@ -362,7 +362,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "1"}
-            yield[]object{"r14_5238_enclosing_catch_filter_write_in_if_expression_condition_removes_fact_for_arm", `import System
+            yield []object{"r14_5238_enclosing_catch_filter_write_in_if_expression_condition_removes_fact_for_arm", `import System
 
 func Resume() int32 {
     try {
@@ -385,7 +385,7 @@ func SecondExpr(seed string?) int32 {
     }
 }
 Console.WriteLine(SecondExpr("abc"))`, "GS0158@18:37", "reject", ""}
-            yield[]object{"r15_5637_struct_literal_computed_setter_invalidates_later_member_initializer", `import System
+            yield []object{"r15_5637_struct_literal_computed_setter_invalidates_later_member_initializer", `import System
 
 class C {
     var Value int32 = 7
@@ -406,7 +406,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@17:31", "reject", ""}
-            yield[]object{"r16_5637_implicit_conversion_on_earlier_argument_invalidates_later_argument", `import System
+            yield []object{"r16_5637_implicit_conversion_on_earlier_argument_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -424,7 +424,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@15:21", "reject", ""}
-            yield[]object{"r17_5637_property_pattern_getter_invalidates_nested_subpattern", `import System
+            yield []object{"r17_5637_property_pattern_getter_invalidates_nested_subpattern", `import System
 
 class C {
     var Value int32 = 7
@@ -443,7 +443,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "GS0158@16:29", "reject", ""}
-            yield[]object{"r18_5637_target_dependent_deferred_block_argument_invalidates_later_argument", `import System
+            yield []object{"r18_5637_target_dependent_deferred_block_argument_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -461,7 +461,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@15:10", "reject", ""}
-            yield[]object{"r19_5637_method_group_receiver_call_invalidates_later_argument", `import System
+            yield []object{"r19_5637_method_group_receiver_call_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -477,7 +477,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@13:42", "reject", ""}
-            yield[]object{"r20_5637_ternary_and_if_expression_when_true_arm_does_not_bleed_into_when_false_arm", `import System
+            yield []object{"r20_5637_ternary_and_if_expression_when_true_arm_does_not_bleed_into_when_false_arm", `import System
 
 class C {
     var Value int32 = 7
@@ -495,7 +495,7 @@ func Run(flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(false))`, "", "run", "14"}
-            yield[]object{"r21_5637_ternary_arm_effect_invalidates_later_sibling_operand", `import System
+            yield []object{"r21_5637_ternary_arm_effect_invalidates_later_sibling_operand", `import System
 
 class C {
     var Value int32 = 7
@@ -510,7 +510,7 @@ func Run(flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(true))`, "GS0158@12:37", "reject", ""}
-            yield[]object{"r22_5637_compound_property_assignment_getter_invalidates_rhs", `import System
+            yield []object{"r22_5637_compound_property_assignment_getter_invalidates_rhs", `import System
 
 class C {
     var Value int32 = 7
@@ -534,7 +534,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "GS0129@20:9 GS0158@20:14", "reject", ""}
-            yield[]object{"r23_5637_clr_constructor_argument_conversion_invalidates_later_argument", `import System
+            yield []object{"r23_5637_clr_constructor_argument_conversion_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -552,7 +552,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@14:41", "reject", ""}
-            yield[]object{"r24_5637_interpolated_string_hole_formatting_invalidates_later_hole", `import System
+            yield []object{"r24_5637_interpolated_string_hole_formatting_invalidates_later_hole", `import System
 
 class C {
     var Value int32 = 7
@@ -569,7 +569,7 @@ func Run(t Tag) string {
 }
 var g C? = C{}
 Console.WriteLine(Run(Tag{}))`, "GS0158@14:21", "reject", ""}
-            yield[]object{"r25_5637_map_literal_entry_insertion_invalidates_later_entry", `import System
+            yield []object{"r25_5637_map_literal_entry_insertion_invalidates_later_entry", `import System
 
 class C {
     var Value int32 = 7
@@ -587,7 +587,7 @@ func Run(k Key) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Key{}))`, "GS0158@14:40", "reject", ""}
-            yield[]object{"r26_5637_binary_operator_left_operand_conversion_invalidates_right_operand", `import System
+            yield []object{"r26_5637_binary_operator_left_operand_conversion_invalidates_right_operand", `import System
 
 class C {
     var Value int32 = 7
@@ -608,7 +608,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@18:28", "reject", ""}
-            yield[]object{"r27_5637_unqualified_static_call_rebind_tracks_argument_conversion", `import System
+            yield []object{"r27_5637_unqualified_static_call_rebind_tracks_argument_conversion", `import System
 
 class C {
     var Value int32 = 7
@@ -630,7 +630,7 @@ class Holder {
 }
 var g C? = C{}
 Console.WriteLine(Holder.Run(Token{}))`, "GS0158@17:29", "reject", ""}
-            yield[]object{"r28_5637_struct_literal_construction_does_not_scan_later_member_initializers", `import System
+            yield []object{"r28_5637_struct_literal_construction_does_not_scan_later_member_initializers", `import System
 
 class Box {
     let Text string? = "abc"
@@ -646,7 +646,7 @@ func Run(b Box) int32 {
     return p.A + p.B
 }
 Console.WriteLine(Run(Box{}))`, "", "run", "7"}
-            yield[]object{"r29_5637_invalidated_subtype_fact_retested_in_same_condition_narrows_branch", `import System
+            yield []object{"r29_5637_invalidated_subtype_fact_retested_in_same_condition_narrows_branch", `import System
 
 func Touch() bool -> true
 func Run(seed object) int32 {
@@ -663,7 +663,7 @@ func Run(seed object) int32 {
     return 0
 }
 Console.WriteLine(Run("abc"))`, "", "run", "3"}
-            yield[]object{"r30_5637_nested_ternary_with_throwing_arm_in_then_branch_restores_fact_for_else_branch", `import System
+            yield []object{"r30_5637_nested_ternary_with_throwing_arm_in_then_branch_restores_fact_for_else_branch", `import System
 
 class C {
     var Value int32 = 7
@@ -683,7 +683,7 @@ func Run(flag bool, cond bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(false, true))`, "", "run", "7"}
-            yield[]object{"r31_5637_single_candidate_user_indexer_read_sequences_argument_effects", `import System
+            yield []object{"r31_5637_single_candidate_user_indexer_read_sequences_argument_effects", `import System
 
 class C {
     var Value int32 = 7
@@ -703,7 +703,7 @@ func Run(table Table) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Table{}))`, "GS0158@17:29", "reject", ""}
-            yield[]object{"r32_5637_multi_index_user_assignment_sequences_index_and_value_effects", `import System
+            yield []object{"r32_5637_multi_index_user_assignment_sequences_index_and_value_effects", `import System
 
 class C {
     var Value int32 = 7
@@ -728,7 +728,7 @@ func Run(table Table) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Table{}))`, "GS0158@21:27", "reject", ""}
-            yield[]object{"r33_5637_mixed_struct_literal_collection_spread_invalidates_later_member", `import System
+            yield []object{"r33_5637_mixed_struct_literal_collection_spread_invalidates_later_member", `import System
 import System.Collections.Generic
 
 class C {
@@ -753,7 +753,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@21:55", "reject", ""}
-            yield[]object{"r34_5637_binary_operator_left_conversion_rebuilds_rhs_and_replaces_stale_gs0536", `import System
+            yield []object{"r34_5637_binary_operator_left_conversion_rebuilds_rhs_and_replaces_stale_gs0536", `import System
 
 struct Amount {
     var V int32
@@ -774,7 +774,7 @@ func Run(t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Token{}, ref seed))`, "", "run", "11"}
-            yield[]object{"r35_5637_call_argument_conversion_propagates_rebound_overload_and_replaces_gs0536", `import System
+            yield []object{"r35_5637_call_argument_conversion_propagates_rebound_overload_and_replaces_gs0536", `import System
 
 struct Token {
     func operator implicit(t Token) int32 {
@@ -792,7 +792,7 @@ func Run(t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Token{}, ref seed))`, "", "run", "11"}
-            yield[]object{"r36_5637_parenthesized_target_typed_branchy_first_argument_snapshots_before_later_effect", `import System
+            yield []object{"r36_5637_parenthesized_target_typed_branchy_first_argument_snapshots_before_later_effect", `import System
 
 class C {
     var Value int32 = 7
@@ -820,7 +820,7 @@ func Run(flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(true))`, "", "run", "10"}
-            yield[]object{"r37_5637_custom_interpolated_string_handler_append_invalidates_later_hole", `import System
+            yield []object{"r37_5637_custom_interpolated_string_handler_append_invalidates_later_hole", `import System
 
 class C {
     var Value int32 = 7
@@ -831,7 +831,7 @@ func Run(provider IFormatProvider?) string {
 }
 var g C? = C{}
 Console.WriteLine(Run(nil))`, "GS0158@8:45", "reject", ""}
-            yield[]object{"r38_5637_overloaded_user_indexer_final_index_conversion_invalidates_rhs", `import System
+            yield []object{"r38_5637_overloaded_user_indexer_final_index_conversion_invalidates_rhs", `import System
 
 class C {
     var Value int32 = 7
@@ -864,7 +864,7 @@ func Run(table Table, t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Table{}, Token{}))`, "GS0158@29:21", "reject", ""}
-            yield[]object{"r39_5637_overloaded_user_indexer_earlier_index_conversion_rebuilds_later_index_capture", `import System
+            yield []object{"r39_5637_overloaded_user_indexer_earlier_index_conversion_rebuilds_later_index_capture", `import System
 
 struct Token {
     func operator implicit(t Token) int32 {
@@ -897,7 +897,7 @@ func Run(table Table, t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Table{}, Token{}, ref seed))`, "", "run", "11"}
-            yield[]object{"r40_5637_conditional_ref_argument_with_earlier_conversion_does_not_recurse", `import System
+            yield []object{"r40_5637_conditional_ref_argument_with_earlier_conversion_does_not_recurse", `import System
 
 struct Token {
     func operator implicit(t Token) int32 {
@@ -916,7 +916,7 @@ func Run(t Token, cond bool) int32 {
     return Use(ref cond ? x : y, t, 0)
 }
 Console.WriteLine(Run(Token{}, true))`, "", "run", "11"}
-            yield[]object{"r41_5637_target_dependent_deferred_block_tail_condition_invalidates_later_argument", `import System
+            yield []object{"r41_5637_target_dependent_deferred_block_tail_condition_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -932,7 +932,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@13:55", "reject", ""}
-            yield[]object{"r42_5637_indirect_call_ref_argument_rebuilds_lvalue_after_earlier_conversion", `import System
+            yield []object{"r42_5637_indirect_call_ref_argument_rebuilds_lvalue_after_earlier_conversion", `import System
 
 struct Token {
     func operator implicit(t Token) int32 {
@@ -952,7 +952,7 @@ func Run(d Op, t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Target, Token{}, ref seed))`, "", "run", "21"}
-            yield[]object{"r43_5637_chained_property_getter_receiver_of_indexer_invalidates_index_argument", `import System
+            yield []object{"r43_5637_chained_property_getter_receiver_of_indexer_invalidates_index_argument", `import System
 
 class C {
     var Value int32 = 0
@@ -972,7 +972,7 @@ func Run(h Holder) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Holder{}))`, "GS0158@17:22", "reject", ""}
-            yield[]object{"r44_5637_null_conditional_delegate_invocation_tracks_argument_conversion", `import System
+            yield []object{"r44_5637_null_conditional_delegate_invocation_tracks_argument_conversion", `import System
 
 class C {
     var Value int32 = 7
@@ -989,7 +989,7 @@ func Run(cb ((int32, int32) -> int32)?, t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(nil, Token{}))`, "GS0158@14:21", "reject", ""}
-            yield[]object{"r45_5637_deferred_block_switch_arm_effect_invalidates_later_argument", `import System
+            yield []object{"r45_5637_deferred_block_switch_arm_effect_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -1005,7 +1005,7 @@ func Run(x int32) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(0))`, "GS0158@13:69", "reject", ""}
-            yield[]object{"r46_5637_deferred_block_if_let_effect_invalidates_later_argument", `import System
+            yield []object{"r46_5637_deferred_block_if_let_effect_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -1021,7 +1021,7 @@ func Run(opt int32?) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(1))`, "GS0158@13:67", "reject", ""}
-            yield[]object{"r47_5637_nested_call_conversion_verified_during_outer_call_verification", `import System
+            yield []object{"r47_5637_nested_call_conversion_verified_during_outer_call_verification", `import System
 
 class C {
     var Value int32 = 7
@@ -1043,7 +1043,7 @@ func Run(ot OuterToken, it InnerToken) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(OuterToken{}, InnerToken{}))`, "GS0158@19:34", "reject", ""}
-            yield[]object{"r48_5637_narrowed_callable_variable_evaluated_before_argument_effects", `import System
+            yield []object{"r48_5637_narrowed_callable_variable_evaluated_before_argument_effects", `import System
 
 func ClearAndReturn() int32 {
     cb = nil
@@ -1055,7 +1055,7 @@ func Run() int32 {
 }
 var cb ((int32) -> int32)? = (x int32) -> x + 5
 Console.WriteLine(Run())`, "", "run", "15"}
-            yield[]object{"r49_5637_indirect_call_conditional_ref_argument_rebuilt_after_conversion", `import System
+            yield []object{"r49_5637_indirect_call_conditional_ref_argument_rebuilt_after_conversion", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1073,7 +1073,7 @@ func Run(d Op, t Token, cond bool, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Target, Token{}, true, ref seed))`, "", "run", "21"}
-            yield[]object{"r50_5637_native_slice_receiver_effects_invalidate_call_argument", `import System
+            yield []object{"r50_5637_native_slice_receiver_effects_invalidate_call_argument", `import System
 
 class C {
     var Value int32 = 0
@@ -1090,7 +1090,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@14:39", "reject", ""}
-            yield[]object{"r51_5637_binary_operator_left_conversion_invalidating_rhs_type_reports_gs0129", `import System
+            yield []object{"r51_5637_binary_operator_left_conversion_invalidating_rhs_type_reports_gs0129", `import System
 
 struct Amount {
     var V int32
@@ -1108,7 +1108,7 @@ func Run(t Token) int32 {
 }
 var g int32? = 5
 Console.WriteLine(Run(Token{}))`, "GS0129@15:14", "reject", ""}
-            yield[]object{"r52_5637_multi_assignment_target_receiver_invalidates_earlier_rhs_value", `import System
+            yield []object{"r52_5637_multi_assignment_target_receiver_invalidates_earlier_rhs_value", `import System
 
 class C {
     var Value int32 = 7
@@ -1128,7 +1128,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "GS0158@16:35", "reject", ""}
-            yield[]object{"r53_5637_deferred_block_arm_implicit_conversion_invalidates_later_argument", `import System
+            yield []object{"r53_5637_deferred_block_arm_implicit_conversion_invalidates_later_argument", `import System
 
 class C {
     var Value int32 = 7
@@ -1149,7 +1149,7 @@ func Run(flag bool, t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(true, Token{}))`, "GS0158@18:42", "reject", ""}
-            yield[]object{"r54_5637_property_pattern_plain_field_preserves_narrowing_for_nested_relational_call", `import System
+            yield []object{"r54_5637_property_pattern_plain_field_preserves_narrowing_for_nested_relational_call", `import System
 
 class C {
     var Value int32 = 7
@@ -1167,7 +1167,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "", "run", "1"}
-            yield[]object{"r55_5637_multi_assignment_target_index_conversion_invalidates_earlier_rhs_value", `import System
+            yield []object{"r55_5637_multi_assignment_target_index_conversion_invalidates_earlier_rhs_value", `import System
 
 class C {
     var Value int32 = 7
@@ -1187,7 +1187,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@16:19", "reject", ""}
-            yield[]object{"r56_5637_rebound_call_argument_updates_inline_out_var_type_in_scope", `import System
+            yield []object{"r56_5637_rebound_call_argument_updates_inline_out_var_type_in_scope", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1210,7 +1210,7 @@ func Run(t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Token{}, ref seed))`, "", "run", "14"}
-            yield[]object{"r57_5637_conditional_ref_argument_isolates_true_branch_effects_from_false_branch", `import System
+            yield []object{"r57_5637_conditional_ref_argument_isolates_true_branch_effects_from_false_branch", `import System
 
 class C {
     var Value int32 = 1
@@ -1227,7 +1227,7 @@ func Run(flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(false))`, "", "run", "20"}
-            yield[]object{"r58_5637_overloaded_user_indexer_read_rebinds_overload_after_index_conversion", `import System
+            yield []object{"r58_5637_overloaded_user_indexer_read_rebinds_overload_after_index_conversion", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1248,7 +1248,7 @@ func Run(table Table, t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Table{}, Token{}, ref seed))`, "", "run", "11"}
-            yield[]object{"r59_5637_null_conditional_indexed_write_receiver_effects_invalidate_index", `import System
+            yield []object{"r59_5637_null_conditional_indexed_write_receiver_effects_invalidate_index", `import System
 
 class C {
     var Value int32 = 0
@@ -1267,7 +1267,7 @@ func Run(h Holder) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Holder{}))`, "GS0158@15:29", "reject", ""}
-            yield[]object{"r60_5637_compound_assignment_left_conversion_invalidates_rhs", `import System
+            yield []object{"r60_5637_compound_assignment_left_conversion_invalidates_rhs", `import System
 
 class C {
     var Value int32 = 7
@@ -1291,7 +1291,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{V: 1}))`, "GS0158@20:24", "reject", ""}
-            yield[]object{"r61_5637_if_let_explicit_type_clause_conversion_invalidates_body", `import System
+            yield []object{"r61_5637_if_let_explicit_type_clause_conversion_invalidates_body", `import System
 
 class C {
     var Value int32 = 7
@@ -1311,7 +1311,7 @@ func Run(src Source?) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Source{}))`, "GS0158@17:38", "reject", ""}
-            yield[]object{"r62_5637_contextual_tuple_conversion_earlier_element_invalidates_later_element", `import System
+            yield []object{"r62_5637_contextual_tuple_conversion_earlier_element_invalidates_later_element", `import System
 
 class C {
     var Value int32 = 7
@@ -1329,7 +1329,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@14:37", "reject", ""}
-            yield[]object{"r63_5637_indirect_delegate_call_conversion_preserves_inline_out_var_in_scope", `import System
+            yield []object{"r63_5637_indirect_delegate_call_conversion_preserves_inline_out_var_in_scope", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1346,7 +1346,7 @@ func Run(d Op, t Token) int32 {
     return r + n
 }
 Console.WriteLine(Run(Target, Token{}))`, "", "run", "12"}
-            yield[]object{"r64_5637_tuple_multi_assignment_dictionary_indexer_does_not_read_getter", `import System
+            yield []object{"r64_5637_tuple_multi_assignment_dictionary_indexer_does_not_read_getter", `import System
 import System.Collections.Generic
 
 class C {
@@ -1360,7 +1360,7 @@ func Run(items Dictionary[string, int32]) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Dictionary[string, int32]()))`, "", "run", "8"}
-            yield[]object{"r65_5637_system_index_assignment_probe_applies_index_effects_before_rhs", `import System
+            yield []object{"r65_5637_system_index_assignment_probe_applies_index_effects_before_rhs", `import System
 
 class C {
     var Value int32 = 7
@@ -1377,7 +1377,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@13:27", "reject", ""}
-            yield[]object{"r66_5637_compound_assignment_rebind_restores_pre_rhs_snapshot", `import System
+            yield []object{"r66_5637_compound_assignment_rebind_restores_pre_rhs_snapshot", `import System
 
 struct Amount {
     var V int32
@@ -1396,7 +1396,7 @@ func Run(t Token, seed string?) int32 {
     return cur.V
 }
 Console.WriteLine(Run(Token{V: 2}, "abcd"))`, "", "run", "6"}
-            yield[]object{"r67_5637_conditional_ref_argument_preserves_declared_storage_type_on_narrowed_lvalue", `import System
+            yield []object{"r67_5637_conditional_ref_argument_preserves_declared_storage_type_on_narrowed_lvalue", `import System
 
 func Clear(ref target string?) {
     target = nil
@@ -1408,7 +1408,7 @@ func Run(aSeed string?, bSeed string?) string {
     return (a ?? "nil") + ":" + (b ?? "nil")
 }
 Console.WriteLine(Run("x", "y"))`, "", "run", "nil:y"}
-            yield[]object{"r68_5637_inherited_user_indexer_reselection_updates_receiver_view", `import System
+            yield []object{"r68_5637_inherited_user_indexer_reselection_updates_receiver_view", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1440,7 +1440,7 @@ func Run(d Derived, t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Derived{}, Token{}, ref seed))`, "", "run", "16"}
-            yield[]object{"r69_5637_explicit_tuple_cast_preserves_explicit_conversion_during_verification", `import System
+            yield []object{"r69_5637_explicit_tuple_cast_preserves_explicit_conversion_during_verification", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1452,14 +1452,14 @@ func Run(t Token, n int64) int32 {
     return pair.Item1 + pair.Item2
 }
 Console.WriteLine(Run(Token{}, 9))`, "", "run", "10"}
-            yield[]object{"r70_5637_block_expression_array_index_with_typed_sibling_binds_eagerly", `import System
+            yield []object{"r70_5637_block_expression_array_index_with_typed_sibling_binds_eagerly", `import System
 
 func Run(flag bool) int32 {
     let arr = []int32{10, 20}
     return arr[{ flag ? 1 : default }]
 }
 Console.WriteLine(Run(true))`, "", "run", "20"}
-            yield[]object{"r71_5637_overloaded_user_indexer_reselection_to_getter_only_reports_error", `import System
+            yield []object{"r71_5637_overloaded_user_indexer_reselection_to_getter_only_reports_error", `import System
 
 struct Token {
     func operator implicit(t Token) int32 -> 1
@@ -1485,7 +1485,7 @@ func Run(table Table, t Token, ref x object) int32 {
 }
 var seed object = "abc"
 Console.WriteLine(Run(Table{}, Token{}, ref seed))`, "GS0116@20:9", "reject", ""}
-            yield[]object{"r72_5637_lambda_argument_rebind_retains_replaced_diagnostic_under_duplicate_suppression", `import System
+            yield []object{"r72_5637_lambda_argument_rebind_retains_replaced_diagnostic_under_duplicate_suppression", `import System
 
 class C {
     var Value int32 = 7
@@ -1504,7 +1504,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@14:19", "reject", ""}
-            yield[]object{"r73_5637_relational_equality_pattern_input_conversion_invalidates_pattern_value", `import System
+            yield []object{"r73_5637_relational_equality_pattern_input_conversion_invalidates_pattern_value", `import System
 
 class C {
     var Value int32 = 7
@@ -1529,7 +1529,7 @@ func Run(t Token) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Token{}))`, "GS0158@19:28", "reject", ""}
-            yield[]object{"r74_5637_data_struct_primary_input_after_body_member_binds_before_construction_effects", `import System
+            yield []object{"r74_5637_data_struct_primary_input_after_body_member_binds_before_construction_effects", `import System
 
 class C {
     var Value int32 = 7
@@ -1548,7 +1548,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "9"}
-            yield[]object{"r75_5637_color_color_unified_instance_receiver_keeps_entry_narrowing_before_arg_effects", `import System
+            yield []object{"r75_5637_color_color_unified_instance_receiver_keeps_entry_narrowing_before_arg_effects", `import System
 
 class Box {
     var V int32 = 40
@@ -1565,7 +1565,7 @@ func Run() int32 {
     return 0
 }
 Console.WriteLine(Run())`, "", "run", "42"}
-            yield[]object{"r76_5637_indirect_delegate_call_revalidates_ref_argument_storage_type_after_conversion", `import System
+            yield []object{"r76_5637_indirect_delegate_call_revalidates_ref_argument_storage_type_after_conversion", `import System
 
 delegate D(n int32, ref slot int32) int32;
 struct Token {
@@ -1584,7 +1584,7 @@ let arr32 = []int32{10}
 let arr64 = []int64{20}
 var x object = "ok"
 Console.WriteLine(Run((n int32, ref slot int32) -> n + slot, Token{}))`, "GS0154@14:23", "reject", ""}
-            yield[]object{"r77_5637_generic_struct_literal_inference_accounts_for_concrete_member_and_primary_order", `import System
+            yield []object{"r77_5637_generic_struct_literal_inference_accounts_for_concrete_member_and_primary_order", `import System
 
 class C {
     var Value int32 = 9
@@ -1611,7 +1611,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "15"}
-            yield[]object{"r78_5637_generic_primary_and_explicit_constructor_inference_applies_argument_effects", `import System
+            yield []object{"r78_5637_generic_primary_and_explicit_constructor_inference_applies_argument_effects", `import System
 
 class C {
     var Value int32 = 5
@@ -1640,7 +1640,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "8"}
-            yield[]object{"r79_5637_clr_single_index_write_applies_index_conversion_effects_before_rhs", `import System
+            yield []object{"r79_5637_clr_single_index_write_applies_index_conversion_effects_before_rhs", `import System
 import System.Collections.Generic
 
 class C {
@@ -1653,7 +1653,7 @@ func Run(items Dictionary[DateTimeOffset, int32], dt DateTime) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Dictionary[DateTimeOffset, int32](), DateTime.UtcNow))`, "GS0158@9:19", "reject", ""}
-            yield[]object{"r80_5637_struct_literal_inference_includes_collection_add_and_braced_member_effects", `import System
+            yield []object{"r80_5637_struct_literal_inference_includes_collection_add_and_braced_member_effects", `import System
 import System.Collections
 import System.Collections.Generic
 
@@ -1684,7 +1684,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "9"}
-            yield[]object{"r81_5637_list_pattern_evaluates_prefix_and_suffix_before_slice_subpattern", `import System
+            yield []object{"r81_5637_list_pattern_evaluates_prefix_and_suffix_before_slice_subpattern", `import System
 
 class C {
     var Value int32 = 1
@@ -1702,7 +1702,7 @@ func Run(xs []int32) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run([]int32{2, 5}))`, "", "run", "10"}
-            yield[]object{"r82_5637_tuple_multi_assignment_applies_ref_getter_indexer_capture_effects_before_rhs", `import System
+            yield []object{"r82_5637_tuple_multi_assignment_applies_ref_getter_indexer_capture_effects_before_rhs", `import System
 
 class C {
     var Value int32 = 7
@@ -1724,7 +1724,7 @@ func Run(h Holder) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Holder{}))`, "GS0158@18:18", "reject", ""}
-            yield[]object{"r83_5637_one_sided_conditional_assignment_preserves_maybe_null_widening", `import System
+            yield []object{"r83_5637_one_sided_conditional_assignment_preserves_maybe_null_widening", `import System
 import System.Collections.Generic
 
 func Run(dict Dictionary[string, string], flag bool) int32 {
@@ -1736,7 +1736,7 @@ func Run(dict Dictionary[string, string], flag bool) int32 {
     return value.Length
 }
 Console.WriteLine(Run(Dictionary[string, string](), false))`, "GS0158@8:33", "reject", ""}
-            yield[]object{
+            yield []object{
                 "r84_5637_argument_reassigning_callee_to_external_callable_still_invalidates_from_entry_callee",
                 `import System
 
@@ -1754,7 +1754,7 @@ Console.WriteLine(Run((_ object?) -> 2))`,
                 "reject",
                 ""
             }
-            yield[]object{"r85_5637_compound_assignment_and_tuple_conversion_rebinds_preserve_checked_context", `import System
+            yield []object{"r85_5637_compound_assignment_and_tuple_conversion_rebinds_preserve_checked_context", `import System
 
 struct Amount {
     var V int32
@@ -1786,7 +1786,7 @@ func Run(max int32) string {
 }
 var g string? = "ok"
 Console.WriteLine(Run(int32.MaxValue))`, "", "run", "1,1"}
-            yield[]object{"r86_5637_long_left_associative_chain_after_call_keeps_parameter_narrowing", `import System
+            yield []object{"r86_5637_long_left_associative_chain_after_call_keeps_parameter_narrowing", `import System
 
 func Step() int32 -> 1
 func Run(s string?) int32 {
@@ -1794,7 +1794,7 @@ func Run(s string?) int32 {
     return Step() + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + s.Length
 }
 Console.WriteLine(Run("abcd"))`, "", "run", "15"}
-            yield[]object{"r87_5637_qualified_callable_member_invocation_uses_pre_argument_narrowing", `import System
+            yield []object{"r87_5637_qualified_callable_member_invocation_uses_pre_argument_narrowing", `import System
 
 class Src { prop N int32 -> 7 }
 class Inner {
@@ -1810,7 +1810,7 @@ let outer = Outer(Inner(write))
 if outer.B.H != nil {
     outer.B.H(Src())
 }`, "", "run", "7"}
-            yield[]object{"r88_5637_callable_property_fallback_with_inapplicable_method_invalidates_argument", `import System
+            yield []object{"r88_5637_callable_property_fallback_with_inapplicable_method_invalidates_argument", `import System
 
 class Box(Value int32) {}
 class Host {
@@ -1827,7 +1827,7 @@ func Run(h Host) int32 {
 }
 var g Box? = Box(4)
 Console.WriteLine(Run(Host{}))`, "GS0158@14:25", "reject", ""}
-            yield[]object{"r89_5637_null_coalescing_assignment_skipped_rhs_keeps_nullable_widening", `import System
+            yield []object{"r89_5637_null_coalescing_assignment_skipped_rhs_keeps_nullable_widening", `import System
 import System.Collections.Generic
 
 func Run(dict Dictionary[string, string], ref target string?) int32 {
@@ -1839,7 +1839,7 @@ func Run(dict Dictionary[string, string], ref target string?) int32 {
 }
 var t string? = "already"
 Console.WriteLine(Run(Dictionary[string, string](), ref t))`, "GS0158@9:18", "reject", ""}
-            yield[]object{"r90_5637_derived_callable_field_hiding_base_computed_property_keeps_argument_narrowing", `import System
+            yield []object{"r90_5637_derived_callable_field_hiding_base_computed_property_keeps_argument_narrowing", `import System
 
 class Box(Value int32) {}
 open class BaseHost {
@@ -1859,7 +1859,7 @@ func Run(d DerivedHost) int32 {
 }
 var g Box? = Box(5)
 Console.WriteLine(Run(DerivedHost{}))`, "", "run", "15"}
-            yield[]object{"r91_5637_null_conditional_call_skipped_argument_keeps_nullable_widening", `import System
+            yield []object{"r91_5637_null_conditional_call_skipped_argument_keeps_nullable_widening", `import System
 import System.Collections.Generic
 
 func Run(dict Dictionary[string, string], cb ((string) -> void)?) int32 {
@@ -1870,7 +1870,7 @@ func Run(dict Dictionary[string, string], cb ((string) -> void)?) int32 {
     return value.Length
 }
 Console.WriteLine(Run(Dictionary[string, string](), nil))`, "GS0158@9:18", "reject", ""}
-            yield[]object{"r92_5637_null_conditional_indirect_call_applies_callee_effect_before_argument", `import System
+            yield []object{"r92_5637_null_conditional_indirect_call_applies_callee_effect_before_argument", `import System
 
 class Box(Value int32) {}
 func GetAndClear() ((int32) -> int32)? {
@@ -1883,7 +1883,7 @@ func Run() int32 {
 }
 var g Box? = Box(3)
 Console.WriteLine(Run())`, "GS0158@10:31", "reject", ""}
-            yield[]object{"r93_5843_call_in_short_circuit_and_kills_explicit_layout_let_field_path", `import System
+            yield []object{"r93_5843_call_in_short_circuit_and_kills_explicit_layout_let_field_path", `import System
 import System.Runtime.InteropServices
 
 @StructLayout(LayoutKind.Explicit)
@@ -1908,7 +1908,7 @@ func Run(b Box) int32 {
     return 0
 }
 Console.WriteLine(Run(Box("abc")))`, "GS0158@21:23", "reject", ""}
-            yield[]object{"r94_5843_call_in_short_circuit_or_early_exit_kills_explicit_layout_let_field_path", `import System
+            yield []object{"r94_5843_call_in_short_circuit_or_early_exit_kills_explicit_layout_let_field_path", `import System
 import System.Runtime.InteropServices
 
 @StructLayout(LayoutKind.Explicit)
@@ -1933,7 +1933,7 @@ func Run(b Box) int32 {
     return b.Text.Length
 }
 Console.WriteLine(Run(Box("abc")))`, "GS0158@23:19", "reject", ""}
-            yield[]object{
+            yield []object{
                 "r95_5843_call_in_condition_kills_chained_member_path_with_explicit_layout_intermediate_link",
                 `import System
 import System.Runtime.InteropServices
@@ -1970,7 +1970,7 @@ Console.WriteLine(Run(Outer(Inner("abc"))))`,
                 "reject",
                 ""
             }
-            yield[]object{"r96_5843_call_in_condition_keeps_normal_layout_let_field_path", `import System
+            yield []object{"r96_5843_call_in_condition_keeps_normal_layout_let_field_path", `import System
 
 class Box {
     let Text string?
@@ -1991,7 +1991,7 @@ func Run(b Box) int32 {
     return 0
 }
 Console.WriteLine(Run(Box("abc")))`, "", "run", "3"}
-            yield[]object{
+            yield []object{
                 "r97_5843_post_call_guard_in_short_circuit_or_early_exit_narrows_explicit_layout_let_field_path",
                 `import System
 import System.Runtime.InteropServices

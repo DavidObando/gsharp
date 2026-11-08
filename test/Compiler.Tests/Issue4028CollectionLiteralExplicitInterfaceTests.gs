@@ -165,7 +165,7 @@ open class Issue4028CollectionLiteralExplicitInterfaceTests {
         func RejectedCases() sequence[[]object] {
             // RED BEFORE: compiled; threw ArgumentException from
             // List<int>.System.Collections.IList.Add(object). The issue's repro.
-            yield[]object{"a-collection-literal-with-a-wrong-element-no-longer-reaches-ilist-add", `package P
+            yield []object{"a-collection-literal-with-a-wrong-element-no-longer-reaches-ilist-add", `package P
 import System
 import System.Collections.Generic
 
@@ -173,7 +173,7 @@ let ys = List[int32]{"x"}
 Console.WriteLine(ys.Count)`, "GS0159"}
             // RED BEFORE: the same hole one interface over —
             // Dictionary<K, V>.System.Collections.IDictionary.Add(object, object).
-            yield[]object{"a-dictionary-literal-with-a-wrong-value-no-longer-reaches-idictionary-add", `package P
+            yield []object{"a-dictionary-literal-with-a-wrong-value-no-longer-reaches-idictionary-add", `package P
 import System
 import System.Collections.Generic
 
@@ -181,7 +181,7 @@ let d = Dictionary[string, int32]{"a": "x"}
 Console.WriteLine(d.Count)`, "GS0159"}
             // RED BEFORE: the comment's second shape — an ordinary call whose
             // argument carries a same-compilation type that does NOT convert.
-            yield[]object{"an-ordinary-call-with-a-same-compilation-argument-that-does-not-convert", `package P
+            yield []object{"an-ordinary-call-with-a-same-compilation-argument-that-does-not-convert", `package P
 import System
 import System.Collections.Generic
 
@@ -193,7 +193,7 @@ let ys = List[int32]()
 ys.Add(Celsius{ Degrees: 2.5 })
 Console.WriteLine(ys.Count)`, "GS0159"}
             // RED BEFORE: the two-argument form of the same, on IDictionary.
-            yield[]object{"a-dictionary-add-with-a-same-compilation-argument-that-does-not-convert", `package P
+            yield []object{"a-dictionary-add-with-a-same-compilation-argument-that-does-not-convert", `package P
 import System
 import System.Collections.Generic
 
@@ -214,7 +214,7 @@ Console.WriteLine(d.Count)`, "GS0159"}
             // the literal form and the author-written form alike, and before this
             // PR as well as after. Pinned in all three element kinds so the claim
             // is checked rather than argued.
-            yield[]object{"a-literal-of-a-same-compilation-enum-refuses-a-wrong-element", `package P
+            yield []object{"a-literal-of-a-same-compilation-enum-refuses-a-wrong-element", `package P
 import System
 import System.Collections.Generic
 
@@ -222,7 +222,7 @@ enum Mode { First }
 
 let xs = List[Mode]{"x"}
 Console.WriteLine(xs.Count)`, "GS0155"}
-            yield[]object{"a-literal-of-a-same-compilation-class-refuses-a-wrong-element", `package P
+            yield []object{"a-literal-of-a-same-compilation-class-refuses-a-wrong-element", `package P
 import System
 import System.Collections.Generic
 
@@ -231,7 +231,7 @@ class Thing {
 
 let xs = List[Thing]{"x"}
 Console.WriteLine(xs.Count)`, "GS0155"}
-            yield[]object{"an-author-written-add-of-a-same-compilation-element-refuses-it-too", `package P
+            yield []object{"an-author-written-add-of-a-same-compilation-element-refuses-it-too", `package P
 import System
 import System.Collections.Generic
 
@@ -243,7 +243,7 @@ Console.WriteLine(xs.Count)`, "GS0155"}
             // GREEN BEFORE (already refused by #4013). The author-written control
             // this issue's Expected section measures itself against: the literal
             // must now report what this reports.
-            yield[]object{"the-author-written-control-still-reports-the-same-diagnostic", `package P
+            yield []object{"the-author-written-control-still-reports-the-same-diagnostic", `package P
 import System
 import System.Collections.Generic
 
@@ -257,7 +257,7 @@ Console.WriteLine(ys.Count)`, "GS0159"}
         /// @returns Case name, G# source, expected stdout lines.
         func BindingCases() sequence[[]object] {
             // Dependency (1): a GENERIC explicit interface member, never a target.
-            yield[]object{"a-dictionary-spread-still-fills-through-the-explicit-generic-add", `package P
+            yield []object{"a-dictionary-spread-still-fills-through-the-explicit-generic-add", `package P
 import System
 import System.Collections.Generic
 
@@ -268,7 +268,7 @@ let pairs = []KeyValuePair[string, int32]{
 let d = Dictionary[string, int32](){ ...pairs }
 Console.WriteLine(d.Count)`, []string{"2"}}
             // Dependency (2): a genuine erasure to repair — the conversion exists.
-            yield[]object{"a-user-defined-spread-conversion-still-reaches-the-widening-add", `package P
+            yield []object{"a-user-defined-spread-conversion-still-reaches-the-widening-add", `package P
 import System
 import System.Collections.Generic
 
@@ -286,7 +286,7 @@ let list = List[float64](){ ...source }
 Console.WriteLine(array[0])
 Console.WriteLine(list[0])`, []string{"2.5", "2.5"}}
             // Dependency (3): an ERASED RECEIVER, whose own members are surrogates.
-            yield[]object{"an-erased-receiver-still-reaches-the-widening-add", `package P
+            yield []object{"an-erased-receiver-still-reaches-the-widening-add", `package P
 import System
 import System.Collections.Generic
 
@@ -296,7 +296,7 @@ let enumCallbacks = List[System.Action[Mode]]()
 enumCallbacks.Add((item Mode) -> Console.WriteLine(17))
 enumCallbacks[0](Mode.Second)`, []string{"17"}}
             // A well-typed literal binds the type's OWN Add, as it always did.
-            yield[]object{"a-well-typed-collection-literal-still-binds-the-types-own-add", `package P
+            yield []object{"a-well-typed-collection-literal-still-binds-the-types-own-add", `package P
 import System
 import System.Collections.Generic
 
@@ -304,7 +304,7 @@ let ys = List[int32]{1, 2, 3}
 Console.WriteLine(ys.Count)
 Console.WriteLine(ys[2])`, []string{"3", "3"}}
             // A well-typed map literal, the sibling of the rejected row above.
-            yield[]object{"a-well-typed-dictionary-literal-still-binds", `package P
+            yield []object{"a-well-typed-dictionary-literal-still-binds", `package P
 import System
 import System.Collections.Generic
 
@@ -313,7 +313,7 @@ Console.WriteLine(d.Count)
 Console.WriteLine(d["b"])`, []string{"2", "2"}}
             // An INTERFACE-typed receiver still reaches the member for real — the
             // "Expected" #4013 gives for anyone who wants IList.Add(object).
-            yield[]object{"an-interface-typed-receiver-still-reaches-the-widening-member", `package P
+            yield []object{"an-interface-typed-receiver-still-reaches-the-widening-member", `package P
 import System
 import System.Collections
 import System.Collections.Generic
@@ -324,7 +324,7 @@ Console.WriteLine(ys.Count)
 Console.WriteLine(ys[0])`, []string{"1", "7"}}
             // A same-compilation element in a literal of its OWN type: the argument
             // is erased, but the type's own Add takes it, so nothing is dropped.
-            yield[]object{"a-literal-of-a-same-compilation-element-still-binds", `package P
+            yield []object{"a-literal-of-a-same-compilation-element-still-binds", `package P
 import System
 import System.Collections.Generic
 

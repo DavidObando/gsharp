@@ -1172,6 +1172,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WhileStatement = 175
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WhitespaceToken = 1
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WithExpression = 229
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind YieldKeyword = 284
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind YieldStatement = 244
 type interface GSharp.Core.CodeAnalysis.Diagnostics.ILogger
   method public abstract Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)
@@ -3563,6 +3564,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportMissingDocumentation(GSharp.Core.CodeAnalysis.Text.TextLocation location, String symbolName)
   method public Void ReportMissingOverride(GSharp.Core.CodeAnalysis.Text.TextLocation location, String baseTypeName, String methodName)
   method public Void ReportMissingReturnExpression(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType)
+  method public Void ReportMovableFixedBufferRequiresFixed(GSharp.Core.CodeAnalysis.Text.TextLocation location, String bufferName)
   method public Void ReportMultiAssignmentMismatch(GSharp.Core.CodeAnalysis.Text.TextLocation location, Int32 targetCount, Int32 valueCount)
   method public Void ReportMultiCharCharLiteral(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportMultipleConstructorsUnsupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String className)
@@ -7855,6 +7857,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax : GSharp.C
   method public Boolean get_HasUnmanagedConstraint()
   method public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> get_ConstraintTypeArguments()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ClassConstraintKeyword()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ClassConstraintQuestionToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_Constraint()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ConstraintTypeArgumentCloseBracketToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_ConstraintTypeArgumentOpenBracketToken()
@@ -7862,6 +7865,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax : GSharp.C
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_InitConstraintCloseParenToken()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_InitConstraintKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_InitConstraintOpenParenToken()
+  method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_NotNullConstraintKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_StructConstraintKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_UnmanagedConstraintKeyword()
   method public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken get_VarianceModifier()
@@ -7879,6 +7883,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax : GSharp.C
   property public GSharp.Core.CodeAnalysis.Syntax.SeparatedSyntaxList`1<GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax> ConstraintTypeArguments { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxKind Kind { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ClassConstraintKeyword { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ClassConstraintQuestionToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken Constraint { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ConstraintTypeArgumentCloseBracketToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken ConstraintTypeArgumentOpenBracketToken { get; }
@@ -7886,6 +7891,7 @@ type sealed class GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax : GSharp.C
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken InitConstraintCloseParenToken { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken InitConstraintKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken InitConstraintOpenParenToken { get; }
+  property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken NotNullConstraintKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken StructConstraintKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken UnmanagedConstraintKeyword { get; }
   property public GSharp.Core.CodeAnalysis.Syntax.SyntaxToken VarianceModifier { get; }

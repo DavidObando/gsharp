@@ -103,7 +103,7 @@ var w out chan[int32] = bi`, Path.Combine(tempDir, "nullability.dll"))
         func Cases() sequence[[]object] {
             // The issue's own repro, made to move a value: an `out chan[T]?` local
             // initialised from what `chan[T](n)` constructs.
-            yield[]object{"out-nullable-from-a-constructed-channel", `package P
+            yield []object{"out-nullable-from-a-constructed-channel", `package P
 import System
 
 func run() int32 {
@@ -119,7 +119,7 @@ func run() int32 {
 }
 
 Console.WriteLine(run())`, []string{"4"}}
-            yield[]object{"in-nullable-from-a-constructed-channel", `package P
+            yield []object{"in-nullable-from-a-constructed-channel", `package P
 import System
 
 func run() int32 {
@@ -137,7 +137,7 @@ func run() int32 {
 Console.WriteLine(run())`, []string{"5"}}
             // GS0520's advice taken: an optional channel slot on a struct, plus the
             // parameter and return-type positions, which reach the same conversion.
-            yield[]object{"nullable-directional-field-parameter-and-return", `package P
+            yield []object{"nullable-directional-field-parameter-and-return", `package P
 import System
 
 struct Holder {
@@ -177,7 +177,7 @@ Console.WriteLine(run())`, []string{"13"}}
             // A nullable bidirectional handle narrowing to each nullable view: the
             // source's own wrapper is looked through by `TryGetChannelShape`, the
             // target's by the emitter arm, so both sides are exercised at once.
-            yield[]object{"nullable-bidirectional-to-nullable-directional", `package P
+            yield []object{"nullable-bidirectional-to-nullable-directional", `package P
 import System
 
 func run() int32 {
@@ -199,7 +199,7 @@ Console.WriteLine(run())`, []string{"6"}}
             // through the wrapper for the view call must not disturb the nil
             // channel's blocked-forever semantics, which is what makes a disabled
             // arm work at all.
-            yield[]object{"a-nil-directional-arm-stays-disabled", `package P
+            yield []object{"a-nil-directional-arm-stays-disabled", `package P
 import System
 
 func run() int32 {

@@ -150,7 +150,7 @@ public struct ImportedPoint
             // The issue's own repro, minus the `.Count` read it spells (see the
             // out-of-scope note in this class's remarks): an EMPTY map literal over
             // an imported reference type. This alone reached only `GetConstructor`.
-            yield[]object{"empty-literal-imported-class", `package P
+            yield []object{"empty-literal-imported-class", `package P
 import System
 import HelperLib
 
@@ -159,14 +159,14 @@ entries["k"] = ImportedBase{}
 Console.WriteLine(entries["k"].Name)`, []string{"base"}}
             // Non-empty: adds `EmitMapLiteral`'s `set_Item`, which the issue's empty
             // repro never reached.
-            yield[]object{"populated-literal-imported-class", `package P
+            yield []object{"populated-literal-imported-class", `package P
 import System
 import HelperLib
 
 let entries = map[string, ImportedBase]{"k": ImportedBase{Name: "one"}}
 Console.WriteLine(entries["k"].Name)`, []string{"one"}}
             // The title's "value type", taken literally: an imported STRUCT.
-            yield[]object{"populated-literal-imported-struct", `package P
+            yield []object{"populated-literal-imported-struct", `package P
 import System
 import HelperLib
 
@@ -174,7 +174,7 @@ let entries = map[string, ImportedPoint]{"a": ImportedPoint{X: 3, Y: 4}}
 let p = entries["a"]
 Console.WriteLine(p.X.ToString() + "," + p.Y.ToString())`, []string{"3,4"}}
             // The KEY position, which the issue does not mention at all.
-            yield[]object{"imported-class-in-the-key-position", `package P
+            yield []object{"imported-class-in-the-key-position", `package P
 import System
 import HelperLib
 
@@ -183,13 +183,13 @@ let entries = map[ImportedBase, string]{k: "v"}
 Console.WriteLine(entries[k])`, []string{"v"}}
             // No imported library at all: a plain BCL value type. This row is the
             // correction to the issue's diagnosis.
-            yield[]object{"bcl-value-type-no-imported-library", `package P
+            yield []object{"bcl-value-type-no-imported-library", `package P
 import System
 
 let entries = map[string, TimeSpan]{"a": TimeSpan.FromSeconds(3)}
 Console.WriteLine(entries["a"].TotalSeconds.ToString())`, []string{"3"}}
             // A BCL generic reference type, likewise with no library in sight.
-            yield[]object{"bcl-generic-reference-type", `package P
+            yield []object{"bcl-generic-reference-type", `package P
 import System
 import System.Collections.Generic
 
@@ -198,14 +198,14 @@ inner.Add(7)
 let entries = map[string, List[int32]]{"a": inner}
 Console.WriteLine(entries["a"][0].ToString())`, []string{"7"}}
             // Nested: a slice of an imported type as the map's value.
-            yield[]object{"nested-slice-value", `package P
+            yield []object{"nested-slice-value", `package P
 import System
 import HelperLib
 
 let entries = map[string, []ImportedBase]{"a": []ImportedBase{ImportedBase{Name: "n"}}}
 Console.WriteLine(entries["a"][0].Name)`, []string{"n"}}
             // Nested: a map of maps. The outer literal is still a map literal.
-            yield[]object{"nested-map-value", `package P
+            yield []object{"nested-map-value", `package P
 import System
 import HelperLib
 
@@ -214,7 +214,7 @@ entries["outer"] = map[string, ImportedBase]{"inner": ImportedBase{Name: "deep"}
 Console.WriteLine(entries["outer"]["inner"].Name)`, []string{"deep"}}
             // A missing key must still produce the CLR default through the symbolic
             // `TryGetValue`, exactly as it does through the reflected one.
-            yield[]object{"missing-key-yields-the-zero-value", `package P
+            yield []object{"missing-key-yields-the-zero-value", `package P
 import System
 import HelperLib
 
@@ -230,7 +230,7 @@ Console.WriteLine((entries["nope"] == nil).ToString())`, []string{"True"}}
         /// @returns Case name, G# source, expected stdout lines.
         func GreenNeighbours() sequence[[]object] {
             // `int32` is a host `RuntimeType`, so this row's emit is untouched.
-            yield[]object{"primitive-value-type-element", `package P
+            yield []object{"primitive-value-type-element", `package P
 import System
 
 let entries = map[string, int32]{"a": 1}
@@ -238,14 +238,14 @@ entries["b"] = 2
 Console.WriteLine(entries["a"].ToString() + entries["b"].ToString())`, []string{"12"}}
             // `string` keeps its #1714 Go zero value ("" rather than the CLR null)
             // on a miss — a branch that sits right beside the changed code.
-            yield[]object{"string-element-keeps-its-go-zero-value", `package P
+            yield []object{"string-element-keeps-its-go-zero-value", `package P
 import System
 
 let entries = map[string, string]{"a": "x"}
 Console.WriteLine(entries["a"] + "|" + entries["zz"] + "|")`, []string{"x||"}}
             // A same-compilation class: `ClrType` is null, so #1481's branch already
             // handled it, which is why the issue found this row "fine".
-            yield[]object{"same-compilation-class-element", `package P
+            yield []object{"same-compilation-class-element", `package P
 import System
 import HelperLib
 
@@ -259,7 +259,7 @@ entries["k"] = d
 Console.WriteLine(entries["k"].Name)`, []string{"d"}}
             // ADR-0104 says this IS the same type as `map[string, ImportedBase]`,
             // and it compiled throughout — the workaround #4019's fixture used.
-            yield[]object{"dictionary-spelling-of-the-same-type", `package P
+            yield []object{"dictionary-spelling-of-the-same-type", `package P
 import System
 import System.Collections.Generic
 import HelperLib
@@ -270,24 +270,24 @@ Console.WriteLine(entries["k"].Name)`, []string{"dict"}}
             // The sibling literal forms, over the very element types that crashed
             // the map literal. A slice is a plain CLR array; a tuple literal has
             // routed a constructed generic through the open definition since #649.
-            yield[]object{"slice-literal-over-an-imported-type", `package P
+            yield []object{"slice-literal-over-an-imported-type", `package P
 import System
 import HelperLib
 
 let items = []ImportedBase{ImportedBase{Name: "s"}}
 Console.WriteLine(items[0].Name)`, []string{"s"}}
-            yield[]object{"slice-literal-over-a-bcl-value-type", `package P
+            yield []object{"slice-literal-over-a-bcl-value-type", `package P
 import System
 
 let items = []TimeSpan{TimeSpan.FromSeconds(2)}
 Console.WriteLine(items[0].TotalSeconds.ToString())`, []string{"2"}}
-            yield[]object{"tuple-literal-over-an-imported-type", `package P
+            yield []object{"tuple-literal-over-an-imported-type", `package P
 import System
 import HelperLib
 
 let pair = (1, ImportedBase{Name: "t"})
 Console.WriteLine(pair.Item1.ToString() + pair.Item2.Name)`, []string{"1t"}}
-            yield[]object{"tuple-literal-over-a-bcl-value-type", `package P
+            yield []object{"tuple-literal-over-a-bcl-value-type", `package P
 import System
 
 let pair = (1, TimeSpan.FromSeconds(2))

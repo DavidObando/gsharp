@@ -234,7 +234,7 @@ shared class ExhaustivenessAnalyzer {
             }
             let value object? = field.GetRawConstantValue()
             if value != nil {
-                yield(field.Name, value)
+                yield (field.Name, value)
             }
         }
     }

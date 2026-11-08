@@ -689,6 +689,10 @@ shared class BaseCallForwarderRewriter {
                 for tp in source {
                     let clone = TypeParameterSymbol(tp.Name, tp.Ordinal, tp.Constraint, tp.Variance){
                         HasReferenceTypeConstraint = tp.HasReferenceTypeConstraint,
+                        HasNullableReferenceTypeConstraint = tp.HasNullableReferenceTypeConstraint,
+                        HasNotNullConstraint = tp.HasNotNullConstraint,
+                        HasNullableInterfaceConstraint = tp.HasNullableInterfaceConstraint,
+                        HasNullableClassBound = tp.HasNullableClassBound,
                         HasValueTypeConstraint = tp.HasValueTypeConstraint,
                         HasDefaultConstructorConstraint = tp.HasDefaultConstructorConstraint,
                         HasUnmanagedConstraint = tp.HasUnmanagedConstraint
@@ -729,14 +733,42 @@ shared class BaseCallForwarderRewriter {
                     // forwarder class does not have.
                     clone.TypeParameterBound = tp.TypeParameterBound
                     if tp.TypeParameterBound is {} bound && substitution.TryGetValue(bound, out var mappedBound) {
-                        clone.TypeParameterBound = mappedBound as TypeParameterSymbol
-                        if !(mappedBound is TypeParameterSymbol) {
-                            if mappedBound is InterfaceSymbol mappedInterface {
-                                clone.InterfaceConstraint ??= mappedInterface
-                            } else if mappedBound.ClrType is {IsInterface: true} {
-                                clone.ClrInterfaceConstraint ??= mappedBound
-                            } else {
-                                clone.ClassConstraint ??= mappedBound
+                        let unwrappedMappedBound = if mappedBound is NullableTypeSymbol nullableMapped {
+                            nullableMapped.UnderlyingType
+                        } else {
+                            mappedBound
+                        }
+                        let isNullableBound = clone.HasNullableClassBound || mappedBound is NullableTypeSymbol
+                        if unwrappedMappedBound is TypeParameterSymbol mappedTp {
+                            clone.TypeParameterBound = mappedTp
+                            clone.HasNullableClassBound = isNullableBound
+                        } else {
+                            clone.TypeParameterBound = nil
+                            if unwrappedMappedBound is InterfaceSymbol mappedInterface {
+                                if clone.InterfaceConstraint == nil {
+                                    clone.InterfaceConstraint = mappedInterface
+                                    clone.HasNullableInterfaceConstraint = isNullableBound
+                                    clone.HasNullableClassBound = false
+                                }
+                            } else if unwrappedMappedBound.ClrType is {IsInterface: true} {
+                                if clone.ClrInterfaceConstraint == nil {
+                                    clone.ClrInterfaceConstraint = if isNullableBound &&
+                                        !(mappedBound is NullableTypeSymbol) {
+                                        NullableTypeSymbol.Get(mappedBound)
+                                    } else {
+                                        mappedBound
+                                    }
+                                    clone.HasNullableClassBound = false
+                                }
+                            } else if clone.ClassConstraint == nil {
+                                clone.ClassConstraint = if unwrappedMappedBound is StructSymbol {
+                                    unwrappedMappedBound
+                                } else if isNullableBound && !(mappedBound is NullableTypeSymbol) {
+                                    NullableTypeSymbol.Get(mappedBound)
+                                } else {
+                                    mappedBound
+                                }
+                                clone.HasNullableClassBound = isNullableBound
                             }
                         }
                     }
