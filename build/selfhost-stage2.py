@@ -1472,6 +1472,19 @@ def system_owned_tree(root: Path, components_only: bool = False) -> bool:
     root_info = root.lstat()
     if stat.S_ISLNK(root_info.st_mode) or root_info.st_uid != 0 or root_info.st_mode & 0o022:
         return False
+    if components_only:
+        for relative in TRUSTED_DOTNET_COMPONENTS:
+            ancestor = root
+            for part in relative.parts[:-1]:
+                ancestor = ancestor / part
+                if not ancestor.exists():
+                    return False
+                ancestor_info = ancestor.lstat()
+                if (stat.S_ISLNK(ancestor_info.st_mode)
+                        or not stat.S_ISDIR(ancestor_info.st_mode)
+                        or ancestor_info.st_uid != 0
+                        or ancestor_info.st_mode & 0o022):
+                    return False
     roots = (
         tuple(root / relative for relative in TRUSTED_DOTNET_COMPONENTS)
         if components_only else (root,)
@@ -1488,7 +1501,10 @@ def system_owned_tree(root: Path, components_only: bool = False) -> bool:
 
 
 def extract_verified_dotnet_archive(
-    archive_path: Path, destination: Path, allowed_hashes: set[str],
+    archive_path: Path,
+    destination: Path,
+    allowed_hashes: set[str],
+    snapshot_path: Path | None = None,
 ) -> Path:
     if not archive_path.is_file():
         raise CertificationError(f"dotnet archive does not exist: {archive_path}")
@@ -1497,15 +1513,24 @@ def extract_verified_dotnet_archive(
             or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in allowed_hashes)):
         raise CertificationError(
             "dotnet archive verification requires lowercase SHA-256 hashes")
-    actual = sha256_file(archive_path)
-    if actual not in allowed_hashes:
-        raise CertificationError(
-            f"dotnet archive hash is not in the approved set: {archive_path}")
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, mode=0o700)
+    frozen_archive = (
+        snapshot_path
+        if snapshot_path is not None
+        else destination.parent / f".{destination.name}.archive"
+    )
+    if frozen_archive != archive_path:
+        atomic_bytes(frozen_archive, archive_path.read_bytes())
+        os.chmod(frozen_archive, 0o400)
+    owned_file(frozen_archive, "frozen dotnet archive")
+    actual = sha256_file(frozen_archive)
+    if actual not in allowed_hashes:
+        raise CertificationError(
+            f"dotnet archive hash is not in the approved set: {archive_path}")
     allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
-    with tarfile.open(archive_path, "r:*") as archive:
+    with tarfile.open(frozen_archive, "r:*") as archive:
         for member in archive.getmembers():
             raw_name = member.name.lstrip("./")
             if not raw_name:
@@ -1913,6 +1938,11 @@ class Controller:
         inputs = self.toolchains / "controller-inputs"
         destination = inputs / source.name
         atomic_bytes(destination, source.read_bytes())
+        archive_source = self.dotnet_archive
+        archive_destination: Path | None = None
+        if archive_source is not None:
+            archive_destination = inputs / "dotnet-archive" / archive_source.name
+            atomic_bytes(archive_destination, archive_source.read_bytes())
         helper_source = inputs / "selfhost"
         helper_source.mkdir()
         helper_files = (
@@ -1940,6 +1970,9 @@ class Controller:
         helper_manifest = directory_manifest(inputs)
         make_read_only(inputs)
         self.bootstrap = destination
+        if archive_destination is not None:
+            self.dotnet_archive_source = archive_source
+            self.dotnet_archive = archive_destination
         self.report["bootstrap"] = {
             "source": str(source),
             "snapshot": str(destination),
@@ -2360,13 +2393,24 @@ class Controller:
             if self.extracted_dotnet is None:
                 allowed = ALLOWED_DOTNET_ARCHIVE_HASHES | set(
                     getattr(self.args, "dotnet_archive_sha256", []))
+                snapshot = (
+                    self.dotnet_archive
+                    if self.toolchains in self.dotnet_archive.parents
+                    else self.toolchains / "controller-inputs" / "dotnet-archive" / self.dotnet_archive.name
+                )
                 extracted_root = self.toolchains / "dotnet-archive"
                 self.extracted_dotnet = extract_verified_dotnet_archive(
-                    self.dotnet_archive, extracted_root, allowed)
+                    self.dotnet_archive, extracted_root, allowed, snapshot_path=snapshot)
+                self.dotnet_archive = snapshot
+                snapshot_sha256 = sha256_file(snapshot)
+                if snapshot_sha256 not in allowed:
+                    raise CertificationError(
+                        f"frozen dotnet archive {snapshot} has unapproved SHA-256 {snapshot_sha256}")
                 make_read_only(extracted_root)
                 self.report["dotnetArchive"] = {
-                    "path": str(self.dotnet_archive),
-                    "sha256": sha256_file(self.dotnet_archive),
+                    "source": str(getattr(self, "dotnet_archive_source", snapshot)),
+                    "path": str(snapshot),
+                    "sha256": snapshot_sha256,
                     "manifestSha256": dotnet_manifest_sha256(extracted_root),
                 }
             return self.extracted_dotnet
@@ -2386,9 +2430,10 @@ class Controller:
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             if source.is_dir():
-                shutil.copytree(source, target, copy_function=shutil.copy2)
+                clone_snapshot(source, target)
             else:
                 shutil.copy2(source, target)
+                os.chmod(target, target.stat().st_mode | stat.S_IWUSR)
         resolution = destination / "sdk" / TRUSTED_DOTNET_SDK_VERSION / "Sdks"
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")

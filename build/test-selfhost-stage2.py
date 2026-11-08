@@ -2055,6 +2055,124 @@ class ToolchainManifestTests(unittest.TestCase):
         self.assertEqual(2, rejected.returncode)
         self.assertIn("dotnet archive hash is not in the approved set", rejected.stderr)
 
+    def test_system_owned_tree_components_only_validates_intermediate_ancestors(self) -> None:
+        dotnet_root = self.root / "dotnet-root"
+        (dotnet_root / "host").mkdir(parents=True)
+        (dotnet_root / "shared").mkdir(parents=True)
+        (dotnet_root / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION).mkdir(parents=True)
+        (dotnet_root / "sdk" / "9.0.100").mkdir(parents=True)
+        (dotnet_root / "packs").mkdir(parents=True)
+        (dotnet_root / "dotnet").write_bytes(b"#!/bin/sh\n")
+        (dotnet_root / "dotnet").chmod(0o755)
+        for path in [dotnet_root, *dotnet_root.rglob("*")]:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        unrelated = dotnet_root / "sdk" / "9.0.100" / "unrelated.txt"
+        unrelated.write_bytes(b"sibling")
+        unrelated.chmod(0o666)
+
+        real_lstat = Path.lstat
+
+        class _RootStat:
+            def __init__(self, inner: os.stat_result) -> None:
+                self._inner = inner
+                self.st_mode = inner.st_mode
+                self.st_uid = 0
+
+        from unittest import mock
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=lambda p: _RootStat(real_lstat(p))
+        ):
+            self.assertTrue(stage2.system_owned_tree(dotnet_root, components_only=True))
+            (dotnet_root / "sdk").chmod(0o775)
+            self.assertFalse(stage2.system_owned_tree(dotnet_root, components_only=True))
+            (dotnet_root / "sdk").chmod(0o755)
+
+            real_sdk = self.root / "real-sdk"
+            shutil.move(str(dotnet_root / "sdk"), str(real_sdk))
+            (dotnet_root / "sdk").symlink_to(real_sdk)
+            self.assertFalse(stage2.system_owned_tree(dotnet_root, components_only=True))
+
+    def test_dotnet_archive_snapshot_freezing_and_read_only_sdk_seeding(self) -> None:
+        staging = self.root / "sdk-staging"
+        (staging / "host").mkdir(parents=True)
+        (staging / "shared").mkdir(parents=True)
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir(parents=True)
+        (staging / "packs").mkdir(parents=True)
+        (staging / "dotnet").write_bytes(b"#!/bin/sh\nexit 0\n")
+        (staging / "dotnet").chmod(0o755)
+        (staging / "host" / "fxr.dll").write_bytes(b"fxr")
+        (staging / "shared" / "core.dll").write_bytes(b"core")
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / "marker.txt").write_bytes(b"sdk")
+        (staging / "packs" / "ref.dll").write_bytes(b"packs")
+        archive_path = self.root / "dotnet-sdk.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as archive:
+            for item in sorted(staging.rglob("*")):
+                archive.add(item, arcname=item.relative_to(staging).as_posix(), recursive=False)
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+
+        bootstrap = self.root / f"{stage2.SDK_ID}.0.5.600.nupkg"
+        with zipfile.ZipFile(bootstrap, "w") as zf:
+            zf.writestr(
+                f"{stage2.SDK_ID}.nuspec",
+                f'<package><metadata><id>{stage2.SDK_ID}</id><version>0.5.600</version></metadata></package>',
+            )
+            zf.writestr("Sdk/Sdk.props", "<Project />")
+            zf.writestr("Sdk/Sdk.targets", "<Project />")
+            zf.writestr("tools/net10.0/any/gsc.dll", "compiler")
+
+        caller = self.root / "caller"
+        caller.mkdir()
+        cache = self.root / "cache"
+        cache.mkdir()
+        work = self.root / "work"
+        import argparse
+
+        args = argparse.Namespace(
+            tree=caller,
+            migrated_tree=None,
+            bootstrap=bootstrap,
+            package_cache=cache,
+            work=work,
+            dotnet_archive=archive_path,
+            dotnet_archive_sha256=[digest],
+            dotnet_host_sha256=[],
+            dotnet_root_manifest_sha256=[],
+            allow_system_dotnet_manifest=False,
+            config="Release",
+            project=None,
+            assembly=None,
+            test=["test/Sample.Tests/Sample.Tests.gsproj"],
+            test_adapter_sha256=[],
+            test_env=[],
+            stage1_version=None,
+            min_tests=[],
+            command_timeout=900,
+        )
+        controller = stage2.Controller(args)
+        controller.work.mkdir(mode=0o700)
+        for path in (
+            controller.evidence, controller.reports, controller.logs,
+            controller.mutable, controller.toolchains,
+        ):
+            path.mkdir(mode=0o700)
+        controller.freeze_controller_inputs()
+        # Mutating the caller's archive file after freeze must not affect extraction or reporting
+        archive_path.write_bytes(b"tampered-after-freeze")
+        seeded = controller.seed_sdk_resolution("stage-1", controller.bootstrap)
+        self.assertEqual("0.5.600", seeded["version"])
+        self.assertEqual(digest, controller.report["dotnetArchive"]["sha256"])
+        injected_props = (
+            controller.stage_dotnet("stage-1")
+            / "sdk"
+            / stage2.TRUSTED_DOTNET_SDK_VERSION
+            / "Sdks"
+            / stage2.SDK_ID
+            / "Sdk"
+            / "Sdk.props"
+        )
+        self.assertTrue(injected_props.is_file())
+
     def test_freeze_migrated_tree_preserves_modes_and_detects_post_freeze_mutations(self) -> None:
         migrated = self.root / "migrated"
         (migrated / "src").mkdir(parents=True)
