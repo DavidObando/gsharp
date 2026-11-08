@@ -8344,19 +8344,24 @@ internal shared class ClrOverloadResolution {
     /// `Dictionary[K?, V]` requires a reference-nullable key view to remain
     /// constructible as a type clause (`Issue4776CopyProvenanceEmitTests`).
     private func IsMapReferenceKeyView(param Type, argSymbol TypeSymbol) bool {
-        if param.GenericParameterPosition != 0 ||
-            param
-            .DeclaringType
-            ?.FullName != "System.Collections.Generic.Dictionary`2" {
+        if param.GenericParameterPosition != 0 {
             return false
         }
-        return if argSymbol is NullableTypeSymbol nullable {
-            !NullableLifting.IsAnyValueTypeNullable(nullable)
-        } else if argSymbol is TypeParameterSymbol tp {
-            !tp.HasNullableReferenceTypeConstraint
-        } else {
-            false
+        let ownerFullName = param.DeclaringType?.FullName
+        if ownerFullName == "System.Collections.Generic.Dictionary`2" {
+            return if argSymbol is NullableTypeSymbol nullable {
+                !NullableLifting.IsAnyValueTypeNullable(nullable)
+            } else if argSymbol is TypeParameterSymbol tp {
+                !tp.HasNullableReferenceTypeConstraint
+            } else {
+                false
+            }
         }
+        if ownerFullName == "System.Collections.Concurrent.ConcurrentDictionary`2" &&
+            argSymbol is TypeParameterSymbol concurrentTp {
+            return !concurrentTp.HasNullableReferenceTypeConstraint
+        }
+        return false
     }
 
     private func IsNullableDependentConstraintRow(param Type, constraintIndex int32) bool {

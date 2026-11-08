@@ -460,6 +460,28 @@ func Run(token Token) {
                 `func Run() (string, int32) -> StrictSink5686.PickTuple(() -> MaybePairElement(), 1)`,
                 "MaybePairElement()"
             )
+            yield Row("object-cast-lambda-not-rebound-as-delegate-5883", `class Node5883 {
+    var Id int32 = 1
+}
+data struct Card5883 {
+    var Id int32 = 2
+    func Build() Node5883 -> Node5883{Id: Id}
+    func operator implicit (c Card5883) Node5883 -> c.Build()
+}
+func Run() int32 {
+    let f Func[Node5883]? = cast[object](() -> Card5883{Id: 3})
+    return f!!().Id
+}`, "cast[object](() -> Card5883{Id: 3})", "GS0156")
+            yield Row("object-cast-lambda-overload-rejected-5883", `class Node5883 {
+    var Id int32 = 1
+}
+data struct Card5883 {
+    var Id int32 = 2
+    func Build() Node5883 -> Node5883{Id: Id}
+    func operator implicit (c Card5883) Node5883 -> c.Build()
+}
+func TakeNode5883(f Func[Node5883]?) int32 -> f!!().Id
+func Run() int32 -> TakeNode5883(cast[object](() -> Card5883{Id: 3}))`, "cast[object](() -> Card5883{Id: 3})", "GS0154")
         }
 
         func AcceptedRows() sequence[[]object] {
@@ -554,6 +576,8 @@ func Pick5883(f Func[Node5883]?) int32 -> f!!().Id
 func Pick5883(f Func[Other5883]?) int32 -> 0
 func PickAction5883(f Func[Node5883]?) int32 -> f!!().Id
 func PickAction5883(f Action?) int32 -> 0
+func PickObject5883(f Func[Node5883]?, x int32) int32 -> f!!().Id + x
+func PickObject5883(o object, x int64) int32 -> 100
 func Run() int32 {
     let a = Shell5883{Make: () -> Card5883{Id: 3}}
     let b = Shell5883{Make: () -> { return Card5883{Id: 4} }}
@@ -563,7 +587,8 @@ func Run() int32 {
     s.Make = (true ? (() -> Card5883{Id: 6}) : nil)
     let c = Shell5883{Make: (() -> Card5883{Id: 7}) ?? fallback}
     let d = Shell5883{Make: fallback ?? (() -> Card5883{Id: 8})}
-    return a.Make!!().Id + b.Make!!().Id + s.Make!!().Id + c.Make!!().Id + d.Make!!().Id + Pick5883(() -> Card5883{Id: 9}) + PickAction5883(() -> { return Card5883{Id: 10} })
+    let objPicked = PickObject5883(cast[object](() -> Card5883{Id: 9}), 1)
+    return a.Make!!().Id + b.Make!!().Id + s.Make!!().Id + c.Make!!().Id + d.Make!!().Id + Pick5883(() -> Card5883{Id: 9}) + PickAction5883(() -> { return Card5883{Id: 10} }) + objPicked
 }`)
         }
 

@@ -90,6 +90,20 @@ var d = ConcurrentDictionary[string, int32]()`
     }
 
     @Fact
+    func ConcurrentDictionaryTypeParameterKey_InSyncMapStyleContainer_Binds() {
+        let source = `import System.Collections.Concurrent
+
+class SyncMap[K, V any] {
+    private var items ConcurrentDictionary[K, V]
+
+    init() {
+        this.items = ConcurrentDictionary[K, V]()
+    }
+}`
+        Assert.Empty(Bind(source))
+    }
+
+    @Fact
     func DictionaryWithNestedListValue_DefaultConstructor_Binds() {
         // Dictionary[string, List[int32]]() — nested generic in the value
         // position exercises the recursive type-clause scan inside the

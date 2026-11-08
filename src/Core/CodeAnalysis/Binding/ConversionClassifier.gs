@@ -4274,9 +4274,7 @@ internal class ConversionClassifier {
         if targetType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
             return false
         }
-        if !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
-            literal == nil ||
-            !literal.DeferredExpressionTreeReturnValidation {
+        if !TryGetEligibleRuntimeDelegateFunctionLiteral(expression, out var literal) || literal == nil {
             return false
         }
         let syntax = literal.Syntax as LambdaExpressionSyntax
@@ -7226,9 +7224,9 @@ internal class ConversionClassifier {
             expression BoundExpression,
             targetType TypeSymbol?
         ) bool {
-            if targetType == nil || !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
-                literal == nil ||
-                !literal.DeferredExpressionTreeReturnValidation {
+            if targetType == nil ||
+                !TryGetEligibleRuntimeDelegateFunctionLiteral(expression, out var literal) ||
+                literal == nil {
                 return false
             }
             let syntax = literal.Syntax as LambdaExpressionSyntax
@@ -7254,6 +7252,21 @@ internal class ConversionClassifier {
                 targetReturn = unwrappedTarget
             }
             return sourceReturn != targetReturn && HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn)
+        }
+
+        private func TryGetEligibleRuntimeDelegateFunctionLiteral(
+            expression BoundExpression,
+            @NotNullWhen(true) out literal BoundFunctionLiteralExpression?
+        ) bool {
+            literal = nil
+            if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expression.Type, out _) ||
+                !LambdaBinder.TryGetFunctionLiteral(expression, out var candidate) ||
+                candidate == nil ||
+                !candidate.DeferredExpressionTreeReturnValidation {
+                return false
+            }
+            literal = candidate
+            return true
         }
 
         private func AreRuntimeDelegateParametersCompatible(

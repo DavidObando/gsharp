@@ -5012,28 +5012,41 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
+            let candidatesByLevel = List[List[IMethodSymbol]]()
+            let overridesByBase = Dictionary[IMethodSymbol, IMethodSymbol](SymbolEqualityComparer.Default)
             for var type INamedTypeSymbol? = target as INamedTypeSymbol; type != nil; type = this.GetEffectiveBaseType(
                 type
             ) {
+                let levelCandidates = List[IMethodSymbol]()
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
-                    if !add.IsStatic &&
+                    if add.IsStatic ||
                         add
                         .Parameters
-                        .Length == 1 &&
-                        this
+                        .Length != 1 ||
+                        !this
                         .context
                         .Compilation
-                        .IsSymbolAccessibleWithin(add, within) &&
-                        !candidates
-                        .Any(
-                        (seen IMethodSymbol) -> !add.IsGenericMethod &&
+                        .IsSymbolAccessibleWithin(add, within) {
+                        continue
+                    }
+                    if add.IsOverride && add.OverriddenMethod is {} overridden {
+                        overridesByBase[overridden] = overridesByBase.GetValueOrDefault(add, add)
+                        continue
+                    }
+                    let effectiveAdd = overridesByBase.GetValueOrDefault(add, add)
+                    if !candidates.Any(
+                        (seen IMethodSymbol) -> !effectiveAdd.IsGenericMethod &&
                             !seen.IsGenericMethod &&
                             SymbolEqualityComparer
                             .Default
-                            .Equals(seen.Parameters[0].Type, add.Parameters[0].Type)
+                            .Equals(seen.Parameters[0].Type, effectiveAdd.Parameters[0].Type)
                     ) {
-                        candidates.Add(add)
+                        candidates.Add(effectiveAdd)
+                        levelCandidates.Add(effectiveAdd)
                     }
+                }
+                if levelCandidates.Count > 0 {
+                    candidatesByLevel.Add(levelCandidates)
                 }
             }
             let hasExtensionAdd = this
@@ -5049,13 +5062,8 @@ partial class CSharpToGSharpTranslator {
                 .Any((method IMethodSymbol) -> method.MethodKind == MethodKind.ReducedExtension)
             var selectedAdd IMethodSymbol? = nil
             if !hasExtensionAdd && !candidates.Any((candidate IMethodSymbol) -> candidate.IsGenericMethod) {
-                if candidates.Count == 1 {
-                    let singleParameterType = candidates[0].Parameters[0].Type
-                    if this.IsCollectionAddParameterApplicable(singleParameterType, element, elementType) {
-                        selectedAdd = candidates[0]
-                    }
-                } else if candidates.Count > 1 {
-                    var applicable = candidates.Where(
+                for levelCandidates in candidatesByLevel {
+                    var applicable = levelCandidates.Where(
                         (candidate IMethodSymbol) -> this.IsCollectionAddParameterApplicable(
                             candidate.Parameters[0].Type,
                             element,
@@ -5063,6 +5071,9 @@ partial class CSharpToGSharpTranslator {
                         )
                     )
                         .ToList()
+                    if applicable.Count == 0 {
+                        continue
+                    }
                     if applicable.Count > 1 && element != nil {
                         if this.context.GetTypeInfo(element).Type is {} exactElementType {
                             let exactMatches = applicable.Where(
@@ -5077,24 +5088,25 @@ partial class CSharpToGSharpTranslator {
                             }
                         }
                         if applicable.Count > 1 {
-                            let standardMatches = applicable.Where(
-                                (candidate IMethodSymbol) -> {
-                                    let conversion = this
-                                        .context
-                                        .SemanticModel
-                                        .ClassifyConversion(element, candidate.Parameters[0].Type)
-                                    return conversion.IsImplicit && !conversion.IsUserDefined
-                                }
+                            let specificMatches = applicable.Where(
+                                (candidate IMethodSymbol) -> !applicable.Any(
+                                    (other IMethodSymbol) -> !object.ReferenceEquals(other, candidate) &&
+                                        this.IsBetterCollectionAddConversionTarget(
+                                        other.Parameters[0].Type,
+                                        candidate.Parameters[0].Type
+                                    )
+                                )
                             )
                                 .ToList()
-                            if standardMatches.Count == 1 {
-                                applicable = standardMatches
+                            if specificMatches.Count == 1 {
+                                applicable = specificMatches
                             }
                         }
                     }
                     if applicable.Count == 1 {
                         selectedAdd = applicable[0]
                     }
+                    break
                 }
             }
             if selectedAdd == nil {
@@ -5107,6 +5119,18 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             return selectedAdd.Parameters[0]
+        }
+
+        private func IsBetterCollectionAddConversionTarget(
+            betterCandidate ITypeSymbol,
+            worseCandidate ITypeSymbol
+        ) bool {
+            if SymbolEqualityComparer.Default.Equals(betterCandidate, worseCandidate) {
+                return false
+            }
+            let forward = this.context.Compilation.ClassifyConversion(betterCandidate, worseCandidate)
+            let reverse = this.context.Compilation.ClassifyConversion(worseCandidate, betterCandidate)
+            return forward.IsImplicit && !forward.IsUserDefined && !(reverse.IsImplicit && !reverse.IsUserDefined)
         }
 
         private func IsCollectionAddParameterApplicable(

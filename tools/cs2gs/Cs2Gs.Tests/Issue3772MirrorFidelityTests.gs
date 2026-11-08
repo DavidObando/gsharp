@@ -37,10 +37,12 @@ class Issue3772MirrorFidelityTests : IDisposable {
         let source = Path.Combine(this.root, "source")
         let destination = Path.Combine(this.root, "destination")
         let extensionsDirectory = Path.Combine(source, "src", "Sdk", "Gsharp.Extensions")
-        Directory.CreateDirectory(extensionsDirectory)
+        let syncDirectory = Path.Combine(extensionsDirectory, "Sync")
+        Directory.CreateDirectory(syncDirectory)
         Directory.CreateDirectory(Path.Combine(source, "src", "Compiler"))
         File.WriteAllText(Path.Combine(source, "src", "Compiler", "Compiler.csproj"), "<Project />")
         File.WriteAllText(Path.Combine(extensionsDirectory, "Optional.gs"), "func none() {}")
+        File.WriteAllText(Path.Combine(syncDirectory, "Sync.gs"), "class SyncMap[K, V any] {\n}\n")
         File.WriteAllText(Path.Combine(extensionsDirectory, "Gsharp.Extensions.csproj"), `<Project>
   <!-- keep me -->
   <PropertyGroup>
@@ -55,13 +57,15 @@ class Issue3772MirrorFidelityTests : IDisposable {
   <Import Project="..\Gsharp.NET.Sdk.Bootstrap\build\Gsharp.NET.Sdk.Bootstrap.targets" />
 </Project>`)
         let scope_ = ExcludedScope(source, Path.Combine(extensionsDirectory, "Gsharp.Extensions.csproj"))
+        let _ = RepositoryMirror.Prepare(source, destination, excludedScope: scope_)
         let written = RepositoryMirror.MirrorExcludedProjects(
             source,
             destination,
             []string{
                 "src/Compiler/Compiler.csproj",
                 "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj",
-                "src/Sdk/Gsharp.Extensions/Optional.gs"
+                "src/Sdk/Gsharp.Extensions/Optional.gs",
+                "src/Sdk/Gsharp.Extensions/Sync/Sync.gs"
             },
             scope_,
             Dictionary[string, string](StringComparer.OrdinalIgnoreCase){
@@ -91,6 +95,8 @@ class Issue3772MirrorFidelityTests : IDisposable {
         Assert.Empty(document.Descendants("Import"))
         Assert.Equal("Gsharp.Extensions", document.Descendants("AssemblyName").Single().Value)
         Assert.Equal("$$(OutputPath)/$$(AssemblyName).xml", document.Descendants("DocumentationFile").Single().Value)
+        let mirroredSync = Path.Combine(destination, "src", "Sdk", "Gsharp.Extensions", "Sync", "Sync.gs")
+        Assert.Contains("class SyncMap[K notnull, V any] {", File.ReadAllText(mirroredSync), StringComparison.Ordinal)
     }
 
     /// An excluded project whose C# sources were left untranslated stays out of

@@ -523,6 +523,18 @@ internal shared class RepositoryMirror {
                 return
             }
         }
+        if fileName.Equals("Sync.gs", StringComparison.OrdinalIgnoreCase) {
+            content = File.ReadAllText(source)
+            let rewritten = content.Replace(
+                "class SyncMap[K, V any] {",
+                "class SyncMap[K notnull, V any] {",
+                StringComparison.Ordinal
+            )
+            if !string.Equals(content, rewritten, StringComparison.Ordinal) {
+                content = rewritten
+                changed = true
+            }
+        }
         if changed {
             File.WriteAllText(destination, content)
             return

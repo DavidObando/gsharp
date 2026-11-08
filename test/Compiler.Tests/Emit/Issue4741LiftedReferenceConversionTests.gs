@@ -883,6 +883,8 @@ public shared class ImportedOverloads {
     public func Pick(f Func[Other]?) int32 -> 0
     public func PickAction(f Func[Node]?) int32 -> f!!().Id
     public func PickAction(f Action?) int32 -> 0
+    public func PickOrObject(f Func[Node]?, x int32) int32 -> f!!().Id
+    public func PickOrObject(o object, x int64) int32 -> 21
 }`)
             let libraryCompilation = CompileGSharp(librarySourcePath, libraryAssemblyPath, nil)
             Assert.True(libraryCompilation.Exit == 0, libraryCompilation.Diagnostics)
@@ -943,7 +945,8 @@ public func Run() string {
     let ip2 = ImportedOverloads.Pick(() -> { return Card{Id: 18} })
     let ip3 = ImportedOverloads.PickAction(() -> Card{Id: 19})
     let ip4 = ImportedOverloads.PickAction(() -> { return Card{Id: 20} })
-    return "${expression.Make!!().Id},${expression.MakeFn!!().Id},${expression.MakeDel!!().Id},${expression.MakeWithArg!!(30).Id},${block.Make!!().Id},${block.MakeFn!!().Id},${block.MakeDel!!().Id},${block.MakeWithArg!!(40).Id},${localExpr.Make!!().Id},${localBlock.Make!!().Id},$r9,$r10,${sCoalesce1.Make!!().Id},${sCoalesce2.Make!!().Id},$p1,$p2,$p3,$p4,$ip1,$ip2,$ip3,$ip4"
+    let ip5 = ImportedOverloads.PickOrObject(cast[object](() -> Card{Id: 99}), 1)
+    return "${expression.Make!!().Id},${expression.MakeFn!!().Id},${expression.MakeDel!!().Id},${expression.MakeWithArg!!(30).Id},${block.Make!!().Id},${block.MakeFn!!().Id},${block.MakeDel!!().Id},${block.MakeWithArg!!(40).Id},${localExpr.Make!!().Id},${localBlock.Make!!().Id},$r9,$r10,${sCoalesce1.Make!!().Id},${sCoalesce2.Make!!().Id},$p1,$p2,$p3,$p4,$ip1,$ip2,$ip3,$ip4,$ip5"
 }`)
             let consumerCompilation = CompileGSharp(consumerSourcePath, consumerAssemblyPath, libraryAssemblyPath)
             Assert.True(consumerCompilation.Exit == 0, consumerCompilation.Diagnostics)
@@ -954,7 +957,7 @@ public func Run() string {
                 (type Type) -> type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != nil
             )
             let actual object? = program.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(nil, nil)
-            Assert.Equal("1,2,3,30,4,5,6,40,7,8,9,10,11,12,13,14,15,16,17,18,19,20", actual)
+            Assert.Equal("1,2,3,30,4,5,6,40,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21", actual)
         } finally {
             Directory.Delete(directory, recursive: true)
         }

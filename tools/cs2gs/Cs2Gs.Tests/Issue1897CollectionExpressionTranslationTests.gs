@@ -354,6 +354,28 @@ namespace Corpus.Issue4573
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
+    public class BaseNonNullStringBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(string item) => Items.Add(item);
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class DerivedNullableObjectBag : BaseNonNullStringBag
+    {
+        public void Add(object? item) => Items.Add(item?.ToString() ?? "derived-null-object");
+    }
+
+    public class ByteOrObjectBag : IEnumerable<byte>
+    {
+        public readonly List<byte> Items = new();
+        public void Add(byte item) => Items.Add(item);
+        public void Add(object? item) => Items.Add(99);
+        public IEnumerator<byte> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     public class Probe
     {
         public static AllowNullBag MakeAllowNullFromWidenedArray()
@@ -376,6 +398,12 @@ namespace Corpus.Issue4573
             return bag;
         }
 
+        public static ByteOrObjectBag MakeByteOrObjectBag()
+        {
+            ByteOrObjectBag bag = [default(int)];
+            return bag;
+        }
+
         public static IntOrNullableStringBag MakeIntOrNullableString(string? nullableStringInput)
         {
             IntOrNullableStringBag bag = [nullableStringInput];
@@ -394,22 +422,32 @@ namespace Corpus.Issue4573
             return bag;
         }
 
+        public static DerivedNullableObjectBag MakeDerivedNullableObject(string? derivedObjectInput)
+        {
+            DerivedNullableObjectBag bag = [derivedObjectInput];
+            return bag;
+        }
+
         public static string Run()
         {
             var allowNullBag = MakeAllowNullFromWidenedArray();
             var targetBag = MakeTarget(null);
             var byteBag = MakeByteBag();
+            var byteOrObjectBag = MakeByteOrObjectBag();
             var intOrNullableStringBag = MakeIntOrNullableString(null);
             var intOrNonNullStringBag = MakeIntOrNonNullString("present");
             var convertibleBag = MakeIntEnumerableWithConvertibleString(null);
+            var derivedObjectBag = MakeDerivedNullableObject(null);
             return string.Join(
                 ",",
                 allowNullBag.Items[0],
                 targetBag.Items[0]!.Value,
                 byteBag.Items[0].ToString(),
+                byteOrObjectBag.Items[0].ToString(),
                 intOrNullableStringBag.Items[0],
                 intOrNonNullStringBag.Items[0],
-                convertibleBag.Items[0]
+                convertibleBag.Items[0],
+                derivedObjectBag.Items[0]
             );
         }
     }
@@ -421,11 +459,15 @@ namespace Corpus.Issue4573
         Assert.DoesNotContain("nullableStringInput!!", rendered, StringComparison.Ordinal)
         Assert.Contains("nonNullStringInput!!", rendered, StringComparison.Ordinal)
         Assert.DoesNotContain("convertibleInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("derivedObjectInput!!", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
         let runtimeResult = EmittedOracle.Evaluate(rendered + "\nProbe.Run()")
         Assert.Empty(runtimeResult.Diagnostics)
         Assert.Null(runtimeResult.UnhandledException)
-        Assert.Equal("allow-null,from-null,0,null-string,present,null-convertible", runtimeResult.Value)
+        Assert.Equal(
+            "allow-null,from-null,0,0,null-string,present,null-convertible,derived-null-object",
+            runtimeResult.Value
+        )
 
         let nullableResultConversionRendered = Render(`
 #nullable enable
@@ -445,6 +487,7 @@ namespace Corpus.Issue4573.NullableResultConversion
     {
         public readonly List<NullableResultTarget?> Items = new();
         public void Add(NullableResultTarget item) => Items.Add(item);
+        public void Add(object? item) { }
         public IEnumerator<NullableResultTarget?> GetEnumerator() => Items.GetEnumerator();
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
@@ -508,19 +551,19 @@ using System.Collections.Generic;
 
 namespace Corpus.Issue4573.AmbiguousDefault
 {
-    public class ByteOrObjectBag : IEnumerable<byte>
+    public class SByteOrByteBag : IEnumerable<byte>
     {
+        public void Add(sbyte item) { }
         public void Add(byte item) { }
-        public void Add(object? item) { }
         public IEnumerator<byte> GetEnumerator() { yield break; }
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     public class Holder
     {
-        public ByteOrObjectBag Make()
+        public SByteOrByteBag Make()
         {
-            ByteOrObjectBag b = [default(int)];
+            SByteOrByteBag b = [default(int)];
             return b;
         }
     }

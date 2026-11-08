@@ -200,6 +200,47 @@ namespace Demo
         )
     }
 
+    @Fact
+    func AnonymousObjectCreation_GenericPropertyWithNonNullableClassConstraint_DoesNotWidenTypeArgument() {
+        let printed = TranslateUnit(`
+#nullable enable
+using System;
+
+namespace Demo
+{
+    public class MigrationOperation
+    {
+        public string Name { get; init; } = "op";
+    }
+
+    public sealed class AddColumnOperation : MigrationOperation
+    {
+    }
+
+    public sealed class OperationBuilder<TOperation>
+        where TOperation : MigrationOperation
+    {
+        public TOperation Operation { get; }
+        public OperationBuilder(TOperation operation) => Operation = operation;
+    }
+
+    public static class C
+    {
+        public static void Run()
+        {
+            var anon = new
+            {
+                Id = new OperationBuilder<AddColumnOperation>(new AddColumnOperation { Name = "IdColumn" })
+            };
+            Console.WriteLine(anon.Id.Operation.Name);
+        }
+    }
+}`)
+        Assert.Contains("Id OperationBuilder[AddColumnOperation]", printed)
+        Assert.DoesNotContain("OperationBuilder[AddColumnOperation?]", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Demo.C.Run()", "IdColumn")
+    }
+
     shared {
         private func AnonymousTypeName(printed string) string -> Regex
             .Match(printed, "data class (AnonymousType\\d+_[0-9A-F]{16})\\(")
