@@ -585,6 +585,8 @@ jobs:
             comment-checker)
               dotnet restore build/gstokens/GsTokens.gsproj --locked-mode
               python3 build/test-check-comment-only-diff.py ;;
+            waikiki-hover-audit)
+              python3 build/test-waikiki-hover-audit.py ;;
             *) echo "Unknown harness: $HARNESS" >&2; exit 1 ;;
           esac
 
