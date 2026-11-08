@@ -2355,7 +2355,8 @@ internal partial class MethodBodyEmitter {
     /// evaluation stack. The result is a managed pointer (`T&`)
     /// with the same verifier type as either branch.
     /// @param node The conditional address-of bound node.
-    private func EmitConditionalAddress(node BoundConditionalAddressExpression) {
+    /// @param preserveReceiverStorage Emit each receiver's physical storage rather than its slot address.
+    private func EmitConditionalAddress(node BoundConditionalAddressExpression, preserveReceiverStorage bool = false) {
         let falseLabel = this.il.DefineLabel()
         let doneLabel = this.il.DefineLabel()
         // <cond>
@@ -2363,13 +2364,21 @@ internal partial class MethodBodyEmitter {
         // brfalse falseLabel
         this.il.Branch(ILOpCode.Brfalse, falseLabel)
         // <addr of WhenTrue>
-        this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenTrueOperand))
+        if preserveReceiverStorage {
+            this.EmitExplicitFieldReceiver(node.WhenTrueOperand)
+        } else {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenTrueOperand))
+        }
         // br doneLabel
         this.il.Branch(ILOpCode.Br, doneLabel)
         // falseLabel:
         this.il.MarkLabel(falseLabel)
         // <addr of WhenFalse>
-        this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenFalseOperand))
+        if preserveReceiverStorage {
+            this.EmitExplicitFieldReceiver(node.WhenFalseOperand)
+        } else {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenFalseOperand))
+        }
         // doneLabel:
         this.il.MarkLabel(doneLabel)
     }

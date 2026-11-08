@@ -6152,8 +6152,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         expression = UnwrapTupleValue(expression)
         symbol = switch expression {
             case invocation is InvocationExpressionSyntax: model.GetSymbolInfo(invocation).Symbol
-            case _ is IdentifierNameSyntax or _ is MemberAccessExpressionSyntax: model.GetSymbolInfo(expression!!)
-                .Symbol
+            case _ is IdentifierNameSyntax or
+                _ is MemberAccessExpressionSyntax or
+                _ is ElementAccessExpressionSyntax: model
+                .GetSymbolInfo(expression!!).Symbol
             default: default(ISymbol?)
         }
         if TryGetTupleType(symbol, out tupleType) {

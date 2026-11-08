@@ -17,6 +17,24 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Fact
+    func TupleRefIndexer_SharesNullableLeavesWithItsBackingStorage() {
+        const source = `public class Holder {
+    private (string Text, int Code) row = ("x", 1);
+    public ref (string Text, int Code) this[int index] => ref row;
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref (string? Text, int Code) alias = ref holder[0];
+        return alias.Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Fact
     func ArrayValuedTupleLeaf_PreservesItsNullableReturn() {
         const source = `public static class Obj {
     private static (string[] Values, int Code) Read() => (null, 1);

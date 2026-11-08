@@ -2028,6 +2028,19 @@ internal partial class MethodBodyEmitter {
             this.EmitExplicitFieldReceiver(block.Expression)
             return
         }
+        if receiver is BoundConditionalExpression conditional {
+            this.EmitConditionalAddress(
+                BoundConditionalAddressExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    conditional.WhenTrue,
+                    conditional.WhenFalse,
+                    conditional.Type
+                ),
+                preserveReceiverStorage: true
+            )
+            return
+        }
         let storage = SideEffectSpiller.GetReceiverStorageView(receiver)
         if ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) && Binder.IsReferenceTypeForConstraint(
             storage.Type.StripToBareShape()
