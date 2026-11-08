@@ -84,6 +84,16 @@ public partial class P {
     }
 
     @Fact
+    func PartialMethodParameters_PreserveImplementationNames() {
+        LiteralConstructionRuntimeParity.AssertMatches(`using System;
+public partial class P {
+    private static partial int Echo(int value);
+    private static partial int Echo(int input) { int value = 1; return input + value; }
+    public static void Main() { Console.WriteLine(Echo(value: 42)); }
+}`, Issue5875ReadabilityCounters.AssertNoSynthetics)
+    }
+
+    @Fact
     func ForeignContextualMethod_KeepsCallerEscaping() {
         LiteralConstructionRuntimeParity.AssertMatches(
             "using System; using static Library.Lib; public class P { public static void Main() { Console.WriteLine(@nameof()); } }",

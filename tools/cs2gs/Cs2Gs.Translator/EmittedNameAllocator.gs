@@ -850,7 +850,15 @@ internal class EmittedNameAllocator {
                 .Length:
             cast[ISymbol](property.OriginalDefinition.Parameters[parameter.Ordinal])
             case parameter is IParameterSymbol when parameter.ContainingSymbol is IMethodSymbol method:
-            cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition.Parameters[parameter.Ordinal])
+            cast[ISymbol](
+                (
+                    (method.PartialDefinitionPart ?? method).PartialImplementationPart ??
+                        method.PartialDefinitionPart ??
+                        method
+                )
+                    .OriginalDefinition
+                    .Parameters[parameter.Ordinal]
+            )
             case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
             case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
