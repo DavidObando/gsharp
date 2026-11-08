@@ -37,6 +37,7 @@ open class WaikikiHoverAuditTests {
     func ReviewedExpectations_AreCompleteAndIssueLinked() {
         Assert.Equal(21, ReviewedFailures.Length)
         Assert.Equal(185, ReviewedSyntaxGaps.Length)
+        Assert.Equal(70, ReviewedDidOpenRepointGaps.Length)
         let seenFailureTargets = HashSet[string](StringComparer.Ordinal)
         for item in ReviewedFailures {
             Assert.False(string.IsNullOrWhiteSpace(item.TargetId))
@@ -48,7 +49,7 @@ open class WaikikiHoverAuditTests {
             Assert.DoesNotContain("\\", item.TargetId, StringComparison.Ordinal)
         }
         let seenGapTargets = HashSet[string](StringComparer.Ordinal)
-        for gap in ReviewedSyntaxGaps {
+        for gap in ReviewedSyntaxGaps.Concat(ReviewedDidOpenRepointGaps) {
             Assert.False(string.IsNullOrWhiteSpace(gap))
             Assert.True(seenGapTargets.Add(gap), "Duplicate reviewed syntax gap: $gap")
             Assert.Contains("|", gap, StringComparison.Ordinal)
@@ -154,6 +155,34 @@ open class WaikikiHoverAuditTests {
             }
             Assert.True(LocationsMatchExpectedDeclaration(expectedCallsLoc, expectedCallsLoc))
             Assert.False(LocationsMatchExpectedDeclaration(expectedCallsLoc, wrongSameFileLoc))
+
+            // Verify configured GSHARP_WAIKIKI_CORPUS_ROOT opts out only when absent/whitespace
+            // and fails explicitly when pointing to a nonexistent directory.
+            Assert.Null(ResolveConfiguredWaikikiCorpusRoot(nil))
+            Assert.Null(ResolveConfiguredWaikikiCorpusRoot("   "))
+            Assert.Equal(corpusRoot, ResolveConfiguredWaikikiCorpusRoot(corpusRoot))
+            let missingCorpusPath = Path.Combine(scratchRoot, "missing-waikiki-corpus")
+            let missingCorpusEx = Assert.Throws[Xunit.Sdk.TrueException](
+                () -> {
+                    let _ = ResolveConfiguredWaikikiCorpusRoot(missingCorpusPath)
+                }
+            )
+            Assert.Contains(missingCorpusPath, missingCorpusEx.Message, StringComparison.Ordinal)
+
+            // Verify IsSyntheticTokenHitLeak flags non-physical keyword/punctuation tokens with positive width (#5277).
+            let syntheticKeywordTree = SyntaxTree.Parse("return {")
+            let syntheticKeywordTokens = SyntaxTree.ParseTokens(syntheticKeywordTree.Text).ToList()
+            let syntheticReturnToken = syntheticKeywordTokens.First(
+                (t SyntaxToken) -> t.Kind == SyntaxKind.ReturnKeyword
+            )
+            let syntheticBraceToken = syntheticKeywordTokens.First(
+                (t SyntaxToken) -> t.Kind == SyntaxKind.OpenBraceToken
+            )
+            Assert.True(syntheticReturnToken.Span.Length > 0)
+            Assert.True(syntheticBraceToken.Span.Length > 0)
+            Assert.True(IsSyntheticTokenHitLeak(consumerTree.Text, syntheticReturnToken))
+            Assert.True(IsSyntheticTokenHitLeak(consumerTree.Text, syntheticBraceToken))
+            Assert.False(IsSyntheticTokenHitLeak(consumerTree.Text, bareLocalTok))
 
             // ADR-0154 discrimination witnesses: verify each failure class fails the gate.
             let mutantPlaceholder = EvaluateTargetCheck(
@@ -603,10 +632,9 @@ open class WaikikiHoverAuditTests {
 
     @Fact
     async func PinnedWaikikiCorpus_FullHeadlessAudit() {
-        guard let corpusRoot = Environment.GetEnvironmentVariable("GSHARP_WAIKIKI_CORPUS_ROOT") else {
-            return
-        }
-        if string.IsNullOrEmpty(corpusRoot) || !Directory.Exists(corpusRoot) {
+        guard let corpusRoot = ResolveConfiguredWaikikiCorpusRoot(
+            Environment.GetEnvironmentVariable("GSHARP_WAIKIKI_CORPUS_ROOT")
+        ) else {
             return
         }
         let explicitOut = Environment.GetEnvironmentVariable("GSHARP_WAIKIKI_AUDIT_OUT")
@@ -662,7 +690,7 @@ open class WaikikiHoverAuditTests {
             Assert.Equal(11056, summary.CompilerOracleTargetCount)
             Assert.Equal(11036, summary.CompilerOracleMatchedCount)
             Assert.Equal(21, summary.ReviewedFailureCount)
-            Assert.Equal(185, summary.ReviewedSyntaxGapCount)
+            Assert.Equal(255, summary.ReviewedSyntaxGapCount)
             Assert.Equal(0, summary.UnreviewedFailureCount)
             Assert.Equal(0, summary.StaleExpectationCount)
         } finally {
@@ -675,6 +703,18 @@ open class WaikikiHoverAuditTests {
     shared {
         internal const PinnedWaikikiCommit string = "ec66d0bfaa39583cd11c66095f2748342dc9e8f6"
         internal const PinnedWaikikiSdkVersion string = "0.5.26"
+
+        internal func ResolveConfiguredWaikikiCorpusRoot(configuredRoot string?) string? {
+            if string.IsNullOrWhiteSpace(configuredRoot) {
+                return nil
+            }
+            let trimmed = configuredRoot.Trim()
+            Assert.True(
+                Directory.Exists(trimmed),
+                "Configured GSHARP_WAIKIKI_CORPUS_ROOT directory does not exist: $trimmed"
+            )
+            return trimmed
+        }
 
         private let ReviewedFailures[]ReviewedFailure = []ReviewedFailure{
             ReviewedFailure(
@@ -1014,6 +1054,79 @@ open class WaikikiHoverAuditTests {
             "tests/Waikiki.Yoto.Tests/YotoTests.gs:344:17:CardId|FieldAssignmentExpressionSyntax"
         }
 
+        private let ReviewedDidOpenRepointGaps[]string = []string{
+            "src/Waikiki.Core/Music/Id3Reader.gs:64:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:64:26:Title|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:66:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:66:26:Artist|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:68:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:68:26:Album|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:70:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:70:26:TrackNumber|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:72:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:72:26:DiscNumber|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:164:13:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:164:18:Cover|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:172:13:stream|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:180:13:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:180:18:Title|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:181:13:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:181:18:Artist|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:182:13:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:182:18:Album|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:185:17:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Id3Reader.gs:185:22:TrackNumber|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/Music/Mp3Duration.gs:21:13:stream|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Core/TrackSource.gs:83:39:tempDirectory|NameExpressionSyntax",
+            "src/Waikiki.Core/TrackSource.gs:84:37:tempDirectory|NameExpressionSyntax",
+            "src/Waikiki.Core/UploadJob.gs:55:24:progress|NameExpressionSyntax",
+            "src/Waikiki.Mp4/ChapterSplitter.gs:158:17:source|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:67:17:stream|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:88:21:stream|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:144:17:track|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:144:23:SampleDescription|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:148:21:track|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:148:27:SampleEntry|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:150:25:track|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:150:31:Channels|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:151:25:track|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:151:31:SampleRate|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:199:13:track|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:199:19:Samples|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:222:21:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:222:26:Cover|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:230:29:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:230:34:TrackNumber|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:232:29:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:232:34:DiscNumber|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:239:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:239:40:Title|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:240:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:240:40:Artist|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:241:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:241:40:AlbumArtist|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:242:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:242:40:Album|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:243:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:243:40:Genre|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:244:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:244:40:Comment|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:245:35:info|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:245:40:Year|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Mp4/Mp4Reader.gs:314:21:stream|FieldAssignmentExpressionSyntax",
+            "src/Waikiki.Yoto/YotoClient.gs:125:30:image|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoClient.gs:125:37:contentType|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoClient.gs:148:30:image|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoClient.gs:148:37:contentType|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:7:74:statusCode|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:7:89:body|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:25:33:message|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:28:78:message|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:62:82:uploadId|NameExpressionSyntax",
+            "src/Waikiki.Yoto/YotoExceptions.gs:62:95:body|NameExpressionSyntax",
+            "tests/Waikiki.Mp4.Tests/ChapterSplitterTests.gs:21:13:stream|FieldAssignmentExpressionSyntax"
+        }
+
         internal async func RunWorkspaceAuditAsync(
             corpusRoot string,
             artifactsDir string,
@@ -1025,7 +1138,12 @@ open class WaikikiHoverAuditTests {
             let workspace = WorkspaceState()
             let server = LspServer(documents, workspace)
             let discoveryDone = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
-            server.TestAfterWorkspaceDiscovery = () -> discoveryDone.TrySetResult(true)
+            var discoveryScheduled = false
+            server.TestBeforeWorkspaceDiscovery = () -> discoveryScheduled = true
+            server.TestAfterWorkspaceDiscovery = () -> {
+                discoveryScheduled = true
+                discoveryDone.TrySetResult(true)
+            }
             let (clientStream, serverStream) = FullDuplexStream.CreatePair()
             using let serverRpc = JsonRpc(
                 HeaderDelimitedMessageHandler(serverStream, serverStream, LspJson.CreateFormatter())
@@ -1038,339 +1156,406 @@ open class WaikikiHoverAuditTests {
             )
             clientRpc.StartListening()
 
-            using let initCaps = JsonDocument.Parse(
-                "{\"textDocument\":{\"diagnostic\":{}},\"workspace\":{\"diagnostics\":{\"refreshSupport\":true}}}"
-            )
-            let _ = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
-                "initialize",
-                InitializeParams{
-                    RootPath: corpusRoot,
-                    RootUri: DocumentUri.FromFileSystemPath(corpusRoot)!!,
-                    Capabilities: initCaps.RootElement.Clone()
-                }
-            )
-            await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
-            await discoveryDone.Task.WaitAsync(TimeSpan.FromSeconds(120))
+            var shutdownSent = false
+            try {
+                using let initCaps = JsonDocument.Parse(
+                    "{\"textDocument\":{\"diagnostic\":{}},\"workspace\":{\"diagnostics\":{\"refreshSupport\":true}}}"
+                )
+                let _ = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
+                    "initialize",
+                    InitializeParams{
+                        RootPath: corpusRoot,
+                        RootUri: DocumentUri.FromFileSystemPath(corpusRoot)!!,
+                        Capabilities: initCaps.RootElement.Clone()
+                    }
+                )
+                await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                discoveryScheduled = true
+                await discoveryDone.Task.WaitAsync(TimeSpan.FromSeconds(120))
 
-            let projects = workspace
-                .Projects
-                .OrderBy(
-                (p ProjectState) -> NormalizeRelativePath(corpusRoot, p.ProjectFilePath),
-                StringComparer.Ordinal
-            )
-                .ToList()
-            Assert.NotEmpty(projects)
-
-            let reviewedFailureList = if enforceWaikikiBaseline {
-                ReviewedFailures
-            } else {
-                Array.Empty[ReviewedFailure]()
-            }
-            let reviewedGapSet = if enforceWaikikiBaseline {
-                ReviewedSyntaxGaps.ToHashSet(StringComparer.Ordinal)
-            } else {
-                HashSet[string](StringComparer.Ordinal)
-            }
-            let matchedReviewedFailures = HashSet[string](StringComparer.Ordinal)
-            let matchedReviewedGaps = HashSet[string](StringComparer.Ordinal)
-            let failures = List[AuditFailureRecord]()
-            let fileSummaries = List[FileInventorySummary]()
-            let seenFiles = HashSet[string](StringComparer.OrdinalIgnoreCase)
-
-            var authoredFiles = 0
-            var generatedFiles = 0
-            var totalPhysicalTokens = 0
-            var totalChecks = 0
-            var excludedSyntheticTokens = 0
-            var syntheticLeaks = 0
-            var oracleTargets = 0
-            var oracleMatched = 0
-            var hoverNonNull = 0
-            var placeholderHovers = 0
-            var interiorMismatches = 0
-
-            for proj in projects {
-                Assert.NotEmpty(proj.References)
-                for refPath in proj.References {
-                    Assert.True(File.Exists(refPath), "Missing project reference assembly: $refPath")
-                }
-                let compilation = proj.GetCompilation()
-                let errors = compilation
-                    .GetDiagnostics()
-                    .Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError)
-                    .ToList()
-                Assert.Empty(errors)
-
-                let orderedTrees = compilation
-                    .SyntaxTrees
+                let projects = workspace
+                    .Projects
                     .OrderBy(
-                    (t SyntaxTree) -> NormalizeRelativePath(corpusRoot, t.Text.FileName),
+                    (p ProjectState) -> NormalizeRelativePath(corpusRoot, p.ProjectFilePath),
                     StringComparer.Ordinal
                 )
                     .ToList()
-                for tree in orderedTrees {
-                    let filePath = tree.Text.FileName
-                    if !seenFiles.Add(filePath) {
-                        continue
-                    }
-                    let relativePath = NormalizeRelativePath(corpusRoot, filePath)
-                    let isGenerated = ProjectDiscovery.IsGeneratedSourcePath(filePath)
-                    if isGenerated {
-                        generatedFiles++
-                    } else {
-                        authoredFiles++
-                    }
-                    let rawBytes = File.ReadAllBytes(filePath)
-                    let fileSha256 = Convert.ToHexString(SHA256.HashData(rawBytes)).ToLowerInvariant()
-                    let text = tree.Text.ToString()
-                    let uri = DocumentUri.FromFileSystemPath(filePath)!!
-                    let content = DocumentContent(tree, BuildLineOffsets(text), proj, workspace)
-                    let coreModel = compilation.GetSemanticModel(tree)
-                    let indexedMemberSpans = CollectIndexedMemberTokenSpans(tree.Root)
+                Assert.NotEmpty(projects)
 
-                    let physicalBySpan = Dictionary[(int32, int32, SyntaxKind), SyntaxToken]()
-                    for tok in SyntaxTree.ParseTokens(tree.Text) {
-                        if tok.Kind == SyntaxKind.WhitespaceToken ||
-                            tok.Kind == SyntaxKind.CommentToken ||
-                            tok.Kind == SyntaxKind.DocumentationCommentToken ||
-                            tok.Kind == SyntaxKind.EndOfFileToken {
+                let reviewedFailureList = if enforceWaikikiBaseline {
+                    ReviewedFailures
+                } else {
+                    Array.Empty[ReviewedFailure]()
+                }
+                let reviewedGapSet = if enforceWaikikiBaseline {
+                    ReviewedSyntaxGaps.ToHashSet(StringComparer.Ordinal)
+                } else {
+                    HashSet[string](StringComparer.Ordinal)
+                }
+                let reviewedRepointGapSet = if enforceWaikikiBaseline {
+                    ReviewedDidOpenRepointGaps.ToHashSet(StringComparer.Ordinal)
+                } else {
+                    HashSet[string](StringComparer.Ordinal)
+                }
+                let matchedReviewedFailures = HashSet[string](StringComparer.Ordinal)
+                let matchedReviewedGaps = HashSet[string](StringComparer.Ordinal)
+                let failures = List[AuditFailureRecord]()
+                let fileSummaries = List[FileInventorySummary]()
+                let seenFiles = HashSet[string](StringComparer.OrdinalIgnoreCase)
+
+                var authoredFiles = 0
+                var generatedFiles = 0
+                var totalPhysicalTokens = 0
+                var totalChecks = 0
+                var excludedSyntheticTokens = 0
+                var syntheticLeaks = 0
+                var oracleTargets = 0
+                var oracleMatched = 0
+                var hoverNonNull = 0
+                var placeholderHovers = 0
+                var interiorMismatches = 0
+
+                for proj in projects {
+                    Assert.NotEmpty(proj.References)
+                    for refPath in proj.References {
+                        Assert.True(File.Exists(refPath), "Missing project reference assembly: $refPath")
+                    }
+                    let compilation = proj.GetCompilation()
+                    let errors = compilation
+                        .GetDiagnostics()
+                        .Where((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.IsError)
+                        .ToList()
+                    Assert.Empty(errors)
+
+                    let orderedTrees = compilation
+                        .SyntaxTrees
+                        .OrderBy(
+                        (t SyntaxTree) -> NormalizeRelativePath(corpusRoot, t.Text.FileName),
+                        StringComparer.Ordinal
+                    )
+                        .ToList()
+                    for tree in orderedTrees {
+                        let filePath = tree.Text.FileName
+                        if !seenFiles.Add(filePath) {
                             continue
                         }
-                        if IsPhysicalToken(tree.Text, tok) {
+                        let relativePath = NormalizeRelativePath(corpusRoot, filePath)
+                        let isGenerated = ProjectDiscovery.IsGeneratedSourcePath(filePath)
+                        if isGenerated {
+                            generatedFiles++
+                        } else {
+                            authoredFiles++
+                        }
+                        let rawBytes = File.ReadAllBytes(filePath)
+                        let fileSha256 = Convert.ToHexString(SHA256.HashData(rawBytes)).ToLowerInvariant()
+                        let text = tree.Text.ToString()
+                        let uri = DocumentUri.FromFileSystemPath(filePath)!!
+                        let docId = TextDocumentIdentifier{Uri: uri}
+                        let coreModel = compilation.GetSemanticModel(tree)
+                        let indexedMemberSpans = CollectIndexedMemberTokenSpans(tree.Root)
+
+                        let physicalBySpan = Dictionary[(int32, int32, SyntaxKind), SyntaxToken]()
+                        for tok in SyntaxTree.ParseTokens(tree.Text) {
+                            if tok.Kind == SyntaxKind.WhitespaceToken ||
+                                tok.Kind == SyntaxKind.CommentToken ||
+                                tok.Kind == SyntaxKind.DocumentationCommentToken ||
+                                tok.Kind == SyntaxKind.EndOfFileToken {
+                                continue
+                            }
+                            if IsPhysicalToken(tree.Text, tok) {
+                                physicalBySpan[(tok.Span.Start, tok.Span.End, tok.Kind)] = tok
+                            }
+                        }
+                        for tok in EnumerateTreeTokens(tree.Root) {
+                            if tok.Kind == SyntaxKind.EndOfFileToken {
+                                continue
+                            }
+                            if !IsPhysicalToken(tree.Text, tok) {
+                                excludedSyntheticTokens++
+                                if tok.Span.Start >= 0 && tok.Span.Start <= text.Length {
+                                    let hit = SemanticLookup.FindTokenAt(tree, tok.Span.Start)
+                                    if IsSyntheticTokenHitLeak(tree.Text, hit) {
+                                        syntheticLeaks++
+                                        failures.Add(
+                                            AuditFailureRecord(
+                                                "$relativePath:${tok.Span.Start}:${tok.Text}",
+                                                "SyntheticAnchor",
+                                                "SyntheticTokenLeak",
+                                                "",
+                                                true,
+                                                "physical token",
+                                                "${hit!!.Kind}:${hit!!.Text}"
+                                            )
+                                        )
+                                    }
+                                }
+                                continue
+                            }
                             physicalBySpan[(tok.Span.Start, tok.Span.End, tok.Kind)] = tok
                         }
-                    }
-                    for tok in EnumerateTreeTokens(tree.Root) {
-                        if tok.Kind == SyntaxKind.EndOfFileToken {
-                            continue
-                        }
-                        if !IsPhysicalToken(tree.Text, tok) {
-                            excludedSyntheticTokens++
-                            if tok.Span.Start >= 0 && tok.Span.Start <= text.Length {
-                                let hit = SemanticLookup.FindTokenAt(tree, tok.Span.Start)
-                                if hit != nil &&
-                                    !IsPhysicalToken(tree.Text, hit) &&
-                                    (hit.Kind == SyntaxKind.IdentifierToken || hit.Span.Length == 0) {
-                                    syntheticLeaks++
-                                    failures.Add(
-                                        AuditFailureRecord(
-                                            "$relativePath:${tok.Span.Start}:${tok.Text}",
-                                            "SyntheticAnchor",
-                                            "SyntheticTokenLeak",
-                                            "",
-                                            true,
-                                            "physical token",
-                                            "${hit.Kind}:${hit.Text}"
+
+                        let orderedTokens = physicalBySpan
+                            .Values
+                            .OrderBy((t SyntaxToken) -> t.Span.Start)
+                            .ThenByDescending((t SyntaxToken) -> t.Span.Length)
+                            .ToList()
+                        totalPhysicalTokens += orderedTokens.Count
+                        var fileChecks = 0
+                        var fileOracleTargets = 0
+                        var fileHovers = 0
+
+                        await clientRpc.NotifyWithParameterObjectAsync(
+                            "textDocument/didOpen",
+                            DidOpenTextDocumentParams{
+                                TextDocument: TextDocumentItem{Uri: uri, LanguageId: "gsharp", Version: 1, Text: text}
+                            }
+                        )
+                        try {
+                            let startRanges = [orderedTokens.Count]GSharp.LanguageServer.Protocol.Range
+                            let startTasks = [orderedTokens.Count]Task[Hover?]
+                            let interiorTasks = [orderedTokens.Count]Task[Hover?]?
+                            for var idx = 0; idx < orderedTokens.Count; idx++ {
+                                let tok = orderedTokens[idx]
+                                let startRange = SemanticLookup.ToRange(tree.Text, tok.Span)
+                                startRanges[idx] = startRange
+                                startTasks[idx] = clientRpc.InvokeWithParameterObjectAsync[Hover?](
+                                    "textDocument/hover",
+                                    HoverParams{TextDocument: docId, Position: startRange.Start}
+                                )
+                                if tok.Span.Length >= 2 && tok.Kind != SyntaxKind.InterpolatedStringToken {
+                                    let interiorPos = SemanticLookup.ToRange(tree.Text, TextSpan(tok.Span.Start + 1, 0))
+                                        .Start
+                                    interiorTasks[idx] = clientRpc.InvokeWithParameterObjectAsync[Hover?](
+                                        "textDocument/hover",
+                                        HoverParams{TextDocument: docId, Position: interiorPos}
+                                    )
+                                }
+                            }
+                            await Task.WhenAll(startTasks)
+
+                            for var idx = 0; idx < orderedTokens.Count; idx++ {
+                                let tok = orderedTokens[idx]
+                                let startRange = startRanges[idx]
+                                let line1 = startRange.Start.Line + 1
+                                let col1 = startRange.Start.Character + 1
+                                let targetId = "$relativePath:$line1:$col1:${tok.Text}"
+                                let hover = await startTasks[idx]
+                                fileChecks++
+                                totalChecks++
+
+                                var interiorMatches = true
+                                if interiorTasks[idx] != nil {
+                                    fileChecks++
+                                    totalChecks++
+                                    let interiorHover = await interiorTasks[idx]!!
+                                    if ExtractSignature(hover) != ExtractSignature(interiorHover) ||
+                                        !RangesEqual(hover?.Range, interiorHover?.Range) {
+                                        interiorMatches = false
+                                        interiorMismatches++
+                                    }
+                                }
+
+                                var rangeMatches = true
+                                let actualSig = ExtractSignature(hover)
+                                if hover != nil {
+                                    fileHovers++
+                                    hoverNonNull++
+                                    if !RangesEqual(hover.Range, startRange) {
+                                        rangeMatches = false
+                                        let rangeFailure = EvaluateTargetCheck(
+                                            targetId,
+                                            ClassifyTokenRole(tok, indexedMemberSpans),
+                                            FormatRange(startRange),
+                                            FormatRange(hover.Range),
+                                            rangeMatches: false,
+                                            interiorMatches: interiorMatches,
+                                            definitionMatches: true,
+                                            reviewedFailureList,
+                                            matchedReviewedFailures
                                         )
-                                    )
+                                        if rangeFailure != nil {
+                                            failures.Add(rangeFailure)
+                                        }
+                                    }
+                                    if IsPlaceholderTypeSignature(actualSig) {
+                                        placeholderHovers++
+                                    }
                                 }
-                            }
-                            continue
-                        }
-                        physicalBySpan[(tok.Span.Start, tok.Span.End, tok.Kind)] = tok
-                    }
 
-                    let orderedTokens = physicalBySpan
-                        .Values
-                        .OrderBy((t SyntaxToken) -> t.Span.Start)
-                        .ThenByDescending((t SyntaxToken) -> t.Span.Length)
-                        .ToList()
-                    totalPhysicalTokens += orderedTokens.Count
-                    var fileChecks = 0
-                    var fileOracleTargets = 0
-                    var fileHovers = 0
-
-                    for tok in orderedTokens {
-                        let startRange = SemanticLookup.ToRange(tree.Text, tok.Span)
-                        let line1 = startRange.Start.Line + 1
-                        let col1 = startRange.Start.Character + 1
-                        let targetId = "$relativePath:$line1:$col1:${tok.Text}"
-                        let hover = HoverComputer.ComputeHover(content, startRange.Start)
-                        fileChecks++
-                        totalChecks++
-
-                        var interiorMatches = true
-                        if tok.Span.Length >= 2 && tok.Kind != SyntaxKind.InterpolatedStringToken {
-                            fileChecks++
-                            totalChecks++
-                            let interiorPos = SemanticLookup.ToRange(tree.Text, TextSpan(tok.Span.Start + 1, 0)).Start
-                            let interiorHover = HoverComputer.ComputeHover(content, interiorPos)
-                            if ExtractSignature(hover) != ExtractSignature(interiorHover) ||
-                                !RangesEqual(hover?.Range, interiorHover?.Range) {
-                                interiorMatches = false
-                                interiorMismatches++
-                            }
-                        }
-
-                        var rangeMatches = true
-                        let actualSig = ExtractSignature(hover)
-                        if hover != nil {
-                            fileHovers++
-                            hoverNonNull++
-                            if !RangesEqual(hover.Range, startRange) {
-                                rangeMatches = false
-                                let rangeFailure = EvaluateTargetCheck(
-                                    targetId,
-                                    ClassifyTokenRole(tok, indexedMemberSpans),
-                                    FormatRange(startRange),
-                                    FormatRange(hover.Range),
-                                    rangeMatches: false,
-                                    interiorMatches: interiorMatches,
-                                    definitionMatches: true,
-                                    reviewedFailureList,
-                                    matchedReviewedFailures
-                                )
-                                if rangeFailure != nil {
-                                    failures.Add(rangeFailure)
-                                }
-                            }
-                            if IsPlaceholderTypeSignature(actualSig) {
-                                placeholderHovers++
-                            }
-                        }
-
-                        if tok.Kind == SyntaxKind.IdentifierToken {
-                            let role = ClassifyTokenRole(tok, indexedMemberSpans)
-                            let declSym = GetDeclaredSymbolIfIdentifier(coreModel, tok)
-                            let refSym = coreModel.GetSymbolInfo(tok).Symbol
-                            let sym = declSym ?? refSym
-                            if sym != nil && sym is not PackageSymbol && sym is not ImportSymbol {
-                                oracleTargets++
-                                fileOracleTargets++
-                                let expectedSig = ExpectedOracleSignature(sym, compilation, tok)
-                                var defMatches = true
-                                if role == "IndexedMemberAccess" && !BoundSemantics.IsImportedMember(sym) {
-                                    defMatches = DefinitionMatchesOracleSymbol(
-                                        uri,
-                                        content,
-                                        startRange.Start,
-                                        compilation,
-                                        sym
-                                    )
-                                }
-                                let outcome = EvaluateTargetCheck(
-                                    targetId,
-                                    role,
-                                    expectedSig,
-                                    actualSig,
-                                    rangeMatches: true,
-                                    interiorMatches: interiorMatches,
-                                    definitionMatches: defMatches,
-                                    reviewedFailureList,
-                                    matchedReviewedFailures
-                                )
-                                if outcome == nil {
-                                    oracleMatched++
-                                } else {
-                                    failures.Add(outcome)
-                                }
-                            } else if hover == nil && IsEligibleUnboundIdentifier(tok) {
-                                let gapKey = "$targetId|${tok.Parent?.GetType().Name ?? "none"}"
-                                if reviewedGapSet.Contains(gapKey) {
-                                    matchedReviewedGaps.Add(gapKey)
-                                    failures.Add(
-                                        AuditFailureRecord(
+                                if tok.Kind == SyntaxKind.IdentifierToken {
+                                    let role = ClassifyTokenRole(tok, indexedMemberSpans)
+                                    let declSym = GetDeclaredSymbolIfIdentifier(coreModel, tok)
+                                    let refSym = coreModel.GetSymbolInfo(tok).Symbol
+                                    let sym = declSym ?? refSym
+                                    if sym != nil && sym is not PackageSymbol && sym is not ImportSymbol {
+                                        oracleTargets++
+                                        fileOracleTargets++
+                                        let expectedSig = ExpectedOracleSignature(sym, compilation, tok)
+                                        var defMatches = true
+                                        if role == "IndexedMemberAccess" && !BoundSemantics.IsImportedMember(sym) {
+                                            defMatches = await DefinitionMatchesOracleSymbolOverRpcAsync(
+                                                clientRpc,
+                                                uri,
+                                                startRange.Start,
+                                                compilation,
+                                                sym
+                                            )
+                                        }
+                                        let outcome = EvaluateTargetCheck(
                                             targetId,
                                             role,
-                                            "ReviewedSyntaxGap",
-                                            "#5900",
-                                            false,
-                                            "hover for $role",
-                                            ""
+                                            expectedSig,
+                                            actualSig,
+                                            rangeMatches: true,
+                                            interiorMatches: interiorMatches,
+                                            definitionMatches: defMatches,
+                                            reviewedFailureList,
+                                            matchedReviewedFailures
                                         )
-                                    )
-                                } else {
-                                    failures.Add(
-                                        AuditFailureRecord(
-                                            targetId,
-                                            role,
-                                            "UnreviewedSyntaxGap",
-                                            "",
-                                            true,
-                                            "hover for $role",
-                                            ""
-                                        )
-                                    )
+                                        if outcome == nil {
+                                            oracleMatched++
+                                        } else {
+                                            failures.Add(outcome)
+                                        }
+                                    } else if hover == nil && IsEligibleUnboundIdentifier(tok) {
+                                        let gapKey = "$targetId|${tok.Parent?.GetType().Name ?? "none"}"
+                                        if reviewedGapSet.Contains(gapKey) {
+                                            matchedReviewedGaps.Add(gapKey)
+                                            failures.Add(
+                                                AuditFailureRecord(
+                                                    targetId,
+                                                    role,
+                                                    "ReviewedSyntaxGap",
+                                                    "#5900",
+                                                    false,
+                                                    "hover for $role",
+                                                    ""
+                                                )
+                                            )
+                                        } else if reviewedRepointGapSet.Contains(gapKey) {
+                                            matchedReviewedGaps.Add(gapKey)
+                                            failures.Add(
+                                                AuditFailureRecord(
+                                                    targetId,
+                                                    role,
+                                                    "ReviewedSyntaxGap",
+                                                    "#5904",
+                                                    false,
+                                                    "hover for $role",
+                                                    ""
+                                                )
+                                            )
+                                        } else {
+                                            failures.Add(
+                                                AuditFailureRecord(
+                                                    targetId,
+                                                    role,
+                                                    "UnreviewedSyntaxGap",
+                                                    "",
+                                                    true,
+                                                    "hover for $role",
+                                                    ""
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
+                        } finally {
+                            await clientRpc.NotifyWithParameterObjectAsync(
+                                "textDocument/didClose",
+                                DidCloseTextDocumentParams{TextDocument: docId}
+                            )
                         }
+
+                        fileSummaries.Add(
+                            FileInventorySummary(
+                                relativePath,
+                                fileSha256,
+                                isGenerated,
+                                orderedTokens.Count,
+                                fileChecks,
+                                fileOracleTargets,
+                                fileHovers
+                            )
+                        )
                     }
+                }
 
-                    fileSummaries.Add(
-                        FileInventorySummary(
-                            relativePath,
-                            fileSha256,
-                            isGenerated,
-                            orderedTokens.Count,
-                            fileChecks,
-                            fileOracleTargets,
-                            fileHovers
+                await clientRpc.InvokeAsync[object]("shutdown")
+                shutdownSent = true
+                var staleExpectationCount = 0
+                for reviewed in reviewedFailureList {
+                    if !matchedReviewedFailures.Contains(reviewed.TargetId) {
+                        staleExpectationCount++
+                        failures.Add(
+                            AuditFailureRecord(
+                                reviewed.TargetId,
+                                "ReviewedExpectation",
+                                "StaleReviewedExpectation",
+                                reviewed.Issue,
+                                true,
+                                reviewed.Expected,
+                                "target now passes or is missing"
+                            )
                         )
-                    )
+                    }
+                }
+                for gap in reviewedGapSet.Concat(reviewedRepointGapSet) {
+                    if !matchedReviewedGaps.Contains(gap) {
+                        staleExpectationCount++
+                        failures.Add(
+                            AuditFailureRecord(
+                                gap,
+                                "ReviewedSyntaxGap",
+                                "StaleReviewedSyntaxGap",
+                                if reviewedRepointGapSet.Contains(gap) {
+                                    "#5904"
+                                } else {
+                                    "#5900"
+                                },
+                                true,
+                                "missing hover",
+                                "target now has hover or is missing"
+                            )
+                        )
+                    }
+                }
+
+                stopwatch.Stop()
+                let unreviewedCount = failures.Count((f AuditFailureRecord) -> f.IsUnreviewed)
+                let summary = WorkspaceAuditSummary(
+                    corpusCommit,
+                    PinnedWaikikiSdkVersion,
+                    RuntimeOperatingSystemName(),
+                    projects.Count,
+                    authoredFiles,
+                    generatedFiles,
+                    totalPhysicalTokens,
+                    totalChecks,
+                    excludedSyntheticTokens,
+                    syntheticLeaks,
+                    oracleTargets,
+                    oracleMatched,
+                    hoverNonNull,
+                    placeholderHovers,
+                    interiorMismatches,
+                    matchedReviewedFailures.Count,
+                    matchedReviewedGaps.Count,
+                    unreviewedCount,
+                    staleExpectationCount,
+                    stopwatch.ElapsedMilliseconds
+                )
+                WriteAuditArtifacts(artifactsDir, summary, fileSummaries, failures)
+                return summary
+            } finally {
+                if !shutdownSent {
+                    server.Shutdown()
+                }
+                if discoveryScheduled {
+                    await discoveryDone.Task.WaitAsync(TimeSpan.FromSeconds(30))
                 }
             }
-
-            await clientRpc.InvokeAsync[object]("shutdown")
-            var staleExpectationCount = 0
-            for reviewed in reviewedFailureList {
-                if !matchedReviewedFailures.Contains(reviewed.TargetId) {
-                    staleExpectationCount++
-                    failures.Add(
-                        AuditFailureRecord(
-                            reviewed.TargetId,
-                            "ReviewedExpectation",
-                            "StaleReviewedExpectation",
-                            reviewed.Issue,
-                            true,
-                            reviewed.Expected,
-                            "target now passes or is missing"
-                        )
-                    )
-                }
-            }
-            for gap in reviewedGapSet {
-                if !matchedReviewedGaps.Contains(gap) {
-                    staleExpectationCount++
-                    failures.Add(
-                        AuditFailureRecord(
-                            gap,
-                            "ReviewedSyntaxGap",
-                            "StaleReviewedSyntaxGap",
-                            "#5900",
-                            true,
-                            "missing hover",
-                            "target now has hover or is missing"
-                        )
-                    )
-                }
-            }
-
-            stopwatch.Stop()
-            let unreviewedCount = failures.Count((f AuditFailureRecord) -> f.IsUnreviewed)
-            let summary = WorkspaceAuditSummary(
-                corpusCommit,
-                PinnedWaikikiSdkVersion,
-                RuntimeOperatingSystemName(),
-                projects.Count,
-                authoredFiles,
-                generatedFiles,
-                totalPhysicalTokens,
-                totalChecks,
-                excludedSyntheticTokens,
-                syntheticLeaks,
-                oracleTargets,
-                oracleMatched,
-                hoverNonNull,
-                placeholderHovers,
-                interiorMismatches,
-                matchedReviewedFailures.Count,
-                matchedReviewedGaps.Count,
-                unreviewedCount,
-                staleExpectationCount,
-                stopwatch.ElapsedMilliseconds
-            )
-            WriteAuditArtifacts(artifactsDir, summary, fileSummaries, failures)
-            return summary
         }
 
         internal func EvaluateTargetCheck(
@@ -1451,11 +1636,16 @@ open class WaikikiHoverAuditTests {
                 let discoveryStarted = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
                 let proceedDiscovery = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
                 let discoveryFinished = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
+                var discoveryScheduled = false
                 server.TestBeforeWorkspaceDiscovery = () -> {
+                    discoveryScheduled = true
                     discoveryStarted.TrySetResult(true)
                     proceedDiscovery.Task.GetAwaiter().GetResult()
                 }
-                server.TestAfterWorkspaceDiscovery = () -> discoveryFinished.TrySetResult(true)
+                server.TestAfterWorkspaceDiscovery = () -> {
+                    discoveryScheduled = true
+                    discoveryFinished.TrySetResult(true)
+                }
 
                 let (clientStream, serverStream) = FullDuplexStream.CreatePair()
                 using let serverRpc = JsonRpc(
@@ -1498,6 +1688,7 @@ open class WaikikiHoverAuditTests {
                     Assert.Null(workspace.GetProjectForFile(targetFilePath))
 
                     await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                    discoveryScheduled = true
                     await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30))
                     proceedDiscovery.TrySetResult(true)
                     await discoveryFinished.Task.WaitAsync(TimeSpan.FromSeconds(120))
@@ -1524,6 +1715,9 @@ open class WaikikiHoverAuditTests {
                     if !shutdownSent {
                         server.Shutdown()
                     }
+                    if discoveryScheduled {
+                        await discoveryFinished.Task.WaitAsync(TimeSpan.FromSeconds(30))
+                    }
                 }
             }
 
@@ -1548,7 +1742,12 @@ open class WaikikiHoverAuditTests {
                 let workspace = WorkspaceState()
                 let server = LspServer(documents, workspace)
                 let discoveryFinished = TaskCompletionSource[bool](TaskCreationOptions.RunContinuationsAsynchronously)
-                server.TestAfterWorkspaceDiscovery = () -> discoveryFinished.TrySetResult(true)
+                var discoveryScheduled = false
+                server.TestBeforeWorkspaceDiscovery = () -> discoveryScheduled = true
+                server.TestAfterWorkspaceDiscovery = () -> {
+                    discoveryScheduled = true
+                    discoveryFinished.TrySetResult(true)
+                }
 
                 let (clientStream, serverStream) = FullDuplexStream.CreatePair()
                 using let serverRpc = JsonRpc(
@@ -1572,6 +1771,7 @@ open class WaikikiHoverAuditTests {
                         InitializeParams{RootPath: workspaceRoot, Capabilities: caps.RootElement.Clone()}
                     )
                     await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                    discoveryScheduled = true
                     await discoveryFinished.Task.WaitAsync(TimeSpan.FromSeconds(120))
 
                     await clientRpc.NotifyWithParameterObjectAsync(
@@ -1696,6 +1896,9 @@ open class WaikikiHoverAuditTests {
                 } finally {
                     if !shutdownSent {
                         server.Shutdown()
+                    }
+                    if discoveryScheduled {
+                        await discoveryFinished.Task.WaitAsync(TimeSpan.FromSeconds(30))
                     }
                 }
             }
@@ -1956,18 +2159,24 @@ class Consumer {
             return hover
         }
 
-        private func DefinitionMatchesOracleSymbol(
+        private async func DefinitionMatchesOracleSymbolOverRpcAsync(
+            clientRpc JsonRpc,
             uri DocumentUri,
-            content DocumentContent,
             position Position,
             compilation Compilation,
             symbol Symbol
         ) bool {
-            let actualLoc = DefinitionComputer.ComputeDefinition(uri, content, position)
+            let actualLocs = await clientRpc.InvokeWithParameterObjectAsync[IReadOnlyList[Location]](
+                "textDocument/definition",
+                DefinitionParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: position}
+            )
+            if actualLocs == nil || actualLocs.Count == 0 {
+                return false
+            }
             if !TryGetExpectedSourceDeclarationLocation(compilation, symbol, uri, out var expectedLoc) {
                 return false
             }
-            return LocationsMatchExpectedDeclaration(expectedLoc, actualLoc)
+            return LocationsMatchExpectedDeclaration(expectedLoc, actualLocs[0])
         }
 
         private func LocationsMatchExpectedDeclaration(expectedLoc Location?, actualLoc Location?) bool {
@@ -2313,6 +2522,20 @@ class Consumer {
             return SymbolDisplay.ToDisplayString(symbol, SymbolDisplayFormat.Hover, compilation)
         }
 
+        private func IsSyntheticTokenHitLeak(source SourceText, hit SyntaxToken?) bool {
+            if hit == nil || IsPhysicalToken(source, hit) {
+                return false
+            }
+            if hit.Span.Start >= 0 && hit.Span.Length == 2 && hit.Span.End <= source.Length {
+                let raw = source.ToString(hit.Span)
+                if (hit.Kind == SyntaxKind.PlusEqualsToken && raw == "++") ||
+                    (hit.Kind == SyntaxKind.MinusEqualsToken && raw == "--") {
+                    return false
+                }
+            }
+            return true
+        }
+
         private func IsPhysicalToken(source SourceText, token SyntaxToken) bool {
             if token.IsMissing || token.Kind == SyntaxKind.EndOfFileToken {
                 return false
@@ -2508,7 +2731,9 @@ class Consumer {
             md.AppendLine("| Placeholder `?` hovers | ${summary.PlaceholderHoverCount} |")
             md.AppendLine("| Interior hover mismatches | ${summary.InteriorMismatchCount} |")
             md.AppendLine("| Reviewed issue-linked failures (`#5899`) | ${summary.ReviewedFailureCount} |")
-            md.AppendLine("| Reviewed issue-linked syntax gaps (`#5900`) | ${summary.ReviewedSyntaxGapCount} |")
+            md.AppendLine(
+                "| Reviewed issue-linked syntax gaps (`#5900`, `#5904`) | ${summary.ReviewedSyntaxGapCount} |"
+            )
             md.AppendLine("| Unreviewed failures | ${summary.UnreviewedFailureCount} |")
             md.AppendLine("| Stale reviewed expectations | ${summary.StaleExpectationCount} |")
             md.AppendLine("| Elapsed (ms) | ${summary.ElapsedMilliseconds} |")

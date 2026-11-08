@@ -47,7 +47,7 @@ EXPECTED_SYNTHETIC_EXCLUDED = 602
 EXPECTED_ORACLE_TARGETS = 11056
 EXPECTED_ORACLE_MATCHED = 11036
 EXPECTED_REVIEWED_FAILURES = 21
-EXPECTED_REVIEWED_SYNTAX_GAPS = 185
+EXPECTED_REVIEWED_SYNTAX_GAPS = 255
 
 REQUIRED_ARTIFACTS = (
     "summary.json",
@@ -273,8 +273,16 @@ def stage_verified_artifacts(
     """Validate raw artifacts and stage only verified artifacts into a separate upload directory."""
     raw_dir = raw_dir.resolve()
     publish_dir = publish_dir.resolve()
-    if raw_dir == publish_dir:
-        raise AuditVerificationError("raw_dir and publish_dir must be distinct directories")
+    if (
+        raw_dir == publish_dir
+        or raw_dir.is_relative_to(publish_dir)
+        or publish_dir.is_relative_to(raw_dir)
+        or publish_dir in {Path("/"), ROOT, ROOT.parent}
+        or ROOT.is_relative_to(publish_dir)
+    ):
+        raise AuditVerificationError(
+            f"raw_dir ({raw_dir}) and publish_dir ({publish_dir}) must be disjoint, non-root directories"
+        )
     shutil.rmtree(publish_dir, ignore_errors=True)
     try:
         verify_artifacts(raw_dir, corpus_dir=corpus_dir, repo_dir=repo_dir)

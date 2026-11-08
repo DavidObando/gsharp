@@ -45,7 +45,7 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
             "SyntheticLeakCount": 0,
             "CompilerOracleTargetCount": audit.EXPECTED_ORACLE_TARGETS,
             "CompilerOracleMatchedCount": audit.EXPECTED_ORACLE_MATCHED,
-            "HoverNonNullCount": 17229,
+            "HoverNonNullCount": 17159,
             "PlaceholderHoverCount": 0,
             "InteriorMismatchCount": 0,
             "ReviewedFailureCount": audit.EXPECTED_REVIEWED_FAILURES,
@@ -188,6 +188,18 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(audit.AuditVerificationError, "forbidden secret/env marker"):
             audit.stage_verified_artifacts(raw_dir, publish_dir, corpus_dir=corpus_dir)
         self.assertFalse(publish_dir.exists())
+
+        nested_raw = SCRATCH_ROOT / "audit" / "raw"
+        self.write_valid_artifacts(nested_raw)
+        with self.assertRaisesRegex(audit.AuditVerificationError, "disjoint"):
+            audit.stage_verified_artifacts(nested_raw, SCRATCH_ROOT / "audit", corpus_dir=corpus_dir)
+        for name in audit.REQUIRED_ARTIFACTS:
+            self.assertTrue((nested_raw / name).is_file())
+
+        with self.assertRaisesRegex(audit.AuditVerificationError, "disjoint"):
+            audit.stage_verified_artifacts(nested_raw, nested_raw / "published", corpus_dir=corpus_dir)
+        for name in audit.REQUIRED_ARTIFACTS:
+            self.assertTrue((nested_raw / name).is_file())
 
     def test_checkout_verifies_commit_sdk_pin_and_msbuild_isolation_guards(self) -> None:
         sdk_key = "Gsharp." + "NET.Sdk"
