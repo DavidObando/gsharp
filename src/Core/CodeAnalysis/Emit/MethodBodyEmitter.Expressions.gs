@@ -1958,12 +1958,12 @@ internal partial class MethodBodyEmitter {
             this.EmitSymbolicTupleElementAccess(
                 access.TupleType,
                 access.Index,
-                () -> this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly),
+                () -> this.EmitTupleReceiver(access.Receiver, addressOnly),
                 addressOnly: addressOnly
             )
             return
         }
-        this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly)
+        this.EmitTupleReceiver(access.Receiver, addressOnly)
         var remainingIndex = access.Index
         while remainingIndex >= 7 {
             this.il.OpCode(ILOpCode.Ldflda)
@@ -1986,6 +1986,15 @@ internal partial class MethodBodyEmitter {
         let field = clrType!!.GetField(fieldName) ??
             throw InvalidOperationException("ValueTuple type '${clrType!!.FullName}' has no public field '$fieldName'.")
         this.il.Token(this.outer.memberRefs.GetFieldReference(field))
+    }
+
+    private func EmitTupleReceiver(receiver BoundExpression, addressOnly bool) {
+        if addressOnly {
+            // An explicit reference must retain the receiver's storage, never a defensive copy.
+            this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
+        } else {
+            this.EmitInstanceReceiver(receiver)
+        }
     }
 
     private func EmitSymbolicTupleElementAccess(

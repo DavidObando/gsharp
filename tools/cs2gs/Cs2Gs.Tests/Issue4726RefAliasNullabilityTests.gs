@@ -16,6 +16,53 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleElementAlias_PreservesTheStorageAndNullWrites(clear bool) {
+        let assigned = if clear {
+            "null"
+        } else {
+            "\"keep\""
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) Read() {
+        (string Text, int Code) row = ("x", 1);
+        ref string alias = ref row.Text;
+        alias = ` + assigned + `;
+        return row;
+    }
+    public static string Run() {
+        var row = Read();
+        return ` + (
+            if clear {
+                "(row.Text ?? \"null\")"
+            } else {
+                "row.Text"
+            }
+        ) + ` + ":" + row.Code;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(
+            if clear {
+                "ref alias string? = row.Text"
+            } else {
+                "ref alias string = row.Text"
+            },
+            printed
+        )
+        AssertParity(
+            source,
+            printed,
+            if clear {
+                "null:1"
+            } else {
+                "keep:1"
+            }
+        )
+    }
+
     @Fact
     func GuardedIteratorAlias_PreservesNullableStorageAndCSharpOutput() {
         const source = `using System.Collections.Generic;

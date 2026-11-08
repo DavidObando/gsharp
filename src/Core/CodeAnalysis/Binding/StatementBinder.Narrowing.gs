@@ -10893,7 +10893,7 @@ internal partial class StatementBinder {
             }
         }
 
-        /// ADR-0208 R12 (#5171): the plain variable that the `ref` local
+        /// ADR-0208 R12 (#5171, #5858): the variable whose storage the `ref` local
         /// [`root`](paramref) names in its initializer, or `null` when
         /// [`root`](paramref) is not such a local.
         internal func TryGetAliasedRoot(root VariableSymbol) VariableSymbol? {
@@ -10909,6 +10909,10 @@ internal partial class StatementBinder {
                     .Op
                     .Kind == BoundUnaryOperatorKind.NullAssertion {
                     origin = unary.Operand
+                } else if origin is BoundTupleElementAccessExpression tuple {
+                    origin = tuple.Receiver
+                } else if origin is BoundBlockExpression block {
+                    origin = block.Expression
                 } else {
                     break
                 }
@@ -10921,7 +10925,7 @@ internal partial class StatementBinder {
             parameter.Type is StructSymbol{IsClass: false}
 
         /// ADR-0208 R12 (#5171): [`root`](paramref) followed by the variables
-        /// it aliases through plain `ref` local initializers.
+        /// it aliases through variable and tuple-element `ref` local initializers.
         internal func AliasChain(root VariableSymbol) List[VariableSymbol] {
             let chain = List[VariableSymbol]()
             chain.Add(root)
@@ -10936,7 +10940,7 @@ internal partial class StatementBinder {
         /// ADR-0208 R12 (#5171): whether [`root`](paramref) may name storage
         /// that no other root names: a by-reference parameter, whose caller may
         /// pass an element or a member, or a `ref` local whose initializer is
-        /// not a plain variable. A member, index or indirect write and any call
+        /// not rooted in variable or tuple-element storage. A member, index or indirect write and any call
         /// can change that storage.
         internal func IsExternalStorageAlias(root VariableSymbol) bool {
             if root is ParameterSymbol parameter {

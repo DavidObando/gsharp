@@ -4529,26 +4529,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
             for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
-                var target ISymbol? = if reference.Parent is EqualsValueClauseSyntax{
-                    Parent: VariableDeclaratorSyntax declaration
-                } {
-                    model.GetDeclaredSymbol(declaration)
-                } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
-                    model.GetEnclosingSymbol(reference.SpanStart)
-                } else {
-                    default(ISymbol?)
-                }
-                if target is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
-                    target = property
-                }
-                if !IsRefStorageSymbol(target) {
+                let target = RefStorageTarget(reference, model)
+                if target == nil {
                     continue
                 }
                 let (source, depth) = RefArrayStorage(reference.Expression, model)
                 if depth > 0 && source != nil {
-                    RefArraySourceSlotFor(slots, source, depth).Root().Sources.Add(Canonical(target)!!)
+                    RefArraySourceSlotFor(slots, source, depth).Root().Sources.Add(target)
                 }
-                ConnectRefArraySources(slots, target!!, reference.Expression, model)
+                ConnectRefArraySources(slots, target, reference.Expression, model)
             }
             for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
                 if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
@@ -5233,6 +5222,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) {
         for node in root.DescendantNodes() {
             switch node {
+                case reference is RefExpressionSyntax when RefStorageTarget(reference, model) is {} target &&
+                    TryResolveTupleElementSource(reference.Expression, model, out var source) {
+                    tupleScalarEdges.Add((source, target))
+                }
                 case method is MethodDeclarationSyntax {
                     CollectTupleReturnFlows(
                         model.GetDeclaredSymbol(method),
@@ -7526,6 +7519,26 @@ internal shared class ObliviousNullabilityAnalyzer {
         IMethodSymbol{ReturnsByRefReadonly: true} ||
         symbol is IPropertySymbol{ReturnsByRef: true} or
         IPropertySymbol{ReturnsByRefReadonly: true}
+
+    private func RefStorageTarget(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
+        var target ISymbol? = if reference.Parent is EqualsValueClauseSyntax{
+            Parent: VariableDeclaratorSyntax declaration
+        } {
+            model.GetDeclaredSymbol(declaration)
+        } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+            model.GetEnclosingSymbol(reference.SpanStart)
+        } else {
+            default(ISymbol?)
+        }
+        if target is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+            target = property
+        }
+        return if IsRefStorageSymbol(target) {
+            Canonical(target)
+        } else {
+            default(ISymbol?)
+        }
+    }
 
     // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their
