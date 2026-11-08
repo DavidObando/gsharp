@@ -22,6 +22,7 @@ internal class ManagedReferenceArrayNullableState {
         ManagedReferenceArrayProjectedMethodByCall = Dictionary[ExpressionSyntax, IMethodSymbol?](
             ReferenceEqualityComparer.Instance
         )
+        MethodProjectionEligibility = Dictionary[IMethodSymbol, bool](SymbolEqualityComparer.Default)
         ManagedReferenceArrayProjectedLocalType = Dictionary[ILocalSymbol, ITypeSymbol?](SymbolEqualityComparer.Default)
         ProjectedBaseTypesInProgress = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
     }
@@ -44,6 +45,11 @@ internal class ManagedReferenceArrayNullableState {
         get;
     }
 
+    // Per-method cached eligibility for managed-reference array projection (#4572).
+    prop MethodProjectionEligibility Dictionary[IMethodSymbol, bool] {
+        get;
+    }
+
     // Effective emitted type of a local whose initializer, assignments, or
     // active foreach binding agree on managed-reference projection.
     prop ManagedReferenceArrayProjectedLocalType Dictionary[ILocalSymbol, ITypeSymbol?] {
@@ -56,6 +62,11 @@ internal class ManagedReferenceArrayNullableState {
     }
 
     prop ProjectedBaseIndex ProjectedBaseCompilationIndex? {
+        get;
+        set;
+    }
+
+    prop ProjectedMethodQueryCount int32 {
         get;
         set;
     }

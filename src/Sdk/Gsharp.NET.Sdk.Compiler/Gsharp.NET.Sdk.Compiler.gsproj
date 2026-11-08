@@ -7,6 +7,9 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <GsharpNoExtensions>true</GsharpNoExtensions>
+    <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
+    <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
     <NoWarn>$(NoWarn);NU5128;NU5100;NU5131;NU5017</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <IncludeSymbols>false</IncludeSymbols>

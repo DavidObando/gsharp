@@ -1656,20 +1656,8 @@ partial class CSharpToGSharpTranslator {
         // collide with a source identifier in the body or with a local other
         // passes synthesized (guard captures, spills); it must also not shadow
         // any symbol visible at the yield.
-        private func FreshYieldedValueName(node Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax) string {
-            let stem = "item"
-            var candidate = stem
-            for var suffix = 2;
-                !this
-                .context
-                .SemanticModel
-                .LookupSymbols(node.SpanStart, name: candidate)
-                .IsEmpty ||
-                !this.TryClaimSynthesizedLocalName(candidate, node); suffix++ {
-                candidate = "${stem}_$suffix"
-            }
-            return candidate
-        }
+        private func FreshYieldedValueName(node Microsoft.CodeAnalysis.CSharp.Syntax.YieldStatementSyntax) string ->
+        this.AllocateScopedSynthesizedLocalName("item", node)
 
         private func TranslateForEachVariable(node ForEachVariableStatementSyntax) GStatement {
             // `foreach (var (a, b) in xs)` is a C# TUPLE DECONSTRUCTION over a
@@ -3329,21 +3317,20 @@ partial class CSharpToGSharpTranslator {
                 .AncestorsAndSelf()
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax]()
                 .Last()
-            var candidate string
-            do {
-                candidate = "__pattern${this.state.SwitchPatternCounter}"
-                this.state.SwitchPatternCounter++
-            } while usedDesignators!!.Contains(candidate) ||
-                rootPattern
-                .DescendantNodesAndSelf()
-                .OfType[SingleVariableDesignationSyntax]()
-                .Any(
-                (designation SingleVariableDesignationSyntax) -> this.EmittedName(
-                    designation,
-                    designation.Identifier
-                ) == candidate
-            ) ||
-                !this.TryClaimSynthesizedLocalName(candidate, pattern)
+            let candidate = this.AllocateScopedSynthesizedLocalName(
+                "pattern",
+                pattern!!,
+                (name string) -> usedDesignators!!.Contains(name) ||
+                    rootPattern
+                    .DescendantNodesAndSelf()
+                    .OfType[SingleVariableDesignationSyntax]()
+                    .Any(
+                    (designation SingleVariableDesignationSyntax) -> this.EmittedName(
+                        designation,
+                        designation.Identifier
+                    ) == name
+                )
+            )
             usedDesignators!!.Add(candidate)
             return candidate
         }

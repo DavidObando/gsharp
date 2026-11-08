@@ -966,11 +966,12 @@ public class Probe {
 namespace ManagedArrayProjectionEligibility;
 public class Probe {
     private static int Twice(int value) => value * 2;
+    private static T Identity<T>(T value) => value;
     private static T First<T>(T[] source) => source[0];
 
     public static int Run() {
         var source = new ManagedRef<int>[1];
-        return Twice(21) + (First(source) is null ? 0 : -42);
+        return Twice(21) + Identity(0) + (First(source) is null ? 0 : -42);
     }
 }`
         let references = List[MetadataReference](
@@ -996,10 +997,17 @@ public class Probe {
             .Where((method IMethodSymbol) -> method != nil)
             .ToArray()
         let ordinaryMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "Twice")
+        let genericOrdinaryMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "Identity")
         let managedArrayMethod = Assert.Single(invokedMethods, (method IMethodSymbol) -> method.Name == "First")
         Assert.False(
             CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
                 ordinaryMethod,
+                project.Compilation
+            )
+        )
+        Assert.False(
+            CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                genericOrdinaryMethod,
                 project.Compilation
             )
         )
@@ -1010,8 +1018,10 @@ public class Probe {
             )
         )
         let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let text = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        let translator = CSharpToGSharpTranslator()
+        let text = GSharpPrinter.Print(translator.TranslateDocument(document, context))
         Assert.Empty(context.Diagnostics)
+        Assert.Equal(1, translator.LastManagedReferenceArrayProjectedMethodCacheCount)
         Assert.DoesNotContain("First(source)!!", text, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
@@ -1020,6 +1030,32 @@ public class Probe {
         Assert.Empty(result.Diagnostics)
         Assert.Null(result.UnhandledException)
         Assert.Equal(42, result.Value)
+
+        const ineligibleOnlySource = `namespace ManagedArrayProjectionIneligibleOnly;
+public class Probe {
+    private static int Twice(int value) => value * 2;
+    private static T Identity<T>(T value) => value;
+
+    public static int Run() => Twice(21) + Identity(21);
+}`
+        let ineligibleProject = CSharpProjectLoader.LoadInMemory(
+            [](string, source string){("ManagedArrayProjectionIneligibleOnly.cs", ineligibleOnlySource)},
+            references
+        )
+        Assert.True(
+            ineligibleProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, ineligibleProject.ErrorDiagnostics)
+        )
+        let ineligibleDoc = Assert.Single(ineligibleProject.Documents)
+        let ineligibleContext = TranslationContext(
+            ineligibleProject.Compilation,
+            ineligibleDoc.SemanticModel,
+            ineligibleDoc.FilePath
+        )
+        let ineligibleTranslator = CSharpToGSharpTranslator()
+        let _ = GSharpPrinter.Print(ineligibleTranslator.TranslateDocument(ineligibleDoc, ineligibleContext))
+        Assert.Equal(0, ineligibleTranslator.LastManagedReferenceArrayProjectedMethodCacheCount)
+        Assert.Equal(0, ineligibleTranslator.LastManagedReferenceArrayProjectedMethodQueryCount)
     }
 
     @Fact

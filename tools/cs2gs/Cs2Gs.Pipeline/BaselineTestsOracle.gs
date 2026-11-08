@@ -127,9 +127,11 @@ class TestCaseOutcome {
     /// Initializes a new instance of the (cref:TestCaseOutcome) class.
     /// @param name The fully qualified test name.
     /// @param outcome The VSTest outcome string.
-    init(name string?, outcome string?) {
+    /// @param targetFramework The optional target framework identifier.
+    init(name string?, outcome string?, targetFramework string? = nil) {
         this.Name = name
         this.Outcome = outcome
+        this.TargetFramework = targetFramework
     }
 
     /// Gets or sets the fully qualified test name.
@@ -141,4 +143,10 @@ class TestCaseOutcome {
     @JsonPropertyName("outcome")
     @JsonPropertyOrder(int32(1))
     prop Outcome string?
+
+    /// Gets or sets the optional target framework identifier.
+    @JsonPropertyName("targetFramework")
+    @JsonPropertyOrder(int32(2))
+    @JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)
+    prop TargetFramework string?
 }

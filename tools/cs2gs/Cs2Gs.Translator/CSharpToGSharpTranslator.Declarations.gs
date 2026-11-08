@@ -34,6 +34,11 @@ partial class CSharpToGSharpTranslator {
             return drained
         }
 
+        func GetManagedReferenceArrayProjectionMetrics()(CacheCount int32, QueryCount int32) -> (
+            this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall.Count,
+            this.state.ManagedReferenceArrayNullable.ProjectedMethodQueryCount
+        )
+
         override func VisitEnumDeclaration(node Microsoft.CodeAnalysis.CSharp.Syntax.EnumDeclarationSyntax) GMember {
             let symbol ISymbol? = this.context.GetDeclaredSymbol(node)
             let cases = List[EnumCase]()

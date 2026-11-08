@@ -33,25 +33,17 @@ open class Issue4681ChannelsNullPassThroughTests {
     @Fact
     async func ChannelsRuntimeSelfMigration_NeverAssertsAnElementValue() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
-            Path.Combine(repoRoot, "src", "Sdk", "Gsharp.Runtime.Channels", "Gsharp.Runtime.Channels.csproj")
-        )
-        Assert.True(
-            project.BoundWithoutErrors,
-            "Gsharp.Runtime.Channels should bind with no C# errors: " + string.Join(
-                Environment.NewLine,
-                project.ErrorDiagnostics
-            )
+        let migrated = await SelfMigratedCompilerSource.LoadAsync(
+            repoRoot,
+            "src/Sdk/Gsharp.Runtime.Channels",
+            preservePartialParts: true
         )
         let offending = List[string]()
         var sawChanCore = false
-        for document in project.Documents {
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            var printed = GSharpPrinter.Print(
-                CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context)
-            )
-            let name = Path.GetFileName(document.FilePath)
-            sawChanCore |= name == "Chan{T}.cs"
+        for pair in migrated {
+            let name = pair.Key
+            var printed = pair.Value.Text
+            sawChanCore |= name == "Chan{T}"
             printed = BlockComment.Replace(printed, string.Empty)
             for raw in printed.Split('\n') {
                 let line = raw.Trim()
@@ -63,7 +55,7 @@ open class Issue4681ChannelsNullPassThroughTests {
                 }
             }
         }
-        Assert.True(sawChanCore, "The channels runtime should include Chan{T}.cs.")
+        Assert.True(sawChanCore, "The channels runtime should include Chan{T}.")
         Assert.True(
             offending.Count == 0,
             "A fail-fast `!!` on a channel element value throws on `nil` in the migrated runtime:" +
@@ -81,17 +73,13 @@ open class Issue4681ChannelsNullPassThroughTests {
     @Fact
     async func NilElementTests_MigrateWithoutTupleMemberReadsOrNilTupleLiterals() {
         let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-        let project = await SelfMigratedCompilerSource.LoadProjectAsync(
-            Path.Combine(repoRoot, "test", "Runtime.Channels.Tests", "Runtime.Channels.Tests.csproj")
+        let migrated = await SelfMigratedCompilerSource.LoadAsync(
+            repoRoot,
+            "test/Runtime.Channels.Tests",
+            preservePartialParts: true,
+            "Issue4681NilElementTests"
         )
-        let document = Enumerable.Single(
-            project.Documents,
-            (candidate LoadedDocument) -> Path.GetFileName(candidate.FilePath) == "Issue4681NilElementTests.cs"
-        )
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let printed = GSharpPrinter.Print(
-            CSharpToGSharpTranslator(preservePartialParts: true).TranslateDocument(document, context)
-        )
+        let printed = migrated["Issue4681NilElementTests"].Text
         Assert.Contains("BufferedNil_RoundTripsThroughEveryReceiveShape", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("(nil, true)", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("tuple.Value", printed, StringComparison.Ordinal)
