@@ -53,4 +53,5 @@ open class LocalVariableSymbol : VariableSymbol {
     internal prop ManagedReferenceStorage LocalVariableSymbol?
     internal prop ManagedReferenceStorageOrigin BoundExpression?
     internal prop HoldsScopedManagedReference bool
+    internal prop IsManagedPointerSlot bool
 }

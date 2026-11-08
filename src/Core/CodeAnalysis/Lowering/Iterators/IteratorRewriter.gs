@@ -92,7 +92,8 @@ shared class IteratorRewriter {
             // state-machine field. RefStructAsyncLivenessAnalyzer proves at
             // bind time that it is never live across a `yield`, so leaving
             // it un-hoisted (a plain MoveNext-body local) is safe.
-            let isNativeRefAlias = variable is LocalVariableSymbol local && local.RefKind != RefKind.None
+            let isNativeRefAlias = variable is LocalVariableSymbol local &&
+                (local.RefKind != RefKind.None || local.IsManagedPointerSlot)
             if !TypeSymbol.IsByRefLike(variable.Type) && !isNativeRefAlias && !Locals.Contains(variable) {
                 Locals.Add(variable)
             }

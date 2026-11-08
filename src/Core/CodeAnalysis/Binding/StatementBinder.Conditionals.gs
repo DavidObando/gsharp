@@ -2183,6 +2183,7 @@ internal partial class StatementBinder {
         captures ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
         let temp = DeclareMultiAssignmentTemp("component", value.Type)
+        temp.IsManagedPointerSlot = ExpressionBinder.ContainsFixedBufferPointer(value)
         captures.Add(BoundVariableDeclaration(targetSyntax, temp, value))
         return BoundVariableExpression(nil, temp)
     }

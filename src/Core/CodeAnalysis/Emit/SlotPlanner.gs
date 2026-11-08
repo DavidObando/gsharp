@@ -422,6 +422,11 @@ internal class SlotPlanner {
                 // local-sig path (EncodeLocalVariableType).
                 if node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None {
                     this.localTypes.Add(ByRefTypeSymbol.Get(lvs.Type))
+                } else if node.Variable is LocalVariableSymbol{
+                    IsManagedPointerSlot: true,
+                    Type: PointerTypeSymbol pointerType
+                } {
+                    this.localTypes.Add(ByRefTypeSymbol.Get(pointerType.PointeeType))
                 } else {
                     this.localTypes.Add(node.Variable.Type)
                 }

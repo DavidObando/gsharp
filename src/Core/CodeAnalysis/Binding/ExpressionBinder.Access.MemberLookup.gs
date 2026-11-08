@@ -2563,7 +2563,9 @@ internal partial class ExpressionBinder {
             )
         }
         let tempName = "<idxAsn${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>"
-        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type)
+        let tempVar = LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type){
+            IsManagedPointerSlot = ContainsFixedBufferPointer(boundReceiver)
+        }
         if !$scope.TryDeclareVariable(tempVar) {
             // Defensive: synthesized names cannot collide with user identifiers
             // (the `<...>` prefix is not a valid identifier token), so a failure
@@ -7188,6 +7190,18 @@ internal partial class ExpressionBinder {
             }
             bufferAccess = nil
             return false
+        }
+
+        internal func ContainsFixedBufferPointer(expression BoundExpression) bool -> switch expression {
+            case block is BoundBlockExpression: ContainsFixedBufferPointer(block.Expression)
+            case conditional is BoundConditionalExpression: ContainsFixedBufferPointer(conditional.WhenTrue) ||
+                ContainsFixedBufferPointer(conditional.WhenFalse)
+            case binary is BoundBinaryExpression: ContainsFixedBufferPointer(binary.Left) ||
+                ContainsFixedBufferPointer(binary.Right)
+            case conversion is BoundConversionExpression: TryGetFixedBufferFieldAccess(conversion, out _) ||
+                ContainsFixedBufferPointer(conversion.Expression)
+            case variable is BoundVariableExpression{Variable: LocalVariableSymbol{IsManagedPointerSlot: true}}: true
+            default: TryGetFixedBufferFieldAccess(expression, out _)
         }
     }
 }

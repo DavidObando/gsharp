@@ -28,6 +28,100 @@ import Xunit
 /// Also covers issue #4377: a bare (implicit-`this`) buffer name inside
 /// the declaring struct decays exactly like the explicit `this.Name`.
 open class Issue4378FixedBufferPinEmitTests {
+    @Fact
+    func MovableBufferAssignments_UseManagedByRefLocalsAcrossSynchronousGC() {
+        let source = BoneInfoPrelude + `unsafe class MovableClassBuffer {
+    fixed Data [8]int8
+
+    func WriteBare(indexFn () -> int32, valueFn () -> int8) {
+        Data[indexFn()] = valueFn()
+    }
+
+    func ReadBare(index int32) int32 -> int32(Data[index])
+}
+
+func CompactHeap(holes []object?) {
+    for var i = 1; i < holes.Length; i += 2 {
+        holes[i] = nil
+    }
+    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true)
+    GC.WaitForPendingFinalizers()
+    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true)
+}
+
+func CollectIndex(holes []object?, index int32) int32 {
+    CompactHeap(holes)
+    return index
+}
+
+func CollectByte(holes []object?, value int8) int8 {
+    CompactHeap(holes)
+    return value
+}
+
+unsafe func ExerciseAssignments(holes []object?, h Holder, c MovableClassBuffer) {
+    h.B.Name[CollectIndex(holes, 0)] = CollectByte(holes, int8(11))
+    h.B.Name[CollectIndex(holes, 1)] = int8(20)
+    h.B.Name[CollectIndex(holes, 1)] += CollectByte(holes, int8(2))
+    c.WriteBare(() -> CollectIndex(holes, 2), () -> CollectByte(holes, int8(33)))
+    var sink = int8(0)
+    h.B.Name[CollectIndex(holes, 3)], sink = CollectByte(holes, int8(44)), CollectByte(holes, int8(55))
+    Console.WriteLine(int32(h.B.Name[0]))
+    Console.WriteLine(int32(h.B.Name[1]))
+    Console.WriteLine(c.ReadBare(2))
+    Console.WriteLine(int32(h.B.Name[3]))
+    Console.WriteLine(int32(sink))
+}
+
+unsafe func run() {
+    var holes = [256]object?
+    for var i = 0; i < holes.Length; i++ {
+        holes[i] = [1024]byte
+    }
+    let holder = Holder()
+    let classBuf = MovableClassBuffer()
+    for var i = 0; i < holes.Length; i += 2 {
+        holes[i] = nil
+    }
+    ExerciseAssignments(holes, holder, classBuf)
+}
+run()`
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4378_assign_gc_").FullName
+        try {
+            let srcPath = Path.Combine(tempDir, "test.gs")
+            let outPath = Path.Combine(tempDir, "test.dll")
+            File.WriteAllText(srcPath, source)
+            Compile(srcPath, outPath, "exe")
+            using let pe = PEReader(File.OpenRead(outPath))
+            let md = pe.GetMetadataReader()
+            for methodName in[]string{"ExerciseAssignments", "WriteBare"} {
+                let method = md
+                    .MethodDefinitions
+                    .Select(md.GetMethodDefinition)
+                    .Single((m MethodDefinition) -> md.GetString(m.Name) == methodName)
+                let body = pe.GetMethodBody(method.RelativeVirtualAddress)
+                Assert.False(body.LocalSignature.IsNil, "expected a local signature for $methodName")
+                let localSig = md.GetBlobBytes(md.GetStandaloneSignature(body.LocalSignature).Signature)
+                Assert.True(
+                    ContainsSequence(localSig, []uint8{0x10, 0x04}),
+                    "expected managed 'int8&' local in $methodName; signature was ${BitConverter.ToString(localSig)}"
+                )
+                Assert.False(
+                    ContainsSequence(localSig, []uint8{0x0F, 0x04}),
+                    "unexpected unmanaged 'int8*' local in $methodName; signature was ${BitConverter.ToString(localSig)}"
+                )
+            }
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch {
+                // ignored
+
+            }
+        }
+        Assert.Equal(Lines("11", "22", "33", "44", "55"), CompileAndRun(source))
+    }
+
     @Theory
     @InlineData("return int32((h.B.Name)[await NextIndex()])")
     @InlineData("return int32(h.B.Name[await NextIndex()])")

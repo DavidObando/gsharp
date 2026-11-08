@@ -11115,8 +11115,16 @@ partial class Binder {
                         target[i].InterfaceConstraint = nullableUserInterface
                         target[i].HasNullableInterfaceConstraint = true
                     } else if constraint.IsInterface ||
-                        mapped.ClrType?.IsInterface == true ||
-                        (mapped is NullableTypeSymbol nullableClr && nullableClr.UnderlyingType.ClrType?.IsInterface == true) {
+                        mapped
+                        .ClrType
+                        ?.IsInterface == true ||
+                        (
+                        mapped is NullableTypeSymbol nullableClr &&
+                            nullableClr
+                            .UnderlyingType
+                            .ClrType
+                            ?.IsInterface == true
+                    ) {
                         target[i].ClrInterfaceConstraint = mapped
                     } else {
                         target[i].ClassConstraint = mapped
