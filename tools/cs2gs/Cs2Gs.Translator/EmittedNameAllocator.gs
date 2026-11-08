@@ -35,6 +35,7 @@ internal class EmittedNameAllocator {
     private let invocationSensitive HashSet[ISymbol] = HashSet[ISymbol](SymbolEqualityComparer.Default)
     private let deconstructionReservedNames Dictionary[IAssemblySymbol, IReadOnlyCollection[string]] =
     Dictionary[IAssemblySymbol, IReadOnlyCollection[string]](SymbolEqualityComparer.Default)
+    private var staticUsingMemberNames IReadOnlyCollection[string]? = nil
 
     func GetDeconstructionReservedNames(method IMethodSymbol) IReadOnlyCollection[string] {
         lock this.gate {
@@ -479,9 +480,12 @@ internal class EmittedNameAllocator {
 
     private func GetUnderscoreParameterScopeNames(parameter IParameterSymbol) IReadOnlyCollection[string] {
         let names = HashSet[string](StringComparer.Ordinal)
-        if parameter.ContainingType is {} containingType {
+        for var containingType INamedTypeSymbol? = parameter.ContainingType;
+            containingType != nil;
+            containingType = containingType!!.ContainingType {
             names.UnionWith(this.GetVisibleTypeMemberNames(containingType))
         }
+        names.UnionWith(this.GetStaticUsingMemberNames())
         for var current ISymbol? = parameter.ContainingSymbol;
             current != nil &&
             current is not INamespaceSymbol &&
@@ -535,6 +539,12 @@ internal class EmittedNameAllocator {
             for reference in references {
                 let root = reference.GetSyntax()
                 let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                for token in root.DescendantTokens() {
+                    if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) &&
+                        token.ValueText != "_" {
+                        names.Add(token.ValueText)
+                    }
+                }
                 for node in root.DescendantNodesAndSelf() {
                     let declared ISymbol? = model.GetDeclaredSymbol(node)
                     if declared == nil {
@@ -547,7 +557,8 @@ internal class EmittedNameAllocator {
                     if declared is ILocalSymbol ||
                         declared is IParameterSymbol ||
                         declared is IRangeVariableSymbol ||
-                        declared is ILabelSymbol {
+                        declared is ILabelSymbol ||
+                        (declared is IMethodSymbol{MethodKind: MethodKind.LocalFunction}) {
                         names.Add(declared.Name)
                         if this.emittedNames.TryGetValue(canonicalDeclared, out var emittedDeclared) {
                             names.Add(emittedDeclared)
@@ -557,6 +568,38 @@ internal class EmittedNameAllocator {
             }
         }
         return names.ToArray()
+    }
+
+    private func GetStaticUsingMemberNames() IReadOnlyCollection[string] {
+        if this.staticUsingMemberNames != nil {
+            return this.staticUsingMemberNames!!
+        }
+        let names = HashSet[string](StringComparer.Ordinal)
+        for tree in this.compilation.SyntaxTrees {
+            if tree.GetRoot() is not Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root {
+                continue
+            }
+            let model = this.compilation.GetSemanticModel(tree)
+            let usings = root.Usings.Concat(
+                root
+                    .DescendantNodes()
+                    .OfType[BaseNamespaceDeclarationSyntax]()
+                    .SelectMany((declaration BaseNamespaceDeclarationSyntax) -> declaration.Usings.AsEnumerable())
+            )
+            for directive in usings {
+                if directive.StaticKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) ||
+                    directive.Name == nil ||
+                    directive.Alias != nil {
+                    continue
+                }
+                if model.GetSymbolInfo(directive.Name!!).Symbol is INamedTypeSymbol staticType {
+                    names.UnionWith(this.GetVisibleTypeMemberNames(staticType.OriginalDefinition))
+                }
+            }
+        }
+        let result = names.ToArray()
+        this.staticUsingMemberNames = result
+        return result
     }
 
     private func GetContractGroup(symbol ISymbol?) IReadOnlyCollection[ISymbol] -> if this.contractGroups.TryGetValue(

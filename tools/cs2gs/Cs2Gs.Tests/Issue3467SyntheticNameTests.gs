@@ -554,7 +554,8 @@ public class C
         static int Other<T>(int n) => underscore(n);
     }
 }`)
-        Assert.Contains("func underscore_2(", printed, StringComparison.Ordinal)
+        Assert.Contains("func Run(underscore_2 (int32) -> int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("func underscore(", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
@@ -1101,6 +1102,52 @@ public class C
         Assert.DoesNotContain("return underscore + underscore", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "42")
+    }
+
+    @Fact
+    func UsingStaticMemberNamedUnderscore_DoesNotGetShadowedByReferencedUnderscoreParameter() {
+        let printed = Translate(`using System;
+using static H;
+
+public static class H
+{
+    public static int underscore = 10;
+}
+
+public class C
+{
+    public int M(int _) => _ + underscore;
+
+    public int Run() => M(2);
+}`)
+        Assert.Contains("func M(underscore_2 int32)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("func M(underscore int32)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "12")
+    }
+
+    @Fact
+    func LocalFunctionNamedUnderscore_NonLiftedAndCapturing_DisambiguatesReferencedUnderscoreParameter() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int NonCapturing(int _)
+    {
+        int underscore() => 10;
+        return _ + underscore();
+    }
+
+    public int Capturing(int _, int bias)
+    {
+        int underscore() => bias + 10;
+        return _ + underscore();
+    }
+
+    public int Run() => NonCapturing(2) * 100 + Capturing(3, 4);
+}`)
+        Assert.Contains("func NonCapturing(underscore_2 int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("func Capturing(underscore_2 int32, bias int32)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "1217")
     }
 
     shared {
