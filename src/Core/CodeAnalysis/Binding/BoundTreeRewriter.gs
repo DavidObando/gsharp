@@ -554,7 +554,7 @@ abstract class BoundTreeRewriter {
     /// @returns The rewritten literal expression.
     protected open func RewriteLiteralExpression(node BoundLiteralExpression) BoundExpression {
         return if ForceClone {
-            BoundLiteralExpression(node.Syntax, node.Value, node.Type)
+            BoundLiteralExpression(node.Syntax, node.Value, node.Type, node.ImportedConstantField)
         } else {
             node
         }
@@ -780,7 +780,9 @@ abstract class BoundTreeRewriter {
         if expression == node.Expression {
             return node
         }
-        let copy = BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked)
+        let copy = BoundConversionExpression(node.Syntax, node.Type, expression, node.IsChecked){
+            IsPatternInputConversion = node.IsPatternInputConversion
+        }
         node.CopyImplicitConversionTo(copy)
         return copy
     }

@@ -881,23 +881,26 @@ internal partial class MethodBodyEmitter {
     // ADR-0044 decimal literal lowering. IL has no `ldc.decimal`, so each
     // literal is materialised by calling the
     // `Decimal(int, int, int, bool, byte)` ctor with the bit pattern
-    // returned by `decimal.GetBits`. Common small values (0, 1, -1) and
-    // any value that fits in `int` use the cheaper one-int ctors.
+    // returned by `decimal.GetBits`. Cheaper constructors preserve scale-zero values, except negative zero.
     private func EmitDecimalLiteral(value decimal) {
-        if value == decimal.Zero {
+        let bits = decimal.GetBits(value)
+        let canUseWholeValue = (bits[3] & 0x00FF0000) == 0 && (value != 0m || bits[3] == 0)
+        if canUseWholeValue && value == decimal.Zero {
             this.EmitDecimalStaticField("Zero")
             return
         }
-        if value == decimal.One {
+        if canUseWholeValue && value == decimal.One {
             this.EmitDecimalStaticField("One")
             return
         }
-        if value == decimal.MinusOne {
+        if canUseWholeValue && value == decimal.MinusOne {
             this.EmitDecimalStaticField("MinusOne")
             return
         }
         // Try int ctor for small whole values.
-        if decimal.Truncate(value) == value && value >= decimal(int32.MinValue) && value <= decimal(int32.MaxValue) {
+        if canUseWholeValue && decimal.Truncate(value) == value &&
+            value >= decimal(int32.MinValue) &&
+            value <= decimal(int32.MaxValue) {
             let asInt = int32(value)
             this.il.LoadConstantI4(asInt)
             let ctor = BclMember.Ctor(typeof(decimal), typeof(int32))
@@ -906,7 +909,9 @@ internal partial class MethodBodyEmitter {
             return
         }
         // Try long ctor.
-        if decimal.Truncate(value) == value && value >= decimal(int64.MinValue) && value <= decimal(int64.MaxValue) {
+        if canUseWholeValue && decimal.Truncate(value) == value &&
+            value >= decimal(int64.MinValue) &&
+            value <= decimal(int64.MaxValue) {
             let asLong = int64(value)
             this.il.LoadConstantI8(asLong)
             let ctor = BclMember.Ctor(typeof(decimal), typeof(int64))
@@ -915,7 +920,6 @@ internal partial class MethodBodyEmitter {
             return
         }
         // General case: Decimal(int lo, int mid, int hi, bool isNegative, byte scale).
-        let bits = decimal.GetBits(value)
         let lo = bits[0]
         let mid = bits[1]
         let hi = bits[2]

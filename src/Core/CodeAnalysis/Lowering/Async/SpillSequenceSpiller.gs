@@ -1700,7 +1700,9 @@ shared class SpillSequenceSpiller {
                 return Trivial(conv)
             }
             let spilled = SpillExpression(conv.Expression)
-            let value = BoundConversionExpression(nil, conv.Type, spilled.Value, conv.IsChecked)
+            let value = BoundConversionExpression(nil, conv.Type, spilled.Value, conv.IsChecked){
+                IsPatternInputConversion = conv.IsPatternInputConversion
+            }
             conv.CopyImplicitConversionTo(value)
             return BoundSpillSequenceExpression(nil, spilled.Locals, spilled.SideEffects, value)
         }
@@ -2407,7 +2409,7 @@ shared class SpillSequenceSpiller {
                             conversion.Type,
                             spilledInner.Value,
                             conversion.IsChecked
-                        )
+                        ){IsPatternInputConversion = conversion.IsPatternInputConversion}
                         conversion.CopyImplicitConversionTo(convertedValue)
                         let rebuiltCp = BoundConstantPattern(cp.Syntax, cp.Type, convertedValue)
                         let isMatch = BoundIsExpression(cp.Syntax, input, rebuiltCp)

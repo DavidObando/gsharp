@@ -243,11 +243,18 @@ internal sealed class RegionMemberRead {
 /// A constant pattern test (ADR-0208 R19, #5593). The consumer decides with the shared R19 classification whether
 /// the test calls the `Equals` of its input, which is a plain call (amendment A3).
 internal sealed class RegionPatternTest {
-    init(subject RegionReceiverPath?, value RegionReceiverPath?, valueIsNull bool, candidate RegionTypeTest?) {
+    init(
+        subject RegionReceiverPath?,
+        value RegionReceiverPath?,
+        valueIsNull bool,
+        candidate RegionTypeTest?,
+        constantValuePath RegionReceiverPath? = nil
+    ) {
         Subject = subject
         Value = value
         ValueIsNull = valueIsNull
         Candidate = candidate
+        ConstantValuePath = constantValuePath
     }
 
     /// Gets the path of the tested value, or `nil` when the walker cannot follow it.
@@ -257,6 +264,11 @@ internal sealed class RegionPatternTest {
 
     /// Gets the path of the pattern value, or `nil` when the walker cannot type it.
     prop Value RegionReceiverPath? {
+        get;
+    }
+
+    /// Gets the direct constant-read path, without substituting a local's type origin.
+    prop ConstantValuePath RegionReceiverPath? {
         get;
     }
 
