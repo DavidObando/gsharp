@@ -167,7 +167,7 @@ async sequence[T]
         let clrType Type? = SemanticLookup.ResolveImportedClrType(
             tree,
             compilation,
-            token.Text,
+            token,
             includeAttributeSuffixFallback: IsAnnotationNameToken(tree.Root, token)
         )
         if clrType != nil {
@@ -264,23 +264,39 @@ async sequence[T]
         // Case 1: member access expression (e.g. var x = person.Name), or an
         // object-initializer property name (e.g. Point() { X = 1 }): the member of the
         // receiver's type (ADR-0212 slice S4).
-        if MemberTokenResolver.TryResolveMember(tree, compilation, token, out var resolved, out _) &&
-            resolved != nil &&
-            !BoundSemantics.IsImportedMember(resolved) {
-            return resolved
+        if MemberTokenResolver.TryResolveMember(tree, compilation, token, out var resolved, out _) && resolved != nil {
+            return if BoundSemantics.IsImportedMember(resolved) {
+                default(Symbol?)
+            } else {
+                resolved
+            }
         }
         // Case 2: field assignment expression (e.g. person.Age = 30)
         let fieldAssignment FieldAssignmentExpressionSyntax? = FindFieldAssignmentWithHoveredField(tree.Root, token)
         if fieldAssignment != nil {
             let receiverSymbol = SemanticLookup.ResolveSymbol(compilation, fieldAssignment.Receiver)
-            let receiverStruct StructSymbol? = switch receiverSymbol {
-                case variable is VariableSymbol: variable.Type as StructSymbol
-                case structSym is StructSymbol: structSym
-                default: default(StructSymbol?)
-            }
-            if receiverStruct != nil {
+            let receiverType TypeSymbol? = UnwrapReceiverType(receiverSymbol)
+            if receiverType is StructSymbol receiverStruct {
                 return LookupMemberOnStruct(receiverStruct, fieldAssignment.FieldIdentifier.Text)
             }
+            if receiverType is InterfaceSymbol receiverInterface {
+                return TypeMemberModel.LookupMember(
+                    receiverInterface,
+                    fieldAssignment.FieldIdentifier.Text,
+                    MemberQuery.All
+                )
+            }
+        }
+        // Issue #5899: do not resolve a member-access or initializer token as an implicit-this member.
+        if MemberTokenResolver.IsMemberOrInitializerToken(tree.Root, token) {
+            return nil
+        }
+        if (
+            (token.Parent is CallExpressionSyntax call && MatchesToken(call.Identifier, token)) ||
+                (token.Parent is StructLiteralExpressionSyntax sl && MatchesToken(sl.TypeIdentifier, token))
+        ) &&
+            SemanticLookup.ResolveImportedClrType(tree, compilation, token) != nil {
+            return nil
         }
         // Case 3: implicit this — bare identifier inside a struct/class method body
         // that matches a member of the enclosing type (e.g. `Name` instead of `this.Name`).
@@ -292,6 +308,26 @@ async sequence[T]
             }
         }
         return nil
+    }
+
+    private func UnwrapReceiverType(symbol Symbol?) TypeSymbol? {
+        var current TypeSymbol? = switch symbol {
+            case variable is VariableSymbol: variable.Type
+            case prop is PropertySymbol: prop.Type
+            case field is FieldSymbol: field.Type
+            case typeSym is TypeSymbol: typeSym
+            default: default(TypeSymbol?)
+        }
+        while current != nil {
+            if current is NullableTypeSymbol nullable {
+                current = nullable.UnderlyingType
+            } else if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+            } else {
+                break
+            }
+        }
+        return current
     }
 
     private func FindFieldAssignmentWithHoveredField(
@@ -530,6 +566,7 @@ shared class ReferencesComputer {
                 case e is EnumDeclarationSyntax: object.ReferenceEquals(e.Identifier, token)
                 case e is EnumMemberSyntax: object.ReferenceEquals(e.Identifier, token)
                 case ta is TypeAliasDeclarationSyntax: object.ReferenceEquals(ta.Identifier, token)
+                case tp is TypeParameterSyntax: object.ReferenceEquals(tp.Identifier, token)
                 default: false
             }
         }
@@ -554,7 +591,8 @@ shared class ReferencesComputer {
                     current is FieldDeclarationSyntax ||
                     current is EnumDeclarationSyntax ||
                     current is EnumMemberSyntax ||
-                    current is TypeAliasDeclarationSyntax {
+                    current is TypeAliasDeclarationSyntax ||
+                    current is TypeParameterSyntax {
                     if best is not{} currentBest || currentBest.Span.Length > current.Span.Length {
                         best = current
                     }
