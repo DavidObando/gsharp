@@ -39,7 +39,8 @@ HARNESS = {
                "build/test-rid-compiler-packages.py", "build/check-rid-packages.py"],
     "stage2": ["build/test-selfhost-stage2.py", "build/selfhost-stage2.py",
                "build/selfhost_pe.py", "build/verify-stage2-report.py",
-               "build/verify-migration-run.py"],
+               "build/verify-migration-run.py", "build/selfhost-fixpoint.py",
+               "build/test-selfhost-fixpoint.py"],
     "concurrency": ["build/verify-concurrency-bench.py", "build/run-concurrency-bench.py",
                     "build/test-concurrency-bench.py"],
     "apps": ["build/test-cs2gs-apps-gate-issues.py", "build/cs2gs-apps-gate-issues.py",
@@ -49,7 +50,7 @@ HARNESS = {
     "comment-checker": ["build/test-check-comment-only-diff.py", "build/check-comment-only-diff.py"],
 }
 BUILD_JOBS = {
-    "build", "discover-tests", "tests", "test-partition", "harness", "e2e",
+    "build", "fixpoint", "discover-tests", "tests", "test-partition", "harness", "e2e",
     "ilverify", "release-version-refs", "cs2gs-corpus", "vscode-extension",
     "vsix", "visual-studio-extension", "desktop-msbuild-sdk-smoke", "r2r-compiler-smoke",
 }
@@ -199,6 +200,8 @@ def select(paths, event, projects=None, go_exists=None):
             jobs.update({"discover-tests", "tests", "test-partition"})
         if harnesses:
             jobs.add("harness")
+        if any(p in {"build/selfhost-fixpoint.py", "build/test-selfhost-fixpoint.py"} for p in paths):
+            jobs.add("fixpoint")
         if any(Path(p).suffix == ".gs" for p in paths) or areas.intersection(SUITES):
             jobs.add("format")
         if "build" in jobs:

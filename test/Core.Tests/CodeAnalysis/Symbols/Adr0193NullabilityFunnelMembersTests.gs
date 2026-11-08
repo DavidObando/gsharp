@@ -77,7 +77,7 @@ class Adr0193NullabilityFunnelMembersTests {
             "MemberLookup.GetClrMemberValueTypeSymbol(MemberInfo, Type, ImmutableArray`1)",
             "MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(TypeSymbol, MethodInfo, Int32, ImmutableArray`1)",
             "MemberLookup.GetClrMethodParameterTypeSymbol(TypeSymbol, MethodBase, Int32)",
-            "MemberLookup.GetClrMethodReturnTypeSymbol(TypeSymbol, MethodInfo)",
+            "MemberLookup.GetClrMethodReturnTypeSymbol(TypeSymbol, MethodInfo, ImmutableArray`1)",
             "MemberLookup.GetClrOpenMethodReturnTypeSymbol(MethodInfo, Type, ImmutableArray`1, ImmutableArray`1)",
             "MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(ParameterInfo, Type, ImmutableArray`1, MethodInfo, ImmutableArray`1)",
             "MemberLookup.GetClrOpenParameterPointeeTypeSymbol(ParameterInfo, Type, ImmutableArray`1, MethodInfo, ImmutableArray`1)",

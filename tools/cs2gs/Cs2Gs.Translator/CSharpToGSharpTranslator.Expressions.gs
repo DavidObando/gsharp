@@ -9028,12 +9028,11 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        /// cs2gs emits only the names of a deconstructing loop (`for (a, b) in items`; the target types are dropped,
-        /// #5700), so its prelude is what gsc does for the element type. gsc reads the elements of a tuple without
-        /// code, reads the members of a G# `data` type (a record of this compilation, through its positional
-        /// properties) except a discard, and calls a `Deconstruct` method.
+        /// Deconstructing loops run selected Deconstruct methods and emitted leaf conversions before the body.
+        /// Tuple reads run no code. Source record positional getters run code unless their outputs are discarded.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
-            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) {
+            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) ||
+                this.ForEachLeafConversionsRunUserCode(forEach) {
                 return true
             }
             let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
@@ -9556,6 +9555,11 @@ partial class CSharpToGSharpTranslator {
         /// is, and a conversion emitted as `T(x)` counts as a construction call (`CallIsIndirect`). The loop then
         /// removes the fact at its entry, and the fact stays removed after the loop.
         private func LoopRegionLosesByReferenceNarrowing(loop Microsoft.CodeAnalysis.SyntaxNode) bool {
+            if loop is ForEachVariableStatementSyntax deconstructing && this.ForEachLeafConversionsRunUserCode(
+                deconstructing
+            ) {
+                return true
+            }
             let root Microsoft.CodeAnalysis.SyntaxNode = if loop is CommonForEachStatementSyntax forEach {
                 forEach.Statement
             } else {
@@ -15486,6 +15490,20 @@ partial class CSharpToGSharpTranslator {
             switch expression {
                 case parenthesized is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax {
                     return this.ReceiverValueIsObliviouslyReadAnnotatedResult(parenthesized.Expression)
+                }
+                case identifier is IdentifierNameSyntax {
+                    // Explicit nullable slots use the guard query even when C# has no flow state.
+                    let type = switch this.context.GetSymbolInfo(identifier).Symbol {
+                        case local is ILocalSymbol when local.DeclaringSyntaxReferences.Any(
+                            (reference SyntaxReference) -> reference.GetSyntax() is VariableDeclaratorSyntax
+                        ): local.Type
+                        case parameter is IParameterSymbol: parameter.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    return type != nil && IsAnnotatedNullableReference(type) && !this.IsGSharpFlowNarrowedLocal(
+                        identifier,
+                        requireRoslynFlowNotNull: false
+                    )
                 }
                 case invocation is InvocationExpressionSyntax {
                     // A `Task<T>`/`ValueTask<T>` envelope is itself non-null; its

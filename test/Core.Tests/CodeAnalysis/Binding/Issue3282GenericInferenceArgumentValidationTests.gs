@@ -37,7 +37,7 @@ open class Issue3282GenericInferenceArgumentValidationTests {
         Assert.Empty(result.Diagnostics)
         Assert.Equal(0, result.ExitCode)
         Assert.Null(result.UnhandledException)
-        Assert.Equal(expectedOutput, result.Output)
+        Assert.Equal(expectedOutput, result.Output.ReplaceLineEndings("\n"))
     }
 
     @Fact

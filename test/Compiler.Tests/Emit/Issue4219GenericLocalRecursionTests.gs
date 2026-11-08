@@ -6,6 +6,7 @@ package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
 import GSharp.Compiler.Tests
+import GSharp.Tests
 import System
 import System.Collections.Generic
 import System.IO
@@ -22,17 +23,14 @@ open class Issue4219GenericLocalRecursionTests {
     @InlineData(true, false)
     @InlineData(true, true)
     func GenericRegions_EmitStaticMethodDefsAndConstructedCalls(interfaceOwner bool, capture bool) {
-        var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
-        while root != nil && !File.Exists(Path.Combine(root.FullName, "samples", "GenericLocalRecursion.gs")) {
-            root = root.Parent
-        }
-        Assert.NotNull(root)
+        let rootPath string? = RepositoryRootMarker.Locate(AppContext.BaseDirectory)
+        Assert.NotNull(rootPath)
         let directory = Path.Combine(AppContext.BaseDirectory, "issue-4219", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {
             let assembly = Path.Combine(directory, "group.dll")
             let source = Path.Combine(directory, "group.gs")
-            var text = File.ReadAllText(Path.Combine(root!!.FullName, "samples", "GenericLocalRecursion.gs"))
+            var text = File.ReadAllText(Path.Combine(rootPath!!, "samples", "GenericLocalRecursion.gs"))
             if interfaceOwner {
                 text = text.Replace("class Example", "interface Example", StringComparison.Ordinal)
                 let nestedReturn = if capture {

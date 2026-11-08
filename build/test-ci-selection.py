@@ -141,6 +141,8 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(plan["harness_matrix"], {"name": [name]})
                 self.assertIn("harness", plan["jobs"])
                 self.assertNotIn("test-partition", plan["jobs"])
+                if path in {"build/selfhost-fixpoint.py", "build/test-selfhost-fixpoint.py"}:
+                    self.assertIn("fixpoint", plan["jobs"])
 
     def test_official_events_always_select_full_validation(self):
         for event in ("push", "schedule", "workflow_dispatch"):

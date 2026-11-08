@@ -62,7 +62,7 @@ open class Issue3826CrossCompilationTypeIdentityTests : IDisposable {
         } catch (IOException) {
             // A best-effort cleanup; a locked file must not fail the test.
 
-        }
+        } catch (UnauthorizedAccessException) { }
         GC.SuppressFinalize(this)
     }
 
@@ -118,6 +118,7 @@ open class Issue3826CrossCompilationTypeIdentityTests : IDisposable {
         var first Type
         {
             using let resolver = ReferenceResolver.WithRuntimeReferences([]string{corePath})
+            Assert.Contains(resolver.GetReferenceInfos(), (info ReferenceInfo) -> info.FileName == "GSharp.Core.dll")
             Assert.True(resolver.TryResolveType("GSharp.Core.CodeAnalysis.Syntax.SyntaxNode", out first))
         }
         var second Type

@@ -167,6 +167,18 @@ open class Issue3730InterpolatedStringHandlerTargetFrameworkTests {
         Assert.Equal(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, missing)
     }
 
+    @Fact
+    func HostRuntimeWithUserReference_ResolvesHandlerShape() {
+        // Issue #4636: a resolver given only a non-BCL reference (for example
+        // `/r:Gsharp.Extensions.dll` under host-TPA compilation) uses the host
+        // runtime as its core library, so it must also resolve the handler.
+        using let resolver = ReferenceResolver.WithReferences(
+            []string{typeof(Issue3730InterpolatedStringHandlerTargetFrameworkTests).Assembly.Location}
+        )
+        Assert.True(DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out var shape, out _))
+        Assert.NotNull(shape)
+    }
+
     shared {
         private const InterpolationSource string = `package Issue3730
 let count = 3

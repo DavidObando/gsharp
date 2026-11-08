@@ -212,15 +212,7 @@ True
             Assert.Equal(expectedY, yField!!.GetValue(value))
         }
 
-        private func FindRepositoryRoot() string {
-            var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
-            while directory != nil {
-                if RepositoryRootMarker.IsRoot(directory.FullName) {
-                    return directory.FullName
-                }
-                directory = directory.Parent
-            }
+        private func FindRepositoryRoot() string -> RepositoryRootMarker.Locate(AppContext.BaseDirectory) ??
             throw InvalidOperationException("Could not locate repository root.")
-        }
     }
 }

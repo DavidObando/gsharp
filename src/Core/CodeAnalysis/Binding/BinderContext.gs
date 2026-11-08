@@ -111,6 +111,7 @@ internal class BinderContext {
         ]()
         NarrowingFlow = NarrowingFlow()
         NarrowedVariables = NarrowingFrameStack()
+        NonNullByRefVariables = HashSet[VariableSymbol]()
         PendingPatternVariableLeaks = Dictionary[BoundIfStatement, ImmutableArray[LocalVariableSymbol]]()
         PatternVariableNames = HashSet[string](StringComparer.Ordinal)
         InitialScope = BoundScope(parent)
@@ -347,6 +348,20 @@ internal class BinderContext {
     /// type within the corresponding scope.
     prop NarrowedVariables NarrowingFrameStack {
         get;
+    }
+
+    /// Issue #4454: nullable-declared locals whose current value is proven non-null
+    /// from their declaration initializer or a non-null `out`/`ref` call.
+    prop NonNullByRefVariables HashSet[VariableSymbol] {
+        get;
+    }
+
+    internal func HasNonNullByRefValue(variable VariableSymbol) bool {
+        if NarrowedVariables.Query(AccessPath.ForVariable(variable)) is {} narrowed &&
+            narrowed.ReferenceNullability == ReferenceNullabilityKind.NotNull {
+            return true
+        }
+        return NonNullByRefVariables.Contains(variable)
     }
 
     /// Wraps [`frame`](paramref) in a narrowing frame and pushes

@@ -54,6 +54,7 @@ internal partial class StatementBinder {
             let callableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
             lastConditionWhenTrueAliases = nil
             lastConditionWhenFalseAliases = nil
+            let nonNullByRefEntry = CaptureNonNullByRefVariables()
             // ADR-0166: pattern variables are in scope in the branch their
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
@@ -71,8 +72,10 @@ internal partial class StatementBinder {
             )
             AddBranchExits(joinExits, thenStatement)
             let callableThenExit = CaptureExternalCallableAliases()
+            let nonNullByRefThenExit = CaptureNonNullByRefVariables()
             let restoredConditionKills = RestoreThenBranchConditionKills(outerConditionKills, joinEntry)
             RestoreExternalCallableAliases(callableWhenFalse)
+            RestoreNonNullByRefVariables(nonNullByRefEntry)
             let elseStatement = if syntax.ElseClause == nil {
                 default(BoundStatement?)
             } else {
@@ -95,7 +98,17 @@ internal partial class StatementBinder {
             } else {
                 CaptureExternalCallableAliases()
             }
+            let nonNullByRefElseExit = if syntax.ElseClause == nil {
+                nonNullByRefEntry
+            } else {
+                CaptureNonNullByRefVariables()
+            }
+            let thenCompletes = !EndsInUnconditionalExit(thenStatement) || ContainsUserLabel(thenStatement)
+            let elseCompletes = elseStatement == nil ||
+                !EndsInUnconditionalExit(elseStatement) ||
+                ContainsUserLabel(elseStatement)
             RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+            RestoreJoinedNonNullByRefVariables(nonNullByRefThenExit, nonNullByRefElseExit, thenCompletes, elseCompletes)
             let result = BoundIfStatement(syntax, condition, thenStatement, elseStatement)
             RecordJoinExits(result, joinExits)
             // ADR-0166: the same early-exit rule leaks pattern variables into
@@ -127,6 +140,7 @@ internal partial class StatementBinder {
         let initCallableWhenFalse = lastConditionWhenFalseAliases ?? CaptureExternalCallableAliases()
         lastConditionWhenTrueAliases = nil
         lastConditionWhenFalseAliases = nil
+        let initNonNullByRefEntry = CaptureNonNullByRefVariables()
         let (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition)
         let initJoinEntry = binderCtx.Narrowing
         let initJoinExits = List[NarrowingState]()
@@ -141,8 +155,10 @@ internal partial class StatementBinder {
         )
         AddBranchExits(initJoinExits, initThen)
         let initCallableThenExit = CaptureExternalCallableAliases()
+        let initNonNullByRefThenExit = CaptureNonNullByRefVariables()
         let initRestoredConditionKills = RestoreThenBranchConditionKills(initOuterConditionKills, initJoinEntry)
         RestoreExternalCallableAliases(initCallableWhenFalse)
+        RestoreNonNullByRefVariables(initNonNullByRefEntry)
         let initElse = if syntax.ElseClause == nil {
             default(BoundStatement?)
         } else {
@@ -165,7 +181,20 @@ internal partial class StatementBinder {
         } else {
             CaptureExternalCallableAliases()
         }
+        let initNonNullByRefElseExit = if syntax.ElseClause == nil {
+            initNonNullByRefEntry
+        } else {
+            CaptureNonNullByRefVariables()
+        }
+        let initThenCompletes = !EndsInUnconditionalExit(initThen) || ContainsUserLabel(initThen)
+        let initElseCompletes = initElse == nil || !EndsInUnconditionalExit(initElse) || ContainsUserLabel(initElse)
         RestoreJoinedExternalCallableAliases(initCallableThenExit, initCallableElseExit)
+        RestoreJoinedNonNullByRefVariables(
+            initNonNullByRefThenExit,
+            initNonNullByRefElseExit,
+            initThenCompletes,
+            initElseCompletes
+        )
         $scope = $scope.Pop()
         let inner = BoundIfStatement(syntax, initCondition, initThen, initElse)
         let initResult = BoundBlockStatement(
@@ -210,8 +239,11 @@ internal partial class StatementBinder {
         Else TBranch
     ) {
         let callableEntry = CaptureExternalCallableAliases()
+        let nonNullByRefEntry = CaptureNonNullByRefVariables()
         var callableThenExit = callableEntry
+        var nonNullByRefThenExit = nonNullByRefEntry
         var callableWhenFalse HashSet[VariableSymbol]? = nil
+        var nonNullByRefWhenFalse HashSet[VariableSymbol]? = nil
         var clauseEntryAliases = callableEntry
         // The else-branch starts from the state before the header: the guard's facts hold only in the then-branch.
         let elseEntry = binderCtx.Narrowing
@@ -250,6 +282,12 @@ internal partial class StatementBinder {
                 } else {
                     JoinAliases(callableWhenFalse, guardWhenFalse)
                 }
+                let currentNonNullByRef = CaptureNonNullByRefVariables()
+                nonNullByRefWhenFalse = if nonNullByRefWhenFalse == nil {
+                    currentNonNullByRef
+                } else {
+                    JoinAliases(nonNullByRefWhenFalse, currentNonNullByRef)
+                }
                 guardThenFrame = guardThen
                 header.Add((guardExprSyntax, bound))
                 return bound
@@ -266,7 +304,9 @@ internal partial class StatementBinder {
                 }
                 let then = bindThen()
                 callableThenExit = CaptureExternalCallableAliases()
+                nonNullByRefThenExit = CaptureNonNullByRefVariables()
                 RestoreExternalCallableAliases(callableWhenFalse ?? callableEntry)
+                RestoreNonNullByRefVariables(nonNullByRefWhenFalse ?? nonNullByRefEntry)
                 return then
             },
             thenSyntax,
@@ -286,10 +326,17 @@ internal partial class StatementBinder {
                 } else {
                     JoinAliases(callableWhenFalse, initWhenFalse)
                 }
+                let currentNonNullByRef = CaptureNonNullByRefVariables()
+                nonNullByRefWhenFalse = if nonNullByRefWhenFalse == nil {
+                    currentNonNullByRef
+                } else {
+                    JoinAliases(nonNullByRefWhenFalse, currentNonNullByRef)
+                }
                 header.Add((clauseSyntax.Initializer, bound.Initializer))
             }
         )
         let callableElseEntry = callableWhenFalse ?? callableEntry
+        let nonNullByRefElseEntry = nonNullByRefWhenFalse ?? nonNullByRefEntry
         // ADR-0208 R18: as for an `if` statement, the else-branch is bound without the facts that the conditions in
         // the then-branch removed. The header runs on the else path too, so a fact that it can remove stays removed.
         let restoredConditionKills = if thenKillsStarted {
@@ -308,7 +355,13 @@ internal partial class StatementBinder {
         } else {
             CaptureExternalCallableAliases()
         }
+        let nonNullByRefElseExit = if !hasElse {
+            nonNullByRefElseEntry
+        } else {
+            CaptureNonNullByRefVariables()
+        }
         RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit)
+        RestoreJoinedNonNullByRefVariables(nonNullByRefThenExit, nonNullByRefElseExit)
         return (clauses, guard_, thenBranch, elseBranch)
     }
 

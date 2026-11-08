@@ -120,12 +120,18 @@ class MigrationPipeline {
             runDir,
             repositoryLayout
         )
+        let excludedScope RepositoryExcludedScope? = if repositoryLayout {
+            RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
+        } else {
+            default(RepositoryExcludedScope?)
+        }
         var repositoryFiles IReadOnlyList[string]? = nil
         if repositoryLayout {
             repositoryFiles = RepositoryMirror.Prepare(
                 this.options.SourceRoot,
                 destinationRoot,
-                this.options.GeneratedProjectPaths
+                this.options.GeneratedProjectPaths,
+                excludedScope
             )
             let verbatimWarnings = List[string]()
             RepositoryVerbatimSources.Compute(this.options.SourceRoot, repositoryFiles, verbatimWarnings)
@@ -161,11 +167,6 @@ class MigrationPipeline {
             apps.Select((app CorpusApp) -> app.ProjectPath),
             evaluatedProjectReferences
         )
-        let excludedScope RepositoryExcludedScope? = if repositoryLayout {
-            RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
-        } else {
-            default(RepositoryExcludedScope?)
-        }
         var passthroughCompileSources IReadOnlyDictionary[string, IReadOnlyList[string]]? = nil
         if repositoryLayout && this.options.PassthroughProjectPaths.Count > 0 {
             let sources = Dictionary[string, IReadOnlyList[string]](StringComparer.OrdinalIgnoreCase)
@@ -265,7 +266,7 @@ class MigrationPipeline {
             ) {
                 this.options.RepositoryAdditionalFiles!!.Add(passthroughFile)
             }
-            RepositoryMirror.RebindMirroredSdkFiles(destinationRoot, sdkMoniker)
+            RepositoryMirror.RebindMirroredSdkFiles(destinationRoot, sdkMoniker, excludedScope)
             // Issue #3862: the mirror must BE a repository before anything runs
             // inside it, not only after. Repository-anchored code — a test that
             // walks up from its output directory looking for `GSharp.sln`, an
@@ -280,7 +281,8 @@ class MigrationPipeline {
                 this.options.SourceRoot,
                 destinationRoot,
                 this.options.GeneratedProjectPaths,
-                repositoryFiles
+                repositoryFiles,
+                excludedScope
             )
             let loadedProjects = Dictionary[string, LoadedCSharpProject](StringComparer.OrdinalIgnoreCase)
             for app in apps {

@@ -3555,7 +3555,7 @@ internal class ConversionClassifier {
         var mismatchStorageType = checkedStorageType
         if argument is BoundConditionalAddressExpression condAddr {
             let leaves = List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]()
-            ExpressionBinder.CollectConditionalAddressLeafStorageTypes(condAddr, leaves)
+            ExpressionBinder.CollectConditionalAddressLeafStorageTypes(condAddr, leaves, binderCtx)
             for leaf in leaves {
                 if !ByRefStorageMatching.AreSameStorageType(
                     leaf.ReadStorage,
@@ -3599,6 +3599,15 @@ internal class ConversionClassifier {
             out nestedMismatch
         ) {
             return false
+        }
+        // Issue #4454: when a ref/in argument addresses a nullable-declared local
+        // whose current value is proven non-null, passing it to a non-null parameter
+        // cannot deliver nil to the callee (and a ref T callee only writes non-null T).
+        if storageNullable &&
+            parameter.RefKind != RefKind.Out &&
+            argument is BoundAddressOfExpression addr &&
+            IsAddressOperandProvenNonNull(addr.Operand) {
+            storageNullable = false
         }
         var reason string? = nil
         let refKind = parameter.RefKind
@@ -3660,6 +3669,17 @@ internal class ConversionClassifier {
             return
         }
         Diagnostics.ReportWrongArgumentType(location, parameterName, parameterType, storageType)
+    }
+
+    private func IsAddressOperandProvenNonNull(operand BoundExpression?) bool {
+        var current = operand
+        while current is BoundBlockExpression block {
+            current = block.Expression
+        }
+        if current is BoundVariableExpression bve {
+            return binderCtx.HasNonNullByRefValue(bve.Variable)
+        }
+        return false
     }
 
     /// Issue #4400 (ADR-0060 amendment): binds an argument written WITHOUT a

@@ -4277,26 +4277,27 @@ internal partial class ExpressionBinder {
 
         internal func CollectConditionalAddressLeafStorageTypes(
             expression BoundExpression,
-            sink List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)]
+            sink List[(ReadStorage TypeSymbol, WriteStorage TypeSymbol)],
+            binderCtx BinderContext? = nil
         ) {
             var current = expression
             while current is BoundBlockExpression block {
                 current = block.Expression
             }
             if current is BoundConditionalAddressExpression condAddr {
-                CollectConditionalAddressLeafStorageTypes(condAddr.WhenTrueOperand, sink)
-                CollectConditionalAddressLeafStorageTypes(condAddr.WhenFalseOperand, sink)
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenTrueOperand, sink, binderCtx)
+                CollectConditionalAddressLeafStorageTypes(condAddr.WhenFalseOperand, sink, binderCtx)
                 return
             }
             if current is BoundConditionalExpression conditional {
-                CollectConditionalAddressLeafStorageTypes(conditional.WhenTrue, sink)
-                CollectConditionalAddressLeafStorageTypes(conditional.WhenFalse, sink)
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenTrue, sink, binderCtx)
+                CollectConditionalAddressLeafStorageTypes(conditional.WhenFalse, sink, binderCtx)
                 return
             }
             sink.Add(
                 (
-                    ReadStorage: AddressedLeafStorageType(current, useEffectiveNullability: true),
-                    WriteStorage: AddressedLeafStorageType(current, useEffectiveNullability: false)
+                    ReadStorage: AddressedLeafStorageType(current, useEffectiveNullability: true, binderCtx),
+                    WriteStorage: AddressedLeafStorageType(current, useEffectiveNullability: false, binderCtx)
                 )
             )
         }
@@ -4325,12 +4326,20 @@ internal partial class ExpressionBinder {
 
         internal func AddressedLeafStorageType(
             current BoundExpression,
-            useEffectiveNullability bool = true
+            useEffectiveNullability bool = true,
+            binderCtx BinderContext? = nil
         ) TypeSymbol {
             switch current {
                 case bve is BoundVariableExpression {
                     let declaredType = bve.Variable.Type
-                    let effectiveType = bve.Type
+                    var effectiveType = bve.Type
+                    if useEffectiveNullability &&
+                        effectiveType is NullableTypeSymbol nullableRef &&
+                        !nullableRef.IsValueType &&
+                        binderCtx != nil &&
+                        binderCtx.HasNonNullByRefValue(bve.Variable) {
+                        effectiveType = nullableRef.UnderlyingType
+                    }
                     let unboxesToValueType = bve.NarrowedType != nil && !ReflectionMetadataEmitter.IsValueTypeSymbol(
                         declaredType
                     ) &&

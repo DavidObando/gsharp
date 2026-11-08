@@ -64,13 +64,20 @@ class CiTestMatrixTests(unittest.TestCase):
             expensive)
         for name in ["Cs2Gs.Tests.Issue4Future.Control"] + [
                 f"Cs2Gs.Tests.Issue4{digit}Future.Control" for digit in range(10)]:
-            self.assertEqual(owner(name), expensive if ".Issue47" in name else original)
+            expected_owner = (
+                expensive if ".Issue47" in name
+                else "cs2gs-issue41-44" if (".Issue41" in name or ".Issue44" in name)
+                else original
+            )
+            self.assertEqual(owner(name), expected_owner)
         for name, band in (
                 ("Cs2Gs.Tests.Issue1Future.Control", "issue1"),
                 ("Cs2Gs.Tests.Issue24Future.Control", "issue24"),
                 ("Cs2Gs.Tests.Issue25Future.Control", "issue25"),
                 ("Cs2Gs.Tests.Issue33Future.Control", "issue33"),
                 ("Cs2Gs.Tests.Issue34Future.Control", "issue34"),
+                ("Cs2Gs.Tests.Issue5Future.Control", "issue5"),
+                ("Cs2Gs.Tests.ManagedReferenceTranslationTests.Control", "managed-ref"),
                 ("Cs2Gs.Tests.Future.Control", "remainder")):
             self.assertEqual(owner(name), "cs2gs-" + band)
 

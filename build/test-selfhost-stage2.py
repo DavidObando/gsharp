@@ -720,7 +720,8 @@ class TestSelectionTests(unittest.TestCase):
         document = json.loads(
             (REPO / "build/selfhost/stage2-env-bound-tests.json").read_text(encoding="utf-8"))
         for project in ("Core.Tests", "Compiler.Tests"):
-            clauses = module.build_filter(project).split("&")
+            raw = module.build_filter(project)
+            clauses = [c for c in raw.split("&") if c]
             self.assertEqual(len(document[project]), len(set(clauses)))
             self.assertTrue(all(c.startswith("FullyQualifiedName!=") for c in clauses))
         with self.assertRaises(SystemExit):

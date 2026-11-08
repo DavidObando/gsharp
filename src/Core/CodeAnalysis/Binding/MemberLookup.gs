@@ -5884,9 +5884,14 @@ internal class MemberLookup {
         /// Resolves an imported method return through a symbolic receiver/interface hierarchy.
         /// @param targetType The symbolic imported receiver type.
         /// @param closedMethod The reflected method selected from the erased receiver.
+        /// @param methodTypeArguments The method's symbolic arguments, when supplied.
         /// @returns The method return type after symbolic receiver substitution.
         @NullabilityFunnel
-        internal func GetClrMethodReturnTypeSymbol(targetType TypeSymbol, closedMethod MethodInfo) TypeSymbol {
+        internal func GetClrMethodReturnTypeSymbol(
+            targetType TypeSymbol,
+            closedMethod MethodInfo,
+            methodTypeArguments ImmutableArray[TypeSymbol?] = default(ImmutableArray[TypeSymbol?])
+        ) TypeSymbol {
             if GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported &&
                 TryGetSymbolicDeclaringContext(
                 imported,
@@ -5897,43 +5902,12 @@ internal class MemberLookup {
                 openDefinition != nil {
                 let openMethod MethodInfo? = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod)
                 if openMethod != nil {
-                    // Issue #3705 (family 2): the symbolic branch returned the
-                    // receiver-substituted type RAW. Substitution recovers the
-                    // shape but not the declaration's `[Nullable]` metadata, so an
-                    // imported `string?` return reached the binder as non-null
-                    // `string`. GetClrFieldTypeSymbol's symbolic branch folds the
-                    // declaration flags back in; this one now does the same.
-                    //
-                    // ADR-0193 §4: a `ref T` return is peeled before the merge and
-                    // re-wrapped after it, exactly as the parameter branch below
-                    // and `ClrNullability.GetReturnTypeSymbol` do — `[Nullable]` on
-                    // a by-ref annotates the pointee. Merging against the by-ref
-                    // type itself read it as a reference position and produced a
-                    // platform-wrapped by-ref for `GetPinnableReference()`, which
-                    // the reader-agreement test found disagreeing with every
-                    // sibling reader.
-                    let openReturnType = ClrNullability.GetSignatureType(openMethod.ReturnParameter)
-                    let returnLayout = if openReturnType.IsByRef {
-                        Invariant.Required(
-                            openReturnType.GetElementType(),
-                            "a by-ref return type has an element type",
-                            expression: "openReturnType.GetElementType()"
-                        )
-                    } else {
-                        openReturnType
-                    }
-                    let mapped = MapOpenClrTypeToSymbolic(returnLayout, openDefinition, declaringTypeArguments)
-                    let declarationFlags = ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod)
-                    let merged = TupleElementNamesReader.ApplyNames(
-                        NullableFlagsBuilder.MergeDeclarationNullability(mapped, returnLayout, declarationFlags),
-                        openMethod.ReturnParameter,
-                        returnLayout
+                    return GetClrOpenMethodReturnTypeSymbol(
+                        openMethod,
+                        openDefinition,
+                        declaringTypeArguments,
+                        methodTypeArguments
                     )
-                    return if openReturnType.IsByRef {
-                        cast[TypeSymbol](ByRefTypeSymbol.Get(merged))
-                    } else {
-                        merged
-                    }
                 }
             }
             // Issue #3705 (family 2, the #3703 shape): the reflected fallback slot
@@ -5943,7 +5917,16 @@ internal class MemberLookup {
             // which drops the declaration's `[Nullable]` metadata and binds an
             // imported `string?` return as non-null `string` — the unsound
             // direction. Route it through the same reader the siblings use.
-            return ClrNullability.GetReturnTypeSymbol(closedMethod)
+            return if !methodTypeArguments.IsDefault {
+                GetClrOpenMethodReturnTypeSymbol(
+                    closedMethod,
+                    openDefinition: nil,
+                    ImmutableArray[TypeSymbol].Empty,
+                    methodTypeArguments
+                )
+            } else {
+                ClrNullability.GetReturnTypeSymbol(closedMethod)
+            }
         }
 
         /// Reads base and interface signatures through their declaring receiver.

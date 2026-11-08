@@ -36,7 +36,8 @@ shared class RepositorySolutionGenerator {
         sourceRoot string?,
         destinationRoot string?,
         projectMapping IReadOnlyDictionary[string, string]?,
-        sourceFiles IReadOnlyList[string]? = nil
+        sourceFiles IReadOnlyList[string]? = nil,
+        excludedScope RepositoryExcludedScope? = nil
     ) IReadOnlyList[string] {
         if string.IsNullOrWhiteSpace(sourceRoot) {
             throw ArgumentException("A source root must be supplied.", "sourceRoot")
@@ -58,10 +59,15 @@ shared class RepositorySolutionGenerator {
         // file name, so a mirror that renames GSharp.sln to GSharp.slnx is not
         // the same repository; the `.slnx` conversion is emitted beside it
         // because only the XML format can type-tag a `.gsproj`.
+        // Issue #4897: template payload `.sln` files and `.sln` files under an
+        // excluded scope stay `.sln` only, without a stray `.slnx` twin.
         let plans = List[(SourcePath string, RelativeDestinationPath string)]()
         for sourcePath in DiscoverSolutions(fullSourceRoot, sourceFiles) {
             let relativePath = Path.GetRelativePath(fullSourceRoot, sourcePath)
-            if Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase) {
+            let isTemplateOrExcluded = (excludedScope != nil && excludedScope.IsExcluded(relativePath)) ||
+                SdkPin.IsTemplatePayload(sourcePath, fullSourceRoot)
+            if Path.GetExtension(sourcePath).Equals(".sln", StringComparison.OrdinalIgnoreCase) &&
+                !isTemplateOrExcluded {
                 plans.Add((sourcePath, relativePath))
                 plans.Add((sourcePath, Path.ChangeExtension(relativePath, ".slnx")))
             } else {
