@@ -564,10 +564,8 @@ internal class ReflectionMetadataEmitter {
         return row
     }
 
-    // Issue #3883: whether <paramref name="c"/> is the class that declares the
-    // authored async `Main`, and therefore owns the synthesized `<Main>$`
-    // entry-point stub's MethodDef row.
-    private func ClassOwnsEntryPointStub(c StructSymbol) bool -> this.EntryPointNeedsSeparateStub &&
+    // The declaring aggregate owns its authored async Main's entry-point stub.
+    private func AggregateOwnsEntryPointStub(c StructSymbol) bool -> this.EntryPointNeedsSeparateStub &&
         this
         .emitCtx
         .Program
@@ -859,7 +857,7 @@ internal class ReflectionMetadataEmitter {
     private data struct MethodRowPlan(
         Delegates ImmutableArray[DelegateTypeSymbol],
         TypeRows TypeMethodRows,
-        EntryPointIsClassOwned bool,
+        EntryPointIsAggregateOwned bool,
         FirstNestedRow int32,
         FirstPackageConstructorRow int32
     ) : IEquatable[MethodRowPlan] { }
@@ -1929,6 +1927,20 @@ internal class ReflectionMetadataEmitter {
                 dataCopyConstructorClasses.Add(current.Definition ?? current)
             }
         }
+        let PlanStaticMethods = func (owner StructSymbol) {
+            if owner.StaticMethods.IsDefaultOrEmpty {
+                return
+            }
+            for method in owner.StaticMethods {
+                let handle = MetadataTokens.MethodDefinitionHandle(methodRow++)
+                aggregateMethodHandles[method] = handle
+                this.cache.MethodHandles[method] = handle
+                methodRow = this.PlanLibraryImportInnerRow(method, methodRow)
+            }
+            if this.AggregateOwnsEntryPointStub(owner) {
+                this.entryPointStubHandle = MetadataTokens.MethodDefinitionHandle(methodRow++)
+            }
+        }
         let PlanClassMethods = func (c StructSymbol) {
             classCtorRows[c] = methodRow
             methodRow++
@@ -2076,23 +2088,7 @@ internal class ReflectionMetadataEmitter {
             methodRow += this.interfaceImpls.PlanImportedAccessorBridges(c, methodRow)
             methodRow += this.interfaceImpls.PlanInheritedStaticVirtualBridges(c, methodRow)
             // ADR-0053: plan method rows for static methods on classes.
-            if !c.StaticMethods.IsDefaultOrEmpty {
-                for m in c.StaticMethods {
-                    let handle = MetadataTokens.MethodDefinitionHandle(methodRow++)
-                    aggregateMethodHandles[m] = handle
-                    this.cache.MethodHandles[m] = handle
-                    methodRow = this.PlanLibraryImportInnerRow(m, methodRow)
-                }
-                // Issue #3883: one extra row on THIS class for the synthesized
-                // `<Main>$` stub that blocks on its authored async `Main`. It
-                // must live on the same type: the stub body is a second async
-                // kickoff, and the state-machine struct it initializes is a
-                // private nested type of this class.
-                if this.ClassOwnsEntryPointStub(c) {
-                    this.entryPointStubHandle = MetadataTokens.MethodDefinitionHandle(methodRow)
-                    methodRow++
-                }
-            }
+            PlanStaticMethods(c)
             // Issue #263: plan accessor method rows for static properties on classes.
             for prop in c.StaticProperties {
                 var getterHandle MethodDefinitionHandle? = nil
@@ -2132,27 +2128,6 @@ internal class ReflectionMetadataEmitter {
         for c in topClasses {
             PlanClassMethods(c)
         }
-        // Issue #1996: a class-scoped static `Main` is emitted as an ordinary
-        // TypeDef-owned static method (its MethodDef row was already reserved
-        // above by PlanClassMethods' StaticMethods loop). It must NOT also get
-        // a package-level <Program> row/emission — the per-package entry-point
-        // reservation/emission below is skipped for it, and the emitted
-        // TypeDef-owned MethodDef row is reused directly as the PE entry point.
-        //
-        // Issue #3883: when that class-scoped `Main` is ASYNC its own row can
-        // no longer double as the PE entry point — reusing it forces the CLR
-        // entry-point signature (void/int32) onto the user's declaration and
-        // erases `Task<T>` from metadata, so cross-assembly consumers see a
-        // synchronous method (`await Program.Main(args)` fails with GS0159 on
-        // ConfigureAwait). csc keeps the authored `Main` Task-shaped and
-        // synthesizes a SEPARATE `<Main>$` stub that blocks on it. The stub's
-        // row is reserved by PlanClassMethods on the SAME class (it reads the
-        // state machine's private fields, so a <Program>-hosted stub would
-        // fail CLR field-access checks); `entryPointIsClassOwned` stays true
-        // so no package-level row is reserved as well.
-        let entryPointIsClassOwned = this.emitCtx.Program.EntryPoint != nil && aggregateMethodHandles.ContainsKey(
-            this.emitCtx.Program.EntryPoint
-        )
         // Plan method rows for non-SM structs.
         let structFirstMethodRows = Dictionary[StructSymbol, int32]()
         let PlanStructMethods = func (s StructSymbol) {
@@ -2293,14 +2268,7 @@ internal class ReflectionMetadataEmitter {
                 this.cache.EventAccessorHandles[ev] = (addHandle, removeHandle, raiseHandle)
             }
             // ADR-0053: plan method rows for static methods on structs.
-            if !s.StaticMethods.IsDefaultOrEmpty {
-                for m in s.StaticMethods {
-                    let handle = MetadataTokens.MethodDefinitionHandle(methodRow++)
-                    aggregateMethodHandles[m] = handle
-                    this.cache.MethodHandles[m] = handle
-                    methodRow = this.PlanLibraryImportInnerRow(m, methodRow)
-                }
-            }
+            PlanStaticMethods(s)
             // Issue #263: plan accessor method rows for static properties on structs.
             for prop in s.StaticProperties {
                 var getterHandle MethodDefinitionHandle? = nil
@@ -2399,6 +2367,10 @@ internal class ReflectionMetadataEmitter {
                 }
             }
         }
+        // Determine ownership after all top-level and nested aggregate methods are planned.
+        let entryPointIsAggregateOwned = this.emitCtx.Program.EntryPoint != nil && aggregateMethodHandles.ContainsKey(
+            this.emitCtx.Program.EntryPoint
+        )
         let firstPackageCtorRow = methodRow
         return MethodRowPlan(
             delegates,
@@ -2410,7 +2382,7 @@ internal class ReflectionMetadataEmitter {
                 aggregateMethodHandles,
                 structFirstMethodRows
             ),
-            entryPointIsClassOwned,
+            entryPointIsAggregateOwned,
             firstNestedMethodRow,
             firstPackageCtorRow
         )
@@ -2891,7 +2863,7 @@ internal class ReflectionMetadataEmitter {
         let classCtorRows = methodRows.TypeRows.ClassConstructorRows
         let classPrimaryCtorRows = methodRows.TypeRows.ClassPrimaryConstructorRows
         let aggregateMethodHandles = methodRows.TypeRows.AggregateMethodHandles
-        let entryPointIsClassOwned = methodRows.EntryPointIsClassOwned
+        let entryPointIsAggregateOwned = methodRows.EntryPointIsAggregateOwned
         let structFirstMethodRows = methodRows.TypeRows.StructFirstRows
         let firstPackageCtorRow = methodRows.FirstPackageConstructorRow
         // 3. Group functions by their declaring package. One <Program> type
@@ -3068,7 +3040,7 @@ internal class ReflectionMetadataEmitter {
                 nextRow++
                 nextRow = this.PlanLibraryImportInnerRow(fn, nextRow)
             }
-            if this.emitCtx.Program.EntryPoint != nil && pkg == entryPointPackage && !entryPointIsClassOwned {
+            if this.emitCtx.Program.EntryPoint != nil && pkg == entryPointPackage && !entryPointIsAggregateOwned {
                 let entryRow = MetadataTokens.MethodDefinitionHandle(nextRow++)
                 // Issue #3883: for an authored async `Main` this row is the
                 // synthesized `<Main>$` stub, NOT the authored function — the
@@ -3112,7 +3084,7 @@ internal class ReflectionMetadataEmitter {
                 this.entryPointStubHandle
             } else {
                 (
-                    if entryPointIsClassOwned {
+                    if entryPointIsAggregateOwned {
                         aggregateMethodHandles[entryPoint]
                     } else {
                         this.cache.FunctionHandles[entryPoint]
@@ -3371,12 +3343,41 @@ internal class ReflectionMetadataEmitter {
         let topClasses = aggregateTypes.TopLevel.Classes
         let topStructs = aggregateTypes.TopLevel.Structs
         let nestedOrdered = aggregateTypes.NestedTypes.Types
-        let entryPointIsClassOwned = methodRows.EntryPointIsClassOwned
+        let entryPointIsAggregateOwned = methodRows.EntryPointIsAggregateOwned
         let packages = packageMethods.Packages
         let functionsByPackage = packageMethods.FunctionsByPackage
         let entryPointPackage = packageMethods.EntryPointPackage
         // === PHASE B: Emit MethodDefs in row order ===
         // B2. Non-SM class ctors + instance methods.
+        let EmitStaticMethodBodies = func (owner StructSymbol) {
+            if owner.StaticMethods.IsDefaultOrEmpty {
+                return
+            }
+            for method in owner.StaticMethods {
+                if this.emitCtx.Program.Functions.TryGetValue(method, out var body) {
+                    let handle = this.functions.EmitFunction(
+                        method,
+                        body,
+                        isEntryPoint: method == this.emitCtx.Program.EntryPoint && !this.EntryPointNeedsSeparateStub
+                    )
+                    this.cache.MethodHandles[method] = handle
+                }
+            }
+            // The stub must share its owner's access to private state-machine members.
+            if this.AggregateOwnsEntryPointStub(owner) &&
+                this
+                .emitCtx
+                .Program
+                .Functions
+                .TryGetValue(this.emitCtx.Program.EntryPoint!!, out var stubBody) {
+                this.functions.EmitFunction(
+                    this.emitCtx.Program.EntryPoint!!,
+                    stubBody,
+                    isEntryPoint: true,
+                    isSynthesizedEntryPointStub: true
+                )
+            }
+        }
         let EmitClassMethodBodies = func (c StructSymbol) {
             if c.ExplicitConstructor != nil {
                 // Issue #306 / ADR-0063 §9: a class with explicit `init(...)`
@@ -3495,50 +3496,7 @@ internal class ReflectionMetadataEmitter {
             this.interfaceImpls.EmitImportedAccessorBridges(c)
             this.interfaceImpls.EmitInheritedStaticVirtualBridges(c)
             // ADR-0053: emit static methods for classes.
-            if !c.StaticMethods.IsDefaultOrEmpty {
-                for m in c.StaticMethods {
-                    if this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody) {
-                        // Issue #1996: a class-scoped static `Main` is the PE
-                        // entry point when picked by ResolveEntryPoint — wire
-                        // isEntryPoint through so EmitFunction applies the same
-                        // async-Main sync-wrapper lowering (GetAwaiter().GetResult())
-                        // used for package-scope entry points.
-                        // Issue #3883: an authored async `Main` is emitted here
-                        // as an ORDINARY static method (Task-returning); the
-                        // CLR entry-point shape lives on the separate
-                        // `<Main>$` stub emitted right after this loop.
-                        let emittedHandle = this.functions.EmitFunction(
-                            m,
-                            staticBody,
-                            isEntryPoint: m == this.emitCtx.Program.EntryPoint && !this.EntryPointNeedsSeparateStub
-                        )
-                        this.cache.MethodHandles[m] = emittedHandle
-                    }
-                }
-                // Issue #3883: the synthesized `<Main>$` entry-point stub for
-                // this class's authored async `Main` — a second kickoff body
-                // over the same state machine, encoded with the CLR
-                // entry-point signature and driven to completion
-                // synchronously. Its row was reserved by PlanClassMethods
-                // immediately after the static-method rows.
-                //
-                // ClassOwnsEntryPointStub is only true when Program.EntryPoint
-                // is non-null (it is one of this class's StaticMethods), so
-                // the two `!`s below are guarded by the preceding conjunct.
-                if this.ClassOwnsEntryPointStub(c) &&
-                    this
-                    .emitCtx
-                    .Program
-                    .Functions
-                    .TryGetValue(this.emitCtx.Program.EntryPoint!!, out var stubBody) {
-                    this.functions.EmitFunction(
-                        this.emitCtx.Program.EntryPoint!!,
-                        stubBody,
-                        isEntryPoint: true,
-                        isSynthesizedEntryPointStub: true
-                    )
-                }
-            }
+            EmitStaticMethodBodies(c)
             // Issue #263: emit static property accessor methods for classes.
             this.memberDefEmitter.EmitStaticPropertyAccessors(c)
             // Issue #263: emit static event accessor methods for classes.
@@ -3651,14 +3609,7 @@ internal class ReflectionMetadataEmitter {
             // ADR-0052: emit event accessor methods for structs.
             this.memberDefEmitter.EmitEventAccessors(s)
             // ADR-0053: emit static methods for structs.
-            if !s.StaticMethods.IsDefaultOrEmpty {
-                for m in s.StaticMethods {
-                    if this.emitCtx.Program.Functions.TryGetValue(m, out var staticBody) {
-                        let emittedHandle = this.functions.EmitFunction(m, staticBody, isEntryPoint: false)
-                        this.cache.MethodHandles[m] = emittedHandle
-                    }
-                }
-            }
+            EmitStaticMethodBodies(s)
             // Issue #263: emit static property accessor methods for structs.
             this.memberDefEmitter.EmitStaticPropertyAccessors(s)
             // Issue #263: emit static event accessor methods for structs.
@@ -3770,7 +3721,12 @@ internal class ReflectionMetadataEmitter {
                     this.functions.EmitFunction(fn, body, isEntryPoint: false)
                 }
             }
-            if this.emitCtx.Program.EntryPoint is {} entryPoint && pkg == entryPointPackage && !entryPointIsClassOwned {
+            if this
+                .emitCtx
+                .Program
+                .EntryPoint is {} entryPoint &&
+                pkg == entryPointPackage &&
+                !entryPointIsAggregateOwned {
                 let entryBody = this.emitCtx.Program.Functions[entryPoint]
                 this.functions.EmitFunction(
                     entryPoint,

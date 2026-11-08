@@ -99,6 +99,42 @@ async func Main(args []string) {
         Assert.Equal("0${Environment.NewLine}", output)
     }
 
+    @Fact
+    func StructOwnedMain_CanCallPrivateMembers() {
+        const source = `package i5873structsync
+import System
+
+struct Program {
+    shared {
+        private var Seed int32 = 42
+        private func Read() int32 -> Seed
+        func Main() {
+            Console.WriteLine(Read())
+        }
+    }
+}`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source, expectedExitCode: 0))
+    }
+
+    @Fact
+    func StructOwnedAsyncMain_RunsWithPrivateStateMachineAccess() {
+        const source = `package i5873structasync
+import System
+import System.Threading.Tasks
+
+struct Program {
+    shared {
+        private var Seed int32 = 42
+        private func Read() int32 -> Seed
+        async func Main() {
+            await Task.Delay(1)
+            Console.WriteLine(Read())
+        }
+    }
+}`
+        Assert.Equal("42${Environment.NewLine}", CompileAndRun(source, expectedExitCode: 0))
+    }
+
     shared {
         /// Copied verbatim from `Issue1502DelegateUserTypeArgEmitTests.CompileAndRun`
         /// (test/Compiler.Tests/Emit/Issue1502DelegateUserTypeArgEmitTests.cs),
