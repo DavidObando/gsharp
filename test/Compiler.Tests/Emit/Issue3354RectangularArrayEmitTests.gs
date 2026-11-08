@@ -424,7 +424,8 @@ public static class Consumer
             let libraryPath = CompileGSharp(directory, Source, target: "library")
             IlVerifier.Verify(libraryPath)
             let consumerPath = CompileCSharpContract(directory, Consumer, "Issue3354.Consumer", libraryPath)
-            let library = AssemblyLoadContext.Default.LoadFromAssemblyPath(libraryPath)
+            let loadedAssemblies = EmittedFixture.LoadTogether(libraryPath, consumerPath)
+            let library = loadedAssemblies[0]
             let api Type? = library.GetType("Exported.MdApi", throwOnError: true)
             let field FieldInfo? = api!!.GetField("Field", BindingFlags.Public | BindingFlags.Static)
             let array = Assert.IsAssignableFrom[Array](field!!.GetValue(nil))
@@ -433,7 +434,7 @@ public static class Consumer
             let nullableInfo = NullabilityInfoContext().Create(api!!.GetMethod("Maybe")!!.ReturnParameter)
             Assert.Equal(NullabilityState.Nullable, nullableInfo.ReadState)
             Assert.Equal(NullabilityState.Nullable, nullableInfo.ElementType!!.ReadState)
-            let consumer = AssemblyLoadContext.Default.LoadFromAssemblyPath(consumerPath)
+            let consumer = loadedAssemblies[1]
             Assert.Equal(4, consumer.GetType("Consumer", throwOnError: true)!!.GetMethod("Read")!!.Invoke(nil, nil))
         } finally {
             Directory.Delete(directory, recursive: true)

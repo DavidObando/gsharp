@@ -21,14 +21,6 @@ assert SPEC and SPEC.loader
 ratchet = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ratchet)
 
-VERIFY_SPEC = importlib.util.spec_from_file_location(
-    "verify_migration_run",
-    REPO / "build" / "verify-migration-run.py",
-)
-assert VERIFY_SPEC and VERIFY_SPEC.loader
-verify_migration = importlib.util.module_from_spec(VERIFY_SPEC)
-VERIFY_SPEC.loader.exec_module(verify_migration)
-
 
 def stages(*statuses: str) -> list[dict]:
     return [
@@ -170,7 +162,7 @@ class StageFloorTests(unittest.TestCase):
             f"Pinned corpus commit {commit} ({manifest['branch']}) is not available locally; "
             f"fetch {manifest['branch']} from {manifest['repository']} before running this check.",
         )
-        corpus_apps = verify_migration.expected_apps(REPO, commit)
+        corpus_apps = ratchet.expected_apps(REPO, commit)
         baseline = json.loads((REPO / "tools" / "cs2gs" / "selfmig-baseline.json").read_text(encoding="utf-8"))
         green_apps = baseline.get("greenApps", [])
         stage_floor = baseline.get("stageFloor", {})

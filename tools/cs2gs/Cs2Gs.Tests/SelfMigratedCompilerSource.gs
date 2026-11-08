@@ -69,7 +69,7 @@ internal shared class SelfMigratedCompilerSource {
     internal func LoadProjectAsync(projectPath string) Task[LoadedCSharpProject] -> LoadProjectAsync(
         projectPath,
         IsDefaultRootPath(Path.GetFullPath(projectPath)),
-        (fullPath string) -> CSharpProjectLoader.LoadProjectAsync(fullPath)
+        LoadProjectFromSourceAsync
     )
 
     internal async func LoadProjectAsync(
@@ -86,6 +86,11 @@ internal shared class SelfMigratedCompilerSource {
             CachedProjects.TryAdd(fullPath, loaded)
         }
         return loaded
+    }
+
+    private async func LoadProjectFromSourceAsync(fullPath string) LoadedCSharpProject {
+        let projects = await CSharpProjectLoader.LoadProjectWithReferencesAsync(fullPath)
+        return projects[0]
     }
 
     private func IsDefaultRootPath(fullPath string) bool {
@@ -121,7 +126,7 @@ internal shared class SelfMigratedCompilerSource {
         projectDirectory,
         preservePartialParts,
         string.Equals(Path.GetFullPath(root), Path.GetFullPath(TestFixtureSource.Root), StringComparison.Ordinal),
-        (projectPath string) -> CSharpProjectLoader.LoadProjectAsync(projectPath),
+        LoadProjectFromSourceAsync,
         fileNames
     )
 

@@ -54,11 +54,18 @@ internal class SlotPlanner {
         IReadOnlyDictionary[VariableSymbol, int32]
     ) -> bool
 
+    prop LambdaTargetDelegateTypes Dictionary[BoundFunctionLiteralExpression, TypeSymbol] {
+        get;
+    }
+
     init(
         emitCtx EmitContext,
         cache MetadataTokenCache,
         needsRvalueReceiverSpill(BoundExpression, FunctionSymbol?, IReadOnlyDictionary[VariableSymbol, int32]) -> bool
     ) {
+        this.LambdaTargetDelegateTypes = Dictionary[BoundFunctionLiteralExpression, TypeSymbol](
+            ReferenceEqualityComparer.Instance
+        )
         this.emitCtx = emitCtx ?? throw ArgumentNullException("emitCtx")
         this.cache = cache ?? throw ArgumentNullException("cache")
         this.needsRvalueReceiverSpill = needsRvalueReceiverSpill ??
@@ -87,7 +94,8 @@ internal class SlotPlanner {
 
     func CollectFunctionLiterals() List[BoundFunctionLiteralExpression] {
         let sink = List[BoundFunctionLiteralExpression]()
-        let collector = LambdaCollector(sink)
+        this.LambdaTargetDelegateTypes.Clear()
+        let collector = LambdaCollector(sink, this.LambdaTargetDelegateTypes)
         // Issue #598: iterate Program.Functions in deterministic order
         // (source-position, then name) so lambda literals are collected in a
         // stable sequence regardless of ImmutableDictionary iteration order.
@@ -668,10 +676,123 @@ internal class SlotPlanner {
 
     private class LambdaCollector : BoundTreeWalker {
         private let sink List[BoundFunctionLiteralExpression]
-        private let seen HashSet[BoundFunctionLiteralExpression] = HashSet[BoundFunctionLiteralExpression]()
+        private let targetDelegateTypes Dictionary[BoundFunctionLiteralExpression, TypeSymbol]
+        private let seen HashSet[BoundFunctionLiteralExpression] = HashSet[BoundFunctionLiteralExpression](
+            ReferenceEqualityComparer.Instance
+        )
+        private let multiTargeted HashSet[BoundFunctionLiteralExpression] = HashSet[BoundFunctionLiteralExpression](
+            ReferenceEqualityComparer.Instance
+        )
+        private var quoteDepth int32
 
-        init(sink List[BoundFunctionLiteralExpression]) {
+        init(
+            sink List[BoundFunctionLiteralExpression],
+            targetDelegateTypes Dictionary[BoundFunctionLiteralExpression, TypeSymbol]
+        ) {
             this.sink = sink
+            this.targetDelegateTypes = targetDelegateTypes
+        }
+
+        private func RecordTarget(lambda BoundFunctionLiteralExpression, targetType TypeSymbol) {
+            if this.quoteDepth > 0 || this.multiTargeted.Contains(lambda) {
+                return
+            }
+            if this.targetDelegateTypes.TryGetValue(lambda, out var existing) {
+                if !object.Equals(existing, targetType) {
+                    this.targetDelegateTypes.Remove(lambda)
+                    this.multiTargeted.Add(lambda)
+                }
+                return
+            }
+            this.targetDelegateTypes[lambda] = targetType
+        }
+
+        private func UnwrapDelegateTarget(type TypeSymbol) TypeSymbol {
+            var current = type
+            while true {
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                } else if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    current = nullable.UnderlyingType
+                } else {
+                    return current
+                }
+            }
+        }
+
+        private func IsSystemFuncOrAction(clrType Type) bool {
+            let def = if clrType.IsGenericType {
+                clrType.GetGenericTypeDefinition()
+            } else {
+                clrType
+            }
+            let fullName = def.FullName
+            return fullName != nil &&
+                (
+                fullName == "System.Action" || fullName.StartsWith("System.Action`", StringComparison.Ordinal) ||
+                    fullName.StartsWith("System.Func`", StringComparison.Ordinal)
+            )
+        }
+
+        private func VisitLambdaWithTarget(lambda BoundFunctionLiteralExpression, targetType TypeSymbol) {
+            this.RecordTarget(lambda, targetType)
+            if !this.seen.Add(lambda) {
+                return
+            }
+            this.sink.Add(lambda)
+            this.VisitStatement(lambda.Body)
+        }
+
+        protected override func VisitConversionExpression(node BoundConversionExpression) {
+            if this.quoteDepth == 0 && node.Expression is BoundFunctionLiteralExpression literal {
+                let targetType = UnwrapDelegateTarget(node.Type)
+                if targetType is DelegateTypeSymbol {
+                    this.VisitLambdaWithTarget(literal, targetType)
+                } else if targetType is ImportedTypeSymbol{ClrType: {} clr} && ClrTypeUtilities.IsDelegateType(clr) {
+                    if clr.FullName == "System.Delegate" ||
+                        clr.FullName == "System.MulticastDelegate" ||
+                        IsSystemFuncOrAction(clr) {
+                        this.VisitLambdaWithTarget(literal, literal.FunctionType)
+                    } else {
+                        this.VisitLambdaWithTarget(literal, targetType)
+                    }
+                } else {
+                    this.VisitLambdaWithTarget(literal, literal.FunctionType)
+                }
+                return
+            }
+            base.VisitConversionExpression(node)
+        }
+
+        protected override func VisitClrEventSubscriptionExpression(node BoundClrEventSubscriptionExpression) {
+            if this.quoteDepth == 0 &&
+                node.Handler is BoundFunctionLiteralExpression literal &&
+                node
+                .Event
+                .EventHandlerType is {} handlerClr {
+                this.VisitExpression(node.Receiver)
+                this.VisitLambdaWithTarget(
+                    literal,
+                    TypeSymbol.FromClrTypeWithoutNullability(handlerClr, NullabilityFreeReason.TypeLiteral)
+                )
+                return
+            }
+            base.VisitClrEventSubscriptionExpression(node)
+        }
+
+        protected override func VisitEventSubscriptionExpression(node BoundEventSubscriptionExpression) {
+            if this.quoteDepth == 0 &&
+                node.Handler is BoundFunctionLiteralExpression literal &&
+                node.EventType is {} eventType {
+                let targetType = UnwrapDelegateTarget(eventType)
+                if targetType is DelegateTypeSymbol ||
+                    (targetType is ImportedTypeSymbol{ClrType: {} clr} && ClrTypeUtilities.IsDelegateType(clr)) {
+                    this.VisitExpression(node.Receiver)
+                    this.VisitLambdaWithTarget(literal, targetType)
+                    return
+                }
+            }
+            base.VisitEventSubscriptionExpression(node)
         }
 
         override func VisitExpression(node BoundExpression?) {
@@ -679,11 +800,7 @@ internal class SlotPlanner {
                 return
             }
             if node is BoundFunctionLiteralExpression lambda {
-                if !this.seen.Add(lambda) {
-                    return
-                }
-                this.sink.Add(lambda)
-                this.VisitStatement(lambda.Body)
+                this.VisitLambdaWithTarget(lambda, lambda.FunctionType)
                 return
             }
             base.VisitExpression(node)

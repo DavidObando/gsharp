@@ -89,6 +89,14 @@ jobs:
           dotnet tool install --global nbgv || dotnet tool update --global nbgv
           export PATH="$PATH:$HOME/.dotnet/tools"
           nbgv get-version
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            simple_version=$(nbgv get-version -v SimpleVersion)
+            kind=$(python3 build/release-publish.py tag-kind "$GITHUB_REF_NAME")
+            if [ "$kind" = none ] || [[ "$GITHUB_REF_NAME" != "v${simple_version}" && "$GITHUB_REF_NAME" != "v${simple_version}-"* ]]; then
+              echo "error: tag '$GITHUB_REF_NAME' does not match Nerdbank.GitVersioning SimpleVersion 'v${simple_version}'" >&2
+              exit 1
+            fi
+          fi
           {
             echo "### Nerdbank.GitVersioning"
             echo ''

@@ -6,9 +6,11 @@
     <IsPackable>false</IsPackable>
     <GsharpNoChannelsRuntime>true</GsharpNoChannelsRuntime>
     <GsharpNoValuesRuntime>true</GsharpNoValuesRuntime>
+    <DefaultItemExcludes>$(DefaultItemExcludes);TestAssets/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="TestAssets/**" />
     <ProjectReference Include="../../src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" />
     <ProjectReference Include="@(GsharpCompiler-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
     <ProjectReference Include="@(GsharpRepl-&gt;'%(RootDir)%(Directory)%(Filename).gsproj')" />
@@ -18,7 +20,7 @@
     <Compile Include="..\Shared\EmittedOracle.gs" Link="EmittedOracle.cs" />
     <Compile Include="..\Shared\EmittedOracleOptions.gs" Link="EmittedOracleOptions.cs" />
     <Compile Include="..\Shared\EmittedOracleResult.gs" Link="EmittedOracleResult.cs" />
-    <ProjectReference Include="../../test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="TestAssets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1063,7 +1063,11 @@ public record Item(System.Func<IKey, bool> Callback) {
                             .Success
                     )
                 }
-                let baseline = Assembly.LoadFile(baselinePath)
+                let baseline = System
+                    .Runtime
+                    .Loader
+                    .AssemblyLoadContext("baseline-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+                    .LoadFromStream(MemoryStream(File.ReadAllBytes(baselinePath)))
                 let original Type? = baseline.GetType("PositionalProperty.Item", throwOnError: true)
                 Assert.Equal(expected, original!!.GetMethod("Run")!!.Invoke(nil, nil))
                 Assert.Equal(sources.Length, project.Documents.Count)
@@ -1147,7 +1151,12 @@ func Main() { System.Console.WriteLine(Item.Run()) }
                 let run = ProcessRunner.Run("dotnet", []string{dll})
                 Assert.Equal(0, run.ExitCode)
                 Assert.Equal(expected.ToString() + "\n", run.Stdout.Replace("\r\n", "\n", StringComparison.Ordinal))
-                let migrated Type? = Assembly.LoadFile(dll).GetType("PositionalProperty.Item", throwOnError: true)
+                let migrated Type? = System
+                    .Runtime
+                    .Loader
+                    .AssemblyLoadContext("migrated-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+                    .LoadFromStream(MemoryStream(File.ReadAllBytes(dll)))
+                    .GetType("PositionalProperty.Item", throwOnError: true)
                 let originalSetter MethodInfo? = original!!.GetProperty(name)!!.SetMethod
                 let migratedSetter MethodInfo? = migrated!!.GetProperty(name)!!.SetMethod
                 if originalSetter == nil {
