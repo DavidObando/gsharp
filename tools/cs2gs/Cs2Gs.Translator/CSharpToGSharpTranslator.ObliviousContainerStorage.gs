@@ -1014,6 +1014,35 @@ partial class CSharpToGSharpTranslator {
                     add.OriginalDefinition.Parameters[index].Type
                 )
             }
+            if parent is ExpressionElementSyntax{Parent: CollectionExpressionSyntax collectionExpression} {
+                let targetType ITypeSymbol? = model.GetTypeInfo(collectionExpression)
+                    .ConvertedType ??
+                    model
+                    .GetTypeInfo(collectionExpression).Type
+                if targetType is INamedTypeSymbol namedTarget &&
+                    namedTarget.TypeKind == TypeKind.Class &&
+                    this
+                    .GetCollectionAddParameterType(
+                    collectionExpression,
+                    namedTarget,
+                    model.GetTypeInfo(written).Type ?? GetCollectionTargetElementType(namedTarget),
+                    written
+                ) is {} addParameterType &&
+                    addParameterType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    let openParameterType ITypeSymbol? = this.GetCollectionProjectionElementType(
+                        collectionExpression,
+                        namedTarget
+                    )
+                    return openParameterType != nil && this.SlotTypeProvesNonNull(
+                        collectionExpression,
+                        openParameterType
+                    )
+                }
+                return false
+            }
             return false
         }
 

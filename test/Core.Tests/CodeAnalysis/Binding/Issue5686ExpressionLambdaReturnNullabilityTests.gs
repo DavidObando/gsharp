@@ -538,6 +538,33 @@ func Run() string? {
     let z3 = StaticTree5686().TakeField((a) -> Box().MaybeName)
     return e.Compile()() ?? p ?? q ?? r ?? s ?? t ?? u ?? v ?? w ?? x ?? y ?? z1 ?? z2 ?? z3
 }`)
+            yield AcceptedRow("ok-issue-5883-nullable-delegate-user-defined-return-conversion", `class Node5883 {
+    var Id int32 = 1
+}
+class Other5883 {}
+data struct Card5883 {
+    var Id int32 = 2
+    func Build() Node5883 -> Node5883{Id: Id}
+    func operator implicit (c Card5883) Node5883 -> c.Build()
+}
+data struct Shell5883 {
+    var Make Func[Node5883]?
+}
+func Pick5883(f Func[Node5883]?) int32 -> f!!().Id
+func Pick5883(f Func[Other5883]?) int32 -> 0
+func PickAction5883(f Func[Node5883]?) int32 -> f!!().Id
+func PickAction5883(f Action?) int32 -> 0
+func Run() int32 {
+    let a = Shell5883{Make: () -> Card5883{Id: 3}}
+    let b = Shell5883{Make: () -> { return Card5883{Id: 4} }}
+    let fallback Func[Node5883]? = nil
+    var s = Shell5883{}
+    s.Make = (() -> Card5883{Id: 5}) ?? fallback
+    s.Make = (true ? (() -> Card5883{Id: 6}) : nil)
+    let c = Shell5883{Make: (() -> Card5883{Id: 7}) ?? fallback}
+    let d = Shell5883{Make: fallback ?? (() -> Card5883{Id: 8})}
+    return a.Make!!().Id + b.Make!!().Id + s.Make!!().Id + c.Make!!().Id + d.Make!!().Id + Pick5883(() -> Card5883{Id: 9}) + PickAction5883(() -> { return Card5883{Id: 10} })
+}`)
         }
 
         private func Row(

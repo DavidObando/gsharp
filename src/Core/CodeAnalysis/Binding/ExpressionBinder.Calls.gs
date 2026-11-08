@@ -3092,17 +3092,6 @@ internal partial class ExpressionBinder {
                     )
                     return true
                 }
-                case user is StructSymbol when MemberLookup.TryGetUserPatternEnumerableElementType(
-                    user,
-                    out var userElement
-                ) {
-                    elementType = Invariant.Required(
-                        userElement,
-                        "a successful user enumerable-element lookup produces an element type",
-                        expression: "userElement"
-                    )
-                    return true
-                }
             }
             let userParameterTypes = TypeMemberModel
                 .GetMethods(collectionType, "Add", MemberQuery.Instance(MemberKinds.Method))
@@ -3112,6 +3101,17 @@ internal partial class ExpressionBinder {
                 .ToArray()
             if userParameterTypes.Length == 1 {
                 elementType = userParameterTypes[0]
+                return true
+            }
+            if userParameterTypes.Length == 0 &&
+                collectionType is StructSymbol user &&
+                MemberLookup
+                .TryGetUserPatternEnumerableElementType(user, out var userElement) {
+                elementType = Invariant.Required(
+                    userElement,
+                    "a successful user enumerable-element lookup produces an element type",
+                    expression: "userElement"
+                )
                 return true
             }
             elementType = nil

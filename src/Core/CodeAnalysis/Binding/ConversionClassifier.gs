@@ -4304,58 +4304,18 @@ internal class ConversionClassifier {
             targetReturn = unwrappedTarget
         }
         let openReturnClrType = GetInferredOpenDelegateReturnClrType(method, paramIndex, call, literal.Function.IsAsync)
-        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn, openReturnClrType) {
+        let isInferredMethodReturnTypeParameter = openReturnClrType != nil &&
+            openReturnClrType.IsGenericParameter &&
+            openReturnClrType.DeclaringMethod != nil
+        if !HasReferenceNullabilityReturnMismatch(sourceReturn, targetReturn, openReturnClrType) &&
+            (
+            isInferredMethodReturnTypeParameter ||
+                sourceReturn == targetReturn ||
+                !HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn)
+        ) {
             return false
         }
         lambdaSyntax = syntax
-        return true
-    }
-
-    private func AreRuntimeDelegateParametersCompatible(
-        literal BoundFunctionLiteralExpression,
-        sourceFunction FunctionTypeSymbol,
-        targetFunction FunctionTypeSymbol
-    ) bool {
-        if sourceFunction.Arity != targetFunction.Arity {
-            return false
-        }
-        for var i = 0; i < sourceFunction.Arity; i++ {
-            let parameterType = sourceFunction.ParameterTypes[i]
-            let targetParameterType = targetFunction.ParameterTypes[i]
-            if parameterType == TypeSymbol.Error || targetParameterType == TypeSymbol.Error {
-                return false
-            }
-            let refKind = if i < literal.Function.Parameters.Length {
-                literal.Function.Parameters[i].RefKind
-            } else {
-                RefKind.None
-            }
-            let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
-                targetParameterType,
-                parameterType
-            )
-            let conversion = Conversion.ClassifyNonStructural(targetParameterType, parameterType)
-            let structurallyCompatibleDelegate = parameterType is FunctionTypeSymbol writtenFunctionType &&
-                !(targetParameterType is FunctionTypeSymbol) &&
-                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
-                targetParameterType,
-                out var targetDelegateFunctionType
-            ) &&
-                Conversion
-                .ClassifyNonStructural(targetDelegateFunctionType!!, writtenFunctionType).IsImplicit
-            let compatible = runtimeEquivalent ||
-                structurallyCompatibleDelegate ||
-                (
-                refKind == RefKind.None &&
-                    (
-                    conversion.IsImplicit ||
-                        HasUserDefinedImplicitConversionForTypes(targetParameterType, parameterType)
-                )
-            )
-            if !compatible {
-                return false
-            }
-        }
         return true
     }
 
@@ -7244,7 +7204,11 @@ internal class ConversionClassifier {
                 !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(expression.Type, target) {
                 return Conversion.None
             }
-            if !conversion.Exists && CanAdaptSynthesizedRefDelegateValue(expression, target) {
+            if !conversion.Exists &&
+                (
+                CanAdaptSynthesizedRefDelegateValue(expression, target) ||
+                    CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(expression, target)
+            ) {
                 return Conversion.Implicit
             }
             if !conversion.Exists || conversion.IsIdentity || KeepsConvertedDelegate(expression, target) {
@@ -7256,6 +7220,88 @@ internal class ConversionClassifier {
             } else {
                 Conversion.None
             }
+        }
+
+        internal func CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+            expression BoundExpression,
+            targetType TypeSymbol?
+        ) bool {
+            if targetType == nil || !LambdaBinder.TryGetFunctionLiteral(expression, out var literal) ||
+                literal == nil ||
+                !literal.DeferredExpressionTreeReturnValidation {
+                return false
+            }
+            let syntax = literal.Syntax as LambdaExpressionSyntax
+            let sourceFunction = literal.FunctionType as FunctionTypeSymbol
+            if syntax == nil || sourceFunction == nil || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                targetType,
+                out var targetFunction
+            ) ||
+                targetFunction == nil ||
+                !AreRuntimeDelegateParametersCompatible(literal, sourceFunction, targetFunction) {
+                return false
+            }
+            var sourceReturn = sourceFunction.ReturnType
+            var targetReturn = targetFunction.ReturnType
+            if literal.Function.IsAsync && !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _) {
+                if !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(sourceReturn, out var unwrappedSource) ||
+                    !AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(targetReturn, out var unwrappedTarget) ||
+                    unwrappedSource == nil ||
+                    unwrappedTarget == nil {
+                    return false
+                }
+                sourceReturn = unwrappedSource
+                targetReturn = unwrappedTarget
+            }
+            return sourceReturn != targetReturn && HasUserDefinedImplicitConversionForTypes(sourceReturn, targetReturn)
+        }
+
+        private func AreRuntimeDelegateParametersCompatible(
+            literal BoundFunctionLiteralExpression,
+            sourceFunction FunctionTypeSymbol,
+            targetFunction FunctionTypeSymbol
+        ) bool {
+            if sourceFunction.Arity != targetFunction.Arity {
+                return false
+            }
+            for var i = 0; i < sourceFunction.Arity; i++ {
+                let parameterType = sourceFunction.ParameterTypes[i]
+                let targetParameterType = targetFunction.ParameterTypes[i]
+                if parameterType == TypeSymbol.Error || targetParameterType == TypeSymbol.Error {
+                    return false
+                }
+                let refKind = if i < literal.Function.Parameters.Length {
+                    literal.Function.Parameters[i].RefKind
+                } else {
+                    RefKind.None
+                }
+                let runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    targetParameterType,
+                    parameterType
+                )
+                let conversion = Conversion.ClassifyNonStructural(targetParameterType, parameterType)
+                let structurallyCompatibleDelegate = parameterType is FunctionTypeSymbol writtenFunctionType &&
+                    !(targetParameterType is FunctionTypeSymbol) &&
+                    MemberLookup.TryGetDelegateFunctionTypeFromSymbol(
+                    targetParameterType,
+                    out var targetDelegateFunctionType
+                ) &&
+                    Conversion
+                    .ClassifyNonStructural(targetDelegateFunctionType!!, writtenFunctionType).IsImplicit
+                let compatible = runtimeEquivalent ||
+                    structurallyCompatibleDelegate ||
+                    (
+                    refKind == RefKind.None &&
+                        (
+                        conversion.IsImplicit ||
+                            HasUserDefinedImplicitConversionForTypes(targetParameterType, parameterType)
+                    )
+                )
+                if !compatible {
+                    return false
+                }
+            }
+            return true
         }
 
         /// Issue #3505: true when [`from`](paramref) and [`to`](paramref)

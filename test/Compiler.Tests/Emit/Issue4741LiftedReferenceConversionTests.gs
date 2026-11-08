@@ -846,6 +846,120 @@ func Build() Func[SourceText] {
         }
     }
 
+    @Fact
+    func Issue5883_NullableDelegateInitializerAndSinks_ApplyUserDefinedLambdaReturnConversion() {
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue5883-fixtures", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let librarySourcePath = Path.Combine(directory, "Types.gs")
+            let libraryAssemblyPath = Path.Combine(directory, "LambdaLibrary.dll")
+            File.WriteAllText(librarySourcePath, `package LambdaLibrary
+
+import System
+
+public class Node {
+    public var Id int32 = 42
+}
+
+public class Other {}
+
+public data struct Card {
+    public var Id int32 = 7
+    public func Build() Node -> Node{Id: Id}
+    public func operator implicit (c Card) Node -> c.Build()
+}
+
+public delegate NodeMaker() Node;
+
+public data struct Shell {
+    public var Make Func[Node]?
+    public var MakeFn (() -> Node)?
+    public var MakeDel NodeMaker?
+    public var MakeWithArg Func[int32, Node]?
+}
+
+public shared class ImportedOverloads {
+    public func Pick(f Func[Node]?) int32 -> f!!().Id
+    public func Pick(f Func[Other]?) int32 -> 0
+    public func PickAction(f Func[Node]?) int32 -> f!!().Id
+    public func PickAction(f Action?) int32 -> 0
+}`)
+            let libraryCompilation = CompileGSharp(librarySourcePath, libraryAssemblyPath, nil)
+            Assert.True(libraryCompilation.Exit == 0, libraryCompilation.Diagnostics)
+            let consumerSourcePath = Path.Combine(directory, "Program.gs")
+            let consumerAssemblyPath = Path.Combine(directory, "Consumer5883.dll")
+            File.WriteAllText(consumerSourcePath, `package LambdaConsumer
+
+import System
+import LambdaLibrary
+
+class LocalNode {
+    var Id int32 = 10
+}
+
+data struct LocalCard {
+    var Id int32 = 11
+    func Build() LocalNode -> LocalNode{Id: Id}
+    func operator implicit (c LocalCard) LocalNode -> c.Build()
+}
+
+data struct LocalShell {
+    var Make Func[LocalNode]?
+}
+
+func Pick(f Func[Node]?) int32 -> f!!().Id
+func Pick(f Func[Other]?) int32 -> 0
+func PickAction(f Func[Node]?) int32 -> f!!().Id
+func PickAction(f Action?) int32 -> 0
+
+public func Run() string {
+    let expression = Shell{
+        Make: () -> Card{Id: 1},
+        MakeFn: () -> Card{Id: 2},
+        MakeDel: () -> Card{Id: 3},
+        MakeWithArg: (x) -> Card{Id: x}
+    }
+    let block = Shell{
+        Make: () -> { return Card{Id: 4} },
+        MakeFn: () -> { return Card{Id: 5} },
+        MakeDel: () -> { return Card{Id: 6} },
+        MakeWithArg: (x int32) -> { return Card{Id: x} }
+    }
+    let localExpr = LocalShell{Make: () -> LocalCard{Id: 7}}
+    let localBlock = LocalShell{Make: () -> { return LocalCard{Id: 8} }}
+    var s = Shell{}
+    let fallback Func[Node]? = nil
+    s.Make = (() -> Card{Id: 9}) ?? fallback
+    let r9 = s.Make!!().Id
+    s.Make = (true ? (() -> Card{Id: 10}) : nil)
+    let r10 = s.Make!!().Id
+    let sCoalesce1 = Shell{Make: (() -> Card{Id: 11}) ?? fallback}
+    let sCoalesce2 = Shell{Make: fallback ?? (() -> Card{Id: 12})}
+    let p1 = Pick(() -> Card{Id: 13})
+    let p2 = Pick(() -> { return Card{Id: 14} })
+    let p3 = PickAction(() -> Card{Id: 15})
+    let p4 = PickAction(() -> { return Card{Id: 16} })
+    let ip1 = ImportedOverloads.Pick(() -> Card{Id: 17})
+    let ip2 = ImportedOverloads.Pick(() -> { return Card{Id: 18} })
+    let ip3 = ImportedOverloads.PickAction(() -> Card{Id: 19})
+    let ip4 = ImportedOverloads.PickAction(() -> { return Card{Id: 20} })
+    return "${expression.Make!!().Id},${expression.MakeFn!!().Id},${expression.MakeDel!!().Id},${expression.MakeWithArg!!(30).Id},${block.Make!!().Id},${block.MakeFn!!().Id},${block.MakeDel!!().Id},${block.MakeWithArg!!(40).Id},${localExpr.Make!!().Id},${localBlock.Make!!().Id},$r9,$r10,${sCoalesce1.Make!!().Id},${sCoalesce2.Make!!().Id},$p1,$p2,$p3,$p4,$ip1,$ip2,$ip3,$ip4"
+}`)
+            let consumerCompilation = CompileGSharp(consumerSourcePath, consumerAssemblyPath, libraryAssemblyPath)
+            Assert.True(consumerCompilation.Exit == 0, consumerCompilation.Diagnostics)
+            IlVerifier.Verify(consumerAssemblyPath, []string{libraryAssemblyPath})
+            let loaded = EmittedFixture.LoadTogether(libraryAssemblyPath, consumerAssemblyPath)
+            let consumerAssembly = loaded[1]
+            let program = consumerAssembly.GetTypes().Single(
+                (type Type) -> type.GetMethod("Run", BindingFlags.Public | BindingFlags.Static) != nil
+            )
+            let actual object? = program.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)?.Invoke(nil, nil)
+            Assert.Equal("1,2,3,30,4,5,6,40,7,8,9,10,11,12,13,14,15,16,17,18,19,20", actual)
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
     shared {
         private func RunPair(
             gsharpConversion string,
@@ -1227,17 +1341,15 @@ func Run() string {
             }
         }
 
-        private func CompileGSharp(sourcePath string, assemblyPath string, fixturePath string)(
+        private func CompileGSharp(sourcePath string, assemblyPath string, fixturePath string?)(
             Exit int32,
             Diagnostics string
         ) {
-            let arguments = List[string]{
-                "/target:library",
-                "/targetframework:net10.0",
-                "/out:" + assemblyPath,
-                "/reference:" + fixturePath,
-                sourcePath
+            let arguments = List[string]{"/target:library", "/targetframework:net10.0", "/out:" + assemblyPath}
+            if !string.IsNullOrEmpty(fixturePath) {
+                arguments.Add("/reference:" + fixturePath)
             }
+            arguments.Add(sourcePath)
             using let stdout = StringWriter()
             using let stderr = StringWriter()
             let previousOut = Console.Out

@@ -1825,7 +1825,7 @@ internal partial class ExpressionBinder {
             syntax
             .OperatorToken
             .Kind == SyntaxKind.QuestionQuestionToken &&
-            IsTargetDependentExpressionSyntax(syntax.Left) {
+            (IsTargetDependentExpressionSyntax(syntax.Left) || IsNestedLambdaExpression(syntax.Left)) {
             BindExpression(syntax.Left, coalesceTargetType)
         } else {
             BindExpression(syntax.Left)
@@ -1896,7 +1896,7 @@ internal partial class ExpressionBinder {
             .OperatorToken
             .Kind == SyntaxKind.QuestionQuestionToken &&
             coalesceTargetType != nil &&
-            IsTargetDependentExpressionSyntax(syntax.Right) {
+            (IsTargetDependentExpressionSyntax(syntax.Right) || IsNestedLambdaExpression(syntax.Right)) {
             ApplySubExpressionNarrowingEffects(syntax.Left, boundLeft)
             let beforeRight = CaptureExpressionNarrowingFrames()
             let preRightSnapshot = CaptureNarrowingBindSnapshot()
@@ -4459,6 +4459,12 @@ internal partial class ExpressionBinder {
                         ClrOverloadResolution.ImplicitConversionKind.None
                     }
                 }
+                if ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                    boundArguments[argIndex],
+                    nativeTarget
+                ) {
+                    return ClrOverloadResolution.ImplicitConversionKind.Reference
+                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -4688,6 +4694,11 @@ internal partial class ExpressionBinder {
                 }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||
+                    ConversionClassifier
+                    .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                    boundArguments[argIndex],
+                    targetType
+                ) ||
                     (
                     sourceType is StructSymbol{IsClass: false} userStruct &&
                         clrParameterType.IsInterface &&

@@ -209,6 +209,77 @@ namespace Corpus.Issue4525
     }
 
     @Fact
+    func ConstructibleTarget_NullableEnumerableWithNonNullableAddParameter_ForgivesNullableElements() {
+        let rendered = Render(`
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4573
+{
+    public class Base {}
+    public class Derived : Base {}
+
+    public class Bag : IEnumerable<string?>
+    {
+        public void Add(string item) { }
+        public IEnumerator<string?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class BaseBag : IEnumerable<Base?>
+    {
+        public void Add(Base item) { }
+        public IEnumerator<Base?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class MultiBag : IEnumerable<string?>
+    {
+        public void Add(string item) { }
+        public void Add(int item) { }
+        public IEnumerator<string?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public Bag Make(string? value, string[] items)
+        {
+            Bag bag = [value, ..items];
+            return bag;
+        }
+
+        public BaseBag MakeDerived(Derived? derived)
+        {
+            BaseBag bag = [derived];
+            return bag;
+        }
+
+        public MultiBag MakeMulti(string? value)
+        {
+            MultiBag bag = [value];
+            return bag;
+        }
+
+        public Bag MakeFromWidenedArray()
+        {
+            var array = new string[2];
+            array[0] = null!;
+            Bag bag = [array[0]];
+            return bag;
+        }
+    }
+}
+`)
+        Assert.Contains("value!!, ...items", rendered, StringComparison.Ordinal)
+        Assert.Contains("derived!!", rendered, StringComparison.Ordinal)
+        Assert.Contains("MultiBag(){ value!! }", rendered, StringComparison.Ordinal)
+        Assert.Contains("array[0]!!", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
+    }
+
+    @Fact
     func ConstructibleTarget_PrivateBaseAddDoesNotHidePublicNullableAdd() {
         let rendered = Render(`
 #nullable enable
