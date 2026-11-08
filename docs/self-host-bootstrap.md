@@ -54,6 +54,11 @@ Use `--migrated-tree` instead of `--tree` to certify a pre-migrated directory wi
 `--freeze-migrated-tree TREE SNAPSHOT` creates a read-only snapshot for inspection.
 The caller and snapshot roots must be disjoint, including through symbolic-link aliases.
 The controller rejects overlapping roots before it changes either tree.
+The migrated-tree manifest records directory paths, including empty directories.
+Freezing preserves these directories in the snapshot and both derived stage trees.
+Verification rejects added, removed, or renamed directories in the caller or snapshot.
+Directory rows use `kind: "directory"`, size `0`, and an empty `sha256` value.
+Regular-file rows keep their existing schema and toolchain identities remain unchanged.
 
 ```sh
 python3 build/selfhost-stage2.py \

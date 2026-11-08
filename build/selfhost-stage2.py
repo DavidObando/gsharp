@@ -34,7 +34,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -281,6 +281,11 @@ class FileIdentity:
     mode: int
     size: int
     sha256: str
+
+
+@dataclass(frozen=True)
+class DirectoryIdentity(FileIdentity):
+    kind: str = "directory"
 
 
 @dataclass(frozen=True)
@@ -883,6 +888,27 @@ def identity(tree: Path, path: Path) -> FileIdentity:
         relative, stat.S_IMODE(info.st_mode), info.st_size, sha256_file(path))
 
 
+def tree_identity(tree: Path, path: Path) -> FileIdentity:
+    info = path.lstat()
+    if stat.S_ISDIR(info.st_mode):
+        return DirectoryIdentity(
+            path.relative_to(tree).as_posix(), stat.S_IMODE(info.st_mode), 0, "")
+    return identity(tree, path)
+
+
+def normalized_migrated_identity(row: FileIdentity) -> FileIdentity:
+    mode = 0o755 if isinstance(row, DirectoryIdentity) or (row.mode & 0o111) else 0o644
+    return replace(row, mode=mode)
+
+
+def manifest_identity(row: dict[str, Any]) -> FileIdentity:
+    if row.get("kind") == "directory":
+        return DirectoryIdentity(**row)
+    if "kind" in row:
+        raise CertificationError(f"unsupported manifest entry kind: {row['kind']}")
+    return FileIdentity(**row)
+
+
 def owned_file(path: Path, label: str) -> os.stat_result:
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -939,19 +965,8 @@ def migrated_tree_manifest(caller: Path) -> list[FileIdentity]:
         relative = rel.as_posix()
         if "\r" in relative or "\n" in relative:
             raise CertificationError("snapshot paths cannot contain CR or LF")
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            raise CertificationError(f"symbolic links are unsupported in v1: {relative}")
-        if stat.S_ISDIR(info.st_mode):
-            continue
-        if not stat.S_ISREG(info.st_mode):
-            raise CertificationError(f"non-regular participating input: {relative}")
-        if info.st_nlink != 1:
-            raise CertificationError(f"hard-linked participating input: {relative}")
-        mode = 0o755 if (info.st_mode & 0o111) else 0o644
-        data = path.read_bytes()
-        manifest.append(FileIdentity(relative, mode, len(data), sha256_bytes(data)))
-    if not manifest:
+        manifest.append(normalized_migrated_identity(tree_identity(caller, path)))
+    if not any(not isinstance(row, DirectoryIdentity) for row in manifest):
         raise CertificationError(f"migrated tree is empty: {caller}")
     return sorted(manifest, key=lambda row: row.path)
 
@@ -963,17 +978,22 @@ def freeze_migrated_tree(
     manifest = migrated_tree_manifest(caller)
     snapshot.mkdir()
     for row in manifest:
+        destination = snapshot / row.path
+        if isinstance(row, DirectoryIdentity):
+            destination.mkdir(parents=True, exist_ok=True)
+            os.chmod(destination, row.mode)
+            continue
         source_path = caller / row.path
         data = source_path.read_bytes()
         if len(data) != row.size or sha256_bytes(data) != row.sha256:
             raise CertificationError(f"migrated tree changed while freezing: {row.path}")
-        destination = snapshot / row.path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
         os.chmod(destination, row.mode)
     make_read_only(snapshot)
-    frozen = [identity(snapshot, snapshot / row.path) for row in manifest]
+    frozen = [tree_identity(snapshot, snapshot / row.path) for row in manifest]
     verify_manifest(snapshot, frozen)
+    verify_migrated_caller_unchanged(caller, frozen)
     tree_sha256 = sha256_bytes(
         json.dumps([asdict(row) for row in frozen], sort_keys=True).encode())
     return frozen, {"migratedTreeSha256": tree_sha256}
@@ -983,10 +1003,7 @@ def verify_migrated_caller_unchanged(
     caller: Path, expected_manifest: list[FileIdentity],
 ) -> None:
     actual = migrated_tree_manifest(caller)
-    expected = [
-        FileIdentity(row.path, 0o755 if (row.mode & 0o111) else 0o644, row.size, row.sha256)
-        for row in expected_manifest
-    ]
+    expected = [normalized_migrated_identity(row) for row in expected_manifest]
     if actual != sorted(expected, key=lambda row: row.path):
         raise CertificationError("caller migrated tree changed during certification")
 
@@ -1031,7 +1048,10 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
 
 def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
     try:
-        expected_directories = {
+        recorded_directories = {
+            row.path for row in expected if isinstance(row, DirectoryIdentity)
+        }
+        expected_directories = recorded_directories | {
             parent.as_posix()
             for row in expected
             for parent in Path(row.path).parents
@@ -1047,6 +1067,8 @@ def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
                 if relative not in expected_directories:
                     raise CertificationError(
                         f"immutable source manifest has an extra directory: {relative}")
+                if relative in recorded_directories:
+                    actual.append(tree_identity(root, path))
                 continue
             actual.append(identity(root, path))
         actual.sort(key=lambda row: row.path)
@@ -3943,7 +3965,8 @@ class Controller:
             self.report["source"] = {
                 "manifestSha256": sha256_bytes(
                     json.dumps([asdict(row) for row in manifest], sort_keys=True).encode()),
-                "files": len(manifest), "git": git_identity,
+                "files": sum(not isinstance(row, DirectoryIdentity) for row in manifest),
+                "git": git_identity,
             }
             atomic_json(self.evidence / "source-manifest.json", [asdict(row) for row in manifest])
             clone_snapshot(self.source, self.stage1)
@@ -4169,7 +4192,8 @@ def main(argv: list[str]) -> int:
         try:
             manifest, git_identity = freeze_migrated_tree(*args.freeze_migrated_tree)
             print(json.dumps({
-                "files": len(manifest), "git": git_identity,
+                "files": sum(not isinstance(row, DirectoryIdentity) for row in manifest),
+                "git": git_identity,
             }, sort_keys=True))
         except (CertificationError, OSError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
@@ -4294,7 +4318,7 @@ def main(argv: list[str]) -> int:
         root, manifest_path = args.verify_manifest
         try:
             rows = [
-                FileIdentity(**row)
+                manifest_identity(row)
                 for row in json.loads(manifest_path.read_text(encoding="utf-8"))
             ]
             verify_manifest(real(root), rows)
@@ -4324,7 +4348,7 @@ def main(argv: list[str]) -> int:
         root, manifest = args.verify_directory_manifest
         try:
             expected = [
-                FileIdentity(**row)
+                manifest_identity(row)
                 for row in json.loads(manifest.read_text(encoding="utf-8"))
             ]
             if directory_manifest(real(root)) != expected:

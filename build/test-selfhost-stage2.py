@@ -2203,6 +2203,89 @@ class ToolchainManifestTests(unittest.TestCase):
         self.assertFalse(report["certified"])
         self.assertIn("invalid dotnet archive", report["error"])
 
+    def test_freeze_migrated_tree_preserves_empty_directory_build_conditions(self) -> None:
+        migrated = self.root / "migrated"
+        (migrated / "gate" / "empty").mkdir(parents=True)
+        (migrated / "Probe.proj").write_text(
+            """<Project>
+  <Target Name="Build">
+    <WriteLinesToFile File="$(ProbeOutput)" Lines="present" Overwrite="true"
+                      Condition="Exists('gate/empty')" />
+    <WriteLinesToFile File="$(ProbeOutput)" Lines="absent" Overwrite="true"
+                      Condition="!Exists('gate/empty')" />
+  </Target>
+</Project>
+""", encoding="utf-8")
+
+        def build(tree: Path, output: Path) -> bytes:
+            result = subprocess.run(
+                ["dotnet", "msbuild", "Probe.proj", "-target:Build",
+                 f"-p:ProbeOutput={output}", "-nologo", "-verbosity:quiet", "-nr:false"],
+                cwd=tree, text=True, capture_output=True,
+                env={**os.environ, "MSBUILDDISABLENODEREUSE": "1",
+                     "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER": "1"})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            return output.read_bytes()
+
+        expected = b"present" + os.linesep.encode()
+        self.assertEqual(expected, build(migrated, self.root / "caller-output.txt"))
+        snapshot = self.root / "snapshot"
+        frozen = run_driver("--freeze-migrated-tree", migrated, snapshot)
+        self.assertEqual(0, frozen.returncode, frozen.stdout + frozen.stderr)
+        self.assertEqual(1, json.loads(frozen.stdout)["files"])
+        for stage in ("stage-1", "stage-2"):
+            with self.subTest(stage=stage):
+                tree = self.root / stage
+                stage2.clone_snapshot(snapshot, tree)
+                self.assertEqual(expected, build(tree, self.root / f"{stage}-output.txt"))
+
+    def test_empty_directory_changes_are_detected_in_caller_and_snapshot(self) -> None:
+        for boundary in ("caller", "snapshot"):
+            for mutation in ("add", "remove", "rename"):
+                with self.subTest(boundary=boundary, mutation=mutation):
+                    suffix = f"{boundary}-{mutation}"
+                    migrated = self.root / f"migrated-{suffix}"
+                    (migrated / "empty").mkdir(parents=True)
+                    (migrated / "App.gs").write_bytes(b"package app\n")
+                    snapshot = self.root / f"snapshot-{suffix}"
+                    manifest, original_identity = stage2.freeze_migrated_tree(migrated, snapshot)
+                    plan = self.root / f"manifest-{suffix}.json"
+                    plan.write_text(json.dumps(
+                        [dataclasses.asdict(row) for row in manifest]), encoding="utf-8")
+                    tree = migrated if boundary == "caller" else snapshot
+                    self.assertTrue((tree / "empty").is_dir())
+                    if boundary == "caller":
+                        stage2.verify_migrated_caller_unchanged(tree, manifest)
+                    else:
+                        valid = run_driver("--verify-manifest", tree, plan)
+                        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+                    mode = tree.stat().st_mode & 0o777
+                    tree.chmod(mode | 0o200)
+                    try:
+                        if mutation == "add":
+                            (tree / "extra").mkdir()
+                        elif mutation == "remove":
+                            (tree / "empty").rmdir()
+                        else:
+                            (tree / "empty").rename(tree / "renamed")
+                    finally:
+                        tree.chmod(mode)
+                    if boundary == "caller":
+                        with self.assertRaisesRegex(
+                            stage2.CertificationError, "caller migrated tree changed",
+                        ):
+                            stage2.verify_migrated_caller_unchanged(tree, manifest)
+                        changed = run_driver(
+                            "--freeze-migrated-tree", tree, self.root / f"changed-{suffix}")
+                        self.assertEqual(0, changed.returncode, changed.stdout + changed.stderr)
+                        self.assertNotEqual(
+                            original_identity["migratedTreeSha256"],
+                            json.loads(changed.stdout)["git"]["migratedTreeSha256"])
+                    else:
+                        rejected = run_driver("--verify-manifest", tree, plan)
+                        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                        self.assertIn("manifest", rejected.stderr)
+
     def test_freeze_migrated_tree_preserves_modes_and_detects_post_freeze_mutations(self) -> None:
         migrated = self.root / "migrated"
         (migrated / "src").mkdir(parents=True)
@@ -2212,7 +2295,9 @@ class ToolchainManifestTests(unittest.TestCase):
         script.chmod(0o755)
         snapshot = self.root / "snapshot"
         manifest, identity = stage2.freeze_migrated_tree(migrated, snapshot)
-        self.assertEqual(2, len(manifest))
+        self.assertEqual(
+            ["build.sh", "src/App.gs"],
+            [row.path for row in manifest if not isinstance(row, stage2.DirectoryIdentity)])
         self.assertIn("migratedTreeSha256", identity)
         self.assertEqual(0o555, (snapshot / "build.sh").stat().st_mode & 0o777)
         stage2.verify_migrated_caller_unchanged(migrated, manifest)
