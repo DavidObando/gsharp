@@ -3420,7 +3420,10 @@ partial class CSharpToGSharpTranslator {
             if storageOwner != nil &&
                 (
                 this.ObliviousContainerPositions(storageOwner)?.Contains(position) == true ||
-                    this.ElementWrittenMaybeNil(storageOwner, position, checkRefStorage) ||
+                    (
+                    this.TryGetRefStorageSlot(storageOwner, position.Split('.').Length) != nil &&
+                        this.ElementWrittenMaybeNil(storageOwner, position, checkRefStorage)
+                ) ||
                     this.ElementPassedToNullableByRefParameter(storageOwner, position, checkRefStorage: checkRefStorage)
             ) {
                 return true

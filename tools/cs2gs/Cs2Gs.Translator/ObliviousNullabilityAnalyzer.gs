@@ -420,6 +420,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
+    private let RefArraySources ConditionalWeakTable[
+        Compilation,
+        Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]
+    ] = ConditionalWeakTable[Compilation, Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]]]()
 
     private let ComputeCounts ConditionalWeakTable[Compilation, StrongBox[int32]] = ConditionalWeakTable[
         Compilation,
@@ -4463,7 +4467,33 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol, Source ISymbol)],
         scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
-        let aliases = Dictionary[ISymbol, Dictionary[int32, ISymbol]](SymbolEqualityComparer.Default)
+        let aliases = RefArraySources.GetValue(compilation, BuildRefArraySources)
+        for positions in aliases.Values {
+            for sources in positions.Values {
+                for source in sources.Skip(1) {
+                    edges.Add((sources[0], source))
+                    edges.Add((source, sources[0]))
+                }
+            }
+        }
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+                if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                    continue
+                }
+                let (source, depth) = RefArrayStorage(assignment.Left, model)
+                if source != nil && depth > 0 && aliases.TryGetValue(source, out var positions) &&
+                    positions
+                    .TryGetValue(depth, out var sources) {
+                    CollectScalarValueFlow(sources[0], assignment.Right, model, tainted, edges, scalarTupleEdges)
+                }
+            }
+        }
+    }
+
+    private func BuildRefArraySources(compilation Compilation) Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] {
+        let aliases = Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
             let model = compilation.GetSemanticModel(tree)
             for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
@@ -4487,32 +4517,18 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 if !aliases.TryGetValue(source, out var positions) {
-                    positions = Dictionary[int32, ISymbol]()
+                    positions = Dictionary[int32, List[ISymbol]]()
                     aliases.Add(source, positions)
                 }
                 let canonicalTarget = Canonical(target)!!
-                if positions.TryGetValue(depth, out var other) {
-                    edges.Add((canonicalTarget, other))
-                    edges.Add((other, canonicalTarget))
-                } else {
-                    positions.Add(depth, canonicalTarget)
+                if !positions.TryGetValue(depth, out var sources) {
+                    sources = List[ISymbol]()
+                    positions.Add(depth, sources)
                 }
+                sources.Add(canonicalTarget)
             }
         }
-        for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
-            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
-                if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
-                    continue
-                }
-                let (source, depth) = RefArrayStorage(assignment.Left, model)
-                if source != nil && depth > 0 && aliases.TryGetValue(source, out var positions) &&
-                    positions
-                    .TryGetValue(depth, out var alias) {
-                    CollectScalarValueFlow(alias, assignment.Right, model, tainted, edges, scalarTupleEdges)
-                }
-            }
-        }
+        return aliases
     }
 
     internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
@@ -4608,16 +4624,22 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if declaration is VariableDeclaratorSyntax{
                 Initializer: {Value: {} initializer},
-                Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
-            } &&
-                declarationModel
-                .GetSymbolInfo(Unwrap(initializer))
-                .Symbol is {} source &&
-                source is ILocalSymbol or
-                IFieldSymbol or
-                IPropertySymbol or
-                IParameterSymbol {
-                return GetArrayStorageOwner(source, declarationModel, visited, preserveSubstitution) ?? local
+                Parent: VariableDeclarationSyntax{Type: {} type}
+            } {
+                let value = if initializer is RefExpressionSyntax referenceExpression {
+                    referenceExpression.Expression
+                } else {
+                    initializer
+                }
+                if (type.IsVar || initializer is RefExpressionSyntax) && declarationModel.GetSymbolInfo(Unwrap(value))
+                    .Symbol is {} source &&
+                    source is ILocalSymbol or
+                    IFieldSymbol or
+                    IPropertySymbol or
+                    IParameterSymbol or
+                    IMethodSymbol {
+                    return GetArrayStorageOwner(source, declarationModel, visited, preserveSubstitution) ?? local
+                }
             }
         }
         return local
@@ -7631,6 +7653,18 @@ internal shared class ObliviousNullabilityAnalyzer {
                 model
                 .GetSymbolInfo(access).Symbol is IPropertySymbol property && IsRefStorageSymbol(property) {
                 yield Canonical(property)
+            }
+            case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {
+                let (owner, depth) = RefArrayStorage(access, model)
+                if owner != nil && RefArraySources.GetValue(model.Compilation, BuildRefArraySources).TryGetValue(
+                    owner,
+                    out var positions
+                ) &&
+                    positions.TryGetValue(depth, out var sources) {
+                    for source in sources {
+                        yield source
+                    }
+                }
             }
             case IdentifierNameSyntax, MemberAccessExpressionSyntax {
                 if $scope == SourceScope.CallsOnly {

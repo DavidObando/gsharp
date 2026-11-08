@@ -5,6 +5,7 @@ import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
+import Microsoft.CodeAnalysis.CSharp
 import System
 import System.Diagnostics
 import System.IO
@@ -644,6 +645,135 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("element-read")
+    @InlineData("array-alias")
+    @InlineData("jagged")
+    @InlineData("out-discard")
+    @InlineData("out-direction")
+    @InlineData("reduced-extension")
+    @InlineData("reduced-generic")
+    @InlineData("reduced-generic-nullable")
+    @InlineData("ref-return-array")
+    @InlineData("jagged-array-alias")
+    func RefStorageEdges_PreserveCSharpOutput(shape string) {
+        let source = switch shape {
+            case "element-read": `public static class Obj {
+    public static string Read() {
+        var xs = new[] { "x" };
+        ref string alias = ref xs[0];
+        alias = null;
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "array-alias": `public static class Obj {
+    public static string Run() {
+        var xs = new[] { "x" };
+        ref string[] ys = ref xs;
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0] ?? "null";
+    }
+}`
+            case "jagged": `public static class Obj {
+    public static string Run() {
+        string[][] xs = new[] { new[] { "x" } };
+        ref string alias = ref xs[0][0];
+        return alias ?? "fallback";
+    }
+}`
+            case "out-discard": `public static class Obj {
+    private static void Clear(out string value) { value = null; }
+    public static string Run() { Clear(out _); return "x"; }
+}`
+            case "out-direction": `public static class Obj {
+#nullable enable
+    private static void Produce(out string value) { value = "x"; }
+#nullable disable
+    public static string Run() {
+        string text = "x";
+        Produce(out text);
+        ref string alias = ref text;
+        alias = null;
+        return text ?? "null";
+    }
+}`
+            case "reduced-generic": `#nullable enable
+public class Holder<T> { public string Text = "x"; }
+#nullable disable
+public static class Extensions {
+    public static ref string Borrow<T>(this Holder<T> holder) => ref holder.Text;
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder<int>();
+        ref string alias = ref holder.Borrow();
+        return alias ?? "fallback";
+    }
+}`
+            case "reduced-generic-nullable": `#nullable enable
+public class Holder<T> {
+    public T Value;
+    public Holder(T value) { Value = value; }
+}
+#nullable disable
+public static class Extensions {
+    public static ref T Borrow<T>(this Holder<T> holder) => ref holder.Value;
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder<string?>(null);
+        ref string alias = ref holder.Borrow();
+        return alias ?? "null";
+    }
+}`
+            case "ref-return-array": `public static class Obj {
+    private static string[] xs = new[] { "x" };
+    private static ref string[] Borrow() => ref xs;
+    public static string Run() {
+        ref string[] ys = ref Borrow();
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0] ?? "null";
+    }
+}`
+            case "jagged-array-alias": `public static class Obj {
+    public static string Run() {
+        string[][] xs = new[] { new[] { "x" } };
+        ref string[] ys = ref xs[0];
+        ref string alias = ref ys[0];
+        alias = null;
+        return xs[0][0] ?? "null";
+    }
+}`
+            default: `#nullable enable
+public class Holder { public string Text = "x"; }
+#nullable disable
+public static class Extensions {
+    public static ref string Borrow(this Holder holder) => ref holder.Text;
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref string alias = ref holder.Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        }
+        let expected = if shape is "element-read" or
+            "array-alias" or
+            "out-direction" or
+            "reduced-generic-nullable" or
+            "ref-return-array" or
+            "jagged-array-alias" {
+            "null"
+        } else {
+            "x"
+        }
+        AssertParity(source, Translate(source), expected)
+    }
+
+    @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
     @InlineData("default(string)")
@@ -685,6 +815,62 @@ public static class Obj {
         Assert.Contains("func Rows(choose bool) sequence[(Text string, Code int32)]", printed)
         Assert.Contains("func MissingRows(choose bool) sequence[(Text string?, Code int32)]", printed)
         AssertParity(source, printed, "keep:2|null:1|x:2")
+    }
+
+    @Fact
+    func LinkedFieldContracts_AgreeAcrossRepositoryCompilations() {
+        const sharedSource = `public static class Shared { public static string Text = "x"; }`
+        const appSource = `public static class Obj {
+    public static string Run() {
+        ref string alias = ref Shared.Text;
+        return alias ?? "fallback";
+    }
+}`
+        const constraintSource = `#nullable enable
+public static class Constraint {
+    public static ref string Keep() => ref Shared.Text;
+}`
+        let app = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource), ("App.cs", appSource)}
+        )
+        let constraint = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource), ("Constraint.cs", constraintSource)}
+        )
+        let repository = []CSharpCompilation{app.Compilation, constraint.Compilation}
+        let translator = CSharpToGSharpTranslator()
+        var appShared string? = nil
+        var constraintShared string? = nil
+        var appPrinted = ""
+        for project in[]LoadedCSharpProject{app, constraint} {
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            for document in project.Documents {
+                let context = TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    repositoryCompilations: repository
+                )
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                Assert.DoesNotContain(
+                    context.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                )
+                if document.FilePath.EndsWith("Shared.cs", StringComparison.Ordinal) {
+                    if project == app {
+                        appShared = printed
+                    } else {
+                        constraintShared = printed
+                    }
+                }
+                if project == app {
+                    appPrinted += printed + Environment.NewLine
+                }
+            }
+        }
+        Assert.NotNull(appShared)
+        Assert.NotNull(constraintShared)
+        Assert.Equal(appShared, constraintShared)
+        AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "x")
     }
 
     shared {

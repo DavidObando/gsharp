@@ -11038,10 +11038,18 @@ partial class CSharpToGSharpTranslator {
             target ITypeParameterSymbol,
             compilation Compilation,
             out projectedArgument ITypeSymbol?,
-            out conflictingProjection bool
+            out conflictingProjection bool,
+            includeAllArguments bool = false
         ) bool {
             let candidates = List[ITypeSymbol]()
-            this.CollectProjectedTypeArguments(parameterType, argumentType, target, compilation, candidates)
+            this.CollectProjectedTypeArguments(
+                parameterType,
+                argumentType,
+                target,
+                compilation,
+                candidates,
+                includeAllArguments: includeAllArguments
+            )
             let firstCandidate ITypeSymbol? = candidates.FirstOrDefault()
             projectedArgument = firstCandidate
             conflictingProjection = candidates.Skip(1).Any(
@@ -11056,15 +11064,20 @@ partial class CSharpToGSharpTranslator {
             target ITypeParameterSymbol,
             compilation Compilation,
             projectedArguments List[ITypeSymbol],
-            visitedMethodParameters HashSet[ITypeParameterSymbol]? = nil
+            visitedMethodParameters HashSet[ITypeParameterSymbol]? = nil,
+            includeAllArguments bool = false
         ) {
             if parameterType == nil || argumentType == nil {
                 return
             }
             if parameterType is ITypeParameterSymbol parameter {
                 if SymbolEqualityComparer.Default.Equals(parameter.OriginalDefinition, target.OriginalDefinition) &&
-                    CSharpToGSharpTranslator
-                    .TypeContainsRecognizedManagedReferenceConsumer(argumentType, compilation) {
+                    (
+                    includeAllArguments || CSharpToGSharpTranslator.TypeContainsRecognizedManagedReferenceConsumer(
+                        argumentType,
+                        compilation
+                    )
+                ) {
                     projectedArguments.Add(argumentType)
                 } else if parameter.TypeParameterKind == TypeParameterKind.Method &&
                     target.TypeParameterKind == TypeParameterKind
@@ -11080,7 +11093,8 @@ partial class CSharpToGSharpTranslator {
                             target,
                             compilation,
                             projectedArguments,
-                            seen
+                            seen,
+                            includeAllArguments
                         )
                     }
                 }
@@ -11093,7 +11107,8 @@ partial class CSharpToGSharpTranslator {
                     target,
                     compilation,
                     projectedArguments,
-                    visitedMethodParameters
+                    visitedMethodParameters,
+                    includeAllArguments
                 )
                 return
             }
@@ -11105,7 +11120,8 @@ partial class CSharpToGSharpTranslator {
                     target,
                     compilation,
                     projectedArguments,
-                    visitedMethodParameters
+                    visitedMethodParameters,
+                    includeAllArguments
                 )
                 return
             }
@@ -11129,7 +11145,8 @@ partial class CSharpToGSharpTranslator {
                     target,
                     compilation,
                     projectedArguments,
-                    visitedMethodParameters
+                    visitedMethodParameters,
+                    includeAllArguments
                 )
             }
             if parameterNamed.ContainingType != nil && matchingArgument.ContainingType != nil {
@@ -11139,7 +11156,8 @@ partial class CSharpToGSharpTranslator {
                     target,
                     compilation,
                     projectedArguments,
-                    visitedMethodParameters
+                    visitedMethodParameters,
+                    includeAllArguments
                 )
             }
         }
