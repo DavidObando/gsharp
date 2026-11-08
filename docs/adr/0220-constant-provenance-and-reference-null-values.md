@@ -27,12 +27,16 @@ A source reference type can lack a runtime `Type` while its constant value is kn
 2. Read imported decimal constant attributes without reading runtime field storage.
    Decode both signed and unsigned attribute constructor payloads.
    Ordinary readonly fields without constant metadata remain nonconstant.
+   Loop effects use the same metadata constant decision and do not execute attributed field initializers.
+   Folded imported field literals retain the selected field metadata for semantic queries and language-server navigation.
    Continue emitting decimal constants through initialized readonly storage and `DecimalConstantAttribute`.
    Preserve their scale and zero sign during runtime materialization.
 3. Admit reference null constants in fields and locals, including reference defaults.
    Keep their CLR representation null and inline null reads.
    A known null constant cannot establish an explicitly non-null declaration type.
    Use the type-level `ForNullConstant` operation to make that declaration nullable.
+   Apply this operation after every initializer path, before establishing declaration and flow facts.
+   Statement and loop pattern effects recognize known null field, local, and global constants through one symbol predicate.
    Existing nullable and platform wrappers retain their distinct kinds.
    Do not permit non-null, non-string reference constants.
    Preserve existing named local function-literal `const` bindings; these are not CLR field constants.
