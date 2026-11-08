@@ -6,6 +6,9 @@ package GSharp.Compiler.Tests.Emit
 
 import GSharp.Compiler
 import GSharp.Compiler.Tests
+import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Syntax
 import System
 import System.Collections.Generic
 import System.Diagnostics
@@ -78,7 +81,10 @@ unsafe func asCall(address nint) int32 {
     return fn!!()
 }
 
-unsafe func asFromNuint(address nuint) bool -> (address as (unmanaged[CC] () -> int32)?) == nil
+unsafe func asFromNuint(address nuint) bool {
+    let boxed object = address
+    return (boxed as (unmanaged[CC] () -> int32)?) == nil
+}
 
 unsafe func isTest(boxed object) bool -> boxed is unmanaged[CC] () -> int32
 
@@ -110,9 +116,13 @@ unsafe func run() {
 
 run()`).Replace("CC", convention).Replace("LIBRARY", library).Replace("EXPORT", export)
         let result = CompileInspectAndRun(source, "asCall", "isTest", "switchCall", "boxTest")
-        // ADR-0095 amendment (#4938): the test is against System.IntPtr, so a
-        // `nint` operand always matches and a `nuint` (boxed UIntPtr) never
-        // does.
+        // ADR-0095 amendment (#4938) & #4945: the runtime test is against
+        // System.IntPtr, so a `nint` operand always matches, a boxed `nuint`
+        // (UIntPtr) never does, and a direct `nuint` operand is rejected at
+        // compile time with GS0637.
+        let rejectedDirectNuint = Compilation(SyntaxTree.Parse(`unsafe func asFromNuint(address nuint) bool -> (address as (unmanaged[Cdecl] () -> int32)?) == nil
+asFromNuint(0)`)).GetDiagnostics()
+        Assert.Equal("GS0637", Assert.Single(rejectedDirectNuint, (d Diagnostic) -> d.IsError).Id)
         Assert.Equal(
             string.Join(Environment.NewLine, "True", "True", "True", "False", "True", "-2", "True") +
                 Environment.NewLine,

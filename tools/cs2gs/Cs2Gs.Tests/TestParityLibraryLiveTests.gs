@@ -53,7 +53,15 @@ open class TestParityLibraryLiveTests {
                 "; output tail:\n" +
                 run.Output
         )
-        let library = Assembly.LoadFile(Path.Combine(workDir, "CalcLib", "bin", "Release", "net10.0", "CalcLib.dll"))
+        let loadContext = System
+            .Runtime
+            .Loader
+            .AssemblyLoadContext("calc-lib-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+        let library = loadContext.LoadFromStream(
+            MemoryStream(
+                File.ReadAllBytes(Path.Combine(workDir, "CalcLib", "bin", "Release", "net10.0", "CalcLib.dll"))
+            )
+        )
         Assert.Single(
             library.GetCustomAttributesData(),
             (attribute CustomAttributeData) -> attribute.AttributeType == typeof(InternalsVisibleToAttribute) &&

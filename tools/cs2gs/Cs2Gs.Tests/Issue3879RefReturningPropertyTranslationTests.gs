@@ -111,7 +111,7 @@ Translated G#:
         )
         let loadContext = AssemblyLoadContext("TranslatedRefPropertyAndIndexer_ReturnLiveAliases", isCollectible: true)
         try {
-            let library = loadContext.LoadFromAssemblyPath(libraryPath)
+            let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let holder = library.GetType("Repro.Holder") ??
                 throw InvalidOperationException(
                 "Repro.Holder is missing from the emitted assembly: " + string.Join(
@@ -135,7 +135,7 @@ Translated G#:
             }
             // A C# consumer retains the references across legitimate mutation.
             let driverPath = CompileDriver(workDir, libraryPath, readOnly)
-            let driver = loadContext.LoadFromAssemblyPath(driverPath)
+            let driver = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(driverPath)))
             let result = driver.GetType("Repro.Driver")!!.GetMethod("Run")!!.Invoke(nil, nil)!!
             Assert.Equal([]int32{99, 88, 77}, Assert.IsType[[]int32](result))
         } finally {

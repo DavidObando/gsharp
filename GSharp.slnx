@@ -53,14 +53,12 @@
     <Project Path="src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj" Type="C#" />
     <Project Path="src/Sdk/Gsharp.Templates/Gsharp.Templates.gsproj" Type="C#" />
   </Folder>
-  <Folder Name="/test-assets/">
-    <Project Path="test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" Type="C#" />
-  </Folder>
   <Folder Name="/test/">
     <Project Path="test/Compiler.Tests/Compiler.Tests.gsproj" Type="C#" />
     <Project Path="test/Extensions.Tests/Extensions.Tests.gsproj" Type="C#" />
     <Project Path="test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.gsproj" Type="C#" />
     <Project Path="test/Interpreter.Tests/Interpreter.Tests.gsproj" Type="C#" />
+    <Project Path="test/Interpreter.Tests/TestAssets/Issue3119.CrossConstants/Issue3119.CrossConstants.gsproj" Type="C#" />
     <Project Path="test/LanguageServer.Tests/LanguageServer.Tests.gsproj" Type="C#" />
     <Project Path="test/Runtime.Channels.Tests/Runtime.Channels.Tests.gsproj" Type="C#" />
   </Folder>

@@ -168,7 +168,7 @@ func Run(b Book) Conversion {
         IlVerifier.Verify(consumerPath)
         let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
         try {
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let bookType = consumerAsm.GetTypes().Single((t Type) -> t.Name == "Book")
             let conversionType = consumerAsm.GetTypes().Single((t Type) -> t.Name == "Conversion")
             let run = GetProgramMethod(consumerAsm, "Run")
@@ -266,14 +266,14 @@ class DependentBuilder[TPrincipal, TDependent] {
             LoadContext AssemblyLoadContext
         ) {
             let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             return (libraryAsm, consumerAsm, loadContext)
         }
     }

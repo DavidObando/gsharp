@@ -144,14 +144,14 @@ func Main() {
         try {
             let libraryLoadContext = AssemblyLoadContext("Issue2304-ImportedInterface-Lib", isCollectible: true)
             try {
-                libraryLoadContext.LoadFromAssemblyPath(libraryPath)
+                let libraryAssembly = libraryLoadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 let libraryAssemblyName = Path.GetFileNameWithoutExtension(libraryPath)
                 loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if string.Equals(
                     name.Name,
                     libraryAssemblyName,
                     StringComparison.Ordinal
                 ) {
-                    libraryLoadContext.LoadFromAssemblyPath(libraryPath)
+                    libraryAssembly
                 } else {
                     default(Assembly?)
                 }

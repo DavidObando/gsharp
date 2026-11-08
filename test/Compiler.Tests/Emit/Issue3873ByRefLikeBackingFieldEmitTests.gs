@@ -117,7 +117,7 @@ ref struct Holder { prop Values Span[int32] }`, "ByRefLikeAutoProperty_InRefStru
             isCollectible: true
         )
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(outputPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
             Assert.Contains(assembly.GetExportedTypes(), (type Type) -> type.Name == "Holder")
         } finally {
             loadContext.Unload()

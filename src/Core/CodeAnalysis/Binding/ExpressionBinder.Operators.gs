@@ -355,7 +355,9 @@ internal partial class ExpressionBinder {
                 castArg.Type == TypeSymbol.NInt ||
                 castArg.Type == TypeSymbol.NUInt ||
                 castArg.Type == TypeSymbol.Int64 ||
-                castArg.Type == TypeSymbol.UInt64 {
+                castArg.Type == TypeSymbol
+                .UInt64 {
+                binderCtx.RecordPointerEscapedArgument(castArg)
                 return BoundConversionExpression(nil, PointerTypeSymbol.Get(castTarget), castArg)
             }
         }
@@ -385,6 +387,7 @@ internal partial class ExpressionBinder {
             operand is BoundConversionExpression conv &&
             conv.Type is {} pointee &&
             (TypeSymbol.IsLegalPointeeType(pointee) || BlittableDetector.IsBlittableValueStructPointee(pointee)) {
+            binderCtx.RecordPointerEscapedArgument(conv.Expression)
             return BoundConversionExpression(nil, PointerTypeSymbol.Get(pointee), conv.Expression)
         }
         // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element

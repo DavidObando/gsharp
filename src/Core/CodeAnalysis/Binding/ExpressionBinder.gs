@@ -4040,6 +4040,27 @@ internal partial class ExpressionBinder {
             Diagnostics.ReportAsRequiresReferenceOrNullableType(syntax.Location, targetType.Name)
             return BoundErrorExpression(nil)
         }
+        if NativeProtocolOperations.GetProtocol(expression.Type) == nil && NativeProtocolOperations.GetProtocol(
+            targetType
+        ) == nil &&
+            !CanConvertViaAs(expression.Type, targetType) {
+            let toCore = if targetType is NullableTypeSymbol tn {
+                PeelPlatformType(tn.UnderlyingType)
+            } else {
+                PeelPlatformType(targetType)
+            }
+            let explicitHint = if Conversion.Classify(expression.Type, toCore).Exists || Conversion.Classify(
+                expression.Type,
+                targetType
+            )
+                .Exists {
+                " An explicit conversion exists; use 'cast[$toCore](...)' or '$toCore(...)' instead."
+            } else {
+                string.Empty
+            }
+            Diagnostics.ReportCannotConvertViaAs(syntax.Location, expression.Type, targetType, explicitHint)
+            return BoundErrorExpression(syntax)
+        }
         if NativeProtocolOperations.GetProtocol(expression.Type) is {} sourceProtocol {
             if NativeProtocolOperations.GetProtocol(targetType) is {} targetProtocol {
                 NativeProtocolOperations.RequireCoverage(
@@ -4079,6 +4100,1404 @@ internal partial class ExpressionBinder {
             cast[TypeSymbol](NullableTypeSymbol.Get(targetType))
         }
         return BoundAsExpression(syntax, expression, resultType)
+    }
+
+    private func PeelPlatformType(type TypeSymbol) TypeSymbol -> if type is PlatformTypeSymbol platform {
+        platform.UnderlyingType
+    } else {
+        type
+    }
+
+    private func CanConvertViaAs(fromType TypeSymbol?, targetType TypeSymbol?) bool {
+        let substitutions = Dictionary[TypeParameterSymbol, TypeSymbol](ReferenceEqualityComparer.Instance)
+        return CanConvertViaAsCore(fromType, targetType, substitutions)
+    }
+
+    private func CanConvertViaAsCore(
+        fromType TypeSymbol?,
+        targetType TypeSymbol?,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if fromType == nil || targetType == nil || fromType == TypeSymbol.Error || targetType == TypeSymbol.Error {
+            return true
+        }
+        if fromType == TypeSymbol.Null {
+            return true
+        }
+        let from = PeelPlatformType(fromType)
+        let to = PeelPlatformType(targetType)
+        let fromCore = if from is NullableTypeSymbol fn {
+            PeelPlatformType(fn.UnderlyingType)
+        } else {
+            from
+        }
+        let toCore = if to is NullableTypeSymbol tn {
+            PeelPlatformType(tn.UnderlyingType)
+        } else {
+            to
+        }
+        let resolvedFrom = ResolveSubstitutedType(fromCore, substitutions) ?? fromCore
+        let resolvedTo = ResolveSubstitutedType(toCore, substitutions) ?? toCore
+        if resolvedFrom == TypeSymbol.Error || resolvedTo == TypeSymbol.Error {
+            return true
+        }
+        if resolvedFrom is PointerTypeSymbol || resolvedTo is PointerTypeSymbol {
+            return false
+        }
+        if resolvedFrom is TypeParameterSymbol fromTp {
+            return CanTypeParameterConvertViaAs(fromTp, resolvedTo, substitutions)
+        }
+        if resolvedTo is TypeParameterSymbol toTp {
+            return CanTypeParameterConvertViaAs(toTp, resolvedFrom, substitutions)
+        }
+        if resolvedTo is FunctionPointerTypeSymbol {
+            return resolvedFrom is FunctionPointerTypeSymbol ||
+                resolvedFrom == TypeSymbol.NInt ||
+                resolvedFrom == TypeSymbol.Object ||
+                resolvedFrom
+                .ClrType
+                ?.FullName == "System.ValueType"
+        }
+        if resolvedFrom is FunctionPointerTypeSymbol {
+            return CanConvertViaAsCore(TypeSymbol.NInt, targetType, substitutions)
+        }
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(resolvedFrom, resolvedTo) ||
+            Conversion.HaveIdenticalTypeArgumentContracts(resolvedFrom, resolvedTo) {
+            return true
+        }
+        let hasTypeParameter = TypeSymbol.ContainsTypeParameter(resolvedFrom) || TypeSymbol.ContainsTypeParameter(
+            resolvedTo
+        )
+        let fromIsValue = resolvedFrom.IsValueType || resolvedFrom is TupleTypeSymbol
+        let toIsValue = resolvedTo.IsValueType || resolvedTo is TupleTypeSymbol
+        if fromIsValue && toIsValue {
+            return hasTypeParameter && CanOpenValueTypesMatchForAs(resolvedFrom, resolvedTo, substitutions)
+        }
+        if fromIsValue {
+            return HasBoxingConversionForAs(resolvedFrom, resolvedTo, hasTypeParameter, substitutions)
+        }
+        if toIsValue {
+            return HasBoxingConversionForAs(resolvedTo, resolvedFrom, hasTypeParameter, substitutions)
+        }
+        if HasRuntimeReferenceConversion(resolvedFrom, resolvedTo) ||
+            HasRuntimeReferenceConversion(resolvedTo, resolvedFrom) {
+            return true
+        }
+        if HasSymbolicReferenceSupertypeConversion(resolvedFrom, resolvedTo) ||
+            HasSymbolicReferenceSupertypeConversion(resolvedTo, resolvedFrom) {
+            return true
+        }
+        return hasTypeParameter && CanOpenReferenceTypesMatchForAs(resolvedFrom, resolvedTo, substitutions)
+    }
+
+    private func IsTypeParameterConstrainedToValueType(tp TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasValueTypeConstraint || current.HasUnmanagedConstraint {
+                return true
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return false
+    }
+
+    private func IsTypeParameterConstrainedToReferenceType(tp TypeParameterSymbol) bool {
+        return tp.HasReferenceTypeConstraint || tp.ClassConstraint != nil || tp.DependentBoundProvesReferenceType
+    }
+
+    private func IsTypeParameterConstrainedToUnmanaged(tp TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasUnmanagedConstraint {
+                return true
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return false
+    }
+
+    private func IsTypeParameterConstrainedToDefaultConstructor(tp TypeParameterSymbol) bool {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.HasDefaultConstructorConstraint ||
+                current.HasValueTypeConstraint ||
+                current.HasUnmanagedConstraint {
+                return true
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return false
+    }
+
+    private func TryGetTypeParameterEffectiveClassBound(tp TypeParameterSymbol) TypeSymbol? {
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.ClassConstraint is {} cls {
+                return cls
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return nil
+    }
+
+    private func EnumerateTypeParameterEffectiveInterfaces(tp TypeParameterSymbol) List[TypeSymbol] {
+        let result = List[TypeSymbol]()
+        var current TypeParameterSymbol? = tp
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current != nil {
+            if current.ConstraintInterfaceType is {} iface {
+                result.Add(iface)
+            }
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(current) {
+                break
+            }
+            current = current.TypeParameterBound
+        }
+        return result
+    }
+
+    private func CanTypeParameterConvertViaAs(
+        tp TypeParameterSymbol,
+        other TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if other == TypeSymbol.Error || other == TypeSymbol.Object {
+            return true
+        }
+        if other is PointerTypeSymbol {
+            return false
+        }
+        if other is TypeParameterSymbol otherTp {
+            if tp == otherTp {
+                return true
+            }
+            let tpIsVal = IsTypeParameterConstrainedToValueType(tp)
+            let otherIsVal = IsTypeParameterConstrainedToValueType(otherTp)
+            if tpIsVal && otherIsVal {
+                return CanSingleTypeParameterSatisfyExactSubstitution(tp, otherTp, substitutions) &&
+                    CanSingleTypeParameterSatisfyExactSubstitution(otherTp, tp, substitutions)
+            }
+            if tpIsVal {
+                if TryGetTypeParameterEffectiveClassBound(otherTp) is {} otherClassBound &&
+                    otherClassBound != TypeSymbol.Object &&
+                    otherClassBound
+                    .ClrType
+                    ?.FullName != "System.ValueType" &&
+                    otherClassBound
+                    .ClrType
+                    ?.FullName != "System.Enum" {
+                    return false
+                }
+                return true
+            }
+            if otherIsVal {
+                if TryGetTypeParameterEffectiveClassBound(tp) is {} tpClassBound &&
+                    tpClassBound != TypeSymbol.Object &&
+                    tpClassBound
+                    .ClrType
+                    ?.FullName != "System.ValueType" &&
+                    tpClassBound
+                    .ClrType
+                    ?.FullName != "System.Enum" {
+                    return false
+                }
+                return true
+            }
+            if TryGetTypeParameterEffectiveClassBound(tp) is {} clsA &&
+                TryGetTypeParameterEffectiveClassBound(otherTp) is {} clsB &&
+                !CanConvertViaAs(clsA, clsB) {
+                return false
+            }
+            return true
+        }
+        if IsTypeParameterConstrainedToValueType(tp) {
+            if other.ClrType?.FullName == "System.ValueType" || other.ClrType?.FullName == "System.Enum" {
+                return true
+            }
+            if other.IsValueType || other is TupleTypeSymbol || other is FunctionPointerTypeSymbol {
+                if IsTypeParameterConstrainedToUnmanaged(tp) && !TypeSymbol.ContainsTypeParameter(other) &&
+                    !Binder.IsUnmanagedTypeForConstraint(other) {
+                    return false
+                }
+                let trial = CloneTypeParameterSubstitutions(substitutions)
+                trial[tp] = other
+                for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+                    let hasParam = TypeSymbol.ContainsTypeParameter(other) || TypeSymbol.ContainsTypeParameter(reqIface)
+                    if !HasBoxingConversionForAs(other, reqIface, hasParam, trial) {
+                        return false
+                    }
+                }
+                return true
+            }
+            return Conversion.IsInterfaceLikeType(other)
+        }
+        let trial = CloneTypeParameterSubstitutions(substitutions)
+        if other.IsValueType ||
+            other is TupleTypeSymbol ||
+            (Conversion.IsClassLikeReferenceType(other) && Conversion.IsSealedReferenceType(other)) {
+            trial[tp] = other
+        }
+        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound &&
+            !CanConvertViaAsCore(classBound, other, trial) {
+            return false
+        }
+        for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+            if !CanConvertViaAsCore(reqIface, other, trial) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func CanTypeParameterSatisfyExactSubstitution(
+        tp TypeParameterSymbol,
+        target TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        let linkedParameters = List[TypeParameterSymbol]()
+        for kvp in substitutions {
+            if ResolveSubstitutedType(kvp.Value, substitutions) == tp {
+                linkedParameters.Add(kvp.Key)
+            }
+        }
+        let trial = CloneTypeParameterSubstitutions(substitutions)
+        trial[tp] = target
+        if !CanSingleTypeParameterSatisfyExactSubstitution(tp, target, trial) {
+            return false
+        }
+        for linked in linkedParameters {
+            if !CanSingleTypeParameterSatisfyExactSubstitution(linked, target, trial) {
+                return false
+            }
+        }
+        CommitTypeParameterSubstitutions(substitutions, trial)
+        return true
+    }
+
+    private func CanSingleTypeParameterSatisfyExactSubstitution(
+        tp TypeParameterSymbol,
+        target TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if target == TypeSymbol.Error {
+            return true
+        }
+        if target is PointerTypeSymbol {
+            return false
+        }
+        if target is TypeParameterSymbol targetTp {
+            if tp == targetTp {
+                return true
+            }
+            if (IsTypeParameterConstrainedToValueType(tp) && IsTypeParameterConstrainedToReferenceType(targetTp)) ||
+                (IsTypeParameterConstrainedToValueType(targetTp) && IsTypeParameterConstrainedToReferenceType(tp)) {
+                return false
+            }
+            if TryGetTypeParameterEffectiveClassBound(tp) is {} clsA &&
+                TryGetTypeParameterEffectiveClassBound(targetTp) is {} clsB &&
+                !CanConvertViaAs(clsA, clsB) {
+                return false
+            }
+            return true
+        }
+        let targetIsNonNullValue = (target.IsValueType || target is TupleTypeSymbol) && !(target is NullableTypeSymbol)
+        if IsTypeParameterConstrainedToValueType(tp) {
+            if !targetIsNonNullValue {
+                return false
+            }
+            if IsTypeParameterConstrainedToUnmanaged(tp) && !TypeSymbol.ContainsTypeParameter(target) &&
+                !Binder.IsUnmanagedTypeForConstraint(target) {
+                return false
+            }
+            for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+                let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(reqIface)
+                if !HasBoxingConversionForAs(target, reqIface, hasParam, substitutions) {
+                    return false
+                }
+            }
+            return true
+        }
+        if IsTypeParameterConstrainedToDefaultConstructor(tp) && !TypeSymbol.ContainsTypeParameter(target) &&
+            target != TypeSymbol.Object &&
+            !targetIsNonNullValue &&
+            !Binder.HasDefaultConstructorForConstraint(target) {
+            return false
+        }
+        if IsTypeParameterConstrainedToReferenceType(tp) {
+            if target.IsValueType || target is TupleTypeSymbol || target is FunctionPointerTypeSymbol {
+                return false
+            }
+        }
+        if TryGetTypeParameterEffectiveClassBound(tp) is {} classBound {
+            if target.IsValueType || target is TupleTypeSymbol || target is FunctionPointerTypeSymbol {
+                return false
+            }
+            let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(classBound)
+            if hasParam {
+                if !CanOpenReferenceConvertDirectionallyForAs(target, classBound, substitutions) {
+                    return false
+                }
+            } else if !Conversion.Classify(target, classBound).IsImplicit {
+                return false
+            }
+        }
+        for reqIface in EnumerateTypeParameterEffectiveInterfaces(tp) {
+            let hasParam = TypeSymbol.ContainsTypeParameter(target) || TypeSymbol.ContainsTypeParameter(reqIface)
+            if targetIsNonNullValue {
+                if !HasBoxingConversionForAs(target, reqIface, hasParam, substitutions) {
+                    return false
+                }
+            } else if hasParam {
+                if !CanOpenReferenceConvertDirectionallyForAs(target, reqIface, substitutions) {
+                    return false
+                }
+            } else if !Conversion.Classify(target, reqIface).IsImplicit {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func TypeContainsTypeParameterWithSubstitutions(
+        type TypeSymbol?,
+        targetTp TypeParameterSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        let resolved = ResolveSubstitutedType(type, substitutions)
+        if resolved == nil {
+            return false
+        }
+        if resolved is TypeParameterSymbol tp {
+            return tp == targetTp
+        }
+        if resolved is NullableTypeSymbol nullable {
+            return TypeContainsTypeParameterWithSubstitutions(nullable.UnderlyingType, targetTp, substitutions)
+        }
+        if OneDimensionalElement(resolved) is {} elem {
+            return TypeContainsTypeParameterWithSubstitutions(elem, targetTp, substitutions)
+        }
+        if resolved is RectangularArrayTypeSymbol rect {
+            return TypeContainsTypeParameterWithSubstitutions(rect.ElementType, targetTp, substitutions)
+        }
+        if resolved is TupleTypeSymbol tuple {
+            for item in tuple.ElementTypes {
+                if TypeContainsTypeParameterWithSubstitutions(item, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is FunctionTypeSymbol fn {
+            for param in fn.ParameterTypes {
+                if TypeContainsTypeParameterWithSubstitutions(param, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return TypeContainsTypeParameterWithSubstitutions(fn.ReturnType, targetTp, substitutions)
+        }
+        if resolved is StructSymbol s {
+            for arg in Conversion.GetEffectiveStructTypeArguments(s) {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is InterfaceSymbol iface {
+            for arg in iface.TypeArguments {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        if resolved is DelegateTypeSymbol del {
+            for arg in del.TypeArguments {
+                if TypeContainsTypeParameterWithSubstitutions(arg, targetTp, substitutions) {
+                    return true
+                }
+            }
+            return false
+        }
+        for pos in resolved.GetElementPositions() {
+            if TypeContainsTypeParameterWithSubstitutions(pos, targetTp, substitutions) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func HasRuntimeReferenceConversion(from TypeSymbol, to TypeSymbol) bool {
+        if (from is FunctionTypeSymbol || to is FunctionTypeSymbol) &&
+            MemberLookup.TryGetDelegateFunctionTypeFromSymbol(from, out var fromFn) &&
+            MemberLookup
+            .TryGetDelegateFunctionTypeFromSymbol(to, out var toFn) {
+            if Conversion.ReusesFunctionValueDelegate(from, to) {
+                return true
+            }
+            if IsNaturalFuncOrActionDelegateShape(from) && IsNaturalFuncOrActionDelegateShape(to) {
+                return CanNaturalFunctionDelegatesOverlapAtRuntime(fromFn!!, toFn!!)
+            }
+            return false
+        }
+        return Conversion.HasCheckedReferenceConversion(from, to)
+    }
+
+    private func IsNaturalFuncOrActionDelegateShape(type TypeSymbol) bool {
+        if type is FunctionTypeSymbol fn {
+            return !fn.ParameterTypes.Any((p TypeSymbol) -> p is ByRefTypeSymbol || p is PointerTypeSymbol) &&
+                !(fn.ReturnType is ByRefTypeSymbol || fn.ReturnType is PointerTypeSymbol)
+        }
+        if OpenClrTypeDefinition(type) is {} openClr && openClr.FullName is {} fullName {
+            return fullName == "System.Action" || fullName.StartsWith("System.Action`", StringComparison.Ordinal) ||
+                fullName.StartsWith("System.Func`", StringComparison.Ordinal)
+        }
+        return false
+    }
+
+    private func CanNaturalFunctionDelegatesOverlapAtRuntime(fromFn FunctionTypeSymbol, toFn FunctionTypeSymbol) bool {
+        if fromFn.ParameterTypes.Length != toFn.ParameterTypes.Length {
+            return false
+        }
+        if (fromFn.ReturnType == TypeSymbol.Void) != (toFn.ReturnType == TypeSymbol.Void) {
+            return false
+        }
+        for var i = 0; i < fromFn.ParameterTypes.Length; i++ {
+            let pFrom = PeelReferenceNullableAndPlatform(fromFn.ParameterTypes[i])
+            let pTo = PeelReferenceNullableAndPlatform(toFn.ParameterTypes[i])
+            if pFrom == nil || pTo == nil {
+                return false
+            }
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(pFrom, pTo) ||
+                Conversion.HaveIdenticalTypeArgumentContracts(pFrom, pTo) {
+                continue
+            }
+            if (pFrom.IsValueType || pFrom is TupleTypeSymbol) || (pTo.IsValueType || pTo is TupleTypeSymbol) {
+                return false
+            }
+        }
+        if fromFn.ReturnType != TypeSymbol.Void {
+            let rFrom = PeelReferenceNullableAndPlatform(fromFn.ReturnType)
+            let rTo = PeelReferenceNullableAndPlatform(toFn.ReturnType)
+            if rFrom == nil || rTo == nil {
+                return false
+            }
+            if !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(rFrom, rTo) &&
+                !Conversion
+                .HaveIdenticalTypeArgumentContracts(rFrom, rTo) {
+                if (rFrom.IsValueType || rFrom is TupleTypeSymbol) ||
+                    (rTo.IsValueType || rTo is TupleTypeSymbol) ||
+                    !CanConvertViaAs(rFrom, rTo) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private func HasSymbolicReferenceSupertypeConversion(sub TypeSymbol, sup TypeSymbol) bool {
+        if sub is FunctionTypeSymbol || sub is DelegateTypeSymbol {
+            return sup.ClrType is {} supClr && ClrTypeUtilities.IsAssignableByName(
+                supClr,
+                typeof(System.MulticastDelegate)
+            )
+        }
+        if sub is SliceTypeSymbol || sub is ArrayTypeSymbol || sub is RectangularArrayTypeSymbol {
+            if sup is SliceTypeSymbol || sup is ArrayTypeSymbol || sup is RectangularArrayTypeSymbol {
+                return false
+            }
+            return sup.ClrType is {} supClr &&
+                !supClr.IsArray &&
+                !supClr.IsGenericType &&
+                ClrTypeUtilities.IsAssignableByName(supClr, typeof(int32).MakeArrayType())
+        }
+        return false
+    }
+
+    private func HasBoxingConversionForAs(
+        valueType TypeSymbol,
+        referenceType TypeSymbol,
+        hasTypeParameter bool,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if referenceType == TypeSymbol.Object || referenceType.ClrType?.FullName == "System.ValueType" {
+            return true
+        }
+        if referenceType.ClrType?.FullName == "System.Enum" {
+            return valueType is EnumSymbol || valueType.ClrType?.IsEnum == true
+        }
+        if !Conversion.IsInterfaceLikeType(referenceType) {
+            return false
+        }
+        if Conversion.Classify(valueType, referenceType).IsImplicit {
+            return true
+        }
+        return hasTypeParameter && ValueTypeCanImplementOpenInterface(valueType, referenceType, substitutions)
+    }
+
+    private func CanOpenValueTypesMatchForAs(
+        fromCore TypeSymbol,
+        toCore TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if fromCore is TupleTypeSymbol fTuple && toCore is TupleTypeSymbol tTuple {
+            return CanTypeArgumentsMatchForAs(fTuple.ElementTypes, tTuple.ElementTypes, varianceMode: 0, substitutions)
+        }
+        if fromCore is StructSymbol fStruct && toCore is StructSymbol tStruct {
+            return (fStruct.Definition ?? fStruct) == (tStruct.Definition ?? tStruct) &&
+                CanTypeArgumentsMatchForAs(
+                Conversion.GetEffectiveStructTypeArguments(fStruct),
+                Conversion.GetEffectiveStructTypeArguments(tStruct),
+                varianceMode: 0,
+                substitutions
+            )
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        return fOpen != nil && tOpen != nil && ClrTypeUtilities.AreSame(fOpen, tOpen) &&
+            CanTypeArgumentsMatchForAs(
+            fromCore.GetElementPositions(),
+            toCore.GetElementPositions(),
+            varianceMode: 0,
+            substitutions
+        )
+    }
+
+    private func CloneTypeParameterSubstitutions(source Dictionary[TypeParameterSymbol, TypeSymbol]) Dictionary[
+        TypeParameterSymbol,
+        TypeSymbol
+    ] {
+        let copy = Dictionary[TypeParameterSymbol, TypeSymbol](source.Count, ReferenceEqualityComparer.Instance)
+        for kvp in source {
+            copy[kvp.Key] = kvp.Value
+        }
+        return copy
+    }
+
+    private func CommitTypeParameterSubstitutions(
+        target Dictionary[TypeParameterSymbol, TypeSymbol],
+        source Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) {
+        target.Clear()
+        for kvp in source {
+            target[kvp.Key] = kvp.Value
+        }
+    }
+
+    private func ValueTypeCanImplementOpenInterface(
+        valueType TypeSymbol,
+        ifaceType TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if ifaceType is InterfaceSymbol userIface {
+            let userIfaceDef = userIface.Definition ?? userIface
+            if valueType is InterfaceSymbol srcIface {
+                for ancestor in srcIface.SelfAndAllBaseInterfaces() {
+                    if (ancestor.Definition ?? ancestor) != userIfaceDef {
+                        continue
+                    }
+                    let trial = CloneTypeParameterSubstitutions(substitutions)
+                    if CanSourceTypeArgumentsMatchForAs(
+                        ancestor.TypeArguments,
+                        userIface.TypeArguments,
+                        userIfaceDef.TypeParameters,
+                        directional: true,
+                        allowVariance: true,
+                        trial
+                    ) {
+                        CommitTypeParameterSubstitutions(substitutions, trial)
+                        return true
+                    }
+                }
+                return false
+            }
+            if valueType is StructSymbol valStruct {
+                for holder in valStruct.GetHierarchy() {
+                    for implemented in holder.Interfaces {
+                        for ancestor in implemented.SelfAndAllBaseInterfaces() {
+                            if (ancestor.Definition ?? ancestor) != userIfaceDef {
+                                continue
+                            }
+                            let trial = CloneTypeParameterSubstitutions(substitutions)
+                            if CanSourceTypeArgumentsMatchForAs(
+                                ancestor.TypeArguments,
+                                userIface.TypeArguments,
+                                userIfaceDef.TypeParameters,
+                                directional: true,
+                                allowVariance: true,
+                                trial
+                            ) {
+                                CommitTypeParameterSubstitutions(substitutions, trial)
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+            return false
+        }
+        let openIface = OpenClrTypeDefinition(ifaceType)
+        if openIface == nil {
+            return false
+        }
+        let ifaceArgs = ifaceType.GetElementPositions()
+        if valueType is InterfaceSymbol srcUserIface {
+            for ancestor in srcUserIface.SelfAndAllBaseInterfaces() {
+                for clrIface in ancestor.BaseClrInterfaces {
+                    if OpenClrTypeDefinition(clrIface) is {} candidateOpen && ClrTypeUtilities.AreSame(
+                        candidateOpen,
+                        openIface
+                    ) {
+                        let trial = CloneTypeParameterSubstitutions(substitutions)
+                        if CanClrTypeArgumentsMatchForAs(
+                            clrIface.GetElementPositions(),
+                            ifaceArgs,
+                            openIface,
+                            directional: true,
+                            allowVariance: true,
+                            trial
+                        ) {
+                            CommitTypeParameterSubstitutions(substitutions, trial)
+                            return true
+                        }
+                    }
+                    for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                        clrIface,
+                        openIface
+                    ) {
+                        let trial = CloneTypeParameterSubstitutions(substitutions)
+                        if CanClrTypeArgumentsMatchForAs(
+                            projectedArgs,
+                            ifaceArgs,
+                            openIface,
+                            directional: true,
+                            allowVariance: true,
+                            trial
+                        ) {
+                            CommitTypeParameterSubstitutions(substitutions, trial)
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+        if valueType is StructSymbol srcStruct {
+            for holder in srcStruct.GetHierarchy() {
+                for clrIface in holder.ImplementedClrInterfaces {
+                    if OpenClrTypeDefinition(clrIface) is {} candidateOpen && ClrTypeUtilities.AreSame(
+                        candidateOpen,
+                        openIface
+                    ) {
+                        let trial = CloneTypeParameterSubstitutions(substitutions)
+                        if CanClrTypeArgumentsMatchForAs(
+                            clrIface.GetElementPositions(),
+                            ifaceArgs,
+                            openIface,
+                            directional: true,
+                            allowVariance: true,
+                            trial
+                        ) {
+                            CommitTypeParameterSubstitutions(substitutions, trial)
+                            return true
+                        }
+                    }
+                    for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                        clrIface,
+                        openIface
+                    ) {
+                        let trial = CloneTypeParameterSubstitutions(substitutions)
+                        if CanClrTypeArgumentsMatchForAs(
+                            projectedArgs,
+                            ifaceArgs,
+                            openIface,
+                            directional: true,
+                            allowVariance: true,
+                            trial
+                        ) {
+                            CommitTypeParameterSubstitutions(substitutions, trial)
+                            return true
+                        }
+                    }
+                }
+                if holder.ImportedBaseType is {} importedBase {
+                    for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                        importedBase,
+                        openIface
+                    ) {
+                        let trial = CloneTypeParameterSubstitutions(substitutions)
+                        if CanClrTypeArgumentsMatchForAs(
+                            projectedArgs,
+                            ifaceArgs,
+                            openIface,
+                            directional: true,
+                            allowVariance: true,
+                            trial
+                        ) {
+                            CommitTypeParameterSubstitutions(substitutions, trial)
+                            return true
+                        }
+                    }
+                    if !openIface.IsGenericType && importedBase.ClrType is {} baseClr {
+                        for clrIface in ClrTypeUtilities.SafeGetInterfaces(baseClr) {
+                            if !clrIface.IsGenericType && ClrTypeUtilities.AreSame(clrIface, openIface) {
+                                return true
+                            }
+                        }
+                    }
+                }
+            }
+            return false
+        }
+        for projectedArgs in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(valueType, openIface) {
+            let trial = CloneTypeParameterSubstitutions(substitutions)
+            if CanClrTypeArgumentsMatchForAs(
+                projectedArgs,
+                ifaceArgs,
+                openIface,
+                directional: true,
+                allowVariance: true,
+                trial
+            ) {
+                CommitTypeParameterSubstitutions(substitutions, trial)
+                return true
+            }
+        }
+        if !openIface.IsGenericType && valueType.ClrType is {} valClr {
+            for clrIface in ClrTypeUtilities.SafeGetInterfaces(valClr) {
+                if !clrIface.IsGenericType && ClrTypeUtilities.AreSame(clrIface, openIface) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func CanOpenReferenceTypesMatchForAs(
+        fromCore TypeSymbol,
+        toCore TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if OneDimensionalElement(fromCore) is {} fElem && OneDimensionalElement(toCore) is {} tElem {
+            return CanSingleTypePositionMatchForAs(fElem, tElem, varianceMode: 3, substitutions)
+        }
+        if fromCore is RectangularArrayTypeSymbol fRect && toCore is RectangularArrayTypeSymbol tRect {
+            return fRect.Rank == tRect.Rank &&
+                CanSingleTypePositionMatchForAs(fRect.ElementType, tRect.ElementType, varianceMode: 3, substitutions)
+        }
+        if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
+            return fFn
+                .ParameterTypes
+                .Length == tFn
+                .ParameterTypes
+                .Length &&
+                (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
+                CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 3, substitutions) &&
+                CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, varianceMode: 3, substitutions)
+        }
+        if fromCore is DelegateTypeSymbol fDel && toCore is DelegateTypeSymbol tDel {
+            let delDef = fDel.Definition ?? fDel
+            return delDef == (tDel.Definition ?? tDel) &&
+                CanSourceTypeArgumentsMatchForAs(
+                fDel.TypeArguments,
+                tDel.TypeArguments,
+                delDef.TypeParameters,
+                directional: false,
+                allowVariance: true,
+                substitutions
+            )
+        }
+        if Conversion.IsInterfaceLikeType(fromCore) {
+            if Conversion.IsClassLikeReferenceType(toCore) && !Conversion.IsSealedReferenceType(toCore) {
+                return true
+            }
+            return ValueTypeCanImplementOpenInterface(toCore, fromCore, substitutions) ||
+                ArrayImplementsOpenInterface(toCore, fromCore, substitutions)
+        }
+        if Conversion.IsInterfaceLikeType(toCore) {
+            if Conversion.IsClassLikeReferenceType(fromCore) && !Conversion.IsSealedReferenceType(fromCore) {
+                return true
+            }
+            return ValueTypeCanImplementOpenInterface(fromCore, toCore, substitutions) ||
+                ArrayImplementsOpenInterface(fromCore, toCore, substitutions)
+        }
+        if fromCore is StructSymbol fClass && toCore is StructSymbol tClass {
+            return StructHierarchyMatchesForAs(fClass, tClass, substitutions) ||
+                StructHierarchyMatchesForAs(tClass, fClass, substitutions)
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        if fOpen != nil && tOpen != nil {
+            if ClrTypeUtilities.AreSame(fOpen, tOpen) {
+                let allowVar = fOpen.IsInterface || ClrTypeUtilities.IsDelegateType(fOpen)
+                return CanClrTypeArgumentsMatchForAs(
+                    fromCore.GetElementPositions(),
+                    toCore.GetElementPositions(),
+                    fOpen,
+                    directional: false,
+                    allowVariance: allowVar,
+                    substitutions
+                )
+            }
+            for projected in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(fromCore, tOpen) {
+                let trial = CloneTypeParameterSubstitutions(substitutions)
+                if CanClrTypeArgumentsMatchForAs(
+                    projected,
+                    toCore.GetElementPositions(),
+                    tOpen,
+                    directional: true,
+                    allowVariance: tOpen.IsInterface,
+                    trial
+                ) {
+                    CommitTypeParameterSubstitutions(substitutions, trial)
+                    return true
+                }
+            }
+            for projected in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(toCore, fOpen) {
+                let trial = CloneTypeParameterSubstitutions(substitutions)
+                if CanClrTypeArgumentsMatchForAs(
+                    projected,
+                    fromCore.GetElementPositions(),
+                    fOpen,
+                    directional: true,
+                    allowVariance: fOpen.IsInterface,
+                    trial
+                ) {
+                    CommitTypeParameterSubstitutions(substitutions, trial)
+                    return true
+                }
+            }
+            if !tOpen.IsGenericType && ClrHierarchyContainsOpenDefinition(fOpen, tOpen) {
+                return true
+            }
+            if !fOpen.IsGenericType && ClrHierarchyContainsOpenDefinition(tOpen, fOpen) {
+                return true
+            }
+            return false
+        }
+        if fromCore is StructSymbol sFrom && tOpen != nil {
+            for holder in sFrom.GetHierarchy() {
+                if holder.ImportedBaseType is {} sFromBase &&
+                    CanOpenReferenceTypesMatchForAs(sFromBase, toCore, substitutions) {
+                    return true
+                }
+            }
+        }
+        if toCore is StructSymbol sTo && fOpen != nil {
+            for holder in sTo.GetHierarchy() {
+                if holder.ImportedBaseType is {} sToBase &&
+                    CanOpenReferenceTypesMatchForAs(fromCore, sToBase, substitutions) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func CanOpenTypesUnifyExactlyForAs(
+        fromCore TypeSymbol,
+        toCore TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if OneDimensionalElement(fromCore) is {} fElem && OneDimensionalElement(toCore) is {} tElem {
+            return CanSingleTypePositionMatchForAs(fElem, tElem, varianceMode: 0, substitutions)
+        }
+        if fromCore is RectangularArrayTypeSymbol fRect && toCore is RectangularArrayTypeSymbol tRect {
+            return fRect.Rank == tRect.Rank &&
+                CanSingleTypePositionMatchForAs(fRect.ElementType, tRect.ElementType, varianceMode: 0, substitutions)
+        }
+        if fromCore is FunctionTypeSymbol fFn && toCore is FunctionTypeSymbol tFn {
+            return fFn
+                .ParameterTypes
+                .Length == tFn
+                .ParameterTypes
+                .Length &&
+                (fFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
+                CanTypeArgumentsMatchForAs(fFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 0, substitutions) &&
+                CanSingleTypePositionMatchForAs(fFn.ReturnType, tFn.ReturnType, varianceMode: 0, substitutions)
+        }
+        if fromCore is DelegateTypeSymbol fDel && toCore is DelegateTypeSymbol tDel {
+            return (fDel.Definition ?? fDel) == (tDel.Definition ?? tDel) &&
+                CanTypeArgumentsMatchForAs(fDel.TypeArguments, tDel.TypeArguments, varianceMode: 0, substitutions)
+        }
+        if fromCore is InterfaceSymbol fIface && toCore is InterfaceSymbol tIface {
+            return (fIface.Definition ?? fIface) == (tIface.Definition ?? tIface) &&
+                CanTypeArgumentsMatchForAs(fIface.TypeArguments, tIface.TypeArguments, varianceMode: 0, substitutions)
+        }
+        if fromCore is StructSymbol fClass && toCore is StructSymbol tClass {
+            return (fClass.Definition ?? fClass) == (tClass.Definition ?? tClass) &&
+                CanTypeArgumentsMatchForAs(
+                Conversion.GetEffectiveStructTypeArguments(fClass),
+                Conversion.GetEffectiveStructTypeArguments(tClass),
+                varianceMode: 0,
+                substitutions
+            )
+        }
+        let fOpen = OpenClrTypeDefinition(fromCore)
+        let tOpen = OpenClrTypeDefinition(toCore)
+        return fOpen != nil && tOpen != nil && ClrTypeUtilities.AreSame(fOpen, tOpen) &&
+            CanTypeArgumentsMatchForAs(
+            fromCore.GetElementPositions(),
+            toCore.GetElementPositions(),
+            varianceMode: 0,
+            substitutions
+        )
+    }
+
+    private func CanOpenReferenceConvertDirectionallyForAs(
+        source TypeSymbol,
+        target TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if target == TypeSymbol.Object || HasSymbolicReferenceSupertypeConversion(source, target) {
+            return true
+        }
+        if OneDimensionalElement(source) is {} sElem && OneDimensionalElement(target) is {} tElem {
+            return CanSingleTypePositionMatchForAs(sElem, tElem, varianceMode: 1, substitutions)
+        }
+        if source is RectangularArrayTypeSymbol sRect && target is RectangularArrayTypeSymbol tRect {
+            return sRect.Rank == tRect.Rank &&
+                CanSingleTypePositionMatchForAs(sRect.ElementType, tRect.ElementType, varianceMode: 1, substitutions)
+        }
+        if source is FunctionTypeSymbol sFn && target is FunctionTypeSymbol tFn {
+            return sFn
+                .ParameterTypes
+                .Length == tFn
+                .ParameterTypes
+                .Length &&
+                (sFn.ReturnType == TypeSymbol.Void) == (tFn.ReturnType == TypeSymbol.Void) &&
+                CanTypeArgumentsMatchForAs(sFn.ParameterTypes, tFn.ParameterTypes, varianceMode: 2, substitutions) &&
+                CanSingleTypePositionMatchForAs(sFn.ReturnType, tFn.ReturnType, varianceMode: 1, substitutions)
+        }
+        if source is DelegateTypeSymbol sDel && target is DelegateTypeSymbol tDel {
+            let delDef = sDel.Definition ?? sDel
+            return delDef == (tDel.Definition ?? tDel) &&
+                CanSourceTypeArgumentsMatchForAs(
+                sDel.TypeArguments,
+                tDel.TypeArguments,
+                delDef.TypeParameters,
+                directional: true,
+                allowVariance: true,
+                substitutions
+            )
+        }
+        if Conversion.IsInterfaceLikeType(target) {
+            return ValueTypeCanImplementOpenInterface(source, target, substitutions) ||
+                ArrayImplementsOpenInterface(source, target, substitutions)
+        }
+        if Conversion.IsInterfaceLikeType(source) {
+            return false
+        }
+        if source is StructSymbol sClass && target is StructSymbol tClass {
+            return StructHierarchyMatchesForAs(sClass, tClass, substitutions)
+        }
+        let sOpen = OpenClrTypeDefinition(source)
+        let tOpen = OpenClrTypeDefinition(target)
+        if sOpen != nil && tOpen != nil {
+            if ClrTypeUtilities.AreSame(sOpen, tOpen) {
+                let allowVar = sOpen.IsInterface || ClrTypeUtilities.IsDelegateType(sOpen)
+                return CanClrTypeArgumentsMatchForAs(
+                    source.GetElementPositions(),
+                    target.GetElementPositions(),
+                    sOpen,
+                    directional: true,
+                    allowVariance: allowVar,
+                    substitutions
+                )
+            }
+            for projected in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(source, tOpen) {
+                let trial = CloneTypeParameterSubstitutions(substitutions)
+                if CanClrTypeArgumentsMatchForAs(
+                    projected,
+                    target.GetElementPositions(),
+                    tOpen,
+                    directional: true,
+                    allowVariance: tOpen.IsInterface,
+                    trial
+                ) {
+                    CommitTypeParameterSubstitutions(substitutions, trial)
+                    return true
+                }
+            }
+            if !tOpen.IsGenericType && ClrHierarchyContainsOpenDefinition(sOpen, tOpen) {
+                return true
+            }
+            return false
+        }
+        if source is StructSymbol sFrom && tOpen != nil {
+            for holder in sFrom.GetHierarchy() {
+                if holder.ImportedBaseType is {} sFromBase &&
+                    CanOpenReferenceConvertDirectionallyForAs(sFromBase, target, substitutions) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func OneDimensionalElement(type TypeSymbol) TypeSymbol? {
+        if type is SliceTypeSymbol slice {
+            return slice.ElementType
+        }
+        if type is ArrayTypeSymbol arr {
+            return arr.ElementType
+        }
+        return nil
+    }
+
+    private func ArrayImplementsOpenInterface(
+        candidate TypeSymbol,
+        ifaceType TypeSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if OneDimensionalElement(candidate) is {} elem {
+            let openIface = OpenClrTypeDefinition(ifaceType)
+            if openIface == nil {
+                return false
+            }
+            if !openIface.IsGenericType {
+                return ClrTypeUtilities.IsAssignableByName(openIface, typeof(int32).MakeArrayType())
+            }
+            for clrIface in typeof(int32).MakeArrayType().GetInterfaces() {
+                if clrIface.IsGenericType && ClrTypeUtilities.AreSame(clrIface.GetGenericTypeDefinition(), openIface) {
+                    let trial = CloneTypeParameterSubstitutions(substitutions)
+                    if CanClrTypeArgumentsMatchForAs(
+                        ImmutableArray.Create(elem),
+                        ifaceType.GetElementPositions(),
+                        openIface,
+                        directional: true,
+                        allowVariance: true,
+                        trial
+                    ) {
+                        CommitTypeParameterSubstitutions(substitutions, trial)
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+        if candidate is RectangularArrayTypeSymbol {
+            let openIface = OpenClrTypeDefinition(ifaceType)
+            return openIface != nil && !openIface.IsGenericType && ClrTypeUtilities.IsAssignableByName(
+                openIface,
+                typeof(int32).MakeArrayType()
+            )
+        }
+        return false
+    }
+
+    private func StructHierarchyMatchesForAs(
+        current StructSymbol,
+        target StructSymbol,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        let targetDef = target.Definition ?? target
+        for ancestor in current.GetHierarchy() {
+            if (ancestor.Definition ?? ancestor) != targetDef {
+                continue
+            }
+            let trial = CloneTypeParameterSubstitutions(substitutions)
+            if CanTypeArgumentsMatchForAs(
+                Conversion.GetEffectiveStructTypeArguments(ancestor),
+                Conversion.GetEffectiveStructTypeArguments(target),
+                varianceMode: 0,
+                trial
+            ) {
+                CommitTypeParameterSubstitutions(substitutions, trial)
+                return true
+            }
+        }
+        return false
+    }
+
+    private func CanSourceTypeArgumentsMatchForAs(
+        leftArgs ImmutableArray[TypeSymbol],
+        rightArgs ImmutableArray[TypeSymbol],
+        typeParameters ImmutableArray[TypeParameterSymbol],
+        directional bool,
+        allowVariance bool,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if leftArgs.IsDefault || rightArgs.IsDefault {
+            return true
+        }
+        if leftArgs.Length != rightArgs.Length {
+            return false
+        }
+        for var i = 0; i < leftArgs.Length; i++ {
+            var mode = 0
+            if allowVariance && !typeParameters.IsDefault && i < typeParameters.Length {
+                let variance = typeParameters[i].Variance
+                if variance == TypeParameterVariance.Out {
+                    mode = if directional {
+                        1
+                    } else {
+                        3
+                    }
+                } else if variance == TypeParameterVariance.In {
+                    mode = if directional {
+                        2
+                    } else {
+                        3
+                    }
+                }
+            }
+            if !CanSingleTypePositionMatchForAs(leftArgs[i], rightArgs[i], mode, substitutions) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func CanClrTypeArgumentsMatchForAs(
+        leftArgs ImmutableArray[TypeSymbol],
+        rightArgs ImmutableArray[TypeSymbol],
+        openClr Type?,
+        directional bool,
+        allowVariance bool,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if !allowVariance || openClr == nil || !openClr.IsGenericType {
+            return CanTypeArgumentsMatchForAs(leftArgs, rightArgs, varianceMode: 0, substitutions)
+        }
+        if leftArgs.IsDefault || rightArgs.IsDefault {
+            return true
+        }
+        if leftArgs.Length != rightArgs.Length {
+            return false
+        }
+        let genericParams = openClr.GetGenericArguments()
+        for var i = 0; i < leftArgs.Length; i++ {
+            var mode = 0
+            if i < genericParams.Length {
+                let variance = genericParams[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                if variance == GenericParameterAttributes.Covariant {
+                    mode = if directional {
+                        1
+                    } else {
+                        3
+                    }
+                } else if variance == GenericParameterAttributes.Contravariant {
+                    mode = if directional {
+                        2
+                    } else {
+                        3
+                    }
+                }
+            }
+            if !CanSingleTypePositionMatchForAs(leftArgs[i], rightArgs[i], mode, substitutions) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func CanTypeArgumentsMatchForAs(
+        leftArgs ImmutableArray[TypeSymbol],
+        rightArgs ImmutableArray[TypeSymbol],
+        varianceMode int32,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        if leftArgs.IsDefault || rightArgs.IsDefault {
+            return true
+        }
+        if leftArgs.Length != rightArgs.Length {
+            return false
+        }
+        for var i = 0; i < leftArgs.Length; i++ {
+            if !CanSingleTypePositionMatchForAs(leftArgs[i], rightArgs[i], varianceMode, substitutions) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func PeelReferenceNullableAndPlatform(type TypeSymbol?) TypeSymbol? {
+        var current = type
+        while current != nil {
+            if current is PlatformTypeSymbol platform {
+                current = platform.UnderlyingType
+            } else if current is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) &&
+                !(nullable.UnderlyingType is TypeParameterSymbol tp && IsTypeParameterConstrainedToValueType(tp)) {
+                current = nullable.UnderlyingType
+            } else {
+                return current
+            }
+        }
+        return nil
+    }
+
+    private func ResolveSubstitutedType(
+        type TypeSymbol?,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) TypeSymbol? {
+        var current = PeelReferenceNullableAndPlatform(type)
+        var visited HashSet[TypeParameterSymbol]? = nil
+        while current is TypeParameterSymbol tp && substitutions.TryGetValue(tp, out var next) {
+            visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+            if !visited!!.Add(tp) {
+                break
+            }
+            current = PeelReferenceNullableAndPlatform(next)
+        }
+        return current
+    }
+
+    private func CanSingleTypePositionMatchForAs(
+        left TypeSymbol?,
+        right TypeSymbol?,
+        varianceMode int32,
+        substitutions Dictionary[TypeParameterSymbol, TypeSymbol]
+    ) bool {
+        let a = ResolveSubstitutedType(left, substitutions)
+        let b = ResolveSubstitutedType(right, substitutions)
+        if a == nil || b == nil || a == TypeSymbol.Error || b == TypeSymbol.Error {
+            return true
+        }
+        if a is TypeParameterSymbol tpA && b is TypeParameterSymbol tpB {
+            if tpA == tpB {
+                return true
+            }
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(tpA) ||
+                IsTypeParameterConstrainedToValueType(tpB) {
+                return CanTypeParameterSatisfyExactSubstitution(tpA, tpB, substitutions)
+            }
+            return CanTypeParameterConvertViaAs(tpA, tpB, substitutions)
+        }
+        if a is TypeParameterSymbol paramA {
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(paramA) ||
+                b.IsValueType ||
+                b is TupleTypeSymbol ||
+                b is FunctionPointerTypeSymbol ||
+                b is NullableTypeSymbol {
+                if TypeContainsTypeParameterWithSubstitutions(b, paramA, substitutions) ||
+                    !CanTypeParameterSatisfyExactSubstitution(paramA, b, substitutions) {
+                    return false
+                }
+                return true
+            }
+            return CanTypeParameterConvertViaAs(paramA, b, substitutions)
+        }
+        if b is TypeParameterSymbol paramB {
+            if varianceMode == 0 ||
+                IsTypeParameterConstrainedToValueType(paramB) ||
+                a.IsValueType ||
+                a is TupleTypeSymbol ||
+                a is FunctionPointerTypeSymbol ||
+                a is NullableTypeSymbol {
+                if TypeContainsTypeParameterWithSubstitutions(a, paramB, substitutions) ||
+                    !CanTypeParameterSatisfyExactSubstitution(paramB, a, substitutions) {
+                    return false
+                }
+                return true
+            }
+            return CanTypeParameterConvertViaAs(paramB, a, substitutions)
+        }
+        if a is NullableTypeSymbol aNull && b is NullableTypeSymbol bNull {
+            return CanSingleTypePositionMatchForAs(
+                aNull.UnderlyingType,
+                bNull.UnderlyingType,
+                varianceMode: 0,
+                substitutions
+            )
+        }
+        if a is NullableTypeSymbol || b is NullableTypeSymbol {
+            return false
+        }
+        if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b) ||
+            Conversion.HaveIdenticalTypeArgumentContracts(a, b) {
+            return true
+        }
+        let aIsValue = a.IsValueType || a is TupleTypeSymbol
+        let bIsValue = b.IsValueType || b is TupleTypeSymbol
+        let hasTypeParameter = TypeSymbol.ContainsTypeParameter(a) || TypeSymbol.ContainsTypeParameter(b)
+        if !hasTypeParameter {
+            if varianceMode == 0 || aIsValue || bIsValue {
+                return false
+            }
+            if varianceMode == 1 {
+                return Conversion.Classify(a, b).IsImplicit
+            }
+            if varianceMode == 2 {
+                return Conversion.Classify(b, a).IsImplicit
+            }
+            return CanConvertViaAs(a, b)
+        }
+        if aIsValue || bIsValue {
+            return aIsValue && bIsValue && CanOpenValueTypesMatchForAs(a, b, substitutions)
+        }
+        if varianceMode == 0 {
+            return CanOpenTypesUnifyExactlyForAs(a, b, substitutions)
+        }
+        if varianceMode == 1 {
+            return CanOpenReferenceConvertDirectionallyForAs(a, b, substitutions)
+        }
+        if varianceMode == 2 {
+            return CanOpenReferenceConvertDirectionallyForAs(b, a, substitutions)
+        }
+        return CanOpenReferenceTypesMatchForAs(a, b, substitutions)
+    }
+
+    private func ClrHierarchyContainsOpenDefinition(startClr Type?, targetOpen Type) bool {
+        var cursor = startClr
+        while cursor != nil {
+            let candidateOpen = if cursor.IsGenericType {
+                cursor.GetGenericTypeDefinition()
+            } else {
+                cursor
+            }
+            if ClrTypeUtilities.AreSame(candidateOpen, targetOpen) {
+                return true
+            }
+            cursor = cursor.BaseType
+        }
+        return false
+    }
+
+    private func OpenClrTypeDefinition(type TypeSymbol) Type? {
+        if type is ImportedTypeSymbol imp && imp.OpenDefinition is {} openDef {
+            return openDef
+        }
+        if type is SequenceTypeSymbol {
+            return typeof(IEnumerable[_])
+        }
+        if type is AsyncSequenceTypeSymbol {
+            return typeof(System.Collections.Generic.IAsyncEnumerable[_])
+        }
+        if type is MapTypeSymbol {
+            return typeof(Dictionary[_, _])
+        }
+        if type.ClrType is {} clr {
+            return if clr.IsGenericType {
+                clr.GetGenericTypeDefinition()
+            } else {
+                clr
+            }
+        }
+        return nil
     }
 
     shared {

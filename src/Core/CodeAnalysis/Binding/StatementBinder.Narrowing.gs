@@ -5736,7 +5736,7 @@ internal partial class StatementBinder {
     }
 
     private func EnsureClosureAssignedNames(anchor SyntaxNode) -> binderCtx.EnsureClosureAssignedNames(
-        () -> ComputeClosureAssignedNames(anchor)
+        () -> ComputeClosureAssignedNames(anchor, binderCtx)
     )
 
     private func ClearAssignedRootsAndUpdateAliases(
@@ -10654,7 +10654,7 @@ internal partial class StatementBinder {
         // Returns null (any name may be assigned) when the anchor is not inside a
         // function: a binder that spans several syntax trees (top-level code,
         // merged static initializers) cannot be scanned from one anchor.
-        private func ComputeClosureAssignedNames(anchor SyntaxNode) HashSet[string]? {
+        private func ComputeClosureAssignedNames(anchor SyntaxNode, binderCtx BinderContext? = nil) HashSet[string]? {
             var root SyntaxNode? = nil
             for var current SyntaxNode? = cast[SyntaxNode?](anchor); current != nil; current = current!!.Parent {
                 if (
@@ -10672,7 +10672,7 @@ internal partial class StatementBinder {
             }
             let names = HashSet[string]()
             CollectClosureAssignedNames(root, root, names, ClosureScopeIndex())
-            CollectAddressTakenNames(root, names)
+            CollectAddressTakenNames(root, names, binderCtx)
             return names
         }
 
@@ -10809,12 +10809,13 @@ internal partial class StatementBinder {
         // statement and lets an unknown callable write the local, wherever in the
         // function it appears. An `&x` passed directly as a call argument is a
         // by-reference argument that cannot outlive the call, so it is not
-        // collected: the call itself is analyzed for the write.
-        private func CollectAddressTakenNames(node SyntaxNode, names HashSet[string]) {
+        // collected unless the call is a type conversion (`*void(&x)`,
+        // `cast[*void](&x)`) or may pass a raw pointer (`*T`) in an unsafe context.
+        private func CollectAddressTakenNames(node SyntaxNode, names HashSet[string], binderCtx BinderContext? = nil) {
             switch node {
-                case UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} addressOf when !(
-                    addressOf.Parent is CallExpressionSyntax
-                ) {
+                case UnaryExpressionSyntax{
+                    OperatorToken: {Kind: SyntaxKind.AmpersandToken}
+                } addressOf when !IsTransientByRefCallArgument(addressOf, binderCtx) {
                     CollectAllNames(addressOf.Operand, names)
                 }
                 case VariableDeclarationSyntax{HasRefKindModifier: true, Initializer: {} initializer} {
@@ -10828,8 +10829,157 @@ internal partial class StatementBinder {
                 }
             }
             for child in node.GetChildren() {
-                CollectAddressTakenNames(child, names)
+                CollectAddressTakenNames(child, names, binderCtx)
             }
+        }
+
+        private func IsTransientByRefCallArgument(addressOf UnaryExpressionSyntax, binderCtx BinderContext?) bool {
+            var call CallExpressionSyntax? = nil
+            var argName string? = nil
+            if addressOf.Parent is CallExpressionSyntax directCall {
+                call = directCall
+            } else if addressOf.Parent is NamedArgumentExpressionSyntax namedArg &&
+                namedArg.Parent is CallExpressionSyntax namedCall {
+                call = namedCall
+                argName = namedArg.NameToken.ValueText
+            }
+            if call == nil {
+                return false
+            }
+            if call.ConversionTypeClause != nil {
+                return false
+            }
+            if call.Identifier.Text == "cast" && call.TypeArgumentList != nil {
+                return false
+            }
+            var argIndex = -1
+            if argName == nil {
+                for var i = 0; i < call.Arguments.Count; i++ {
+                    if object.ReferenceEquals(call.Arguments[i], addressOf) {
+                        argIndex = i
+                        break
+                    }
+                }
+                if argIndex < 0 {
+                    return false
+                }
+            }
+            let boundScope = binderCtx?.RootScope
+            if call.Callee == nil && binderCtx != nil && boundScope != nil && binderCtx.TryLookupSourceType(
+                boundScope,
+                call.Identifier.ValueText,
+                -1,
+                nil,
+                out _,
+                out _
+            ) {
+                return false
+            }
+            if !IsInUnsafeSyntaxContext(addressOf, binderCtx) {
+                return true
+            }
+            if call.Callee == nil && boundScope != nil {
+                let fnName = call.Identifier.ValueText
+                if boundScope.TryLookupSymbol(fnName) is VariableSymbol {
+                    return false
+                }
+                var foundByRefParam = false
+                for candidate in boundScope.TryLookupFunctions(fnName) {
+                    if CandidateParameterIsPointer(candidate, argIndex, argName, ref foundByRefParam) {
+                        return false
+                    }
+                }
+                if binderCtx?.CurrentContainingType is StructSymbol currentStruct {
+                    for method in currentStruct.Methods {
+                        if method.Name == fnName &&
+                            CandidateParameterIsPointer(method, argIndex, argName, ref foundByRefParam) {
+                            return false
+                        }
+                    }
+                    for staticFn in currentStruct.StaticMethods {
+                        if staticFn.Name == fnName &&
+                            CandidateParameterIsPointer(staticFn, argIndex, argName, ref foundByRefParam) {
+                            return false
+                        }
+                    }
+                }
+                return foundByRefParam
+            }
+            if call.Callee is AccessorExpressionSyntax accessor &&
+                accessor.LeftPart is NameExpressionSyntax leftName &&
+                binderCtx != nil &&
+                boundScope != nil &&
+                binderCtx.TryLookupSourceType(
+                boundScope,
+                leftName.IdentifierToken.ValueText,
+                -1,
+                nil,
+                out var ownerType,
+                out _
+            ) &&
+                ownerType != nil {
+                if ownerType is StructSymbol ownerStruct {
+                    let memberName = accessor.RightPart.GetFirstToken().ValueText
+                    var foundByRefParam = false
+                    for method in ownerStruct.Methods {
+                        if method.Name == memberName &&
+                            CandidateParameterIsPointer(method, argIndex, argName, ref foundByRefParam) {
+                            return false
+                        }
+                    }
+                    for staticFn in ownerStruct.StaticMethods {
+                        if staticFn.Name == memberName &&
+                            CandidateParameterIsPointer(staticFn, argIndex, argName, ref foundByRefParam) {
+                            return false
+                        }
+                    }
+                    return foundByRefParam
+                }
+            }
+            return false
+        }
+
+        private func CandidateParameterIsPointer(
+            fn FunctionSymbol,
+            argIndex int32,
+            argName string?,
+            ref foundByRefParam bool
+        ) bool {
+            var param ParameterSymbol? = nil
+            if argName != nil {
+                for p in fn.Parameters {
+                    if p.Name == argName {
+                        param = p
+                        break
+                    }
+                }
+            } else if argIndex >= 0 && argIndex < fn.Parameters.Length {
+                param = fn.Parameters[argIndex]
+            }
+            if param == nil {
+                return false
+            }
+            if param.Type is PointerTypeSymbol {
+                return true
+            }
+            if param.RefKind != RefKind.None {
+                foundByRefParam = true
+            }
+            return false
+        }
+
+        private func IsInUnsafeSyntaxContext(node SyntaxNode, binderCtx BinderContext?) bool {
+            if binderCtx != nil && binderCtx.InUnsafeContext {
+                return true
+            }
+            for var current SyntaxNode? = node; current != nil; current = current!!.Parent {
+                if (current is BlockStatementSyntax block && block.IsUnsafe) ||
+                    (current is FunctionDeclarationSyntax fn && fn.IsUnsafe) ||
+                    (current is StructDeclarationSyntax structDecl && structDecl.IsUnsafe) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func CollectAllNames(node SyntaxNode, names HashSet[string]) {
