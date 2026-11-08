@@ -50,6 +50,37 @@ import Xunit
 /// `<Nullable>enable</Nullable>` on a netstandard2.0 project.
 open class Issue3865ImportedObliviousArgumentAssertionTests {
     @Theory
+    @InlineData(NullableContextOptions.Enable)
+    @InlineData(NullableContextOptions.Disable)
+    func XunitObliviousLambdaReturn_ReflectionVoidResult_RunsWithoutAssertion(nullableContext NullableContextOptions) {
+        const Source = `
+using System;
+using Xunit;
+namespace Consumer {
+    public class Program {
+        public void Done() { }
+        public static void Main() {
+            var instance = new Program();
+            var method = typeof(Program).GetMethod("Done")!;
+            Console.WriteLine(Record.Exception(() => method.Invoke(instance, null)) == null);
+        }
+    }
+}`
+        let image = ImmutableArray.Create(File.ReadAllBytes(typeof(Record).Assembly.Location))
+        let (printed, _) = TranslateAgainstLibraryWithImage(
+            "",
+            Source,
+            OutputKind.ConsoleApplication,
+            image,
+            nullableContext
+        )
+        let (exit, stdout) = CompileAndRun(printed, image, "xunit.core.dll")
+        Assert.True(exit == 0, "Translated xunit callback must not throw:\n" + stdout)
+        Assert.Equal("True", stdout.Trim())
+        Assert.DoesNotContain("Invoke(instance, nil)!!", Compact(printed), StringComparison.Ordinal)
+    }
+
+    @Theory
     @InlineData("Run", "method.Invoke(instance, null)")
     @InlineData("RunTuple", "(method.Invoke(instance, null), 1)")
     func ImportedObliviousLambdaReturn_ReflectionVoidResult_StaysNullableAndRuns(sink string, result string) {
@@ -353,9 +384,15 @@ namespace Consumer
         private func TranslateAgainstLibraryWithImage(
             librarySource string,
             consumerSource string,
-            outputKind OutputKind
+            outputKind OutputKind,
+            libraryImage ImmutableArray[uint8] = default(ImmutableArray[uint8]),
+            nullableContext NullableContextOptions = NullableContextOptions.Enable
         )(Printed string, LibraryImage ImmutableArray[uint8]) {
-            let image = EmitLibraryImage(librarySource)
+            let image = if libraryImage.IsDefault {
+                EmitLibraryImage(librarySource)
+            } else {
+                libraryImage
+            }
             // A METADATA reference (not a compilation reference): the imported
             // symbols have no `DeclaringSyntaxReference` at all, which is what a
             // framework/NuGet reference looks like and what the fix keys off.
@@ -372,7 +409,7 @@ namespace Consumer
                 "Consumer",
                 []SyntaxTree{tree},
                 references,
-                CSharpCompilationOptions(outputKind).WithNullableContextOptions(NullableContextOptions.Enable)
+                CSharpCompilationOptions(outputKind).WithNullableContextOptions(nullableContext)
             )
             let errors = compilation
                 .GetDiagnostics()
@@ -414,7 +451,11 @@ namespace Consumer
             return ImmutableArray.Create(stream.ToArray())
         }
 
-        private func CompileAndRun(printed string, libraryImage ImmutableArray[uint8])(Exit int32, Stdout string) {
+        private func CompileAndRun(
+            printed string,
+            libraryImage ImmutableArray[uint8],
+            libraryFileName string = "Imported.dll"
+        )(Exit int32, Stdout string) {
             let compiler string? = FindCompiler()
             Assert.True(
                 compiler != nil,
@@ -422,7 +463,7 @@ namespace Consumer
             )
             let workDir = Path.Combine(AppContext.BaseDirectory, "issue-3865-e2e", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(workDir)
-            let libraryPath = Path.Combine(workDir, "Imported.dll")
+            let libraryPath = Path.Combine(workDir, libraryFileName)
             File.WriteAllBytes(libraryPath, libraryImage.ToArray())
             let gsPath = Path.Combine(workDir, "Program.gs")
             File.WriteAllText(gsPath, printed)

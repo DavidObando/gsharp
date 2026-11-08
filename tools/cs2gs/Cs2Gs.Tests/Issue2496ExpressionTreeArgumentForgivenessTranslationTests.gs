@@ -116,8 +116,8 @@ public static class Repro
         sink.Accept<Item>(Item.ReadName);
     }
 }`)
-        Assert.Contains("Accept((item Item) -> item.Name!!)", printed, StringComparison.Ordinal)
-        Assert.Contains("Accept((item Item) -> item.Other?.Name)", printed, StringComparison.Ordinal)
+        Assert.Matches("Accept\\(func \\(item Item\\) string\\s*\\{\\s*return item\\.Name!!", printed)
+        Assert.Contains("return item.Other?.Name", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("item.Other?.Name!!", printed, StringComparison.Ordinal)
         Assert.Contains("return item.Name!!", printed, StringComparison.Ordinal)
         Assert.Contains("Accept[Item](Item.ReadName)", printed, StringComparison.Ordinal)
@@ -233,11 +233,13 @@ public sealed class Selector<T>
     public Selector(Expression<Func<T, object>> selector) { }
 }
 
+#nullable enable
 public sealed class RuntimeSink
 {
     public void Accept<T>(Func<T, string> selector) { }
     public void AcceptBlock<T>(Func<T, string> selector) { }
 }
+#nullable restore
 
 public static class GenericSink
 {

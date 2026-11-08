@@ -352,7 +352,7 @@ partial class CSharpToGSharpTranslator {
                         )
                     } else if this.IsGSharpNullableAnalyzerExpression(bodyExpression) &&
                         this
-                        .AnalyzerBridgeTargetIsNonNull(targetType) {
+                        .AnalyzerBridgeTargetIsNonNull(targetType, invoke, bodyExpression) {
                         // Issue #4356: a `T?`-only-in-G# analyzer value returned
                         // where the delegate's EFFECTIVE G# result is non-null —
                         // the `T` of an async `Task<T>`, never the envelope — the
