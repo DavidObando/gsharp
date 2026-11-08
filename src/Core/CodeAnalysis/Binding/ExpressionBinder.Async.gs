@@ -880,7 +880,13 @@ internal partial class ExpressionBinder {
                         boundReceiver,
                         eventNameSyntax,
                         accessor.LeftPart,
-                        forWriteOrEvent: true
+                        kind: if !isEventCapableOperator {
+                            NilableMemberAccessKind.CompoundWrite
+                        } else if isAdd {
+                            NilableMemberAccessKind.CompoundWriteOrEventAdd
+                        } else {
+                            NilableMemberAccessKind.CompoundWriteOrEventRemove
+                        }
                     )
                     return BoundErrorExpression(nil)
                 }

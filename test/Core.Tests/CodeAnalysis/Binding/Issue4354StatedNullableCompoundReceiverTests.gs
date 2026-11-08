@@ -91,6 +91,33 @@ func f(n Node?) int32 { return n.secret }`, "", "Cannot find member secret.")
     private var secret int32 = 1
 }
 func f(n Node?) { n.secret = 2 }`, "", "Cannot find member secret.")
+    @InlineData(`class Node {
+    private func Secret() int32 -> 1
+}
+func f(n Node?) { let _ = n.Secret }`, "", "Cannot find member Secret.")
+    @InlineData(`open class Base {
+    protected func Secret() int32 -> 1
+}
+class Derived : Base {
+    func Use(b Base?) { let _ = b.Secret }
+}`, "", "Cannot find member Secret.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+}
+func f(n Node?) { n.Value = 3 }`, "", "Cannot find member Value.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+}
+func f(n Node?) { n.Value += 1 }`, "", "Cannot find member Value.")
+    @InlineData(`class Holder {
+    var _v int32
+    prop Value ref int32 { get { return ref _v } }
+}
+func f(h Holder?) { h.Value = 3 }`, "", "Cannot access member Value because receiver 'h' may be nil.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+    init(other Node?) { other.Value = 3 }
+}`, "", "Cannot access member Value because receiver 'other' may be nil.")
     func Issue4366_NilableReceiver_MemberAccess_ExplainsNilableReceiver_And_MissingMember_StaysCannotFind(
         declarations string,
         body string,

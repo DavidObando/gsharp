@@ -1594,6 +1594,14 @@ internal partial class ExpressionBinder {
         return BoundErrorExpression(nil)
     }
 
+    private enum NilableMemberAccessKind {
+        Read,
+        Write,
+        CompoundWrite,
+        CompoundWriteOrEventAdd,
+        CompoundWriteOrEventRemove
+    }
+
     private var probingNullableUnderlyingMemberDepth int32
 
     private func ReportUnableToFindMemberOrNilableReceiver(
@@ -1601,7 +1609,7 @@ internal partial class ExpressionBinder {
         memberNameSyntax NameExpressionSyntax,
         receiverSyntax SyntaxNode? = nil,
         receiverStart int32? = nil,
-        forWriteOrEvent bool = false
+        kind NilableMemberAccessKind = NilableMemberAccessKind.Read
     ) {
         let memberName = memberNameSyntax.IdentifierToken.ValueText
         if probingNullableUnderlyingMemberDepth == 0 && receiver != nil {
@@ -1612,11 +1620,11 @@ internal partial class ExpressionBinder {
                     receiver,
                     nullableRecvType.UnderlyingType,
                     memberNameSyntax,
-                    forWriteOrEvent
+                    kind
                 ) ||
                     receiver.Type is TypeParameterSymbol nullableTpRecv &&
                     !HasProvenNonNullTypeParameterReceiver(receiver, nullableTpRecv) &&
-                    IsApplicableNullableUnderlyingMember(receiver, nullableTpRecv, memberNameSyntax, forWriteOrEvent)
+                    IsApplicableNullableUnderlyingMember(receiver, nullableTpRecv, memberNameSyntax, kind)
             ) {
                 Diagnostics.ReportUnableToFindMember(
                     memberNameSyntax.Location,
@@ -1629,11 +1637,104 @@ internal partial class ExpressionBinder {
         Diagnostics.ReportUnableToFindMember(memberNameSyntax.Location, memberName)
     }
 
+    private func IsSourceInstanceMemberAccessible(
+        accessibility Accessibility,
+        declaringType TypeSymbol?,
+        receiverType TypeSymbol
+    ) bool -> AccessibilityChecker.IsAccessible(accessibility, declaringType, this.function) &&
+        !AccessibilityChecker.ViolatesProtectedReceiverRule(accessibility, declaringType, receiverType, this.function)
+
+    private func CanReadSourceProperty(
+        prop PropertySymbol,
+        propDeclaringType TypeSymbol,
+        receiverType TypeSymbol
+    ) bool -> prop.HasGetter &&
+        IsSourceInstanceMemberAccessible(prop.GetterAccessibility, propDeclaringType, receiverType)
+
+    private func CanWriteSourceProperty(
+        prop PropertySymbol,
+        propDeclaringType TypeSymbol,
+        receiverType TypeSymbol,
+        receiver BoundExpression
+    ) bool {
+        if prop.HasSetter {
+            return (!prop.IsInitOnly || IsInitOnlyAssignmentContext(receiver)) &&
+                IsSourceInstanceMemberAccessible(prop.SetterAccessibility, propDeclaringType, receiverType)
+        }
+        if IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, receiver) {
+            return IsSourceInstanceMemberAccessible(prop.GetterAccessibility, propDeclaringType, receiverType)
+        }
+        return prop.HasGetter &&
+            prop.ReturnRefKind == RefKind.Ref &&
+            IsSourceInstanceMemberAccessible(prop.GetterAccessibility, propDeclaringType, receiverType)
+    }
+
+    private func SatisfiesSourcePropertyAccess(
+        prop PropertySymbol,
+        propDeclaringType TypeSymbol,
+        receiverType TypeSymbol,
+        receiver BoundExpression,
+        kind NilableMemberAccessKind
+    ) bool -> if kind == NilableMemberAccessKind.Write {
+        CanWriteSourceProperty(prop, propDeclaringType, receiverType, receiver)
+    } else {
+        CanReadSourceProperty(prop, propDeclaringType, receiverType) &&
+            CanWriteSourceProperty(prop, propDeclaringType, receiverType, receiver)
+    }
+
+    private func SatisfiesSourceFieldAccess(
+        field FieldSymbol,
+        fieldDeclaringType TypeSymbol,
+        receiverType TypeSymbol,
+        receiver BoundExpression
+    ) bool -> IsSourceInstanceMemberAccessible(field.Accessibility, fieldDeclaringType, receiverType) &&
+        (
+        !field.IsReadOnly ||
+            IsReadOnlyFieldAssignmentAllowed(field, fieldDeclaringType, ReceiverExpressionIsThis(receiver))
+    )
+
+    private func SatisfiesClrDataMemberAccess(
+        member MemberInfo,
+        receiver BoundExpression,
+        fromDerivedType bool,
+        kind NilableMemberAccessKind
+    ) bool {
+        switch member {
+            case clrProp is PropertyInfo {
+                if clrProp.GetIndexParameters().Length != 0 {
+                    return false
+                }
+                let familyAllowed = fromDerivedType && IsFamilyAccessibleClrMember(clrProp.DeclaringType, receiver)
+                let canRead = GetVisibleGetter(clrProp, fromDerivedType: familyAllowed) != nil
+                let setter = GetVisibleSetter(clrProp, fromDerivedType: familyAllowed)
+                let canWrite = (
+                    setter != nil &&
+                        (!ImportedTypeSymbol.IsInitOnlySetter(setter) || IsInitOnlyAssignmentContext(receiver))
+                ) ||
+                    (!clrProp.CanWrite && clrProp.PropertyType.IsByRef && canRead)
+                return if kind == NilableMemberAccessKind.Write {
+                    canWrite
+                } else {
+                    canRead && canWrite
+                }
+            }
+            case clrFld is FieldInfo {
+                let familyAllowed = fromDerivedType && IsFamilyAccessibleClrMember(clrFld.DeclaringType, receiver)
+                let visible = ClrMemberVisibility.IsVisible(clrFld, CanAccessInternalsOf(clrFld.DeclaringType)) ||
+                    familyAllowed
+                return visible && !clrFld.IsInitOnly && !clrFld.IsLiteral
+            }
+            default {
+                return false
+            }
+        }
+    }
+
     private func IsApplicableNullableUnderlyingMember(
         receiver BoundExpression,
         underlyingType TypeSymbol,
         memberNameSyntax NameExpressionSyntax,
-        forWriteOrEvent bool
+        kind NilableMemberAccessKind
     ) bool {
         if underlyingType is NullableTypeSymbol || underlyingType == TypeSymbol.Error {
             return false
@@ -1643,8 +1744,8 @@ internal partial class ExpressionBinder {
         let diagnosticMark = Diagnostics.Count
         probingNullableUnderlyingMemberDepth++
         try {
-            if forWriteOrEvent {
-                return HasWritableOrEventUnderlyingMember(narrowedReceiver, underlyingType, memberName)
+            if kind != NilableMemberAccessKind.Read {
+                return HasWritableOrEventUnderlyingMember(narrowedReceiver, underlyingType, memberName, kind)
             }
             if underlyingType is TypeParameterSymbol tpRecv {
                 let tpMember = BindTypeParameterInstanceMemberAccess(
@@ -1656,7 +1757,13 @@ internal partial class ExpressionBinder {
                 if tpMember != nil && !(tpMember is BoundErrorExpression) && !Diagnostics.HasErrorSince(
                     diagnosticMark
                 ) {
-                    return true
+                    if tpMember.Syntax == nil {
+                        tpMember.AnchorSyntax(memberNameSyntax)
+                    }
+                    ProtectedReceiverDiagnostics.Report(tpMember, this.function, Diagnostics)
+                    if !Diagnostics.HasErrorSince(diagnosticMark) {
+                        return true
+                    }
                 }
                 return !$scope.TryLookupExtensionFunctions(tpRecv, memberName)
                     .IsDefaultOrEmpty ||
@@ -1664,6 +1771,28 @@ internal partial class ExpressionBinder {
             }
             let probed = BindAccessorStepCore(narrowedReceiver, classSymbol: nil, memberNameSyntax)
             if !(probed is BoundErrorExpression) && !Diagnostics.HasErrorSince(diagnosticMark) {
+                if probed.Syntax == nil {
+                    probed.AnchorSyntax(memberNameSyntax)
+                }
+                ProtectedReceiverDiagnostics.Report(probed, this.function, Diagnostics)
+                if Diagnostics.HasErrorSince(diagnosticMark) {
+                    return false
+                }
+                if probed is BoundMethodGroupExpression userGroup {
+                    let candidates = if userGroup.Function != nil {
+                        ImmutableArray.Create(userGroup.Function)
+                    } else {
+                        userGroup.Candidates
+                    }
+                    return candidates.Any(
+                        (m FunctionSymbol) -> m.IsExtension ||
+                            IsSourceInstanceMemberAccessible(
+                            m.Accessibility,
+                            m.ReceiverType ?? underlyingType,
+                            underlyingType
+                        )
+                    )
+                }
                 if probed is BoundClrMethodGroupExpression{DeclaringType: nil} {
                     return ImportedExtensionMayApply(underlyingType, memberName, callSyntax: nil)
                 }
@@ -1679,12 +1808,22 @@ internal partial class ExpressionBinder {
     private func HasWritableOrEventUnderlyingMember(
         narrowedReceiver BoundExpression,
         underlyingType TypeSymbol,
-        memberName string
+        memberName string,
+        kind NilableMemberAccessKind
     ) bool {
+        let allowEvents = kind is NilableMemberAccessKind.CompoundWriteOrEventAdd or
+            NilableMemberAccessKind.CompoundWriteOrEventRemove
+        let isEventAdd = kind == NilableMemberAccessKind.CompoundWriteOrEventAdd
         if underlyingType is TupleTypeSymbol tupleSym {
             return TryGetTupleElementIndex(memberName, tupleSym, out _)
         }
         if underlyingType is StructSymbol structSym {
+            if allowEvents &&
+                !SourceValueMemberPrecedesInheritedEvent(structSym, memberName) &&
+                TypeMemberModel
+                .TryGetEvent(structSym, memberName, out var ev, out var evOwner) {
+                return IsSourceInstanceMemberAccessible(ev!!.Accessibility, evOwner!!, underlyingType)
+            }
             let hasProperty = TypeMemberModel.TryGetProperty(
                 structSym,
                 memberName,
@@ -1703,128 +1842,105 @@ internal partial class ExpressionBinder {
                 !hasProperty ||
                     IsFieldAtLeastAsNearAsProperty(structSym, fieldDeclaringType!!, prop!!, propDeclaringType!!)
             ) {
-                return AccessibilityChecker.IsAccessible(field!!.Accessibility, fieldDeclaringType!!, this.function)
+                return SatisfiesSourceFieldAccess(field!!, fieldDeclaringType!!, underlyingType, narrowedReceiver)
             }
             if hasProperty {
-                return (
-                    prop!!.HasSetter && AccessibilityChecker.IsAccessible(
-                        prop!!.SetterAccessibility,
-                        propDeclaringType!!,
-                        this.function
-                    )
-                ) ||
-                    (
-                    prop!!.HasGetter && AccessibilityChecker.IsAccessible(
-                        prop!!.GetterAccessibility,
-                        propDeclaringType!!,
-                        this.function
-                    )
+                return SatisfiesSourcePropertyAccess(
+                    prop!!,
+                    propDeclaringType!!,
+                    underlyingType,
+                    narrowedReceiver,
+                    kind
                 )
             }
-            if TypeMemberModel.TryGetEvent(structSym, memberName, out var ev, out var evOwner) {
-                return AccessibilityChecker.IsAccessible(ev.Accessibility, evOwner, this.function)
-            }
             if GetInheritedClrBaseType(structSym) is Type inhClr {
-                if ClrTypeUtilities.SafeGetInheritedInstanceProperty(
-                    inhClr,
-                    memberName,
-                    CanAccessInternalsOf
-                ) is {} inhProp {
-                    if GetVisibleSetter(inhProp) != nil ||
-                        GetVisibleGetter(inhProp) != nil ||
-                        (
-                        (
-                            GetVisibleSetter(inhProp, fromDerivedType: true) != nil ||
-                                GetVisibleGetter(inhProp, fromDerivedType: true) != nil
-                        ) &&
-                            IsFamilyAccessibleClrMember(inhProp.DeclaringType, narrowedReceiver)
-                    ) {
-                        return true
-                    }
-                }
-                if ClrTypeUtilities.SafeGetInheritedInstanceField(
-                    inhClr,
-                    memberName,
-                    CanAccessInternalsOf
-                ) is {} inhFld {
-                    if ClrMemberVisibility.IsVisible(inhFld, CanAccessInternalsOf(inhFld.DeclaringType)) ||
-                        IsFamilyAccessibleClrMember(inhFld.DeclaringType, narrowedReceiver) {
-                        return true
-                    }
-                }
-                if MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
+                if allowEvents && MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
                     inhClr,
                     memberName,
                     CanAccessInternalsOf(inhClr),
                     CanAccessInternalsOf,
                     (dt Type?) -> IsFamilyAccessibleClrMember(dt, narrowedReceiver)
-                ) is {} inhEvt &&
-                    (
-                    IsCallableClrEventAccessor(inhEvt.AddMethod, inhEvt.DeclaringType, narrowedReceiver) ||
-                        IsCallableClrEventAccessor(inhEvt.RemoveMethod, inhEvt.DeclaringType, narrowedReceiver)
-                ) {
-                    return true
+                ) is {} inhEvt {
+                    let accessor = if isEventAdd {
+                        inhEvt.AddMethod
+                    } else {
+                        inhEvt.RemoveMethod
+                    }
+                    return IsCallableClrEventAccessor(accessor, inhEvt.DeclaringType, narrowedReceiver)
+                }
+                var inhMember MemberInfo? = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                    inhClr,
+                    memberName,
+                    CanAccessInternalsOf
+                )
+                inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inhClr, memberName, CanAccessInternalsOf)
+                if inhMember != nil {
+                    return SatisfiesClrDataMemberAccess(inhMember, narrowedReceiver, fromDerivedType: true, kind)
                 }
             }
             return false
         }
         if underlyingType is InterfaceSymbol ifaceSym {
+            if allowEvents && TypeMemberModel.TryGetEvent(ifaceSym, memberName, out var ifaceEv) {
+                return AccessibilityChecker.IsAccessible(ifaceEv!!.Accessibility, ifaceSym, this.function)
+            }
             if TypeMemberModel.TryGetPropertyWithOwner(ifaceSym, memberName, out var ifaceProp, out var ifaceOwner) &&
                 ifaceOwner is InterfaceSymbol effIface {
-                return (
-                    ifaceProp!!.HasSetter && AccessibilityChecker.IsAccessible(
-                        ifaceProp!!.SetterAccessibility,
-                        effIface,
-                        this.function
-                    )
-                ) ||
-                    (
-                    ifaceProp!!.HasGetter && AccessibilityChecker.IsAccessible(
-                        ifaceProp!!.GetterAccessibility,
-                        effIface,
-                        this.function
-                    )
-                )
+                return SatisfiesSourcePropertyAccess(ifaceProp!!, effIface, underlyingType, narrowedReceiver, kind)
             }
-            if TypeMemberModel.TryGetEvent(ifaceSym, memberName, out var ifaceEv) {
-                return AccessibilityChecker.IsAccessible(ifaceEv.Accessibility, ifaceSym, this.function)
+            if allowEvents && MemberLookup.GetInterfaceImportedBaseInstanceEvent(
+                ifaceSym,
+                memberName,
+                out _
+            ) is {} ifaceClrEvt {
+                let accessor = if isEventAdd {
+                    ifaceClrEvt.AddMethod
+                } else {
+                    ifaceClrEvt.RemoveMethod
+                }
+                return IsCallableClrEventAccessor(accessor, ifaceClrEvt.DeclaringType, narrowedReceiver)
             }
-            return MemberLookup.GetInterfaceImportedBaseInstanceProperty(
+            if MemberLookup.GetInterfaceImportedBaseInstanceProperty(
                 ifaceSym,
                 memberName,
                 out _,
                 requireReadable: false
-            ) != nil ||
-                MemberLookup.GetInterfaceImportedBaseInstanceEvent(ifaceSym, memberName, out _) != nil
+            ) is {} ifaceClrProp {
+                return SatisfiesClrDataMemberAccess(ifaceClrProp, narrowedReceiver, fromDerivedType: false, kind)
+            }
+            return false
         }
         if underlyingType is TypeParameterSymbol tpSym {
             if tpSym.UnwrappedClassConstraintStruct is StructSymbol tpClass &&
-                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpClass, memberName) {
+                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpClass, memberName, kind) {
                 return true
             }
             if tpSym.InterfaceConstraint is InterfaceSymbol tpIface &&
-                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpIface, memberName) {
+                HasWritableOrEventUnderlyingMember(narrowedReceiver, tpIface, memberName, kind) {
                 return true
             }
             let tpImportedConstraint TypeSymbol? = tpSym.ClrInterfaceConstraint ?? tpSym.ClassConstraint
             if tpImportedConstraint != nil &&
                 !(tpImportedConstraint is StructSymbol) &&
                 tpImportedConstraint.ClrType is Type tpClr {
-                if ClrTypeUtilities.SafeGetEventIncludingInterfaces(
+                if allowEvents && ClrTypeUtilities.SafeGetEventIncludingInterfaces(
                     tpClr,
                     memberName,
                     BindingFlags.Public | BindingFlags.Instance
-                ) != nil {
-                    return true
+                ) is {} tpEvt {
+                    let accessor = if isEventAdd {
+                        tpEvt.AddMethod
+                    } else {
+                        tpEvt.RemoveMethod
+                    }
+                    return IsCallableClrEventAccessor(accessor, tpEvt.DeclaringType, narrowedReceiver)
                 }
                 if ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(
                     tpClr,
                     memberName,
                     BindingFlags.Public | BindingFlags.Instance
-                ) is {} tpProp &&
-                    tpProp
-                    .GetIndexParameters().Length == 0 {
-                    return true
+                ) is {} tpProp {
+                    return SatisfiesClrDataMemberAccess(tpProp, narrowedReceiver, fromDerivedType: false, kind)
                 }
             }
             return false
@@ -1834,25 +1950,27 @@ internal partial class ExpressionBinder {
             $scope
             .References
             ?.TryGetMemberLookupType(declaredClr, out var lookupClr) == true {
-            if SafeGetVisibleInstanceProperty(lookupClr, memberName) is {} clrProp && clrProp.GetIndexParameters()
-                .Length == 0 {
-                return true
-            }
-            if SafeGetVisibleInstanceField(lookupClr, memberName) != nil {
-                return true
-            }
-            if MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
+            if allowEvents && MemberLookup.SafeGetEventIncludingSelfAndInterfaces(
                 lookupClr,
                 memberName,
                 CanAccessInternalsOf(lookupClr),
                 CanAccessInternalsOf,
                 (dt Type?) -> IsFamilyAccessibleClrMember(dt, narrowedReceiver)
-            ) is {} clrEvt &&
-                (
-                IsCallableClrEventAccessor(clrEvt.AddMethod, clrEvt.DeclaringType, narrowedReceiver) ||
-                    IsCallableClrEventAccessor(clrEvt.RemoveMethod, clrEvt.DeclaringType, narrowedReceiver)
-            ) {
-                return true
+            ) is {} clrEvt {
+                let accessor = if isEventAdd {
+                    clrEvt.AddMethod
+                } else {
+                    clrEvt.RemoveMethod
+                }
+                return IsCallableClrEventAccessor(accessor, clrEvt.DeclaringType, narrowedReceiver)
+            }
+            var clrMember MemberInfo? = SafeGetVisibleInstanceProperty(lookupClr, memberName)
+            if clrMember is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0 {
+                clrMember = nil
+            }
+            clrMember ??= SafeGetVisibleInstanceField(lookupClr, memberName)
+            if clrMember != nil {
+                return SatisfiesClrDataMemberAccess(clrMember, narrowedReceiver, fromDerivedType: false, kind)
             }
         }
         return false
