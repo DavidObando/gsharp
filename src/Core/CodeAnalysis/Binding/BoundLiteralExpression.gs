@@ -23,8 +23,16 @@ class BoundLiteralExpression : BoundExpression {
     /// @param syntax The originating syntax.
     /// @param value The runtime value, or `null` for the `nil` literal.
     /// @param type The static type.
+    convenience init(syntax SyntaxNode?, value object?, type TypeSymbol) {
+        init(syntax, value, type, nil)
+    }
+
+    /// Initializes a literal that retains its imported constant field metadata.
+    /// @param syntax The originating syntax.
+    /// @param value The constant value.
+    /// @param type The static type.
     /// @param importedConstantField The imported field whose metadata supplied this value.
-    init(syntax SyntaxNode?, value object?, type TypeSymbol, importedConstantField FieldInfo? = nil) : base(syntax) {
+    init(syntax SyntaxNode?, value object?, type TypeSymbol, importedConstantField FieldInfo?) : base(syntax) {
         Value = value
         _type = type
         ImportedConstantField = importedConstantField
