@@ -697,6 +697,7 @@ gsc folds a constant `float32` or `float64` value that converts to an integer ty
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
 | GS0635 | Error | A constant floating-point value that is NaN or out of the range of the target integer type converts outside an explicit `unchecked(...)` expression or `unchecked { }` block, for example `const a int8 = int8(300.5)`. The default context and `checked` both report it. Mirrors C# CS0221. | Correct the value, or write `unchecked(int8(300.5))` to accept the saturated value: the nearest bound of the type (`127` here), or `0` for NaN. |
+| GS0637 | Error | An `as` expression tests a target type that the operand's static type can never convert to via a reference, boxing, unboxing, wrapping, or null conversion (for example `42 as string` or `nuint(1) as int64?`). Mirrors C# CS0039. | Use a compatible operand or target type, or apply an explicit value conversion with `cast[T](x)` or `T(x)` when one exists. |
 
 ## Field declaration `var` / `let` requirement (GS0288)
 

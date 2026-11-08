@@ -632,10 +632,12 @@ class MissingGetterBox : MissingGetterBase, IValue { }`
                         []string{referencePath}
                     }
                 )
-                if referencePath != nil {
-                    let _ = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.GetFullPath(referencePath))
+                let loaded = if referencePath != nil {
+                    EmittedFixture.LoadTogether(referencePath, outputPath)[1]
+                } else {
+                    EmittedFixture.Load(outputPath)
                 }
-                let _ = EmittedFixture.Load(outputPath).GetTypes()
+                let _ = loaded.GetTypes()
             } finally {
                 Directory.Delete(directory, recursive: true)
             }

@@ -631,14 +631,15 @@ public class C
         {
             case var callback:
                 callback = n => 100 + n;
-                return callback(0) + __pattern0(0);
-                static int __pattern0(int n) =>
+                return callback(0) + pattern(0);
+                static int pattern(int n) =>
                     n == 0 ? 7 : Other<int>(n - 1);
-                static int Other<T>(int n) => __pattern0(n);
+                static int Other<T>(int n) => pattern(n);
         }
     }
 }`)
-        Assert.Contains("__pattern1", printed, StringComparison.Ordinal)
+        Assert.Contains("pattern_2", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__pattern", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(C().Run((value int32) -> value))",
@@ -733,18 +734,55 @@ public class C
     {
         while (Make(out var ignored) is not null)
         {
-            return __scrutinee0(0);
-            static int __scrutinee0(int n) =>
+            return scrutinee(0);
+            static int scrutinee(int n) =>
                 n == 0 ? 7 : Other<int>(n - 1);
-            static int Other<T>(int n) => __scrutinee0(n);
+            static int Other<T>(int n) => scrutinee(n);
         }
 
         return -1;
     }
 }`)
-        Assert.Contains("let __scrutinee1 =", printed, StringComparison.Ordinal)
-        Assert.Contains("func __scrutinee0(", printed, StringComparison.Ordinal)
+        Assert.Contains("let scrutinee_2 =", printed, StringComparison.Ordinal)
+        Assert.Contains("func scrutinee(", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__scrutinee", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "7")
+    }
+
+    @Fact
+    func CapturedMethodGroupReceiver_AvoidsScopeAndLiftedHelperNames() {
+        let printed = Translate(`using System;
+
+public class Counter
+{
+    public int Base;
+}
+
+public static class CounterExtensions
+{
+    public static int Add(this Counter counter, int delta) => counter.Base + delta;
+}
+
+public class C
+{
+    private static int Apply(Func<int, int> f) => f(5);
+
+    public int Run()
+    {
+        int receiver = 10;
+        Counter current = new Counter { Base = 20 };
+        int first = Apply(current.Add);
+        current = new Counter { Base = 900 };
+        return first + Apply(new Counter { Base = 30 }.Add) + receiver + receiver_2(0);
+        static int receiver_2(int n) =>
+            n == 0 ? 7 : Other<int>(n - 1);
+        static int Other<T>(int n) => receiver_2(n);
+    }
+}`)
+        Assert.Contains("let receiver_3 = current", printed, StringComparison.Ordinal)
+        Assert.Contains("let receiver_4 = Counter{Base: 30}", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "77")
     }
 
     @Fact

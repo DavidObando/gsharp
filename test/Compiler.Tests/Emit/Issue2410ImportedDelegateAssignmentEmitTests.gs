@@ -81,11 +81,11 @@ func Main() {
             let context = AssemblyLoadContext("Issue2410." + caseName, isCollectible: true)
             try {
                 context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Lib2410Emit" {
-                    context.LoadFromAssemblyPath(libraryPath)
+                    context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 } else {
                     default(Assembly?)
                 }
-                let assembly = context.LoadFromAssemblyPath(consumerPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 let output = Console.Out
                 using let captured = StringWriter()
                 Console.SetOut(captured)

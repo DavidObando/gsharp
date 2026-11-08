@@ -159,7 +159,7 @@ func Main() {
             "CSharpLib2291",
             StringComparison.Ordinal
         ) {
-            context.LoadFromAssemblyPath(libraryPath)
+            context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
         } else {
             default(Assembly?)
         }

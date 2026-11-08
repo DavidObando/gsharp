@@ -369,6 +369,26 @@ internal partial class MethodBodyEmitter {
             }
             let constructedClosure = closure.ConstructedClassSym
             let closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure)
+            var cachedFieldToken = default(EntityHandle)
+            var hitLabel = default(LabelHandle)
+            let useCachedField = literal
+                .CapturedVariables
+                .IsEmpty &&
+                closure.CachedDelegateField is {Type: DelegateTypeSymbol} cachedField &&
+                this.TryResolveCachedDelegateFieldToken(
+                constructedClosure,
+                closureIsGeneric,
+                cachedField,
+                out cachedFieldToken
+            )
+            if useCachedField {
+                hitLabel = this.il.DefineLabel()
+                this.il.OpCode(ILOpCode.Ldsfld)
+                this.il.Token(cachedFieldToken)
+                this.il.OpCode(ILOpCode.Dup)
+                this.il.Branch(ILOpCode.Brtrue, hitLabel)
+                this.il.OpCode(ILOpCode.Pop)
+            }
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(
                 if closureIsGeneric {
@@ -409,6 +429,12 @@ internal partial class MethodBodyEmitter {
             )
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(delegateCtorHandle)
+            if useCachedField {
+                this.il.OpCode(ILOpCode.Dup)
+                this.il.OpCode(ILOpCode.Stsfld)
+                this.il.Token(cachedFieldToken)
+                this.il.MarkLabel(hitLabel)
+            }
             return
         }
         if literal.CapturedVariables.Length > 0 {
@@ -833,6 +859,32 @@ internal partial class MethodBodyEmitter {
             // DelegateCtor). Reuse the existing user-generic token machinery.
             let constructedClosure = closure.ConstructedClassSym
             let closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure)
+            var cachedFieldToken = default(EntityHandle)
+            var hitLabel = default(LabelHandle)
+            let useCachedField = literal
+                .CapturedVariables
+                .IsEmpty &&
+                closure.CachedDelegateField is {} cachedField &&
+                this.CachedDelegateMatchesTarget(
+                literal,
+                cachedField.Type,
+                overrideDelegateType,
+                symbolicDelegateCtorRef
+            ) &&
+                this.TryResolveCachedDelegateFieldToken(
+                constructedClosure,
+                closureIsGeneric,
+                cachedField,
+                out cachedFieldToken
+            )
+            if useCachedField {
+                hitLabel = this.il.DefineLabel()
+                this.il.OpCode(ILOpCode.Ldsfld)
+                this.il.Token(cachedFieldToken)
+                this.il.OpCode(ILOpCode.Dup)
+                this.il.Branch(ILOpCode.Brtrue, hitLabel)
+                this.il.OpCode(ILOpCode.Pop)
+            }
             this.il.OpCode(ILOpCode.Newobj)
             this.il.Token(
                 if closureIsGeneric {
@@ -898,6 +950,12 @@ internal partial class MethodBodyEmitter {
                     .signatures
                     .ResolveDelegateClrType(literal.FunctionType)
                 this.il.Token(this.outer.memberRefs.GetDelegateCtorReference(delegateTypeC))
+            }
+            if useCachedField {
+                this.il.OpCode(ILOpCode.Dup)
+                this.il.OpCode(ILOpCode.Stsfld)
+                this.il.Token(cachedFieldToken)
+                this.il.MarkLabel(hitLabel)
             }
             return
         }
@@ -1146,6 +1204,65 @@ internal partial class MethodBodyEmitter {
             return
         }
         this.EmitExpression(BoundVariableExpression(nil, captured))
+    }
+
+    private func TryResolveCachedDelegateFieldToken(
+        constructedClosure StructSymbol,
+        closureIsGeneric bool,
+        cachedField FieldSymbol,
+        out fieldToken EntityHandle
+    ) bool {
+        if closureIsGeneric {
+            fieldToken = this.outer.userTokens.ResolveFieldToken(constructedClosure, cachedField)
+            return true
+        }
+        if this.outer.cache.StructFieldDefs.TryGetValue(cachedField, out var fieldDef) {
+            fieldToken = EntityHandle(fieldDef)
+            return true
+        }
+        if this.outer.cache.DeclaredFieldDefs.TryGetValue(cachedField, out var declaredDef) {
+            fieldToken = EntityHandle(declaredDef)
+            return true
+        }
+        fieldToken = default(EntityHandle)
+        return false
+    }
+
+    private func CachedDelegateMatchesTarget(
+        literal BoundFunctionLiteralExpression,
+        cachedType TypeSymbol,
+        overrideDelegateType Type?,
+        symbolicDelegateCtorRef EntityHandle?
+    ) bool {
+        if symbolicDelegateCtorRef != nil {
+            if cachedType is FunctionTypeSymbol cachedFn &&
+                (cachedFn.ClrType == nil || this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(cachedFn)) {
+                return this.outer.memberRefs.GetFunctionDelegateCtorRef(cachedFn) == symbolicDelegateCtorRef
+            }
+            if cachedType is ImportedTypeSymbol constructed &&
+                constructed.OpenDefinition != nil &&
+                constructed.HasSubstitutableTypeArgument &&
+                ClrTypeUtilities
+                .IsDelegateType(constructed.ClrType) {
+                return this.outer.memberRefs.GetConstructedDelegateCtorRef(constructed) == symbolicDelegateCtorRef
+            }
+            return false
+        }
+        if overrideDelegateType == nil {
+            return cachedType is FunctionTypeSymbol
+        }
+        if cachedType is FunctionTypeSymbol {
+            if this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(literal.FunctionType) {
+                return false
+            }
+            let naturalClr = this.outer.signatures.ResolveDelegateClrType(literal.FunctionType)
+            return naturalClr.IsSameAs(overrideDelegateType)
+        }
+        if cachedType is ImportedTypeSymbol{ClrType: {} cachedClr} {
+            let resolvedCached = this.outer.signatures.ResolveTargetDelegateClrType(cachedClr)
+            return resolvedCached.IsSameAs(overrideDelegateType)
+        }
+        return false
     }
 
     shared {

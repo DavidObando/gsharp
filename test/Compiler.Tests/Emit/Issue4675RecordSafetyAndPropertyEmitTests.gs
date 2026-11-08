@@ -68,7 +68,7 @@ func Main() {
             ), "PositionalStorage", true)
         IlVerifier.Verify(dll)
         Assert.Equal("7\n", fixture.Run(dll))
-        let type Type? = Assembly.LoadFile(dll).GetType("PositionalStorage.Box", throwOnError: true)
+        let type Type? = EmittedFixture.Load(dll).GetType("PositionalStorage.Box", throwOnError: true)
         Assert.NotNull(type)
         let field = Assert.Single(
             type!!.GetFields(

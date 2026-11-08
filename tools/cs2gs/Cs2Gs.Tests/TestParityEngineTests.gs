@@ -63,6 +63,110 @@ open class TestParityEngineTests {
         let names = results.Select((r TestCaseOutcome) -> r.Name!!).ToArray()
         let sorted = names.OrderBy((n string) -> n, StringComparer.Ordinal).ToArray()
         Assert.Equal(sorted, names)
+
+        let dir = Path.Combine(AppContext.BaseDirectory, "trx-parser-tfm-tests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(dir)
+        let xmlPathTrx = Path.Combine(dir, "results.trx")
+        File.WriteAllText(xmlPathTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" storage="/work/net9.0/Sample.Tests/bin/Release/net10.0/Sample.Tests.dll" />
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 2)" outcome="Passed" storage="/work/net9.0/Sample.Tests/bin/Release/net10.0/Sample.Tests.dll" />
+  </Results>
+</TestRun>`)
+        let filenameFallbackDir = Path.Combine(dir, "net8.0")
+        Directory.CreateDirectory(filenameFallbackDir)
+        let filenameFallbackTrx = Path.Combine(filenameFallbackDir, "parity_net9.0.trx")
+        File.WriteAllText(filenameFallbackTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" />
+  </Results>
+</TestRun>`)
+        let parsedNet10 = TrxParser.ParseFile(xmlPathTrx, requireNames: true)
+        Assert.All(parsedNet10, (r TestCaseOutcome) -> Assert.Equal("net10.0", r.TargetFramework))
+        let parsedNet9 = TrxParser.ParseFile(filenameFallbackTrx, requireNames: true)
+        Assert.All(parsedNet9, (r TestCaseOutcome) -> Assert.Equal("net9.0", r.TargetFramework))
+        let multiTfmOracle = CSharpTestOracle.CreateFromListTestsOutput("Sample.Tests", `Test run for /work/net9.0/Sample.Tests/bin/Release/net9.0/Sample.Tests.dll (x64)
+Test run for /work/net9.0/Sample.Tests/bin/Release/net10.0/Sample.Tests.dll (x64)
+The following Tests are available:
+    Sample.Tests.A.Cells
+The following Tests are available:
+    Sample.Tests.A.Cells`)
+        let testsByFramework = multiTfmOracle.TestsByFramework!!
+        Assert.Equal(2, testsByFramework.Count)
+        Assert.True(testsByFramework.ContainsKey("net9.0"))
+        Assert.True(testsByFramework.ContainsKey("net10.0"))
+        let missingNet9Parity = TestNameParity.Compare(multiTfmOracle, parsedNet10)
+        Assert.False(missingNet9Parity.IsMatch)
+        Assert.Equal([]string{"Sample.Tests.A.Cells"}, missingNet9Parity.Missing)
+        let fullParity = TestNameParity.Compare(multiTfmOracle, parsedNet10.Concat(parsedNet9).ToArray())
+        Assert.True(fullParity.IsMatch)
+
+        let net35Trx = Path.Combine(dir, "results_net35.trx")
+        File.WriteAllText(net35Trx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" storage="/repo/out/bin/Release/net35/Sample.Tests.dll" />
+  </Results>
+</TestRun>`)
+        let parsedNet35 = TrxParser.ParseFile(net35Trx, requireNames: true)
+        Assert.All(parsedNet35, (r TestCaseOutcome) -> Assert.Equal("net35", r.TargetFramework))
+        let net35Oracle = CSharpTestOracle.CreateFromListTestsOutput("Sample.Tests", `Test run for /repo/out/bin/Release/net35/Sample.Tests.dll (.NETFramework,Version=v3.5)
+The following Tests are available:
+    Sample.Tests.A.Cells`)
+        Assert.True(TestNameParity.Compare(net35Oracle, parsedNet35).IsMatch)
+
+        let windowsTrx = Path.Combine(dir, "parity-net10.0-windows.trx")
+        File.WriteAllText(windowsTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult testName="Sample.Tests.A.Cells(x: 1)" outcome="Passed" />
+  </Results>
+</TestRun>`)
+        let parsedWindows = TrxParser.ParseFile(windowsTrx, requireNames: true)
+        Assert.All(parsedWindows, (r TestCaseOutcome) -> Assert.Equal("net10.0-windows", r.TargetFramework))
+        let windowsOracle = CSharpTestOracle.CreateFromListTestsOutput("Sample.Tests", `Test run for /repo/out/bin/Release/net10.0-windows/Sample.Tests.dll (x64)
+The following Tests are available:
+    Sample.Tests.A.Cells`)
+        Assert.True(TestNameParity.Compare(windowsOracle, parsedWindows).IsMatch)
+
+        let customOutOracle = CSharpTestOracle.CreateFromListTestsOutput("Own.Tests", `Test run for /work/net9.0/artifacts/current/Own.Tests.dll (.NETCoreApp,Version=v8.0)
+The following Tests are available:
+    Own.Tests.A.Cells
+Test run for /work/net9.0/artifacts/current/Own.Tests.dll (.NETCoreApp,Version=v10.0)
+The following Tests are available:
+    Own.Tests.A.Cells`)
+        let customOutBuckets = customOutOracle.TestsByFramework!!
+        Assert.Equal(2, customOutBuckets.Count)
+        Assert.True(customOutBuckets.ContainsKey("net8.0"))
+        Assert.True(customOutBuckets.ContainsKey("net10.0"))
+        Assert.False(customOutBuckets.ContainsKey("net9.0"))
+
+        let customOutTrx = Path.Combine(dir, "parity_net10.0.trx")
+        File.WriteAllText(customOutTrx, `<?xml version="1.0" encoding="utf-8"?>
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <TestDefinitions>
+    <UnitTest name="Own.Tests.A.Cells">
+      <TestMethod codeBase="/work/net9.0/artifacts/current/Own.Tests.dll" className="Own.Tests.A" name="Cells" />
+    </UnitTest>
+  </TestDefinitions>
+  <Results>
+    <UnitTestResult testName="Own.Tests.A.Cells(x: 1)" outcome="Passed" storage="/work/net9.0/artifacts/current/Own.Tests.dll" />
+    <UnitTestResult testName="Own.Tests.A.Cells(x: 2)" outcome="Passed" />
+  </Results>
+</TestRun>`)
+        let parsedCustomOutNet10 = TrxParser.ParseFile(customOutTrx, requireNames: true)
+        Assert.Equal(2, parsedCustomOutNet10.Count)
+        Assert.All(parsedCustomOutNet10, (r TestCaseOutcome) -> Assert.Equal("net10.0", r.TargetFramework))
+        Assert.False(TestNameParity.Compare(customOutOracle, parsedCustomOutNet10).IsMatch)
+        Assert.True(
+            TestNameParity.Compare(
+                customOutOracle,
+                parsedCustomOutNet10.Append(TestCaseOutcome("Own.Tests.A.Cells(x: 1)", "Passed", "net8.0")).ToArray()
+            )
+                .IsMatch
+        )
     }
 
     /// Exact-match parity: the G# TRX equals the baseline, so the comparison

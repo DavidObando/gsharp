@@ -715,18 +715,26 @@ public sealed class Marker
         }
 
         private func AssertFriendAssemblies(assemblyPath string) {
-            let assembly = Assembly.LoadFile(assemblyPath)
-            let friendAssemblies = assembly
-                .GetCustomAttributesData()
-                .Where(
-                (attribute CustomAttributeData) -> attribute.AttributeType == typeof(InternalsVisibleToAttribute)
-            )
-                .Select(
-                (attribute CustomAttributeData) -> cast[string](Assert.Single(attribute.ConstructorArguments).Value)
-            )
-                .OrderBy((name string) -> name, StringComparer.Ordinal)
-                .ToArray()
-            Assert.Equal([]string{"L2-Library.Source.Tests", "L2-Library.Tests"}, friendAssemblies)
+            let loadContext = System
+                .Runtime
+                .Loader
+                .AssemblyLoadContext("friend-check-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            try {
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
+                let friendAssemblies = assembly
+                    .GetCustomAttributesData()
+                    .Where(
+                    (attribute CustomAttributeData) -> attribute.AttributeType == typeof(InternalsVisibleToAttribute)
+                )
+                    .Select(
+                    (attribute CustomAttributeData) -> cast[string](Assert.Single(attribute.ConstructorArguments).Value)
+                )
+                    .OrderBy((name string) -> name, StringComparer.Ordinal)
+                    .ToArray()
+                Assert.Equal([]string{"L2-Library.Source.Tests", "L2-Library.Tests"}, friendAssemblies)
+            } finally {
+                loadContext.Unload()
+            }
         }
 
         private func FingerprintShort(fingerprint string) string {

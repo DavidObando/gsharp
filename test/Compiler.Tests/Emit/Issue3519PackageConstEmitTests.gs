@@ -239,7 +239,6 @@ const D System.DayOfWeek = System.DayOfWeek.Monday`))
     func ExplicitReferenceEnumPackageConsts_UseExactUnderlyingMetadataPayloads() {
         let fixturePath = CompileExplicitEnumFixture()
         try {
-            let fixture = AssemblyLoadContext.Default.LoadFromAssemblyPath(fixturePath)
             using let program = CompileWithReferences([]string{fixturePath}, ("Reader.gs", `package FindingExplicitReferenceEnumPackageConsts
 
 import Issue3519.ExplicitEnums
@@ -252,7 +251,9 @@ import Issue3519.ExplicitEnums
 
 const U ByteCode = ByteCode.High | ByteCode.Low
 const S SByteCode = SByteCode.Negative + int8(2)`))
-            let assembly = program.Load()
+            let loadedAssemblies = EmittedFixture.LoadTogether(fixturePath, program.OutputPath)
+            let fixture = loadedAssemblies[0]
+            let assembly = loadedAssemblies[1]
             let container = assembly.GetTypes().Single((type Type) -> type.Name == "<Program>")
             let check MethodInfo? = container.GetMethod("CheckExplicitEnums", BindingFlags.Public | BindingFlags.Static)
             Assert.NotNull(check)
@@ -461,9 +462,9 @@ interface IConstants {
         func Load() Assembly -> EmittedFixture.Load(OutputPath)
 
         func Dispose() {
-            try {
-                Directory.Delete(Directory, recursive: true)
-            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            if System.IO.Directory.Exists(Directory) {
+                System.IO.Directory.Delete(Directory, recursive: true)
+            }
         }
     }
 

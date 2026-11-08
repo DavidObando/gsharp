@@ -231,7 +231,7 @@ func MakeNullablePair() Pair[string?] -> Pair[string?]("left", "right")`
                 "Geometry.Library",
                 StringComparison.Ordinal
             ) {
-                context.LoadFromAssemblyPath(libraryPath)
+                context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }

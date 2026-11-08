@@ -1273,6 +1273,10 @@ internal partial class OverloadResolver {
             } else {
                 syntax.Identifier.Location
             }
+            if parameter.RefKind == RefKind.None &&
+                (paramType is PointerTypeSymbol || parameter.Type is PointerTypeSymbol) {
+                binderCtx.RecordPointerEscapedArgument(argument)
+            }
             if parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax {
                 var argRefKind = if argumentSyntax is RefArgumentExpressionSyntax explicitRefArg {
                     getRefKindFromModifier(explicitRefArg.RefKindModifier)
@@ -2260,6 +2264,9 @@ internal partial class OverloadResolver {
                 UnwrapNamedArgumentValue(parameterSyntax[i]!!)
             } else {
                 default(ExpressionSyntax?)
+            }
+            if parameter.RefKind == RefKind.None && parameter.Type is PointerTypeSymbol {
+                binderCtx.RecordPointerEscapedArgument(argument)
             }
             if parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax {
                 var argRefKind = if argumentSyntax is RefArgumentExpressionSyntax explicitRefArg {

@@ -92,7 +92,7 @@ class SelectionTests(unittest.TestCase):
     def test_compiler_and_shared_inputs_cover_consumers(self):
         all_tests = set(ci.test_projects(ci.solution_projects()))
         for path in ("src/Core/Binder.gs", "src/Compiler/Program.gs",
-                     "test/Shared/Oracle.gs", "test-assets/fixture/README.md",
+                     "test/Shared/Oracle.gs",
                      "test/Core.Tests/CSharpFixture.gs"):
             with self.subTest(path=path):
                 plan = selection(path)
@@ -641,6 +641,13 @@ class WorkflowTests(unittest.TestCase):
         deploy = job(pages, "deploy")
         self.assertIn("needs: [build, visual]", deploy)
         self.assertIn("if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'", deploy)
+
+    def test_build_job_rejects_tag_mismatch_against_nbgv_simple_version(self):
+        text = (ROOT / ".github/workflows/build.yml").read_text()
+        block = job(text, "build")
+        self.assertIn("nbgv get-version -v SimpleVersion", block)
+        self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
+        self.assertIn("does not match Nerdbank.GitVersioning SimpleVersion", block)
 
 
 class RulesTests(unittest.TestCase):

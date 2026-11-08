@@ -160,6 +160,20 @@ Console.WriteLine(result)`
     }
 
     @Fact
+    func As_OnImpossibleOperandType_ErrorsWithGS0637() {
+        let source = `package Test
+import System
+
+let s = 42 as string
+let u = nuint(1)
+let p = u as int64?
+Console.WriteLine(s == nil && p == nil)`
+        let (exitCode, stdout, _) = CompileAndRunRaw(source)
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains("GS0637", stdout)
+    }
+
+    @Fact
     func PatternLevel_Is_InSwitch_StillWorks() {
         // Regression: the existing pattern-level `identifier is Type` syntax
         // in switch arms must continue to parse and compile correctly.

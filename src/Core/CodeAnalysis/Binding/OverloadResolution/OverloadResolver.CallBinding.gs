@@ -2319,6 +2319,10 @@ internal partial class OverloadResolver {
             // ADR-0060 §1 back-compat: a bare `&x` (BoundAddressOfExpression
             // without a RefArgumentExpressionSyntax wrapper) is universally
             // compatible with any ref-kind parameter (existing ADR-0039 behaviour).
+            if parameter.RefKind == RefKind.None &&
+                (expectedType is PointerTypeSymbol || parameter.Type is PointerTypeSymbol) {
+                binderCtx.RecordPointerEscapedArgument(argument)
+            }
             if parameter.RefKind != RefKind.None ||
                 (i < parameterSyntax.Length && parameterSyntax[i] is RefArgumentExpressionSyntax) {
                 let argSyntax ExpressionSyntax? = if i < parameterSyntax.Length {
@@ -2340,6 +2344,15 @@ internal partial class OverloadResolver {
                     parameter.RefKind != RefKind.None
                 if isBareAddressOf {
                     argRefKind = parameter.RefKind
+                    if argument is BoundAddressOfExpression{IsUnmanaged: true} unmanagedAddr {
+                        boundArguments[i] = (
+                            argument = BoundAddressOfExpression(
+                                unmanagedAddr.Syntax,
+                                unmanagedAddr.Operand,
+                                unmanaged: false
+                            )
+                        )
+                    }
                 }
                 if argRefKind != parameter.RefKind {
                     if parameter.RefKind == RefKind.In && argRefKind == RefKind.None {

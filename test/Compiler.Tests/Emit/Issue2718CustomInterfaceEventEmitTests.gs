@@ -80,12 +80,12 @@ func Main() {
         }
         let loadContext = AssemblyLoadContext("Issue2718", isCollectible: true)
         loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Oahu.Core" {
-            loadContext.LoadFromAssemblyPath(artifacts.ContractsPath!!)
+            loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.ContractsPath!!)))
         } else {
             default(Assembly?)
         }
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(artifacts.OutputPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.OutputPath)))
             let implementationType = assembly.GetType("Cli.App.PerJobDownloadSettings")!!
             let interfaceType = implementationType.GetInterfaces().Single(
                 (i Type) -> i.FullName == "Oahu.Core.IDownloadSettings"
@@ -139,12 +139,12 @@ func Main() {
         IlVerifier.Verify(artifacts.OutputPath, additionalReferences: []string{artifacts.ContractsPath!!})
         let loadContext = AssemblyLoadContext("Issue2726", isCollectible: true)
         loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Oahu.Core" {
-            loadContext.LoadFromAssemblyPath(artifacts.ContractsPath!!)
+            loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.ContractsPath!!)))
         } else {
             default(Assembly?)
         }
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(artifacts.OutputPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.OutputPath)))
             let method = assembly
                 .GetTypes()
                 .SelectMany(

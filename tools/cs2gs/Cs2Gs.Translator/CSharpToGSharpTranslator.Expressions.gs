@@ -6620,20 +6620,8 @@ partial class CSharpToGSharpTranslator {
             return paths
         }
 
-        private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string {
-            let stem = "tupleValue"
-            var candidate = stem
-            for var suffix = 2;
-                !this
-                .context
-                .SemanticModel
-                .LookupSymbols(node.SpanStart, name: candidate)
-                .IsEmpty ||
-                !this.TryClaimSynthesizedLocalName(candidate, node); suffix++ {
-                candidate = "${stem}_$suffix"
-            }
-            return candidate
-        }
+        private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string ->
+        this.AllocateScopedSynthesizedLocalName("tupleValue", node)
 
         private func FormatTupleProjection(path List[int32]) string {
             let sb = StringBuilder()
