@@ -200,8 +200,15 @@ def verify_artifacts(
     summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
     inventory = json.loads((out_dir / "inventory.json").read_text(encoding="utf-8"))
     failures = json.loads((out_dir / "failures.json").read_text(encoding="utf-8"))
+    expected_csv_columns = ["target_id", "role", "kind", "issue", "unreviewed", "expected", "actual"]
     with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:
-        csv_rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_csv_columns:
+            raise AuditVerificationError(
+                f"failures.csv columns {actual_columns!r} do not match expected {expected_csv_columns!r}"
+            )
+        csv_rows = list(reader)
 
     expected_fields = {
         "CorpusCommit": WAIKIKI_COMMIT,
@@ -244,7 +251,7 @@ def verify_artifacts(
         raise AuditVerificationError(
             f"expected {EXPECTED_REVIEWED_FAILURES + EXPECTED_REVIEWED_SYNTAX_GAPS} reviewed failure records, got {len(failures)}"
         )
-    for item in failures:
+    for index, (item, csv_row) in enumerate(zip(failures, csv_rows)):
         if item.get("IsUnreviewed"):
             raise AuditVerificationError(f"unreviewed hover failure: {item}")
         issue = item.get("Issue", "")
@@ -253,6 +260,19 @@ def verify_artifacts(
         target_id = item.get("TargetId", "")
         if "\\" in target_id or not target_id:
             raise AuditVerificationError(f"invalid or unnormalized TargetId: {target_id!r}")
+        expected_csv_row = {
+            "target_id": target_id,
+            "role": item.get("Role", ""),
+            "kind": item.get("Kind", ""),
+            "issue": issue,
+            "unreviewed": "true" if item.get("IsUnreviewed") else "false",
+            "expected": item.get("Expected", ""),
+            "actual": item.get("Actual", ""),
+        }
+        if csv_row != expected_csv_row:
+            raise AuditVerificationError(
+                f"failures.csv row {index} {csv_row!r} disagrees with failures.json record {expected_csv_row!r}"
+            )
 
     if step_summary_path is not None:
         summary_md = (out_dir / "summary.md").read_text(encoding="utf-8")

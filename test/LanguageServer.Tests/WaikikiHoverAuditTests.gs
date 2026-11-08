@@ -276,6 +276,33 @@ open class WaikikiHoverAuditTests {
             )
             Assert.Single(nonOracleInteriorFailures)
 
+            let nonOraclePlaceholderFailures = List[AuditFailureRecord]()
+            RecordPlaceholderHoverIfUnrecorded(
+                "Consumer.gs:24:13:loaded",
+                "NameExpression",
+                "(local variable) loaded ?",
+                isPlaceholderHover: true,
+                alreadyRecorded: false,
+                Array.Empty[ReviewedFailure](),
+                HashSet[string](StringComparer.Ordinal),
+                nonOraclePlaceholderFailures
+            )
+            let recordedPlaceholder = Assert.Single(nonOraclePlaceholderFailures)
+            Assert.Equal("PlaceholderType", recordedPlaceholder.Kind)
+            Assert.True(recordedPlaceholder.IsUnreviewed)
+
+            RecordPlaceholderHoverIfUnrecorded(
+                "Consumer.gs:24:13:loaded",
+                "NameExpression",
+                "(local variable) loaded ?",
+                isPlaceholderHover: true,
+                alreadyRecorded: true,
+                Array.Empty[ReviewedFailure](),
+                HashSet[string](StringComparer.Ordinal),
+                nonOraclePlaceholderFailures
+            )
+            Assert.Single(nonOraclePlaceholderFailures)
+
             let matchedReviewed = HashSet[string](StringComparer.Ordinal)
             let passingWithStaleExpectation = EvaluateTargetCheck(
                 "Consumer.gs:32:29:ToString",
@@ -654,10 +681,15 @@ open class WaikikiHoverAuditTests {
             if let running = process {
                 try {
                     if !running.HasExited {
-                        running.Kill(entireProcessTree: true)
+                        try {
+                            running.Kill(entireProcessTree: true)
+                        } catch (InvalidOperationException) { }
+                        using let killWaitCts = CancellationTokenSource(TimeSpan.FromSeconds(15))
+                        await running.WaitForExitAsync(killWaitCts.Token)
                     }
-                } catch (Exception) { }
-                running.Dispose()
+                } finally {
+                    running.Dispose()
+                }
             }
             if Directory.Exists(scratchRoot) {
                 Directory.Delete(scratchRoot, recursive: true)
@@ -1408,6 +1440,8 @@ open class WaikikiHoverAuditTests {
                                 }
 
                                 var rangeMatches = true
+                                var isPlaceholderHover = false
+                                var recordedPlaceholderHover = false
                                 var recordedInteriorMismatch = false
                                 let actualSig = ExtractSignature(hover)
                                 if hover != nil {
@@ -1431,9 +1465,13 @@ open class WaikikiHoverAuditTests {
                                             if rangeFailure.Kind == "InteriorHoverMismatch" {
                                                 recordedInteriorMismatch = true
                                             }
+                                            if rangeFailure.Kind == "PlaceholderType" {
+                                                recordedPlaceholderHover = true
+                                            }
                                         }
                                     }
                                     if IsPlaceholderTypeSignature(actualSig) {
+                                        isPlaceholderHover = true
                                         placeholderHovers++
                                     }
                                 }
@@ -1473,6 +1511,9 @@ open class WaikikiHoverAuditTests {
                                             failures.Add(outcome)
                                             if outcome.Kind == "InteriorHoverMismatch" {
                                                 recordedInteriorMismatch = true
+                                            }
+                                            if outcome.Kind == "PlaceholderType" {
+                                                recordedPlaceholderHover = true
                                             }
                                         }
                                     } else if hover == nil && IsEligibleUnboundIdentifier(tok) {
@@ -1519,6 +1560,16 @@ open class WaikikiHoverAuditTests {
                                     }
                                 }
 
+                                RecordPlaceholderHoverIfUnrecorded(
+                                    targetId,
+                                    role,
+                                    actualSig,
+                                    isPlaceholderHover,
+                                    recordedPlaceholderHover,
+                                    reviewedFailureList,
+                                    matchedReviewedFailures,
+                                    failures
+                                )
                                 RecordInteriorMismatchIfUnrecorded(
                                     targetId,
                                     role,
@@ -1667,6 +1718,43 @@ open class WaikikiHoverAuditTests {
                 }
             }
             return AuditFailureRecord(targetId, role, kind, "", true, expected, actual)
+        }
+
+        internal func RecordPlaceholderHoverIfUnrecorded(
+            targetId string,
+            role string,
+            actualSignature string,
+            isPlaceholderHover bool,
+            alreadyRecorded bool,
+            reviewed[]ReviewedFailure,
+            matchedReviewed HashSet[string],
+            failures List[AuditFailureRecord]
+        ) {
+            if !isPlaceholderHover || alreadyRecorded {
+                return
+            }
+            let expected = "resolved non-placeholder hover for $role"
+            for item in reviewed {
+                if item.TargetId == targetId &&
+                    item.Kind == "PlaceholderType" &&
+                    item.Expected == expected &&
+                    item.Actual == actualSignature {
+                    matchedReviewed.Add(targetId)
+                    failures.Add(
+                        AuditFailureRecord(
+                            targetId,
+                            role,
+                            "PlaceholderType",
+                            item.Issue,
+                            false,
+                            expected,
+                            actualSignature
+                        )
+                    )
+                    return
+                }
+            }
+            failures.Add(AuditFailureRecord(targetId, role, "PlaceholderType", "", true, expected, actualSignature))
         }
 
         internal func RecordInteriorMismatchIfUnrecorded(

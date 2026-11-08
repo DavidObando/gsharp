@@ -25,6 +25,32 @@ audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
 
 
+def is_process_alive(pid: int) -> bool:
+    """Check whether a process ID is still running without sending a control signal on Windows."""
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 class WaikikiHoverAuditScriptTests(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(SCRATCH_ROOT, ignore_errors=True)
@@ -153,6 +179,24 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
         summary["PlaceholderHoverCount"] = 1
         (out_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
         with self.assertRaisesRegex(audit.AuditVerificationError, "PlaceholderHoverCount"):
+            audit.verify_artifacts(out_dir)
+
+        self.write_valid_artifacts(out_dir)
+        with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.reader(handle))
+        rows[1][4] = "true"
+        with (out_dir / "failures.csv").open("w", encoding="utf-8", newline="") as handle:
+            csv.writer(handle).writerows(rows)
+        with self.assertRaisesRegex(audit.AuditVerificationError, "failures.csv row 0"):
+            audit.verify_artifacts(out_dir)
+
+        self.write_valid_artifacts(out_dir)
+        with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.reader(handle))
+        rows[0][0] = "wrong_header"
+        with (out_dir / "failures.csv").open("w", encoding="utf-8", newline="") as handle:
+            csv.writer(handle).writerows(rows)
+        with self.assertRaisesRegex(audit.AuditVerificationError, "failures.csv columns"):
             audit.verify_artifacts(out_dir)
 
     def test_verify_rejects_unscrubbed_paths_and_secret_markers(self) -> None:
@@ -292,16 +336,9 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
         self.assertTrue(child_pid_file.is_file())
         child_pid = int(child_pid_file.read_text(encoding="utf-8").strip())
         deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                break
-            except PermissionError:
-                break
+        while time.monotonic() < deadline and is_process_alive(child_pid):
             time.sleep(0.05)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        self.assertFalse(is_process_alive(child_pid))
 
 
 if __name__ == "__main__":
