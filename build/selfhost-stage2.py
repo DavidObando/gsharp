@@ -1538,34 +1538,37 @@ def extract_verified_dotnet_archive(
             f"dotnet archive hash is not in the approved set: {archive_path}")
     destination.mkdir(parents=True, mode=0o700)
     allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
-    with tarfile.open(frozen_archive, "r:*") as archive:
-        for member in archive.getmembers():
-            raw_name = member.name.lstrip("./")
-            if not raw_name:
-                continue
-            if "\r" in raw_name or "\n" in raw_name:
-                raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
-            rel = Path(raw_name)
-            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
-                raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
-            if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo():
-                raise CertificationError(
-                    f"unsupported non-regular dotnet archive entry: {member.name!r}")
-            if rel.parts[0] not in allowed_roots:
-                continue
-            target = destination / rel
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-                continue
-            if not member.isfile():
-                raise CertificationError(
-                    f"unsupported dotnet archive entry kind: {member.name!r}")
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise CertificationError(f"cannot read dotnet archive entry: {member.name!r}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(extracted.read())
-            os.chmod(target, 0o755 if (member.mode & 0o111) else 0o644)
+    try:
+        with tarfile.open(frozen_archive, "r:*") as archive:
+            for member in archive.getmembers():
+                raw_name = member.name.lstrip("./")
+                if not raw_name:
+                    continue
+                if "\r" in raw_name or "\n" in raw_name:
+                    raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
+                rel = Path(raw_name)
+                if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                    raise CertificationError(f"unsafe dotnet archive entry: {member.name!r}")
+                if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo():
+                    raise CertificationError(
+                        f"unsupported non-regular dotnet archive entry: {member.name!r}")
+                if rel.parts[0] not in allowed_roots:
+                    continue
+                target = destination / rel
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    raise CertificationError(
+                        f"unsupported dotnet archive entry kind: {member.name!r}")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise CertificationError(f"cannot read dotnet archive entry: {member.name!r}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(extracted.read())
+                os.chmod(target, 0o755 if (member.mode & 0o111) else 0o644)
+    except tarfile.TarError as error:
+        raise CertificationError(f"invalid dotnet archive {archive_path}: {error}") from error
     dotnet_manifest_sha256(destination)
     executable = destination / "dotnet"
     if not executable.is_file():
@@ -4027,7 +4030,7 @@ class Controller:
             atomic_json(self.reports / "stage2-report.json", self.report)
             print(f"self-host stage 2: CERTIFIED ({self.reports / 'stage2-report.json'})")
             return 0
-        except (CertificationError, OSError, PeError, zipfile.BadZipFile) as error:
+        except (CertificationError, OSError, PeError, tarfile.TarError, zipfile.BadZipFile) as error:
             self.report["certified"] = False
             self.report["error"] = str(error)
             if self.reports.is_dir():

@@ -2179,6 +2179,30 @@ class ToolchainManifestTests(unittest.TestCase):
         )
         self.assertTrue(injected_props.is_file())
 
+        malformed_archive = self.root / "malformed.tar.gz"
+        malformed_archive.write_bytes(b"not-a-valid-tar-archive")
+        malformed_digest = hashlib.sha256(malformed_archive.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(stage2.CertificationError, "invalid dotnet archive"):
+            stage2.extract_verified_dotnet_archive(
+                malformed_archive, self.root / "malformed-extract", {malformed_digest})
+        malformed_work = self.root / "malformed-work"
+        malformed_args = argparse.Namespace(**{
+            **vars(args),
+            "work": malformed_work,
+            "dotnet_archive": malformed_archive,
+            "dotnet_archive_sha256": [malformed_digest],
+        })
+        malformed_controller = stage2.Controller(malformed_args)
+        malformed_controller.preflight = lambda: (  # type: ignore[method-assign]
+            malformed_controller.reports.mkdir(parents=True, exist_ok=True),
+            malformed_controller.toolchains.mkdir(parents=True, exist_ok=True),
+            malformed_controller.resolve_installed_dotnet(),
+        )
+        self.assertEqual(2, malformed_controller.certify())
+        report = json.loads((malformed_controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["certified"])
+        self.assertIn("invalid dotnet archive", report["error"])
+
     def test_freeze_migrated_tree_preserves_modes_and_detects_post_freeze_mutations(self) -> None:
         migrated = self.root / "migrated"
         (migrated / "src").mkdir(parents=True)
