@@ -1,7 +1,9 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
@@ -9,6 +11,22 @@ import System.Linq
 import Xunit
 
 class Issue5858TupleReferenceTests {
+    @Theory
+    @InlineData("(Text string, Code int32)", "(\"x\", 1)", "Text")
+    @InlineData("(Inner (Text string, Code int32), Flag bool)", "((\"x\", 1), true)", "Inner.Text")
+    func TupleElementAlias_SharesStorageWithItsAggregateRoot(type string, value string, member string) {
+        let compilation = Compilation(SyntaxTree.Parse(
+            "func Probe() {\nvar row " + type + " = " + value + "\nvar ref alias = row." + member + "\n}"
+        ))
+        let program = compilation.BoundProgram
+        Assert.Empty(program.Diagnostics)
+        let function = compilation.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Probe")
+        let declarations = program.Functions[function].DescendantsAndSelf().OfType[BoundVariableDeclaration]().ToArray()
+        let root = Assert.Single(declarations, (d BoundVariableDeclaration) -> d.Variable.Name == "row").Variable
+        let alias = Assert.Single(declarations, (d BoundVariableDeclaration) -> d.Variable.Name == "alias").Variable
+        Assert.True(StatementBinder.SharesStorage(root, alias))
+    }
+
     @Fact
     func TupleElementAlias_RequiresAnAssignedOutParameterReceiver() {
         let compilation = Compilation(SyntaxTree.Parse(`func Bad(out row (Text string, Code int32)) {
