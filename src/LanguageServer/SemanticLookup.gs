@@ -266,11 +266,32 @@ shared class SemanticLookup {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return nil
             }
-            if IsStrictTypePosition(token) {
+            if IsUnqualifiedTypeParameterPosition(token) {
                 let enclosingTypeParam Symbol? = this.ResolveEnclosingTypeParameter(token)
                 if enclosingTypeParam != nil {
                     return enclosingTypeParam
                 }
+            }
+            if IsStrictTypePosition(token) && !IsUnqualifiedTypeParameterPosition(token) {
+                return if this.globals.TryGetValue(token.Text, out var strictTypeGlobal) {
+                    strictTypeGlobal
+                } else {
+                    ResolvePrimitiveOrImportedType(token.Text)
+                }
+            }
+            if (
+                (token.Parent is CallExpressionSyntax call && TokenMatches(call.Identifier, token)) ||
+                    (token.Parent is StructLiteralExpressionSyntax sl && TokenMatches(sl.TypeIdentifier, token))
+            ) &&
+                token.SyntaxTree != nil &&
+                !this
+                .globals
+                .ContainsKey(token.Text) && SemanticLookup.ResolveImportedClrType(
+                token.SyntaxTree,
+                this.compilation,
+                token
+            ) != nil {
+                return nil
             }
             // A simple name the binder left no answer for (an assignment target, a name in
             // code that did not bind): the name resolves where the scope rules of the
@@ -665,6 +686,25 @@ shared class SemanticLookup {
                 return false
             }
 
+            private func IsUnqualifiedTypeParameterPosition(token SyntaxToken) bool {
+                if token.Parent is TypeParameterSyntax tp {
+                    return TokenMatches(tp.Identifier, token) ||
+                        (
+                        TokenMatches(tp.Constraint, token) && tp.ConstraintType == nil && !tp.HasConstraintTypeArguments
+                    )
+                }
+                var clause TypeClauseSyntax? = token.Parent as TypeClauseSyntax
+                if clause == nil && token.Parent is StructDeclarationSyntax structDecl {
+                    clause = structDecl.BaseTypeClauses.FirstOrDefault(
+                        (c TypeClauseSyntax) -> c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End
+                    )
+                }
+                if clause != nil {
+                    return !clause.HasQualifier && !clause.HasTypeArguments && TokenMatches(clause.Identifier, token)
+                }
+                return false
+            }
+
             internal func IsTypeArgumentIndexToken(token SyntaxToken) bool {
                 if token.Parent is not NameExpressionSyntax ne || !TokenMatches(ne.IdentifierToken, token) {
                     return false
@@ -686,7 +726,8 @@ shared class SemanticLookup {
                     return true
                 }
                 if token.Parent is NameExpressionSyntax ne && TokenMatches(ne.IdentifierToken, token) {
-                    return ne.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, ne)
+                    return ne.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, ne) &&
+                        acc.Parent is not AccessorExpressionSyntax
                 }
                 if token.Parent is FieldAssignmentExpressionSyntax fa && TokenMatches(fa.Receiver, token) {
                     return true
@@ -713,8 +754,24 @@ shared class SemanticLookup {
                     case name is NameExpressionSyntax {
                         yield name.IdentifierToken
                     }
+                    case genericName is GenericNameExpressionSyntax {
+                        yield genericName.Identifier
+                    }
                     case call is CallExpressionSyntax {
                         yield call.Identifier
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax {
+                        yield structLiteral.TypeIdentifier
+                    }
+                    case objectCreation is ObjectCreationExpressionSyntax when objectCreation.Target != nil {
+                        for t in EnumerateAccessorMemberTokens(objectCreation.Target!!) {
+                            yield t
+                        }
+                    }
+                    case collectionInit is CollectionInitializerExpressionSyntax when collectionInit.Target != nil {
+                        for t in EnumerateAccessorMemberTokens(collectionInit.Target!!) {
+                            yield t
+                        }
                     }
                     case index is IndexExpressionSyntax {
                         for t in EnumerateAccessorMemberTokens(index.Target) {
@@ -756,8 +813,17 @@ shared class SemanticLookup {
                     case name is NameExpressionSyntax {
                         return TokenMatches(name.IdentifierToken, token)
                     }
+                    case genericName is GenericNameExpressionSyntax {
+                        return TokenMatches(genericName.Identifier, token)
+                    }
+                    case index is IndexExpressionSyntax {
+                        return AccessorRightContainsMemberToken(index.Target, token)
+                    }
                     case call is CallExpressionSyntax {
                         return TokenMatches(call.Identifier, token)
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax {
+                        return TokenMatches(structLiteral.TypeIdentifier, token)
                     }
                     case nested is AccessorExpressionSyntax {
                         return AccessorRightContainsMemberToken(nested.LeftPart, token) ||
@@ -785,9 +851,32 @@ shared class SemanticLookup {
                         memberName = name.IdentifierToken.Text
                         return true
                     }
+                    case genericName is GenericNameExpressionSyntax when TokenMatches(genericName.Identifier, token) {
+                        receiverExpression = receiver
+                        memberName = genericName.Identifier.Text
+                        return true
+                    }
+                    case index is IndexExpressionSyntax {
+                        return TryDriveAccessorTarget(
+                            tree,
+                            index.Target,
+                            receiver,
+                            token,
+                            out receiverExpression,
+                            out memberName
+                        )
+                    }
                     case call is CallExpressionSyntax when TokenMatches(call.Identifier, token) {
                         receiverExpression = receiver
                         memberName = call.Identifier.Text
+                        return true
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax when TokenMatches(
+                        structLiteral.TypeIdentifier,
+                        token
+                    ) {
+                        receiverExpression = receiver
+                        memberName = structLiteral.TypeIdentifier.Text
                         return true
                     }
                     case nested is AccessorExpressionSyntax {

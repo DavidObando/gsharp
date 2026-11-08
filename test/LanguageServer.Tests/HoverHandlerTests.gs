@@ -1203,6 +1203,77 @@ func Build() string {
         )
     }
 
+    @Fact
+    func ComputeHover_QualifiedGenericTypeInClassWithSameNamedMember_ResolvesClrType() {
+        const source = `package Repro
+
+import System
+
+class Holder {
+    prop EqualityComparer string { get; set; }
+
+    func Check() object {
+        return System.Collections.Generic.EqualityComparer[string].Default
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let hover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "EqualityComparer", 1)
+        )
+        Assert.NotNull(hover)
+        let value = hover!!.Contents.ToString()
+        Assert.Contains("class System.Collections.Generic.EqualityComparer[T]", value, StringComparison.Ordinal)
+        Assert.DoesNotContain("Holder", value, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_DirectClrConstructorInDerivedExceptionClass_ResolvesClrType_NotInheritedProperty() {
+        const source = `package Repro
+
+import System
+import System.Diagnostics
+
+class CustomError : Exception {
+    func Capture() StackTrace {
+        let trace = StackTrace()
+        return trace
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let ctorHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StackTrace", 1)
+        )
+        Assert.NotNull(ctorHover)
+        let value = ctorHover!!.Contents.ToString()
+        Assert.Contains("class System.Diagnostics.StackTrace", value, StringComparison.Ordinal)
+        Assert.DoesNotContain("Exception.StackTrace", value, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_QualifiedTypeClauseInsideTypeParameterWithSameName_ResolvesClrType_NotTypeParameter() {
+        const source = `package Repro
+
+class Container[Environment] : System.Collections.Generic.List[string] {
+    func Resolve(folder System.Environment.SpecialFolder) string {
+        return folder.ToString()
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let envHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Environment", 1)
+        )
+        Assert.NotNull(envHover)
+        let value = envHover!!.Contents.ToString()
+        Assert.Contains("class System.Environment", value, StringComparison.Ordinal)
+        Assert.DoesNotContain("type Environment", value, StringComparison.Ordinal)
+    }
+
     shared {
         private func CreateReferencePackResolver() ReferenceResolver {
             let TryParseVersion = func (s string) Version? {

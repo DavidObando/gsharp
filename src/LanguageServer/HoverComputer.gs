@@ -291,6 +291,13 @@ async sequence[T]
         if MemberTokenResolver.IsMemberOrInitializerToken(tree.Root, token) {
             return nil
         }
+        if (
+            (token.Parent is CallExpressionSyntax call && MatchesToken(call.Identifier, token)) ||
+                (token.Parent is StructLiteralExpressionSyntax sl && MatchesToken(sl.TypeIdentifier, token))
+        ) &&
+            SemanticLookup.ResolveImportedClrType(tree, compilation, token) != nil {
+            return nil
+        }
         // Case 3: implicit this — bare identifier inside a struct/class method body
         // that matches a member of the enclosing type (e.g. `Name` instead of `this.Name`).
         let enclosingStruct StructSymbol? = FindEnclosingStructSymbol(tree, compilation, token)

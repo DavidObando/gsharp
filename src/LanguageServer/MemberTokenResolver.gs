@@ -449,6 +449,13 @@ internal shared class MemberTokenResolver {
             .IsTypeArgumentIndexToken(token) {
             return false
         }
+        if (
+            (token.Parent is CallExpressionSyntax call && MatchesToken(call.Identifier, token)) ||
+                (token.Parent is StructLiteralExpressionSyntax sl && MatchesToken(sl.TypeIdentifier, token))
+        ) &&
+            SemanticLookup.ResolveImportedClrType(tree, compilation, token) != nil {
+            return false
+        }
         if token.Parent is NameExpressionSyntax ne && BoundSemantics.GetNodeSymbol(compilation, ne) is TypeSymbol {
             return false
         }
@@ -563,10 +570,50 @@ internal shared class MemberTokenResolver {
                 memberName = name.IdentifierToken.Text
                 return true
             }
+            case genericName is GenericNameExpressionSyntax when MatchesToken(genericName.Identifier, token) {
+                receiverExpression = receiver
+                memberName = genericName.Identifier.Text
+                return true
+            }
+            case index is IndexExpressionSyntax {
+                return TryResolveAccessorMemberContext(
+                    tree,
+                    index.Target,
+                    receiver,
+                    token,
+                    out receiverExpression,
+                    out memberName
+                )
+            }
             case call is CallExpressionSyntax when MatchesToken(call.Identifier, token) {
                 receiverExpression = receiver
                 memberName = call.Identifier.Text
                 return true
+            }
+            case structLiteral is StructLiteralExpressionSyntax when MatchesToken(structLiteral.TypeIdentifier, token) {
+                receiverExpression = receiver
+                memberName = structLiteral.TypeIdentifier.Text
+                return true
+            }
+            case objectCreation is ObjectCreationExpressionSyntax when objectCreation.Target != nil {
+                return TryResolveAccessorMemberContext(
+                    tree,
+                    objectCreation.Target!!,
+                    receiver,
+                    token,
+                    out receiverExpression,
+                    out memberName
+                )
+            }
+            case collectionInit is CollectionInitializerExpressionSyntax when collectionInit.Target != nil {
+                return TryResolveAccessorMemberContext(
+                    tree,
+                    collectionInit.Target!!,
+                    receiver,
+                    token,
+                    out receiverExpression,
+                    out memberName
+                )
             }
             case nested is AccessorExpressionSyntax {
                 if TryResolveAccessorMemberContext(
