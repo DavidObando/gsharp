@@ -43,5 +43,6 @@ internal data struct PendingGenericParameter(
     Index uint16,
     InterfaceConstraintType TypeSymbol?,
     HasUnmanagedConstraint bool = false,
-    PreResolvedConstraintHandle EntityHandle? = nil
+    PreResolvedConstraintHandle EntityHandle? = nil,
+    ParameterSymbol TypeParameterSymbol? = nil
 ) : IEquatable[PendingGenericParameter] { }

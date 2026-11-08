@@ -173,28 +173,28 @@ Console.WriteLine(fwdClassT[string]())`
         func RejectedCases() sequence[[]object] {
             // The issue's four shapes, each at an OPEN parameter. All four compiled
             // with NO diagnostic on the parent.
-            yield[]object{"an-open-channel-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-channel-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesChan[T](c chan[T]) int32 { return 1 }
 func nilChan[T]() int32 { return takesChan[T](nil) }
 
 Console.WriteLine("x")`, "GS0154"}
-            yield[]object{"an-open-slice-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-slice-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesSlice[T](s []T) int32 { return 1 }
 func nilSlice[T]() int32 { return takesSlice[T](nil) }
 
 Console.WriteLine("x")`, "GS0154"}
-            yield[]object{"an-open-map-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-map-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesMap[K, V](m map[K, V]) int32 { return 1 }
 func nilMap[K, V]() int32 { return takesMap[K, V](nil) }
 
 Console.WriteLine("x")`, "GS0154"}
-            yield[]object{"an-open-sequence-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-sequence-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesSeq[T](s sequence[T]) int32 { return 1 }
@@ -204,21 +204,21 @@ Console.WriteLine("x")`, "GS0154"}
             // Three shapes the issue did not name, found by sweeping the OPEN
             // spellings. Each one's CLOSED sibling was already GS0154 on the
             // parent, so these are the same hole, not a widening.
-            yield[]object{"an-open-unconstrained-type-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-unconstrained-type-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesBareT[T](x T) int32 { return 1 }
 func fwdBareT[T]() int32 { return takesBareT[T](nil) }
 
 Console.WriteLine("x")`, "GS0154"}
-            yield[]object{"an-open-fixed-array-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-fixed-array-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesFixed[T](a [4]T) int32 { return 1 }
 func fwdFixed[T]() int32 { return takesFixed[T](nil) }
 
 Console.WriteLine("x")`, "GS0154"}
-            yield[]object{"an-open-function-type-parameter-rejects-a-nil-literal", `package Demo
+            yield []object{"an-open-function-type-parameter-rejects-a-nil-literal", `package Demo
 import System
 
 func takesFunc[T](f (T) -> T) int32 { return 1 }
@@ -227,7 +227,7 @@ func fwdFunc[T]() int32 { return takesFunc[T](nil) }
 Console.WriteLine("x")`, "GS0154"}
             // THE SOUNDNESS ROW. On the parent this compiled, IL-verified, ran, and
             // threw NullReferenceException at `m.Count`.
-            yield[]object{"the-forwarded-nil-that-reached-a-real-dereference-is-now-a-compile-error", `package Demo
+            yield []object{"the-forwarded-nil-that-reached-a-real-dereference-is-now-a-compile-error", `package Demo
 import System
 
 func takesMap[K, V](m map[K, V]) int32 { return m.Count }
@@ -238,12 +238,12 @@ Console.WriteLine(n)`, "GS0154"}
             // The CLOSED controls the issue lists. Rejected before and after — the
             // rows that establish what "the open spelling now agrees with the
             // closed one" is agreeing WITH.
-            yield[]object{"control-the-closed-channel-spelling-was-always-rejected", `package Demo
+            yield []object{"control-the-closed-channel-spelling-was-always-rejected", `package Demo
 import System
 
 func takesClosedChan(c chan[int32]) int32 { return 1 }
 Console.WriteLine(takesClosedChan(nil))`, "GS0154"}
-            yield[]object{"control-the-closed-map-spelling-was-always-rejected", `package Demo
+            yield []object{"control-the-closed-map-spelling-was-always-rejected", `package Demo
 import System
 
 func takesClosedMap(m map[string, int32]) int32 { return 1 }
@@ -251,7 +251,7 @@ Console.WriteLine(takesClosedMap(nil))`, "GS0154"}
             // The issue's own DIRECT form, whose diagnosis the issue got wrong: a
             // closed instantiation mentions no type parameter, so the bypass was
             // never taken and this reported GS0154 on the parent too.
-            yield[]object{"control-the-direct-closed-instantiation-was-always-rejected", `package Demo
+            yield []object{"control-the-direct-closed-instantiation-was-always-rejected", `package Demo
 import System
 
 func takesMap[K, V](m map[K, V]) int32 { return m.Count }
@@ -268,7 +268,7 @@ Console.WriteLine(n)`, "GS0154"}
             // compile-verify-and-run fact below rather than here, because it also
             // asserts the value that ARRIVES. It used to skip verification for a
             // pre-existing emit defect; #4027 fixed that and the skip is gone.
-            yield[]object{"control-nil-still-reaches-every-null-tolerant-open-shape", `package Demo
+            yield []object{"control-nil-still-reaches-every-null-tolerant-open-shape", `package Demo
 import System
 
 func takesNullableT[T](x T?) int32 { return 3 }
@@ -293,7 +293,7 @@ Console.WriteLine(fwdIface[int32]())`, []string{"3", "4", "5", "6"}}
             // open parameter the repro used still binds, and its contents are read
             // back out, so a wrong argument would print a wrong number rather than
             // merely verify.
-            yield[]object{"control-a-real-map-still-forwards-through-the-open-parameter", `package Demo
+            yield []object{"control-a-real-map-still-forwards-through-the-open-parameter", `package Demo
 import System
 
 func countMap[K, V](m map[K, V]) int32 { return m.Count }
@@ -307,7 +307,7 @@ Console.WriteLine(forwardReal[string, int32](real))`, []string{"2"}}
             // relay sends through an open `chan[T]` parameter and the caller reads
             // the value back, so a dropped or mis-shaped argument would deadlock or
             // print the wrong number.
-            yield[]object{"control-a-real-channel-still-moves-a-value-through-the-open-parameter", `package Demo
+            yield []object{"control-a-real-channel-still-moves-a-value-through-the-open-parameter", `package Demo
 import System
 
 func sendOne[T](c chan[T], v T) {
@@ -325,7 +325,7 @@ Console.WriteLine(got)`, []string{"41"}}
             // The remedy the diagnostic leaves the author for a genuinely optional
             // slot: annotate the parameter. Kept green so the change cannot be read
             // as "an open channel can never be absent".
-            yield[]object{"control-the-annotation-remedy-accepts-nil-and-narrows-back-to-a-value", `package Demo
+            yield []object{"control-the-annotation-remedy-accepts-nil-and-narrows-back-to-a-value", `package Demo
 import System
 
 func maybeCount[K, V](m (map[K, V])?) int32 {

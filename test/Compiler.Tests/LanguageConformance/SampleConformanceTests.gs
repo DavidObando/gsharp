@@ -104,7 +104,7 @@ open class SampleConformanceTests {
             }
             for sample in SampleConformanceData.GetSingleFileSamples(samplesDirectory) {
                 if !OperatingSystem.IsWindows() || !WindowsSkippedSamples.Contains(sample) {
-                    yield[]object{sample}
+                    yield []object{sample}
                 }
             }
         }
@@ -115,7 +115,7 @@ open class SampleConformanceTests {
                 yield break
             }
             for sample in SampleConformanceData.GetMultiFileSamples(samplesDirectory) {
-                yield[]object{sample}
+                yield []object{sample}
             }
         }
 

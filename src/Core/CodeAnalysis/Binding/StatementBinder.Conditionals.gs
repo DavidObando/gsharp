@@ -1310,6 +1310,7 @@ internal partial class StatementBinder {
         ) &&
             !NullableLifting.IsUserValueTypeNullable(nullable)
         case platform is PlatformTypeSymbol: platform.UnderlyingType == fact
+        case tp is TypeParameterSymbol when !Binder.SatisfiesNotNullConstraint(tp): tp == fact
         default: false
     }
 
@@ -2182,6 +2183,7 @@ internal partial class StatementBinder {
         captures ImmutableArray[BoundStatement].Builder
     ) BoundExpression {
         let temp = DeclareMultiAssignmentTemp("component", value.Type)
+        temp.IsManagedPointerSlot = ExpressionBinder.ContainsFixedBufferPointer(value)
         captures.Add(BoundVariableDeclaration(targetSyntax, temp, value))
         return BoundVariableExpression(nil, temp)
     }
@@ -4066,6 +4068,10 @@ internal partial class StatementBinder {
                     !IsNilLiteral(constantPattern.Value) {
                     narrowedType = nullable.UnderlyingType
                 }
+                case constantPattern is BoundConstantPattern when discriminantType is TypeParameterSymbol constTp &&
+                    !Binder.SatisfiesNotNullConstraint(constTp) && !IsNilLiteral(constantPattern.Value) {
+                    narrowedType = constTp
+                }
                 case BoundDiscardPattern { }
                 case binaryPattern is BoundBinaryPattern when binaryPattern.IsConjunction {
                     // Issue #992: `and` — both sub-patterns hold, so the union of
@@ -4114,6 +4120,10 @@ internal partial class StatementBinder {
                 }
                 case BoundPropertyPattern when operandType is PlatformTypeSymbol restoredPlatform {
                     narrowedType = restoredPlatform.UnderlyingType
+                }
+                case BoundPropertyPattern when discriminantType is TypeParameterSymbol propTp &&
+                    !Binder.SatisfiesNotNullConstraint(propTp) {
+                    narrowedType = propTp
                 }
                 case BoundRelationalPattern, BoundPropertyPattern, BoundListPattern { }
             }

@@ -292,6 +292,7 @@ namespace ReaderAgreement.Fixture
         public T[]? Array;
         public T?[] ArrayOfMaybe = System.Array.Empty<T?>();
         public (T, string?) Tuple;
+        public Tuple<T, string?>? ReferenceTuple;
         public KeyValuePair<T, string?> Pair;
         public Func<T?, string> Projection = _ => "";
         public T this[int index] => default;
@@ -352,6 +353,7 @@ namespace ReaderAgreement.Fixture.Oblivious
         public Dictionary<string, T> Map;
         public string Name;
         public (T, string) Tuple;
+        public Tuple<T, string> ReferenceTuple;
         public static event Action<T> StaticChanged;
         internal static void Raise() { StaticChanged?.Invoke(default); }
     }

@@ -1327,6 +1327,24 @@ internal class ConversionClassifier {
             return BoundClrConversionCallExpression(nil, expression, liftedMethod!!, liftedOwner, type!!)
         }
         var conversion = Conversion.Classify(expression.Type, type!!)
+        if !conversion.IsImplicit &&
+            expression.Type is TypeParameterSymbol tpSource &&
+            !(type is NullableTypeSymbol) &&
+            !(type is TypeParameterSymbol) &&
+            (
+            ExpressionBinder.IsProvenNonNullTypeParameterExpression(expression) ||
+                (
+                SmartCastStability.TryGetStableMemberPath(expression, out var memberPath, out _) &&
+                    memberPath != nil &&
+                    binderCtx
+                    .NarrowedVariables
+                    .Query(memberPath) != nil
+            )
+        ) &&
+            Conversion
+            .Classify(tpSource, NullableTypeSymbol.Get(type!!)).IsImplicit {
+            conversion = Conversion.Implicit
+        }
         conversion = ClassifyConvertedDelegate(expression, type!!, conversion)
         if isUserMethodGroupSource &&
             !conversion.IsImplicit &&

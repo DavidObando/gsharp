@@ -44,6 +44,11 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
         get;
     }
 
+    internal prop NarrowedType TypeSymbol? {
+        get;
+        init;
+    }
+
     /// Gets a value indicating whether this is a static (cref:FieldInfo)
     /// read whose storage the emitter may address in place (`ldsflda`) —
     /// ADR-0156 Phase 2 (issue #3185): a top-level global of a prior interactive

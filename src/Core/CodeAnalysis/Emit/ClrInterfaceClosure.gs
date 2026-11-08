@@ -28,7 +28,9 @@ internal class ClrInterfaceClosure {
     private let signatures SignatureEncoder
     private let concreteKeys HashSet[Type] = HashSet[Type](TypeIdentityComparer.Instance)
     private let symbolicKeys HashSet[string] = HashSet[string](StringComparer.Ordinal)
-    private let entries List[(Symbolic TypeSymbol?, Concrete Type?)] = List[(Symbolic TypeSymbol?, Concrete Type?)]()
+    private let entries List[(Symbolic TypeSymbol?, Concrete Type?, AnnotationType TypeSymbol?)] = List[
+        (Symbolic TypeSymbol?, Concrete Type?, AnnotationType TypeSymbol?)
+    ]()
 
     private init(signatures SignatureEncoder) {
         this.signatures = signatures
@@ -38,16 +40,17 @@ internal class ClrInterfaceClosure {
     /// positions is set: `Symbolic` for a generic interface closed over
     /// G# types (emitted through its symbolic TypeSpec), `Concrete`
     /// otherwise.
-    prop Entries IReadOnlyList[(Symbolic TypeSymbol?, Concrete Type?)] -> this.entries
+    prop Entries IReadOnlyList[(Symbolic TypeSymbol?, Concrete Type?, AnnotationType TypeSymbol?)] -> this.entries
 
     /// Adds a concrete interface unless it is already present.
     /// @param iface The interface.
+    /// @param annotationType The symbolic interface carrying nullability annotations, if any.
     /// @returns `true` when it was added.
-    func TryAddConcrete(iface Type) bool {
+    func TryAddConcrete(iface Type, annotationType TypeSymbol? = nil) bool {
         if !this.concreteKeys.Add(iface) {
             return false
         }
-        this.entries.Add((nil, iface))
+        this.entries.Add((nil, iface, annotationType))
         return true
     }
 
@@ -61,8 +64,18 @@ internal class ClrInterfaceClosure {
         if !this.symbolicKeys.Add(Convert.ToBase64String(signature.ToArray())) {
             return false
         }
-        this.entries.Add((iface, nil))
+        this.entries.Add((iface, nil, iface))
         return true
+    }
+
+    private func AddSingle(iface TypeSymbol) bool {
+        if MemberLookup.TryGetSymbolicClrGenericInterface(iface, out _, out _) {
+            return this.TryAddSymbolic(iface)
+        }
+        if iface.ClrType is Type clrIface {
+            return this.TryAddConcrete(clrIface, iface)
+        }
+        return false
     }
 
     shared {
@@ -76,32 +89,17 @@ internal class ClrInterfaceClosure {
             if type.ImplementedClrInterfaces.IsDefaultOrEmpty {
                 return closure
             }
+            let pending = Queue[TypeSymbol]()
             for declared in type.ImplementedClrInterfaces {
-                // Issue #949: a CLR generic interface closed over a user G# type
-                // (e.g. `IEquatable[Shape]`) carries symbolic type arguments
-                // alongside its type-erased ClrType; it is emitted over the real
-                // constructed shape, never the erased `IEquatable<object>`.
-                if MemberLookup.TryGetSymbolicClrGenericInterface(declared, out var openIface, out var symbolicArgs) {
-                    closure.TryAddSymbolic(declared)
-                    for baseIface in ClrTypeUtilities.SafeGetInterfaces(openIface) {
-                        let baseSym = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
-                            baseIface,
-                            openIface,
-                            symbolicArgs,
-                            NullabilityFreeReason.TypeStructure
-                        )
-                        if MemberLookup.TryGetSymbolicClrGenericInterface(baseSym, out _, out _) {
-                            closure.TryAddSymbolic(baseSym)
-                        } else if baseSym.ClrType is Type concreteBase {
-                            closure.TryAddConcrete(concreteBase)
-                        }
-                    }
-                    continue
+                if declared != nil && closure.AddSingle(declared) {
+                    pending.Enqueue(declared)
                 }
-                if declared?.ClrType is Type clrIface {
-                    closure.TryAddConcrete(clrIface)
-                    for baseIface in ClrTypeUtilities.SafeGetInterfaces(clrIface) {
-                        closure.TryAddConcrete(baseIface)
+            }
+            while pending.Count > 0 {
+                let current = pending.Dequeue()
+                for rel in MemberLookup.GetClrRelationshipTypeSymbols(current) {
+                    if rel.ClrType is {IsInterface: true} && closure.AddSingle(rel) {
+                        pending.Enqueue(rel)
                     }
                 }
             }

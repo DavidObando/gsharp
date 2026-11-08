@@ -105,7 +105,7 @@ open class Issue3954AwaitableSemanticsTests {
         func Cases() sequence[[]object] {
             // D4's `await g()` row: a plain `func` awaits an ordinary Task and is
             // coloured by the await, exactly as a channel operation would colour it.
-            yield[]object{"await-in-a-plain-func", `package P
+            yield []object{"await-in-a-plain-func", `package P
 import System
 
 async func answer() int32 {
@@ -119,7 +119,7 @@ func ask() int32 {
 Console.WriteLine(ask())`, []string{"42"}}
             // The batch surface after un-marking: colourless code still uses it,
             // now saying `await` where the compiler used to insert one.
-            yield[]object{"batch-awaited-by-a-plain-func", `package P
+            yield []object{"batch-awaited-by-a-plain-func", `package P
 import System
 
 func drain(source chan[int32]) int32 {
@@ -144,7 +144,7 @@ Console.WriteLine(run())`, []string{"3"}}
             // The point of the issue: the call has a task the caller can NAME.
             // The second send only fits once the receive drains the buffer, so a
             // completed placeholder would not produce this total.
-            yield[]object{"batch-call-is-a-nameable-task", `package P
+            yield []object{"batch-call-is-a-nameable-task", `package P
 import System
 import System.Threading.Tasks
 
@@ -163,7 +163,7 @@ await run()`, []string{"8"}}
             // `ReceiveBatch_CancelledMidBatch_ReturnsTheCountSoFar`): start the
             // batch, cancel it, then await the count with a timeout. D10's
             // linearization rule says the count so far — 1 — not a throw.
-            yield[]object{"cancelled-mid-batch-through-the-task", `package P
+            yield []object{"cancelled-mid-batch-through-the-task", `package P
 import System
 import System.Threading
 import System.Threading.Channels
@@ -188,7 +188,7 @@ await run()`, []string{"1"}}
             // the issue draws, so a mutant that "fixes" #3954 by removing the
             // implicit await everywhere fails here — `<-ch` in a plain `func` needs
             // no `await`, and never will.
-            yield[]object{"channel-syntax-still-awaits-implicitly", `package P
+            yield []object{"channel-syntax-still-awaits-implicitly", `package P
 import System
 
 func take(ch in chan[int32]) int32 {
@@ -217,7 +217,7 @@ Console.WriteLine(run())`, []string{"9"}}
             // function whose signature inference may not change, so GS0574 asks
             // the author which coloring the fixed signature has. Without this the
             // new rule leaves an await in a body the emitter cannot state-machine.
-            yield[]object{"await-at-a-boundary", `package P
+            yield []object{"await-at-a-boundary", `package P
 
 async func answer() int32 {
     return 42
@@ -233,7 +233,7 @@ open class Reader {
             // An explicit await has no blocking form to fall back to. Rejecting it
             // is what keeps the new rule from letting a continuation resume on
             // another thread and exit a monitor it does not hold.
-            yield[]object{"await-inside-a-lock-body", `package P
+            yield []object{"await-inside-a-lock-body", `package P
 import System
 
 async func answer() int32 {
@@ -250,7 +250,7 @@ func guarded(o Object, ch chan[int32]) int32 {
 }`, "GS0575", "thread-affine"}
             // The same rule holds where the body is ALREADY `async`: this shape
             // compiled before, and its hazard is the same one C# spells CS1996.
-            yield[]object{"await-inside-a-lock-body-of-an-async-func", `package P
+            yield []object{"await-inside-a-lock-body-of-an-async-func", `package P
 import System
 
 async func answer() int32 {
@@ -269,7 +269,7 @@ async func guarded(o Object) int32 {
             // still here is nested in its arguments — a shape no function kind can
             // lower. Before this rule it reached the emitter as GS9998, from an
             // `async func` too, so this case also closes a pre-existing hole.
-            yield[]object{"await-nested-in-a-go-operand", `package P
+            yield []object{"await-nested-in-a-go-operand", `package P
 import System
 
 async func fetch() int32 {
@@ -285,7 +285,7 @@ func run() {
         go consume(await fetch())
     }
 }`, "GS0576", "Bind the awaited value to a local first"}
-            yield[]object{"await-nested-in-a-go-operand-of-an-async-func", `package P
+            yield []object{"await-nested-in-a-go-operand-of-an-async-func", `package P
 import System
 
 async func fetch() int32 {

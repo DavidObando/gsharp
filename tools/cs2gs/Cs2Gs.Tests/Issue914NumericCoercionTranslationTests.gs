@@ -608,10 +608,15 @@ Translated G#:
 
         private func FindCompiler() string? {
             let repoRoot = GsharpTestProjectRunner.FindRepoRoot()!!
-            for configuration in[]string{"Debug", "Release"} {
-                let candidate = Path.Combine(repoRoot, "out", "bin", configuration, "Compiler", "gsc.dll")
-                if File.Exists(candidate) {
-                    return candidate
+            for root in[]string? {repoRoot, GsharpTestProjectRunner.FindAssemblyRepoRoot()} {
+                if string.IsNullOrEmpty(root) {
+                    continue
+                }
+                for configuration in[]string{"Debug", "Release"} {
+                    let candidate = Path.Combine(root, "out", "bin", configuration, "Compiler", "gsc.dll")
+                    if File.Exists(candidate) {
+                        return candidate
+                    }
                 }
             }
             return nil

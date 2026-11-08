@@ -223,7 +223,7 @@ public static class ListExtensions
         func RejectedCases() sequence[[]object] {
             // The issue's own repro. Compiled on `main`, printed `1`, and ilverify
             // reported StackUnexpected [found List`1<Pair>] [expected List`1<object>].
-            yield[]object{"the-reported-repro-is-rejected", `package P
+            yield []object{"the-reported-repro-is-rejected", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -239,7 +239,7 @@ Console.WriteLine(Probes.CountObjList(items))`, "GS0159"}
             // The covariant sibling, and the stronger repro: CLR variance does not
             // reach a value-type element, so this one CRASHES rather than merely
             // failing to verify.
-            yield[]object{"a-covariant-object-parameter-does-not-accept-a-value-type-element", `package P
+            yield []object{"a-covariant-object-parameter-does-not-accept-a-value-type-element", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -252,7 +252,7 @@ struct Pair {
 let items = List[Pair]()
 items.Add(Pair{a: 1, b: 2})
 Console.WriteLine(Probes.CountObjEnumerable(items))`, "GS0159"}
-            yield[]object{"a-slice-of-a-same-compilation-struct-does-not-reach-an-object-enumerable", `package P
+            yield []object{"a-slice-of-a-same-compilation-struct-does-not-reach-an-object-enumerable", `package P
 import System
 import Interop
 
@@ -264,7 +264,7 @@ struct Pair {
 Console.WriteLine(Probes.CountObjEnumerable([]Pair{Pair{a: 3, b: 4}}))`, "GS0159"}
             // The issue's own second shape: an open type parameter erases exactly
             // the same way.
-            yield[]object{"an-open-type-parameter-erases-the-same-way", `package P
+            yield []object{"an-open-type-parameter-erases-the-same-way", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -276,7 +276,7 @@ func countThem[T](items List[T]) string {
 Console.WriteLine(countThem[int32](List[int32]()))`, "GS0159"}
             // Invariance is not about value types: `List<Node>` is not
             // `List<object>` either, however reference-typed `Node` is.
-            yield[]object{"an-invariant-object-parameter-refuses-a-reference-element-too", `package P
+            yield []object{"an-invariant-object-parameter-refuses-a-reference-element-too", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -290,7 +290,7 @@ items.Add(Node{name: "n"})
 Console.WriteLine(Probes.CountObjList(items))`, "GS0159"}
             // The extension path: slot 0 is the `this` receiver, and it goes
             // through the same check with the same offset every other argument does.
-            yield[]object{"a-non-generic-extension-on-an-object-list-is-invisible", `package P
+            yield []object{"a-non-generic-extension-on-an-object-list-is-invisible", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -306,7 +306,7 @@ Console.WriteLine(items.CountObjListExt())`, "GS0159"}
             // The slot-blind hole #3982 left open: every slot on a constructed
             // generic class answered "possibly erased", so a genuine
             // `List<object>` constructor accepted a `List[Pair]`.
-            yield[]object{"a-genuine-object-slot-on-a-generic-class-constructor-is-refused", `package P
+            yield []object{"a-genuine-object-slot-on-a-generic-class-constructor-is-refused", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -334,7 +334,7 @@ Console.WriteLine(SlotHolder[Pair](items).Tag)`, "GS0267"}
             // one — so the position-aware test rejected every lambda passed to it.
             // See the `a-lambda-at-a-partly-concrete-generic-slot-still-binds` row
             // below, and Issue1512GenericClosureInferenceEmitTests.
-            yield[]object{"a-genuine-nested-slot-beside-an-open-one-is-still-refused-by-conversion", `package P
+            yield []object{"a-genuine-nested-slot-beside-an-open-one-is-still-refused-by-conversion", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -353,7 +353,7 @@ Console.WriteLine(holder.TakeMixed(m))`, "GS0155"}
             // Review finding 1: a same-compilation ENUM erases to `int`, not to
             // `object`. Measured refused on `main` too — the surrogate has no hole
             // here — so this row pins the behaviour rather than claiming a fix.
-            yield[]object{"a-same-compilation-enum-element-does-not-reach-an-int-list", `package P
+            yield []object{"a-same-compilation-enum-element-does-not-reach-an-int-list", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -366,7 +366,7 @@ enum MyEnum {
 let enums = List[MyEnum]()
 enums.Add(MyEnum.B)
 Console.WriteLine(SurrogateProbes.CountIntList(enums))`, "GS0159"}
-            yield[]object{"a-genuine-object-slot-on-a-generic-class-method-is-refused", `package P
+            yield []object{"a-genuine-object-slot-on-a-generic-class-method-is-refused", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -388,7 +388,7 @@ Console.WriteLine(holder.TakeObjList(items))`, "GS0159"}
             // The case the erasure exists to serve: an INFERRED generic slot. This
             // is what the fix must not touch, and it is why the check is gated on
             // `IsErasedGenericParameterSlot` rather than applied everywhere.
-            yield[]object{"the-inferred-generic-slot-still-binds", `package P
+            yield []object{"the-inferred-generic-slot-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -405,7 +405,7 @@ Console.WriteLine(Probes.CountAny[Pair](items))
 Console.WriteLine(items.CountAnyExt())`, []string{"any:1", "any:1", "ext-generic:1"}}
             // The issue's own control, and #3982's: `[]Pair{…}.Count()` reaches
             // LINQ's `Count[TSource](IEnumerable[TSource])`.
-            yield[]object{"control-the-linq-count-over-a-same-compilation-element", `package P
+            yield []object{"control-the-linq-count-over-a-same-compilation-element", `package P
 import System
 import System.Linq
 
@@ -417,7 +417,7 @@ struct Pair {
 Console.WriteLine([]Pair{Pair{a: 1, b: 2}, Pair{a: 3, b: 4}}.Count().ToString())`, []string{"2"}}
             // A parameter that genuinely IS `object` accepts the argument for real
             // — nothing about the erasure was involved in that match.
-            yield[]object{"a-genuine-object-parameter-still-accepts-anything", `package P
+            yield []object{"a-genuine-object-parameter-still-accepts-anything", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -433,7 +433,7 @@ Console.WriteLine(Probes.Describe(items))
 Console.WriteLine(Probes.Describe(Pair{a: 5, b: 6}))`, []string{"obj:List`1", "obj:Pair"}}
             // Where variance genuinely applies — a REFERENCE element — the
             // covariant parameter keeps binding, and the IL verifies.
-            yield[]object{"a-reference-element-still-rides-covariance", `package P
+            yield []object{"a-reference-element-still-rides-covariance", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -447,7 +447,7 @@ items.Add(Node{name: "n"})
 Console.WriteLine(Probes.CountObjEnumerable(items))`, []string{"objseq:1"}}
             // The open slot on the very generic class whose `object` slot is now
             // refused: making the predicate slot-PRECISE has to keep this one.
-            yield[]object{"the-open-slot-on-a-generic-class-still-binds", `package P
+            yield []object{"the-open-slot-on-a-generic-class-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -470,7 +470,7 @@ Console.WriteLine(holder.TakeOpen(items))`, []string{"ctor-int:4", "take-open:1"
             // suspicion rejects this lambda too. Lifted from
             // Issue1512GenericClosureInferenceEmitTests, which is where the attempt
             // to make the #3989 gate position-aware was measured and abandoned.
-            yield[]object{"a-lambda-at-a-partly-concrete-generic-slot-still-binds", `package P
+            yield []object{"a-lambda-at-a-partly-concrete-generic-slot-still-binds", `package P
 import System
 import System.Threading.Tasks
 
@@ -489,7 +489,7 @@ let task = op.SetIt(Task.CompletedTask, 42)
 Console.WriteLine(task.Result)`, []string{"42"}}
             // Review finding 2's control: when EVERY nested position of the open
             // parameter is generic, nothing is suspect and the call still binds.
-            yield[]object{"a-parameter-whose-nested-positions-are-all-open-still-binds", `package P
+            yield []object{"a-parameter-whose-nested-positions-are-all-open-still-binds", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -509,7 +509,7 @@ Console.WriteLine(holder.TakeAllOpen(m))`, []string{"take-allopen:1"}}
             // inside a constructed generic was matched on the argument's real CLR
             // shape: a `[]Pair` IS a `System.Array`, an `ICollection`, an `IList`;
             // a `map[string, Pair]` IS an `IDictionary`.
-            yield[]object{"non-generic-targets-are-untouched", `package P
+            yield []object{"non-generic-targets-are-untouched", `package P
 import System
 import Interop
 
@@ -547,7 +547,7 @@ Console.WriteLine(mapOpen[string, Pair](m))`, []string{
             // A `params object[]` slot expands to an `object` ELEMENT, which is a
             // genuine `object` and not an erased one — the expanded-form loop takes
             // the same second opinion and must reach the same conclusion.
-            yield[]object{"a-params-object-array-still-packs-an-erased-argument", `package P
+            yield []object{"a-params-object-array-still-packs-an-erased-argument", `package P
 import System
 import Interop
 
@@ -561,7 +561,7 @@ Console.WriteLine(Probes.FormatAll("{0}", Node{name: "n"}))`, []string{"fmt:P.No
             // used to prefer the concrete one — so the call bound to the overload
             // that cannot hold the argument. Removing the spurious candidate is
             // what lets the generic one win.
-            yield[]object{"an-object-overload-beside-the-generic-one-does-not-steal-the-call", `package P
+            yield []object{"an-object-overload-beside-the-generic-one-does-not-steal-the-call", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -576,7 +576,7 @@ items.Add(Pair{a: 1, b: 2})
 Console.WriteLine(Probes.Pick(items))`, []string{"pick-generic:1"}}
             // A genuinely CLOSED `List[object]` argument still reaches every one of
             // the refused parameters: nothing was erased, so nothing is suspect.
-            yield[]object{"control-a-real-object-list-still-reaches-every-object-parameter", `package P
+            yield []object{"control-a-real-object-list-still-reaches-every-object-parameter", `package P
 import System
 import System.Collections.Generic
 import Interop

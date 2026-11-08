@@ -225,7 +225,7 @@ Console.WriteLine(RunHasValueInLoop(Holder(), 2) + RunHasValueInSpan(Holder(), 2
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"stable_imported_getters_in_loop_and_span_keep_facts_5549", `import System
+            yield []object{"stable_imported_getters_in_loop_and_span_keep_facts_5549", `import System
 import System.Collections.Generic
 import System.Text
 
@@ -272,7 +272,7 @@ let list = List[int32]{30}
 let holder = Holder(C{Value: 4})
 Console.WriteLine(RunLoop("xyz", sb, arr, list, 5, holder))
 Console.WriteLine(RunSpan("xyz", sb, holder))`, "", "run", "36|28"}
-            yield[]object{"non_hideable_fields_and_auto_properties_in_loop_and_span_keep_facts_5549", `import System
+            yield []object{"non_hideable_fields_and_auto_properties_in_loop_and_span_keep_facts_5549", `import System
 
 enum Color {
     Red = 1,
@@ -319,7 +319,7 @@ func RunSpan(box Box, pt Point) int32 {
 var g C? = C{Value: 2}
 Console.WriteLine(RunLoop(Box{Auto: 6}, Point{X: 4}, (7, 8)))
 Console.WriteLine(RunSpan(Box{Auto: 6}, Point{X: 4}))`, "", "run", "54|40"}
-            yield[]object{"control1_type_test_on_receiver_in_loop_and_span_disables_exemption_5549", `import System
+            yield []object{"control1_type_test_on_receiver_in_loop_and_span_disables_exemption_5549", `import System
 import System.Collections.Generic
 
 class C {
@@ -397,7 +397,7 @@ func RunHiddenStableGetterInSpan(n int32) int32 {
 }
 
 Console.WriteLine(RunHiddenFieldInLoop(2) + RunHiddenStableGetterInLoop(2) + RunHiddenStableGetterInSpan(2))`, "GS0158@38:27 GS0158@53:27 GS0158@69:23", "reject", ""}
-            yield[]object{"control2_field_on_open_or_sealed_hierarchy_class_rejected_5549", `import System
+            yield []object{"control2_field_on_open_or_sealed_hierarchy_class_rejected_5549", `import System
 
 class C {
     var Value int32 = 1
@@ -435,7 +435,7 @@ func RunSealedInLoop(b SealedBox, n int32) int32 {
 
 var g C? = C{}
 Console.WriteLine(RunOpenInLoop(OpenBox{}, 2) + RunSealedInLoop(SealedBox{}, 2))`, "GS0158@19:27 GS0158@19:37 GS0158@31:27", "reject", ""}
-            yield[]object{"control3_unlisted_imported_getter_lazy_value_rejected_5549", `import System
+            yield []object{"control3_unlisted_imported_getter_lazy_value_rejected_5549", `import System
 
 class C {
     var Value int32 = 1
@@ -474,7 +474,7 @@ func RunSpan(n int32) int32 {
 
 var g C? = C{}
 Console.WriteLine(RunLoop(2) + RunSpan(2))`, "GS0158@17:27 GS0158@17:37 GS0158@32:23", "reject", ""}
-            yield[]object{"dereference_unary_and_enum_extension_operators_in_loop_and_span_rejected_5549", `import System
+            yield []object{"dereference_unary_and_enum_extension_operators_in_loop_and_span_rejected_5549", `import System
 
 class C {
     var Value int32 = 1

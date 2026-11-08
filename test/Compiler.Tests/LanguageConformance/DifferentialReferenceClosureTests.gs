@@ -200,7 +200,7 @@ open class DifferentialReferenceClosureTests {
                 // Degrade gracefully rather than emitting an empty theory (which
                 // xUnit reports as an error): one row that reports the missing
                 // prerequisite by name.
-                yield[]object? {nil}
+                yield []object? {nil}
                 yield break
             }
             let fullCorpus = string.Equals(
@@ -215,7 +215,7 @@ open class DifferentialReferenceClosureTests {
                 if OperatingSystem.IsWindows() && sample.StartsWith("PInvoke", StringComparison.Ordinal) {
                     continue
                 }
-                yield[]object{sample}
+                yield []object{sample}
             }
         }
 

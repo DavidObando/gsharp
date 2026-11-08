@@ -1634,7 +1634,7 @@ internal partial class StatementBinder {
     }
 
     // Whether a conversion site can run a user-defined or imported conversion operator (the predicate of the
-    // conversion classifier, `HasUserDefinedImplicitConversion`). A site that the walker cannot follow can.
+    // conversion classifier, `HasUserDefinedConversion`). A site that the walker cannot follow can.
     private func ConversionsRunUserCode(effects RegionEffects) bool {
         for conversion in effects.Conversions {
             if conversion.OperatorArms {

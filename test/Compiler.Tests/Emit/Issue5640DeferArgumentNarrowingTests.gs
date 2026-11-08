@@ -80,7 +80,7 @@ class Issue5640DeferArgumentNarrowingTests {
 
     shared {
         func Rows() IEnumerable[[]object] {
-            yield[]object{"d01_5640_defer_call_argument_removes_a_global_fact", `import System
+            yield []object{"d01_5640_defer_call_argument_removes_a_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -96,7 +96,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@13:14", "reject", ""}
-            yield[]object{"d02_5640_defer_computed_getter_argument_removes_a_global_fact", `import System
+            yield []object{"d02_5640_defer_computed_getter_argument_removes_a_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -116,7 +116,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d03_5640_defer_open_auto_property_argument_removes_a_global_fact", `import System
+            yield []object{"d03_5640_defer_open_auto_property_argument_removes_a_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -140,7 +140,7 @@ func Run(b Base) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Derived()))`, "GS0158@21:14", "reject", ""}
-            yield[]object{"d04_5640_defer_eager_receiver_removes_a_global_fact", `import System
+            yield []object{"d04_5640_defer_eager_receiver_removes_a_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -160,7 +160,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d05_5640_defer_argument_removes_a_closure_assigned_local_fact", `import System
+            yield []object{"d05_5640_defer_argument_removes_a_closure_assigned_local_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -181,7 +181,7 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "GS0158@19:14", "reject", ""}
-            yield[]object{"d06_5640_defer_argument_out_write_removes_a_local_fact", `import System
+            yield []object{"d06_5640_defer_argument_out_write_removes_a_local_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -197,7 +197,7 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "GS0158@14:14", "reject", ""}
-            yield[]object{"d07_5640_defer_eager_target_replaces_an_external_callable_alias", `import System
+            yield []object{"d07_5640_defer_eager_target_replaces_an_external_callable_alias", `import System
 class C {
     var Value int32 = 1
 }
@@ -211,7 +211,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@12:14", "reject", ""}
-            yield[]object{"d08_5640_defer_without_eager_effects_keeps_a_global_fact", `import System
+            yield []object{"d08_5640_defer_without_eager_effects_keeps_a_global_fact", `import System
 class C {
     var Value int32 = 7
 }
@@ -225,7 +225,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "", "run", "7"}
-            yield[]object{"d09_5640_defer_without_eager_effects_keeps_a_member_path_fact", `import System
+            yield []object{"d09_5640_defer_without_eager_effects_keeps_a_member_path_fact", `import System
 class C {
     var Value int32 = 7
 }
@@ -240,7 +240,7 @@ func Run(b Box) int32 {
     return b.Item.Value
 }
 Console.WriteLine(Run(Box(C{})))`, "", "run", "7"}
-            yield[]object{"d10_5640_defer_computed_getter_argument_removes_a_by_reference_fact", `import System
+            yield []object{"d10_5640_defer_computed_getter_argument_removes_a_by_reference_fact", `import System
 class Box {
     shared {
         var G string? = "ab"
@@ -259,7 +259,7 @@ func Run(ref text string?, b Box) int32 {
     return text.Length
 }
 Console.WriteLine(Run(ref Box.G, Box{}))`, "GS0158@17:17", "reject", ""}
-            yield[]object{"d11_5640_defer_plain_argument_keeps_a_by_reference_fact", `import System
+            yield []object{"d11_5640_defer_plain_argument_keeps_a_by_reference_fact", `import System
 class Box {
     shared {
         var G string? = "abcdefg"
@@ -272,7 +272,7 @@ func Run(ref text string?) int32 {
     return text.Length
 }
 Console.WriteLine(Run(ref Box.G))`, "", "run", "7"}
-            yield[]object{"d12_5640_defer_uninvoked_function_literal_with_try_filter_keeps_external_callable_alias", `import System
+            yield []object{"d12_5640_defer_uninvoked_function_literal_with_try_filter_keeps_external_callable_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -292,7 +292,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "", "run", "7"}
-            yield[]object{"d13_5640_defer_eager_target_assigning_external_callable_keeps_alias", `import System
+            yield []object{"d13_5640_defer_eager_target_assigning_external_callable_keeps_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -306,7 +306,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "", "run", "7"}
-            yield[]object{"d14_5640_defer_invoked_function_literal_with_try_filter_removes_external_callable_alias", `import System
+            yield []object{"d14_5640_defer_invoked_function_literal_with_try_filter_removes_external_callable_alias", `import System
 class C {
     var Value int32 = 1
 }
@@ -331,7 +331,7 @@ func Run(callback () -> void, ex Exception) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }, Exception("x")))`, "GS0158@23:14", "reject", ""}
-            yield[]object{"d15_5640_reassigning_external_callable_after_unknown_call_keeps_alias", `import System
+            yield []object{"d15_5640_reassigning_external_callable_after_unknown_call_keeps_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -367,7 +367,7 @@ func RunDefer(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(RunBlock(func() { }) + RunDefer(func() { }))`, "", "run", "14"}
-            yield[]object{"d16_5640_defer_eager_target_assigning_method_group_keeps_alias", `import System
+            yield []object{"d16_5640_defer_eager_target_assigning_method_group_keeps_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -382,7 +382,7 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "", "run", "7"}
-            yield[]object{"d17_5640_defer_invoked_function_literal_runs_after_argument_assignment", `import System
+            yield []object{"d17_5640_defer_invoked_function_literal_runs_after_argument_assignment", `import System
 class C {
     var Value int32 = 1
 }
@@ -400,7 +400,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@16:14", "reject", ""}
-            yield[]object{"d18_5640_variable_declaration_evaluates_initializer_before_recording_method_group_alias", `import System
+            yield []object{"d18_5640_variable_declaration_evaluates_initializer_before_recording_method_group_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -420,7 +420,7 @@ func Run() int32 {
     return x.Value
 }
 Console.WriteLine(Run())`, "", "run", "7"}
-            yield[]object{"d19_5640_defer_explicit_delegate_invoke_runs_after_callable_argument", `import System
+            yield []object{"d19_5640_defer_explicit_delegate_invoke_runs_after_callable_argument", `import System
 class C {
     var Value int32 = 7
 }
@@ -439,7 +439,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d20_5640_defer_callable_argument_provenance_snapshotted_before_later_argument", `import System
+            yield []object{"d20_5640_defer_callable_argument_provenance_snapshotted_before_later_argument", `import System
 class C {
     var Value int32 = 7
 }
@@ -461,7 +461,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@20:14", "reject", ""}
-            yield[]object{"d21_5640_defer_invoked_literal_calls_passed_closure_after_external_assignment", `import System
+            yield []object{"d21_5640_defer_invoked_literal_calls_passed_closure_after_external_assignment", `import System
 class C {
     var Value int32 = 7
 }
@@ -480,7 +480,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d22_5640_defer_explicit_delegate_invoke_calls_passed_closure_after_external_assignment", `import System
+            yield []object{"d22_5640_defer_explicit_delegate_invoke_calls_passed_closure_after_external_assignment", `import System
 class C {
     var Value int32 = 7
 }
@@ -502,7 +502,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@20:14", "reject", ""}
-            yield[]object{"d23_5640_defer_ignored_callable_argument_does_not_overwrite_non_external_alias", `import System
+            yield []object{"d23_5640_defer_ignored_callable_argument_does_not_overwrite_non_external_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -519,7 +519,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@15:14", "reject", ""}
-            yield[]object{"d24_5640_defer_repeated_invocation_preserves_captured_parameter_provenance", `import System
+            yield []object{"d24_5640_defer_repeated_invocation_preserves_captured_parameter_provenance", `import System
 class C {
     var Value int32 = 7
 }
@@ -544,7 +544,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@23:14", "reject", ""}
-            yield[]object{"d25_5640_defer_out_argument_invalidates_external_callable_alias", `import System
+            yield []object{"d25_5640_defer_out_argument_invalidates_external_callable_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -562,7 +562,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@16:14", "reject", ""}
-            yield[]object{"d26_5640_defer_invoked_literal_early_return_joins_pre_return_callable_state", `import System
+            yield []object{"d26_5640_defer_invoked_literal_early_return_joins_pre_return_callable_state", `import System
 class C {
     var Value int32 = 7
 }
@@ -581,7 +581,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d27_5640_defer_repeated_noncapturing_invocation_replaces_parameter_provenance", `import System
+            yield []object{"d27_5640_defer_repeated_noncapturing_invocation_replaces_parameter_provenance", `import System
 class C {
     var Value int32 = 7
 }
@@ -607,7 +607,7 @@ func Run(choose bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "", "run", "7"}
-            yield[]object{"d28_5640_defer_conditional_out_argument_invalidates_external_callable_alias", `import System
+            yield []object{"d28_5640_defer_conditional_out_argument_invalidates_external_callable_alias", `import System
 class C {
     var Value int32 = 7
 }
@@ -627,7 +627,7 @@ func Run(choose bool, callback () -> void) int32 {
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@17:14", "reject", ""}
             // Early return inside `try`/`finally` in an invoked literal joins returning callable state through `finally`.
-            yield[]object{"d29_5640_defer_invoked_literal_try_finally_return_preserves_returning_branch_state", `import System
+            yield []object{"d29_5640_defer_invoked_literal_try_finally_return_preserves_returning_branch_state", `import System
 class C {
     var Value int32 = 7
 }
@@ -652,7 +652,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@23:14", "reject", ""}
-            yield[]object{"d30_5640_defer_repeated_invocation_preserves_captured_local_provenance", `import System
+            yield []object{"d30_5640_defer_repeated_invocation_preserves_captured_local_provenance", `import System
 class C {
     var Value int32 = 7
 }
@@ -678,7 +678,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(func() { }))`, "GS0158@24:14", "reject", ""}
-            yield[]object{"d31_5640_defer_invoked_literal_terminating_finally_replays_pending_try_return", `import System
+            yield []object{"d31_5640_defer_invoked_literal_terminating_finally_replays_pending_try_return", `import System
 class C {
     var Value int32 = 7
 }
@@ -703,7 +703,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@23:14", "reject", ""}
-            yield[]object{"d32_5640_defer_invoked_literal_catch_entry_includes_unknown_call_invalidation", `import System
+            yield []object{"d32_5640_defer_invoked_literal_catch_entry_includes_unknown_call_invalidation", `import System
 class C {
     var Value int32 = 7
 }
@@ -726,7 +726,7 @@ func Run(ex Exception, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(Exception("boom"), func() { }))`, "GS0158@21:14", "reject", ""}
-            yield[]object{"d33_5640_defer_repeated_callback_argument_executes_to_fixed_point", `import System
+            yield []object{"d33_5640_defer_repeated_callback_argument_executes_to_fixed_point", `import System
 class C {
     var Value int32 = 7
 }
@@ -749,7 +749,7 @@ Console.WriteLine(Run(func(f Action) int32 {
     f()
     return 1
 }, func() { }))`, "GS0158@17:14", "reject", ""}
-            yield[]object{"d34_5640_defer_nested_finally_returns_scale_linearly_and_preserve_return_state", `import System
+            yield []object{"d34_5640_defer_nested_finally_returns_scale_linearly_and_preserve_return_state", `import System
 class C {
     var Value int32 = 7
 }
@@ -808,7 +808,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@57:14", "reject", ""}
-            yield[]object{"d35_5640_defer_declaration_copy_of_mixed_external_unknown_callable_preserves_unknown", `import System
+            yield []object{"d35_5640_defer_declaration_copy_of_mixed_external_unknown_callable_preserves_unknown", `import System
 class C {
     var Value int32 = 7
 }
@@ -829,7 +829,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@19:14", "reject", ""}
-            yield[]object{"d36_5640_defer_self_assignment_of_mixed_external_unknown_callable_preserves_unknown", `import System
+            yield []object{"d36_5640_defer_self_assignment_of_mixed_external_unknown_callable_preserves_unknown", `import System
 class C {
     var Value int32 = 7
 }
@@ -849,7 +849,7 @@ func Run(stop bool, callback () -> void) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, func() { }))`, "GS0158@18:14", "reject", ""}
-            yield[]object{"d37_5707_defer_storage_owner_effects_remove_global_fact", `import System
+            yield []object{"d37_5707_defer_storage_owner_effects_remove_global_fact", `import System
 class C { var Value int32 = 1 }
 struct Counter { func Bump() { } }
 class Host { var counter Counter }
@@ -864,7 +864,7 @@ func Run() int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run())`, "GS0158@12:14", "reject", ""}
-            yield[]object{"d38_5707_defer_storage_index_effects_remove_global_fact", `import System
+            yield []object{"d38_5707_defer_storage_index_effects_remove_global_fact", `import System
 class C { var Value int32 = 1 }
 struct Counter { func Bump() { } }
 func Index() int32 {

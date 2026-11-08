@@ -140,7 +140,7 @@ Console.WriteLine(Run(1))
         /// Gets the rejected programs: each is (name, source).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"straight-line", `
+            yield []object{"straight-line", `
 import System
 
 var text string? = nil
@@ -152,7 +152,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"loop", `
+            yield []object{"loop", `
 import System
 
 var text string? = nil
@@ -168,7 +168,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"instance-method", `
+            yield []object{"instance-method", `
 import System
 
 var text string? = nil
@@ -183,7 +183,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"constructor", `
+            yield []object{"constructor", `
 import System
 
 var text string? = nil
@@ -197,7 +197,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"composite-literal-field-initializer", `
+            yield []object{"composite-literal-field-initializer", `
 import System
 
 var text string? = nil
@@ -215,7 +215,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"property-getter", `
+            yield []object{"property-getter", `
 import System
 
 var text string? = nil
@@ -235,7 +235,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"generic-composite-literal-field-initializer", `
+            yield []object{"generic-composite-literal-field-initializer", `
 import System
 
 var text string? = nil
@@ -253,7 +253,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"derived-literal-base-constructor", `
+            yield []object{"derived-literal-base-constructor", `
 import System
 
 var text string? = nil
@@ -268,7 +268,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"literal-custom-setter", `
+            yield []object{"literal-custom-setter", `
 import System
 
 var text string? = nil
@@ -286,7 +286,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"base-call", `
+            yield []object{"base-call", `
 import System
 
 var text string? = nil
@@ -303,7 +303,7 @@ class Derived : Base {
 let d = Derived{}
 Console.WriteLine(d.Run())
 `}
-            yield[]object{"iterator-for-in-after-loop", `
+            yield []object{"iterator-for-in-after-loop", `
 import System
 
 var text string? = nil
@@ -320,7 +320,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `}
-            yield[]object{"iterator-for-in-inside-loop", `
+            yield []object{"iterator-for-in-inside-loop", `
 import System
 
 var text string? = nil
@@ -344,7 +344,7 @@ Console.WriteLine(Run())
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
-            yield[]object{"no-call", `
+            yield []object{"no-call", `
 import System
 
 var text string? = nil
@@ -355,7 +355,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"8"}}
-            yield[]object{"reassigned-after-call", `
+            yield []object{"reassigned-after-call", `
 import System
 
 var text string? = nil
@@ -368,7 +368,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"5"}}
-            yield[]object{"assigned-from-call", `
+            yield []object{"assigned-from-call", `
 import System
 
 var text string? = nil
@@ -379,7 +379,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"4"}}
-            yield[]object{"literal-without-initializers", `
+            yield []object{"literal-without-initializers", `
 import System
 
 var text string? = nil
@@ -393,7 +393,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"4"}}
-            yield[]object{"local-survives-call", `
+            yield []object{"local-survives-call", `
 import System
 
 var text string? = nil
@@ -406,7 +406,7 @@ func Run() int32 {
 }
 Console.WriteLine(Run())
 `, []string{"5"}}
-            yield[]object{"indexed-for-in", `
+            yield []object{"indexed-for-in", `
 import System
 
 var text string? = nil
@@ -422,7 +422,7 @@ func Run(flag bool) string {
 }
 Console.WriteLine(Run(false))
 `, []string{"safe"}}
-            yield[]object{"read-only-global-survives-call", `
+            yield []object{"read-only-global-survives-call", `
 import System
 
 func Get() string? { return "abc" }

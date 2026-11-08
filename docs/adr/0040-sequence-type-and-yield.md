@@ -132,3 +132,7 @@ Rejected in favor of bare `yield <expr>` for brevity and Go/Kotlin flavor. The `
 ## Summary
 
 This ADR introduces producer-side iterator support via `sequence[T]` (alias for `IEnumerable[T]`) and `yield <expr>`. The feature uses a synthesized state-machine class following the well-established C# iterator pattern, reuses architectural patterns from the existing async pipeline, and composes naturally with the already-shipped `for x in` consumption syntax. `yield break` is omitted in favor of plain `return`. Async iterators (`IAsyncEnumerable[T]` with mixed `yield` + `await`) shipped in #128 as a follow-on to this ADR.
+
+## Amendment (#4872)
+
+`yield` is now a reserved keyword (`SyntaxKind.YieldKeyword`) rather than a contextual identifier. At statement start, `Parser.ParseStatementCore` dispatches `SyntaxKind.YieldKeyword` directly to `ParseYieldStatement()`, removing `LooksLikeYieldTupleLiteral` and the `yield [` lookahead carve-out so forms such as `yield (x) + y`, `yield (x).Foo()`, `yield (x)[i]`, and `yield [3]T{...}` parse unambiguously as `YieldStatementSyntax`. Identifiers named `yield` must use the escaped `$yield` form (`cs2gs` sanitizes C# identifiers named `yield` automatically via `SyntaxFacts.GetKeywordKind`).

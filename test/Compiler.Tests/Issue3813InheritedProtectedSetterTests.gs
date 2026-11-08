@@ -90,7 +90,7 @@ stderr:
             // reader/writer through the base's `protected set` accessors, and the
             // value written must be observable through the BASE-typed reference —
             // i.e. the setter really wrote the base's backing slot.
-            yield[]object{"protected-setter-through-bare-name", `
+            yield []object{"protected-setter-through-bare-name", `
 package P
 import System
 import System.Threading
@@ -114,7 +114,7 @@ if asBase.Reader.TryRead(&got) {
 `, []string{"42"}}
             // The `this.`-qualified spelling takes a different binder path than the
             // bare name; both must agree.
-            yield[]object{"protected-setter-through-this", `
+            yield []object{"protected-setter-through-this", `
 package P
 import System
 import System.Threading
@@ -144,7 +144,7 @@ if asBase.Reader.TryRead(&got) {
         func RejectedCases() sequence[[]object] {
             // ANTI-VACUITY: a genuinely get-only inherited property is still
             // read-only. `Task.IsCompleted` has no setter at all.
-            yield[]object{"get-only-inherited-property-still-rejected", `
+            yield []object{"get-only-inherited-property-still-rejected", `
 package P
 import System
 import System.Threading.Tasks
@@ -159,7 +159,7 @@ Console.WriteLine("unreachable")
 `}
             // ANTI-VACUITY: `protected` stays out of reach from a NON-derived type.
             // The widening is keyed on the inherited-base write paths only.
-            yield[]object{"protected-setter-not-reachable-from-outside", `
+            yield []object{"protected-setter-not-reachable-from-outside", `
 package P
 import System
 import System.Threading.Channels

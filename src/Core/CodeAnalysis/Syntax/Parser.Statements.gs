@@ -234,6 +234,9 @@ open partial class Parser {
             case SyntaxKind.ScopeKeyword {
                 return ParseScopeStatement()
             }
+            case SyntaxKind.YieldKeyword {
+                return ParseYieldStatement()
+            }
             case SyntaxKind.AwaitKeyword {
                 if Peek(1).Kind == SyntaxKind.ForKeyword {
                     return ParseAwaitForRangeStatement()
@@ -244,46 +247,6 @@ open partial class Parser {
                 fallthrough
             }
             default {
-                // ADR-0040: contextual `yield` keyword — parse as yield statement
-                // when `yield` appears at statement start and is not followed by
-                // an assignment operator or other identifier-consuming syntax.
-                if Current.Kind == SyntaxKind.SequenceKeyword && Peek(1).Kind != SyntaxKind.ColonEqualsToken && Peek(
-                    1
-                ).Kind != SyntaxKind.PlusPlusToken &&
-                    Peek(1).Kind != SyntaxKind.MinusMinusToken && Peek(1).Kind != SyntaxKind.CommaToken && Peek(
-                    1
-                ).Kind != SyntaxKind.DotToken &&
-                    Peek(1).Kind != SyntaxKind.OpenParenthesisToken && Peek(1).Kind != SyntaxKind.EqualsToken {
-                    // "sequence" at statement start is not a yield — fall through.
-
-                }
-                if Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "yield" && Peek(
-                    1
-                ).Kind != SyntaxKind.ColonEqualsToken &&
-                    Peek(1).Kind != SyntaxKind.PlusPlusToken && Peek(1).Kind != SyntaxKind.MinusMinusToken && Peek(
-                    1
-                ).Kind != SyntaxKind.CommaToken &&
-                    Peek(1).Kind != SyntaxKind.DotToken && Peek(1).Kind != SyntaxKind.EqualsToken &&
-                    (
-                    Peek(1).Kind != SyntaxKind.OpenSquareBracketToken || Peek(
-                        2
-                    ).Kind == SyntaxKind.CloseSquareBracketToken
-                ) &&
-                    (Peek(1).Kind != SyntaxKind.OpenParenthesisToken || LooksLikeYieldTupleLiteral(1)) {
-                    // Issue #813: `yield (a, b)` is a yield-statement that
-                    // yields a value-tuple literal — required for iterators
-                    // whose element type is `(T1, T2, …)` (e.g. the
-                    // dogfooded `Indexed` / `Pairwise` ports). Without the
-                    // tuple-literal lookahead, `yield (` was uniformly
-                    // forwarded to expression-statement parsing where it
-                    // became the call `yield(args)` and reported GS0130.
-                    //
-                    // Issue #3501: `yield [` is indexing a variable named
-                    // `yield` — except when the bracket pair is empty, since
-                    // `[]` can only begin an array-literal type
-                    // (`yield []T{…}`).
-                    return ParseYieldStatement()
-                }
                 if Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.ColonToken {
                     // ADR-0070 / issue #1884: `label: statement`. A label on a
                     // loop names it for `break`/`continue`; a label on any
@@ -1356,9 +1319,9 @@ open partial class Parser {
     }
 
     private func ParseYieldStatement() StatementSyntax {
-        // ADR-0040: `yield <expr>` statement. The `yield` token is a contextual
-        // identifier (not a reserved keyword) to preserve source compatibility.
-        let yieldToken = MatchToken(SyntaxKind.IdentifierToken)
+        // ADR-0040 / issue #4872: `yield <expr>` statement. `yield` is a reserved
+        // keyword (`SyntaxKind.YieldKeyword`), removing statement-start ambiguity.
+        let yieldToken = MatchToken(SyntaxKind.YieldKeyword)
         // Issue #3501: `yield break` terminates the iterator from any nesting
         // depth (C# alignment); plain `break` keeps its loop binding.
         if Current.Kind == SyntaxKind.BreakKeyword {
@@ -1367,61 +1330,6 @@ open partial class Parser {
         }
         let expression = ParseExpression()
         return YieldStatementSyntax(syntaxTree, yieldToken, expression)
-    }
-
-    /// Issue #813: lookahead helper for the contextual `yield` at statement
-    /// start. Returns `true` when the token at [`parenOffset`](paramref)
-    /// is a `(` that opens a value-tuple literal (i.e. its matching
-    /// `)` follows a top-level `,`). A tuple-literal yield like
-    /// `yield (a, b)` must be parsed as a yield-statement; without this
-    /// disambiguation the existing rule rejected every `yield (` form
-    /// because it treats parens as the start of a function-call expression.
-    private func LooksLikeYieldTupleLiteral(parenOffset int32) bool {
-        if Peek(parenOffset).Kind != SyntaxKind.OpenParenthesisToken {
-            return false
-        }
-        var depth = 0
-        var bracketDepth = 0
-        var braceDepth = 0
-        let scanBound = Math.Min(tokens.Length, parenOffset + LookaheadMaxScan)
-        for var i = parenOffset; i < scanBound; i++ {
-            let t = Peek(i)
-            switch t.Kind {
-                case SyntaxKind.OpenParenthesisToken {
-                    depth++
-                }
-                case SyntaxKind.CloseParenthesisToken {
-                    depth--
-                    if depth == 0 {
-                        return false
-                    }
-                }
-                case SyntaxKind.OpenSquareBracketToken {
-                    bracketDepth++
-                }
-                case SyntaxKind.CloseSquareBracketToken {
-                    bracketDepth--
-                }
-                case SyntaxKind.OpenBraceToken {
-                    braceDepth++
-                }
-                case SyntaxKind.CloseBraceToken {
-                    braceDepth--
-                }
-                case SyntaxKind.CommaToken {
-                    if depth == 1 && bracketDepth == 0 && braceDepth == 0 {
-                        return true
-                    }
-                }
-                case SyntaxKind.EndOfFileToken {
-                    return false
-                }
-                default {
-                    let _ = 0
-                }
-            }
-        }
-        return false
     }
 
     shared {

@@ -51,7 +51,8 @@ internal class SlotPlanner {
     private let needsRvalueReceiverSpill(
         BoundExpression,
         FunctionSymbol?,
-        IReadOnlyDictionary[VariableSymbol, int32]
+        IReadOnlyDictionary[VariableSymbol, int32],
+        bool
     ) -> bool
 
     prop LambdaTargetDelegateTypes Dictionary[BoundFunctionLiteralExpression, TypeSymbol] {
@@ -61,7 +62,12 @@ internal class SlotPlanner {
     init(
         emitCtx EmitContext,
         cache MetadataTokenCache,
-        needsRvalueReceiverSpill(BoundExpression, FunctionSymbol?, IReadOnlyDictionary[VariableSymbol, int32]) -> bool
+        needsRvalueReceiverSpill(
+            BoundExpression,
+            FunctionSymbol?,
+            IReadOnlyDictionary[VariableSymbol, int32],
+            bool
+        ) -> bool
     ) {
         this.LambdaTargetDelegateTypes = Dictionary[BoundFunctionLiteralExpression, TypeSymbol](
             ReferenceEqualityComparer.Instance
@@ -416,6 +422,11 @@ internal class SlotPlanner {
                 // local-sig path (EncodeLocalVariableType).
                 if node.Variable is LocalVariableSymbol lvs && lvs.RefKind != RefKind.None {
                     this.localTypes.Add(ByRefTypeSymbol.Get(lvs.Type))
+                } else if node.Variable is LocalVariableSymbol{
+                    IsManagedPointerSlot: true,
+                    Type: PointerTypeSymbol pointerType
+                } {
+                    this.localTypes.Add(ByRefTypeSymbol.Get(pointerType.PointeeType))
                 } else {
                     this.localTypes.Add(node.Variable.Type)
                 }
@@ -927,7 +938,8 @@ internal class SlotPlanner {
         private let needsRvalueReceiverSpill(
             BoundExpression,
             FunctionSymbol?,
-            IReadOnlyDictionary[VariableSymbol, int32]
+            IReadOnlyDictionary[VariableSymbol, int32],
+            bool
         ) -> bool
         private let function FunctionSymbol?
         private let locals IReadOnlyDictionary[VariableSymbol, int32]
@@ -937,7 +949,8 @@ internal class SlotPlanner {
             needsRvalueReceiverSpill(
                 BoundExpression,
                 FunctionSymbol?,
-                IReadOnlyDictionary[VariableSymbol, int32]
+                IReadOnlyDictionary[VariableSymbol, int32],
+                bool
             ) -> bool,
             function FunctionSymbol?,
             locals IReadOnlyDictionary[VariableSymbol, int32],
@@ -1038,6 +1051,32 @@ internal class SlotPlanner {
             base.VisitTupleElementAccessExpression(node)
         }
 
+        protected override func VisitAddressOfExpression(node BoundAddressOfExpression) {
+            this.AddAddressedReceiver(node.Operand)
+            base.VisitAddressOfExpression(node)
+        }
+
+        private func AddAddressedReceiver(expression BoundExpression) {
+            switch expression {
+                case BoundFieldAccessExpression{Receiver: {} receiver} {
+                    this.AddIfNeeded(receiver, isReadOnlyCall: true)
+                }
+                case BoundClrPropertyAccessExpression{Member: System.Reflection.FieldInfo, Receiver: {} receiver} {
+                    this.AddIfNeeded(receiver, isReadOnlyCall: true)
+                }
+                case tuple is BoundTupleElementAccessExpression {
+                    this.AddIfNeeded(tuple.Receiver, isReadOnlyCall: true)
+                }
+                case block is BoundBlockExpression {
+                    this.AddAddressedReceiver(block.Expression)
+                }
+                case conditional is BoundConditionalExpression {
+                    this.AddAddressedReceiver(conditional.WhenTrue)
+                    this.AddAddressedReceiver(conditional.WhenFalse)
+                }
+            }
+        }
+
         protected override func VisitClrMethodGroupExpression(node BoundClrMethodGroupExpression) {
             if node.Receiver != nil {
                 this.AddIfNeeded(node.Receiver)
@@ -1055,8 +1094,8 @@ internal class SlotPlanner {
             base.VisitMethodGroupExpression(node)
         }
 
-        private func AddIfNeeded(receiver BoundExpression) {
-            if this.needsRvalueReceiverSpill(receiver, this.function, this.locals) {
+        private func AddIfNeeded(receiver BoundExpression, isReadOnlyCall bool = false) {
+            if this.needsRvalueReceiverSpill(receiver, this.function, this.locals, isReadOnlyCall) {
                 this.sink.Add(receiver)
             }
         }
@@ -1097,7 +1136,7 @@ internal class SlotPlanner {
                 receiver.Type
             ) &&
                 !this
-                .needsRvalueReceiverSpill(receiver, this.function, this.locals) {
+                .needsRvalueReceiverSpill(receiver, this.function, this.locals, false) {
                 if fieldAccess.Receiver != nil {
                     this.AddIfCompoundReused(fieldAccess.Receiver, value)
                 }

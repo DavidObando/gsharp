@@ -200,7 +200,7 @@ public static class Strings
             // The report's repro, plus a value pushed through the constructed
             // object and read back, so the whole-channel handle is the one that
             // was really bound.
-            yield[]object{"the-reported-repro-runs", `package P
+            yield []object{"the-reported-repro-runs", `package P
 import System
 import Interop
 
@@ -214,7 +214,7 @@ func maybe[T](source chan[T]?, value T) int32 {
 Console.WriteLine(maybe[int32](chan[int32](4), 41))`, []string{"True", "41", "1"}}
             // Nullability is dropped, direction is NOT: each open nullable
             // spelling still reaches its own BCL parameter and no other.
-            yield[]object{"the-directional-open-nullable-spellings-reach-their-own-parameters", `package P
+            yield []object{"the-directional-open-nullable-spellings-reach-their-own-parameters", `package P
 import System
 import Interop
 
@@ -239,7 +239,7 @@ Console.WriteLine(sourceOf[int32](ch))`, []string{"True", "5", "1", "6"}}
             // by the same `IsReferenceLikeTarget` on both underlyings. The
             // constructed object reports whether it received a null, so a dropped
             // argument would print `-9` rather than `9`.
-            yield[]object{"a-nullable-open-channel-reaches-a-nullable-clr-parameter", `package P
+            yield []object{"a-nullable-open-channel-reaches-a-nullable-clr-parameter", `package P
 import System
 import Interop
 
@@ -261,7 +261,7 @@ Console.WriteLine(optClosed(ch))`, []string{"9", "10"}}
             // with the identical `ClrType` hole, which is why the closed spelling
             // was rescued and the open one was not. Both spellings are asserted
             // side by side here, which is the agreement the issue asks for.
-            yield[]object{"a-bidirectional-nullable-channel-reaches-a-directional-parameter", `package P
+            yield []object{"a-bidirectional-nullable-channel-reaches-a-directional-parameter", `package P
 import System
 import Interop
 
@@ -292,7 +292,7 @@ Console.WriteLine(sourcePair(chan[Pair](4)))`, []string{"True", "5", "True", "6"
             // Control (green on both sides), and the issue's own control 1: the
             // closed element was rescued by the #1627 arm all along, because its
             // `ClrType` is a real class.
-            yield[]object{"control-the-closed-element-was-always-accepted", `package P
+            yield []object{"control-the-closed-element-was-always-accepted", `package P
 import System
 import Interop
 
@@ -307,7 +307,7 @@ Console.WriteLine(maybeInt(chan[int32](4)))`, []string{"True", "7", "2"}}
             // Control (green on both sides), and the issue's own control 2: this is
             // the behaviour the open channel now matches. G# does not enforce a CLR
             // parameter's declared nullability.
-            yield[]object{"control-a-nullable-reference-of-any-other-kind", `package P
+            yield []object{"control-a-nullable-reference-of-any-other-kind", `package P
 import System
 import Interop
 
@@ -319,7 +319,7 @@ Console.WriteLine(lenOf("abc"))`, []string{"3"}}
             // Control (green on both sides since #3876): the NON-nullable open
             // channel reaches the same constructor, which is what pins the cause to
             // the nullable wrapper rather than to the open element.
-            yield[]object{"control-a-non-nullable-open-channel-reaches-the-same-constructor", `package P
+            yield []object{"control-a-non-nullable-open-channel-reaches-the-same-constructor", `package P
 import System
 import Interop
 
@@ -332,7 +332,7 @@ func certain[T](source chan[T], value T) int32 {
 Console.WriteLine(certain[int32](chan[int32](4), 8))`, []string{"True", "3"}}
             // Control (green on both sides): the `!!` the issue names as the
             // pre-fix remedy keeps working, so nothing depending on it breaks.
-            yield[]object{"control-the-bang-bang-remedy-still-works", `package P
+            yield []object{"control-the-bang-bang-remedy-still-works", `package P
 import System
 import Interop
 
@@ -345,7 +345,7 @@ func viaBang[T](source chan[T]?, value T) int32 {
 Console.WriteLine(viaBang[int32](chan[int32](4), 6))`, []string{"True", "4"}}
             // A same-compilation element is the other way a channel loses its CLR
             // identity (#3982), and the nullable form of it lands on this same arm.
-            yield[]object{"a-nullable-channel-over-a-same-compilation-element-reaches-the-parameter", `package P
+            yield []object{"a-nullable-channel-over-a-same-compilation-element-reaches-the-parameter", `package P
 import System
 import Interop
 
@@ -370,7 +370,7 @@ Console.WriteLine(maybePair(chan[Pair](4)))`, []string{"True", "4", "12"}}
         func RejectedCases() sequence[[]object] {
             // Dropping the annotation must not drop the direction: a send-only
             // handle still cannot become a reader.
-            yield[]object{"a-send-only-nullable-cannot-reach-a-reader-parameter", `package P
+            yield []object{"a-send-only-nullable-cannot-reach-a-reader-parameter", `package P
 import System
 import Interop
 
@@ -381,7 +381,7 @@ func bad[T](w out chan[T]?) int32 {
 
 Console.WriteLine(bad[int32](chan[int32](1)))`, "Source"}
             // ...nor a receive-only handle a writer.
-            yield[]object{"a-receive-only-nullable-cannot-reach-a-writer-parameter", `package P
+            yield []object{"a-receive-only-nullable-cannot-reach-a-writer-parameter", `package P
 import System
 import Interop
 
@@ -392,7 +392,7 @@ func bad[T](r in chan[T]?) int32 {
 
 Console.WriteLine(bad[int32](chan[int32](1)))`, "Sink"}
             // ...nor the element. `Channel<T>` is invariant.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import Interop
 
@@ -404,7 +404,7 @@ func bad(source chan[string]?) int32 {
 Console.WriteLine(bad(chan[string](1)))`, "Relay"}
             // The leniency is a CLR-boundary rule and stays one: a G#-DECLARED
             // parameter still enforces nullability, exactly as it did before.
-            yield[]object{"a-gsharp-declared-parameter-still-enforces-nullability", `package P
+            yield []object{"a-gsharp-declared-parameter-still-enforces-nullability", `package P
 import System
 import Interop
 

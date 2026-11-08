@@ -66,7 +66,7 @@ open class Issue5801StaticInitInterpolatedStringTests {
         private const RunTimeout int32 = 30000
 
         func Probes() IEnumerable[[]object] {
-            yield[]object{"class_shared_init_interpolated_string", `package Probe
+            yield []object{"class_shared_init_interpolated_string", `package Probe
 import System
 
 class K {
@@ -80,7 +80,7 @@ class K {
 }
 
 Console.WriteLine(K.S)`, "n=3"}
-            yield[]object{"shared_class_init_formatted_and_custom_handler", `package Probe
+            yield []object{"shared_class_init_formatted_and_custom_handler", `package Probe
 import System
 import System.Globalization
 import System.Text
@@ -101,7 +101,7 @@ shared class Config {
 
 Console.WriteLine(Config.Banner)
 Console.WriteLine(Config.BuilderText)`, "gsc-007|v=7"}
-            yield[]object{"static_init_with_captured_lambda_and_interpolation", `package Probe
+            yield []object{"static_init_with_captured_lambda_and_interpolation", `package Probe
 import System
 
 class WithPlan {

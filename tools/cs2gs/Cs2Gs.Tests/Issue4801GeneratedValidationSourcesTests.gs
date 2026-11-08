@@ -127,7 +127,8 @@ namespace Native.Other {
             framework,
             "Release"
         )
-        let cli = Path.Combine(repoRoot, "out", "bin", "Release", "Cs2Gs.Cli", "cs2gs.dll")
+        let buildRoot = GsharpTestProjectRunner.FindAssemblyRepoRoot() ?? repoRoot
+        let cli = Path.Combine(buildRoot, "out", "bin", "Release", "Cs2Gs.Cli", "cs2gs.dll")
         let sdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(repoRoot)
         Assert.NotNull(sdk)
         let producerAlias = Path.Combine(this.root, "producer-alias")

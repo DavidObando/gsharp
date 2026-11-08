@@ -489,6 +489,43 @@ public class Open<U, T> where T : U { }`)},
         Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(unboundedDependent))
     }
 
+    /// Issue #4401: `System.Tuple<...>` is a reference type through both
+    /// `FromClrType` / `ClrNullability` and the symbolic projection, while
+    /// `System.ValueTuple<...>` remains a value `TupleTypeSymbol`.
+    @Fact
+    func SystemTuple_Reads_As_Reference_ImportedTypeSymbol_In_Both_Reader_Families() {
+        using let scope_ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
+        let refTuple = TypeSymbol.FromClrType(typeof(Tuple[_, _]).MakeGenericType(typeof(string), typeof(int32)))
+        Assert.IsType[ImportedTypeSymbol](refTuple)
+        Assert.False(refTuple.IsTupleType)
+        Assert.Equal(ReferenceNullabilityKind.NotNull, refTuple.ReferenceNullability)
+
+        let valTuple = TypeSymbol.FromClrType(typeof(ValueTuple[_, _]).MakeGenericType(typeof(string), typeof(int32)))
+        Assert.IsType[TupleTypeSymbol](valTuple)
+        Assert.True(valTuple.IsTupleType)
+        Assert.Equal(ReferenceNullabilityKind.NotApplicable, valTuple.ReferenceNullability)
+
+        let refDirectory = typeof(Adr0193NullabilityImportRuleTests)
+            .Assembly
+            .GetCustomAttributes[AssemblyMetadataAttribute]()
+            .Single((attribute AssemblyMetadataAttribute) -> attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value ??
+            throw XunitException("prerequisite missing: NetStandard20ReferenceDirectory")
+        using let resolver = ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"))
+        Assert.True(resolver.TryResolveType("System.Tuple", out var tupleStatic))
+        Assert.True(resolver.TryResolveType("System.String", out var stringType))
+        let openCreate = tupleStatic.GetMethods().Single(
+            (m MethodInfo) -> m.Name == "Create" && m.GetGenericArguments().Length == 2
+        )
+        let closedCreate = openCreate.MakeGenericMethod(stringType, stringType)
+        let directReturn = ClrNullability.GetReturnTypeSymbol(closedCreate)
+        Assert.Equal(ReferenceNullabilityKind.Platform, directReturn.ReferenceNullability)
+        Assert.Equal(
+            []ReferenceNullabilityKind{ReferenceNullabilityKind.NotNull, ReferenceNullabilityKind.NotNull},
+            directReturn.GetElementPositions().Select((p TypeSymbol) -> p.ReferenceNullability)
+        )
+    }
+
     /// Collects the type of every `Find` call in a bound body.
     private class FindCallFinder : GSharp.Core.CodeAnalysis.Binding.BoundTreeWalker {
         init() {

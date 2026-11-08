@@ -53,6 +53,8 @@ class TypeParameterSymbol : TypeSymbol {
     /// constraint is a self-referential constructed generic such as `[T IAdd[T]]`.
     prop InterfaceConstraint InterfaceSymbol?
 
+    internal prop HasNullableInterfaceConstraint bool
+
     /// Gets or sets the imported CLR interface constraint, if any (issue #943).
     /// Holds an imported (possibly constructed-generic) CLR interface — e.g.
     /// `System.IComparable[T]` from `[T IComparable[T]]` — that a
@@ -78,6 +80,24 @@ class TypeParameterSymbol : TypeSymbol {
     /// `constrained.` prefix is required because the bound proves `T`
     /// is a reference type.
     prop ClassConstraint TypeSymbol?
+
+    internal prop HasNullableClassBound bool
+
+    internal prop EffectiveClassConstraint TypeSymbol? -> if ClassConstraint is {} classBound {
+        if HasNullableClassBound && !(classBound is NullableTypeSymbol) {
+            cast[TypeSymbol](NullableTypeSymbol.Get(classBound))
+        } else {
+            classBound
+        }
+    } else {
+        nil
+    }
+
+    internal prop UnwrappedClassConstraintStruct StructSymbol? -> if ClassConstraint is NullableTypeSymbol nullableClass {
+        nullableClass.UnderlyingType as StructSymbol
+    } else {
+        ClassConstraint as StructSymbol
+    }
 
     /// Gets or sets the DEPENDENT bound — another type parameter this one must
     /// derive from, satisfy, or equal (issue #4043). Mirrors C#'s
@@ -179,7 +199,15 @@ class TypeParameterSymbol : TypeSymbol {
     /// (cref:ClrInterfaceConstraint) (issue #943). Used by the emitter to
     /// emit the `GenericParamConstraint` row and by the binder to enforce
     /// constraint satisfaction at call sites.
-    prop ConstraintInterfaceType TypeSymbol? -> InterfaceConstraint ?? ClrInterfaceConstraint
+    prop ConstraintInterfaceType TypeSymbol? -> if InterfaceConstraint is {} iface {
+        if HasNullableInterfaceConstraint {
+            cast[TypeSymbol](NullableTypeSymbol.Get(iface))
+        } else {
+            cast[TypeSymbol](iface)
+        }
+    } else {
+        ClrInterfaceConstraint
+    }
 
     /// Gets the single TypeDefOrRefOrSpec bound this type parameter projects onto
     /// a `GenericParamConstraint` metadata row — the interface bound
@@ -187,7 +215,19 @@ class TypeParameterSymbol : TypeSymbol {
     /// ((cref:ClassConstraint), issue #1056), or the dependent bound on
     /// another type parameter ((cref:TypeParameterBound), issue #4043).
     /// At most one of these is set for a given type parameter.
-    prop ConstraintReferenceType TypeSymbol? -> ConstraintInterfaceType ?? ClassConstraint ?? TypeParameterBound
+    prop ConstraintReferenceType TypeSymbol? -> ConstraintInterfaceType ??
+        EffectiveClassConstraint ??
+        (
+        if TypeParameterBound is {} tpBound {
+            if HasNullableClassBound {
+                cast[TypeSymbol](NullableTypeSymbol.Get(tpBound))
+            } else {
+                cast[TypeSymbol](tpBound)
+            }
+        } else {
+            default(TypeSymbol?)
+        }
+    )
 
     /// Gets or sets a value indicating whether this type parameter carries a
     /// reference-type (`class`) constraint (ADR-0097 / issue #775).
@@ -230,6 +270,113 @@ class TypeParameterSymbol : TypeSymbol {
     /// verifiable.
     prop HasUnmanagedConstraint bool
 
+    internal prop HasNullableReferenceTypeConstraint bool
+
+    internal prop HasNotNullConstraint bool
+
+    internal prop ProvesNotNullConstraint bool {
+        get {
+            var current TypeParameterSymbol? = this
+            var visited HashSet[TypeParameterSymbol]? = nil
+            while current != nil {
+                let p = current
+                if p.HasNotNullConstraint ||
+                    (p.HasReferenceTypeConstraint && !p.HasNullableReferenceTypeConstraint) ||
+                    p.HasValueTypeConstraint ||
+                    p.HasUnmanagedConstraint ||
+                    (p.InterfaceConstraint != nil && !p.HasNullableInterfaceConstraint) ||
+                    p
+                    .ClrInterfaceConstraint
+                    ?.ReferenceNullability == ReferenceNullabilityKind.NotNull ||
+                    (
+                    !p.HasNullableClassBound &&
+                        p
+                        .ClassConstraint
+                        ?.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+                        !(p.ClassConstraint is TypeParameterSymbol)
+                ) {
+                    return true
+                }
+                if p.TypeParameterBound != nil && p.HasNullableClassBound {
+                    break
+                }
+                visited ??= HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance)
+                if !visited!!.Add(p) {
+                    break
+                }
+                current = p.TypeParameterBound
+            }
+            return false
+        }
+    }
+
+    internal prop HasNullableConstraintWithoutNotNull bool {
+        get {
+            if ProvesNotNullConstraint {
+                return false
+            }
+            let chain = List[TypeParameterSymbol]{this}
+            let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance){this}
+            for var i = 0; i < chain.Count; i++ {
+                let p = chain[i]
+                if p.HasNullableReferenceTypeConstraint ||
+                    p.HasNullableClassBound ||
+                    p.HasNullableInterfaceConstraint ||
+                    p.ClassConstraint is NullableTypeSymbol ||
+                    p.ClrInterfaceConstraint is NullableTypeSymbol {
+                    return true
+                }
+                if p.TypeParameterBound is {} tpBound && visited.Add(tpBound) {
+                    chain.Add(tpBound)
+                }
+                if p.ClassConstraint is TypeParameterSymbol classTp && visited.Add(classTp) {
+                    chain.Add(classTp)
+                }
+            }
+            return false
+        }
+    }
+
+    internal prop ProvesNonUniversalReferenceConstraint bool {
+        get {
+            if HasReferenceTypeConstraint {
+                return true
+            }
+            let chain = List[TypeParameterSymbol]{this}
+            let visited = HashSet[TypeParameterSymbol](ReferenceEqualityComparer.Instance){this}
+            for var i = 0; i < chain.Count; i++ {
+                let p = chain[i]
+                if IsNonUniversalReferenceClassConstraint(p.ClassConstraint) {
+                    return true
+                }
+                if p.TypeParameterBound is {} tpBound && visited.Add(tpBound) {
+                    chain.Add(tpBound)
+                }
+                if p.ClassConstraint is TypeParameterSymbol classTp && visited.Add(classTp) {
+                    chain.Add(classTp)
+                }
+            }
+            return false
+        }
+    }
+
+    internal prop RequiresNullableGenericParamAttribute bool -> !HasValueTypeConstraint &&
+        !HasUnmanagedConstraint &&
+        (
+        HasNullableReferenceTypeConstraint ||
+            (!HasReferenceTypeConstraint && !HasNotNullConstraint && ConstraintReferenceType == nil) ||
+            HasNullableConstraintWithoutNotNull ||
+            (TypeParameterBound != nil && !ProvesNotNullConstraint)
+    )
+
+    internal prop RequiresNotNullGenericParamAttribute bool -> !HasValueTypeConstraint &&
+        !HasUnmanagedConstraint &&
+        !RequiresNullableGenericParamAttribute &&
+        (
+        HasNotNullConstraint ||
+            (TypeParameterBound != nil && ProvesNotNullConstraint && !ProvesNonUniversalReferenceConstraint)
+    )
+
     /// Gets or sets a value indicating whether this type parameter is declared
     /// on a generic method (as opposed to a generic type). When
     /// `true` the emitter encodes it as
@@ -239,4 +386,33 @@ class TypeParameterSymbol : TypeSymbol {
     /// `FunctionSymbol`. Type-type parameters keep the default
     /// `false`.
     prop IsMethodTypeParameter bool
+
+    shared {
+        internal func IsNonUniversalReferenceClassConstraint(classConstraint TypeSymbol?) bool {
+            if classConstraint == nil {
+                return false
+            }
+            let unwrapped = if classConstraint is NullableTypeSymbol nullableClass {
+                nullableClass.UnderlyingType
+            } else {
+                classConstraint
+            }
+            if unwrapped is StructSymbol structSym {
+                return structSym.IsClass
+            }
+            if unwrapped.ClrType is {} clr {
+                if !clr.IsClass || clr.IsValueType {
+                    return false
+                }
+                let fullName = clr.FullName
+                return !string.Equals(fullName, "System.Object", StringComparison.Ordinal) && !string.Equals(
+                    fullName,
+                    "System.ValueType",
+                    StringComparison.Ordinal
+                ) &&
+                    !string.Equals(fullName, "System.Enum", StringComparison.Ordinal)
+            }
+            return false
+        }
+    }
 }

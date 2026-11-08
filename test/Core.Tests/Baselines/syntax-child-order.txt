@@ -143,7 +143,7 @@ GSharp.Core.CodeAnalysis.Syntax.TypeClauseSyntax: ReadOnlySliceModifier, ReadOnl
 GSharp.Core.CodeAnalysis.Syntax.TypeOfExpressionSyntax: TypeOfIdentifier, OpenParenthesis, TypeClause, CloseParenthesis
 GSharp.Core.CodeAnalysis.Syntax.TypeOrConstantPatternSyntax: Expression, PropertyPattern
 GSharp.Core.CodeAnalysis.Syntax.TypeParameterListSyntax: OpenBracketToken, Parameters, CloseBracketToken
-GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax: VarianceModifier, Identifier, Constraint, ConstraintType, ConstraintTypeArgumentOpenBracketToken, ConstraintTypeArguments, ConstraintTypeArgumentCloseBracketToken, ClassConstraintKeyword, StructConstraintKeyword, InitConstraintKeyword, InitConstraintOpenParenToken, InitConstraintCloseParenToken, UnmanagedConstraintKeyword
+GSharp.Core.CodeAnalysis.Syntax.TypeParameterSyntax: VarianceModifier, Identifier, Constraint, ConstraintType, ConstraintTypeArgumentOpenBracketToken, ConstraintTypeArguments, ConstraintTypeArgumentCloseBracketToken, ClassConstraintKeyword, ClassConstraintQuestionToken, StructConstraintKeyword, NotNullConstraintKeyword, InitConstraintKeyword, InitConstraintOpenParenToken, InitConstraintCloseParenToken, UnmanagedConstraintKeyword
 GSharp.Core.CodeAnalysis.Syntax.TypePatternSyntax: Identifier, IsKeyword, Type, PropertyPattern, Designation
 GSharp.Core.CodeAnalysis.Syntax.UnaryExpressionSyntax: OperatorToken, Operand
 GSharp.Core.CodeAnalysis.Syntax.UsingStatementSyntax: UsingKeyword, Declaration

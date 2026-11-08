@@ -67,7 +67,7 @@ internal shared class DiagnosticDescriptors {
     internal let UnexpectedToken DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0005",
         DiagnosticSeverity.Error,
-        "Unexpected token <{0}>, expected <{1}>."
+        "Unexpected token <{0}>, expected <{1}>.{2}"
     )
     internal let AllPathsMustReturn DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0100",
@@ -2612,6 +2612,11 @@ internal shared class DiagnosticDescriptors {
         "GS0637",
         DiagnosticSeverity.Error,
         "Cannot convert type '{0}' to '{1}' via a reference conversion, boxing conversion, unboxing conversion, wrapping conversion, or null type conversion.{2}"
+    )
+    internal let MovableFixedBufferRequiresFixed DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0638",
+        DiagnosticSeverity.Error,
+        "Cannot take the pointer value of fixed-size buffer '{0}' because its containing storage is movable and not pinned; pin it with a 'fixed' statement or index an element directly ('{0}[i]') (C# spells the same rule CS1666)."
     )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",

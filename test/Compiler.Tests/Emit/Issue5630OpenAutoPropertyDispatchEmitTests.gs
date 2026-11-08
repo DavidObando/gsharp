@@ -78,28 +78,28 @@ open class Issue5630OpenAutoPropertyDispatchEmitTests {
 
     shared {
         func Cases() sequence[[]object] {
-            yield[]object{
+            yield []object{
                 "an-open-auto-property-read-runs-the-override",
                 ReadsSource,
                 []string{"42", "42", "42", "42", "7", "9"}
             }
-            yield[]object{
+            yield []object{
                 "an-open-auto-property-write-runs-the-override",
                 WritesSource,
                 []string{"set 1;set 2;set 3;set 41;", "6"}
             }
-            yield[]object{"a-base-access-reads-the-base-storage", BaseAccessSource, []string{"110", "110"}}
-            yield[]object{
+            yield []object{"a-base-access-reads-the-base-storage", BaseAccessSource, []string{"110", "110"}}
+            yield []object{
                 "an-interface-property-runs-the-override",
                 InterfaceSource,
                 []string{"Derived.set_Tag 3", "46", "46", "8", "8"}
             }
-            yield[]object{
+            yield []object{
                 "a-constructor-store-matches-csharp",
                 CtorSource,
                 []string{"Derived.set_Auto 1", "Derived.init_Init 3", "42", "44", "1", "12", "43", "53"}
             }
-            yield[]object{"an-exact-dispatch-keeps-the-field-access", ControlSource, []string{"4", "4", "6", "8", "9"}}
+            yield []object{"an-exact-dispatch-keeps-the-field-access", ControlSource, []string{"4", "4", "6", "8", "9"}}
         }
 
         private const ReadsSource string = `package Issue5630Reads

@@ -1233,10 +1233,14 @@ internal partial class DeclarationBinder {
             for symbol in existingSymbols {
                 symbol.Constraint = TypeParameterConstraint.Any
                 symbol.InterfaceConstraint = nil
+                symbol.HasNullableInterfaceConstraint = false
                 symbol.ClrInterfaceConstraint = nil
                 symbol.ClassConstraint = nil
+                symbol.HasNullableClassBound = false
                 symbol.TypeParameterBound = nil
                 symbol.HasReferenceTypeConstraint = false
+                symbol.HasNullableReferenceTypeConstraint = false
+                symbol.HasNotNullConstraint = false
                 symbol.HasValueTypeConstraint = false
                 symbol.HasDefaultConstructorConstraint = false
                 symbol.HasUnmanagedConstraint = false
@@ -1317,9 +1321,11 @@ internal partial class DeclarationBinder {
                 // by the syntax — combining class + init() is legal and produces
                 // both CLR flag bits.
                 let hasRefType = p.HasClassConstraint
+                let hasNullableRefType = p.HasNullableClassConstraint
                 var hasValueType = p.HasStructConstraint
                 var hasDefaultCtor = p.HasInitConstraint
                 var hasUnmanaged = p.HasUnmanagedConstraint
+                var hasNotNull = p.HasNotNullConstraint
                 // Issue #1336: the `unmanaged` constraint subsumes `struct` —
                 // an unmanaged type is necessarily a non-nullable value type —
                 // so it implies the value-type (and therefore default-ctor)
@@ -1340,7 +1346,11 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportTypeParameterConstraintConflict(
                         p.ClassConstraintKeyword?.Location ?? p.Identifier.Location,
                         name,
-                        "class",
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
                         "unmanaged"
                     )
                     hasUnmanaged = false
@@ -1349,10 +1359,45 @@ internal partial class DeclarationBinder {
                     Diagnostics.ReportTypeParameterConstraintConflict(
                         p.StructConstraintKeyword?.Location ?? p.Identifier.Location,
                         name,
-                        "class",
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
                         "struct"
                     )
                     hasValueType = false
+                }
+                if hasNotNull && hasRefType {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        if hasNullableRefType {
+                            "class?"
+                        } else {
+                            "class"
+                        },
+                        "notnull"
+                    )
+                    hasNotNull = false
+                }
+                if hasNotNull && hasValueType {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "struct",
+                        "notnull"
+                    )
+                    hasNotNull = false
+                }
+                if hasNotNull && hasUnmanaged {
+                    Diagnostics.ReportTypeParameterConstraintConflict(
+                        p.NotNullConstraintKeyword?.Location ?? p.Identifier.Location,
+                        name,
+                        "unmanaged",
+                        "notnull"
+                    )
+                    hasNotNull = false
                 }
                 if hasValueType && hasDefaultCtor {
                     // `struct` already implies `init()` at the CLR level (ECMA-335 II.10.1.7);
@@ -1382,6 +1427,8 @@ internal partial class DeclarationBinder {
                 // bits. The dedicated modreq(UnmanagedType) GenericParamConstraint
                 // is emitted by TypeDefEmitter from HasUnmanagedConstraint.
                 symbol.HasReferenceTypeConstraint = hasRefType
+                symbol.HasNullableReferenceTypeConstraint = hasRefType && hasNullableRefType
+                symbol.HasNotNullConstraint = hasNotNull
                 symbol.HasValueTypeConstraint = hasValueType || hasUnmanaged
                 symbol.HasDefaultConstructorConstraint = hasDefaultCtor
                 symbol.HasUnmanagedConstraint = hasUnmanaged
@@ -1563,7 +1610,12 @@ internal partial class DeclarationBinder {
             // bindTypeClause already reported the failure (e.g. undefined type).
             return
         }
-        if resolved is InterfaceSymbol iface {
+        let unwrappedResolved = if resolved is NullableTypeSymbol nullableResolved {
+            nullableResolved.UnderlyingType
+        } else {
+            resolved
+        }
+        if unwrappedResolved is InterfaceSymbol iface {
             // Issue #1052: ANY user-declared interface — sealed or not, generic
             // or not, including the self-referential `[T IFace[T]]` shape — is a
             // legal constraint, matching imported CLR interfaces and C#'s
@@ -1572,12 +1624,13 @@ internal partial class DeclarationBinder {
             // `T` via the constraint and a GenericParamConstraint metadata row is
             // emitted pointing at the interface TypeDef so the IL verifies.
             symbol.InterfaceConstraint = iface
+            symbol.HasNullableInterfaceConstraint = resolved is NullableTypeSymbol
             return
         }
         // Issue #943: an imported CLR interface (generic or not). Reference-set
         // interfaces are universally implementable, so no sealedness rule
         // applies; the GenericParamConstraint metadata row carries the bound.
-        if resolved.ClrType is {IsInterface: true} {
+        if unwrappedResolved.ClrType is {IsInterface: true} {
             symbol.ClrInterfaceConstraint = resolved
             return
         }
@@ -1590,12 +1643,14 @@ internal partial class DeclarationBinder {
         // class bind on values of `T` and a GenericParamConstraint metadata row
         // is emitted pointing at the class so the IL verifies. A value type
         // (struct/enum) is still rejected (C# forbids `where T : SomeStruct`).
-        if resolved is StructSymbol && resolved.IsClass == true {
-            symbol.ClassConstraint = resolved
+        if unwrappedResolved is StructSymbol && unwrappedResolved.IsClass == true {
+            symbol.ClassConstraint = unwrappedResolved
+            symbol.HasNullableClassBound = resolved is NullableTypeSymbol
             return
         }
-        if resolved.ClrType is {IsClass: true, IsValueType: false} {
+        if unwrappedResolved.ClrType is {IsClass: true, IsValueType: false} {
             symbol.ClassConstraint = resolved
+            symbol.HasNullableClassBound = resolved is NullableTypeSymbol
             return
         }
         // Issue #4043: a DEPENDENT bound — another type parameter, mirroring
@@ -1610,8 +1665,9 @@ internal partial class DeclarationBinder {
         // (`[T T]`, `[A B, B A]`) are rejected by `ReportCircularConstraints`
         // once the whole list is resolved — a per-parameter check cannot see
         // them, because a later parameter's bound is still empty here.
-        if resolved is TypeParameterSymbol boundTypeParameter {
+        if unwrappedResolved is TypeParameterSymbol boundTypeParameter {
             symbol.TypeParameterBound = boundTypeParameter
+            symbol.HasNullableClassBound = resolved is NullableTypeSymbol
             return
         }
         // Resolved to something that is not a legal constraint (a struct, enum,
@@ -2337,12 +2393,19 @@ internal partial class DeclarationBinder {
                     x.Variance != y.Variance ||
                     x.Constraint != y.Constraint ||
                     x.HasReferenceTypeConstraint != y.HasReferenceTypeConstraint ||
+                    x.HasNullableReferenceTypeConstraint != y.HasNullableReferenceTypeConstraint ||
+                    x.HasNotNullConstraint != y.HasNotNullConstraint ||
                     x.HasValueTypeConstraint != y.HasValueTypeConstraint ||
                     x.HasDefaultConstructorConstraint != y.HasDefaultConstructorConstraint ||
                     x.HasUnmanagedConstraint != y.HasUnmanagedConstraint ||
-                    !TypeSignaturesEquivalent(x.InterfaceConstraint, y.InterfaceConstraint, typeParameterMap) ||
-                    !TypeSignaturesEquivalent(x.ClrInterfaceConstraint, y.ClrInterfaceConstraint, typeParameterMap) ||
-                    !TypeSignaturesEquivalent(x.ClassConstraint, y.ClassConstraint, typeParameterMap) ||
+                    x.HasNullableClassBound != y.HasNullableClassBound ||
+                    x.HasNullableInterfaceConstraint != y.HasNullableInterfaceConstraint ||
+                    !TypeSignaturesEquivalent(x.ConstraintInterfaceType, y.ConstraintInterfaceType, typeParameterMap) ||
+                    !TypeSignaturesEquivalent(
+                    x.EffectiveClassConstraint,
+                    y.EffectiveClassConstraint,
+                    typeParameterMap
+                ) ||
                     !TypeSignaturesEquivalent(x.TypeParameterBound, y.TypeParameterBound, typeParameterMap) {
                     return false
                 }

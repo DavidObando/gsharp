@@ -209,7 +209,7 @@ True
 
     shared {
         func Programs() sequence[[]object] {
-            yield[]object{`package ManagedSuspension
+            yield []object{`package ManagedSuspension
 import System
 func Values() sequence[managed[int32]] {
     var x = 1
@@ -236,7 +236,7 @@ func Main() {
 True
 9
 `}
-            yield[]object{`package ManagedInitialization
+            yield []object{`package ManagedInitialization
 import System
 class Owner { var Value int32 }
 class Holder { var Location managed[int32] = managed(Owner{Value: 13}.Value) }
@@ -258,7 +258,7 @@ True
 retained
 17
 `}
-            yield[]object{`package ManagedCompositions
+            yield []object{`package ManagedCompositions
 import System
 import System.Collections.Generic
 class Node { var Value int32 }
@@ -317,7 +317,7 @@ True
 12
 6
 `}
-            yield[]object{`package ManagedReadonlyFields
+            yield []object{`package ManagedReadonlyFields
 import System
 class Box { let Value int32 = 17 }
 func Main() {
@@ -329,7 +329,7 @@ func Main() {
 }`, `17
 23
 `}
-            yield[]object{`package ManagedState
+            yield []object{`package ManagedState
 import System
 import System.Threading.Tasks
 class Holder {
@@ -364,7 +364,7 @@ func Main() {
 4
 True
 `}
-            yield[]object{`package ManagedClosures
+            yield []object{`package ManagedClosures
 import System
 func Make[T](value T) managed[T] {
     var copy = value
@@ -396,7 +396,7 @@ True
 99
 5
 `}
-            yield[]object{`package ManagedAlias
+            yield []object{`package ManagedAlias
 import System
 class Box { var Value int32 }
 func Main() {
@@ -426,7 +426,7 @@ func Main() {
 9
 10
 `}
-            yield[]object{`package ManagedPrivate
+            yield []object{`package ManagedPrivate
 import System
 import System.Threading
 class Counter[T] {
@@ -450,7 +450,7 @@ True
 13
 True
 `}
-            yield[]object{`package ManagedCells
+            yield []object{`package ManagedCells
 import System
 func Make() managed[int32] {
     var x = 1
@@ -479,7 +479,7 @@ True
 9
 True
 `}
-            yield[]object{`package ManagedOwners
+            yield []object{`package ManagedOwners
 import System
 class Box { var Value int32 }
 struct Pair {

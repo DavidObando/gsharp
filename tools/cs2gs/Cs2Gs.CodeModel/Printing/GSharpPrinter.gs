@@ -1722,11 +1722,11 @@ shared class GSharpPrinter {
             case raw is RawStatement {
                 return "$pad${raw.Text}"
             }
-            case yield is YieldStatement {
-                return if yield.Expression == nil {
+            case yieldStatement is YieldStatement {
+                return if yieldStatement.Expression == nil {
                     "${pad}yield break"
                 } else {
-                    "${pad}yield ${RenderExpression(yield.Expression, indent)}"
+                    "${pad}yield ${RenderExpression(yieldStatement.Expression, indent)}"
                 }
             }
             case switchStatement is SwitchStatement {

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import base64
+import contextlib
 import functools
 import hashlib
 import hmac
@@ -28,14 +29,17 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import threading
 import time
+import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import asdict, dataclass
+import zlib
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 HERE = Path(__file__).resolve().parent
 _PACKER_SPEC = importlib.util.spec_from_file_location(
@@ -71,6 +75,7 @@ ALLOWED_DOTNET_HOST_HASHES = {
 ALLOWED_DOTNET_ROOT_MANIFESTS = {
     "e362d932f8adc51ae4642740d24df422adf5908eff2e6941a691fef8529dc6a9",
 }
+ALLOWED_DOTNET_ARCHIVE_HASHES: set[str] = set()
 TRUSTED_DOTNET_SDK_VERSION = "10.0.400"
 TRUSTED_DOTNET_COMPONENTS = (
     Path("dotnet"),
@@ -273,12 +278,35 @@ class CertificationError(Exception):
     pass
 
 
+ARCHIVE_READ_ERRORS = (
+    OSError, ValueError, RuntimeError, tarfile.TarError, zipfile.BadZipFile,
+    EOFError, zlib.error,
+    *(getattr(codec, name) for codec, name in (
+        (getattr(zipfile, "lzma", None), "LZMAError"),
+        (getattr(zipfile, "zstd", None), "ZstdError"),
+    ) if codec is not None),
+)
+
+
+@contextlib.contextmanager
+def archive_read_errors(path: Path, label: str = "package archive") -> Iterator[None]:
+    try:
+        yield
+    except ARCHIVE_READ_ERRORS as error:
+        raise CertificationError(f"invalid {label} {path}: {error}") from error
+
+
 @dataclass(frozen=True)
 class FileIdentity:
     path: str
     mode: int
     size: int
     sha256: str
+
+
+@dataclass(frozen=True)
+class DirectoryIdentity(FileIdentity):
+    kind: str = "directory"
 
 
 @dataclass(frozen=True)
@@ -881,6 +909,32 @@ def identity(tree: Path, path: Path) -> FileIdentity:
         relative, stat.S_IMODE(info.st_mode), info.st_size, sha256_file(path))
 
 
+def tree_identity(tree: Path, path: Path) -> FileIdentity:
+    info = path.lstat()
+    if stat.S_ISDIR(info.st_mode):
+        return DirectoryIdentity(
+            path.relative_to(tree).as_posix(), stat.S_IMODE(info.st_mode), 0, "")
+    return identity(tree, path)
+
+
+def normalized_migrated_identity(row: FileIdentity) -> FileIdentity:
+    mode = 0o755 if isinstance(row, DirectoryIdentity) or (row.mode & 0o111) else 0o644
+    return replace(row, mode=mode)
+
+
+def manifest_sha256(manifest: list[FileIdentity]) -> str:
+    return sha256_bytes(json.dumps(
+        [asdict(row) for row in manifest], sort_keys=True).encode())
+
+
+def manifest_identity(row: dict[str, Any]) -> FileIdentity:
+    if row.get("kind") == "directory":
+        return DirectoryIdentity(**row)
+    if "kind" in row:
+        raise CertificationError(f"unsupported manifest entry kind: {row['kind']}")
+    return FileIdentity(**row)
+
+
 def owned_file(path: Path, label: str) -> os.stat_result:
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -926,6 +980,61 @@ def verify_caller_unchanged(caller: Path, git_identity: dict[str, str] | None) -
         raise CertificationError("caller tree changed during certification")
 
 
+def migrated_tree_manifest(caller: Path) -> list[FileIdentity]:
+    if not caller.is_dir():
+        raise CertificationError(f"migrated tree does not exist: {caller}")
+    manifest: list[FileIdentity] = [tree_identity(caller, caller)]
+    for path in sorted(caller.rglob("*")):
+        rel = path.relative_to(caller)
+        if ".git" in rel.parts:
+            continue
+        relative = rel.as_posix()
+        if "\r" in relative or "\n" in relative:
+            raise CertificationError("snapshot paths cannot contain CR or LF")
+        manifest.append(tree_identity(caller, path))
+    if not any(not isinstance(row, DirectoryIdentity) for row in manifest):
+        raise CertificationError(f"migrated tree is empty: {caller}")
+    return sorted(manifest, key=lambda row: row.path)
+
+
+def freeze_migrated_tree(
+    caller: Path, snapshot: Path,
+) -> tuple[list[FileIdentity], dict[str, str]]:
+    reject_root_collisions({"caller tree": caller, "source snapshot": snapshot})
+    manifest = migrated_tree_manifest(caller)
+    caller_identity = {"callerTreeSha256": manifest_sha256(manifest)}
+    snapshot.mkdir()
+    for caller_row in manifest:
+        row = normalized_migrated_identity(caller_row)
+        destination = snapshot / row.path
+        if isinstance(row, DirectoryIdentity):
+            destination.mkdir(parents=True, exist_ok=True)
+            os.chmod(destination, row.mode)
+            continue
+        source_path = caller / row.path
+        data = source_path.read_bytes()
+        if len(data) != row.size or sha256_bytes(data) != row.sha256:
+            raise CertificationError(f"migrated tree changed while freezing: {row.path}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        os.chmod(destination, row.mode)
+    make_read_only(snapshot)
+    frozen = [tree_identity(snapshot, snapshot / row.path) for row in manifest]
+    verify_manifest(snapshot, frozen)
+    verify_migrated_caller_unchanged(caller, caller_identity)
+    return frozen, {
+        "migratedTreeSha256": manifest_sha256(frozen),
+        **caller_identity,
+    }
+
+
+def verify_migrated_caller_unchanged(
+    caller: Path, expected_identity: dict[str, str],
+) -> None:
+    if manifest_sha256(migrated_tree_manifest(caller)) != expected_identity["callerTreeSha256"]:
+        raise CertificationError("caller migrated tree changed during certification")
+
+
 def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dict[str, str] | None]:
     entries, git_identity = git_snapshot_entries(caller)
     snapshot.mkdir()
@@ -966,13 +1075,16 @@ def freeze_source(caller: Path, snapshot: Path) -> tuple[list[FileIdentity], dic
 
 def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
     try:
-        expected_directories = {
+        recorded_directories = {
+            row.path for row in expected if isinstance(row, DirectoryIdentity)
+        }
+        expected_directories = recorded_directories | {
             parent.as_posix()
             for row in expected
             for parent in Path(row.path).parents
             if parent != Path(".")
         }
-        actual = []
+        actual = [tree_identity(root, root)] if "." in recorded_directories else []
         for path in sorted(root.rglob("*")):
             relative = path.relative_to(root).as_posix()
             if path.is_symlink():
@@ -982,6 +1094,8 @@ def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
                 if relative not in expected_directories:
                     raise CertificationError(
                         f"immutable source manifest has an extra directory: {relative}")
+                if relative in recorded_directories:
+                    actual.append(tree_identity(root, path))
                 continue
             actual.append(identity(root, path))
         actual.sort(key=lambda row: row.path)
@@ -1021,6 +1135,48 @@ def package_component(value: Any, label: str) -> str:
     return value
 
 
+def validated_archive_members(
+    archive: zipfile.ZipFile | tarfile.TarFile,
+) -> list[tuple[Path, Any, bool]]:
+    members = archive.infolist() if isinstance(archive, zipfile.ZipFile) else archive.getmembers()
+    nodes: dict[tuple[str, ...], tuple[tuple[str, ...], bool]] = {}
+    explicit: set[tuple[str, ...]] = set()
+    result = []
+    for member in members:
+        if isinstance(member, zipfile.ZipInfo):
+            raw_name = member.orig_filename
+            directory = member.is_dir() or raw_name.endswith("\\")
+            kind = stat.S_IFMT(member.external_attr >> 16)
+            regular = kind in (0, stat.S_IFDIR if directory else stat.S_IFREG)
+        else:
+            raw_name = member.name
+            directory = member.isdir()
+            regular = directory or member.isfile()
+        name = raw_name.replace("\\", "/")
+        parts = tuple(part for part in name.split("/") if part and part != ".")
+        if (name.startswith("/") or not parts and not directory
+                or any(char in name for char in ("\0", "\r", "\n", ":"))
+                or ".." in parts or any(part.endswith((" ", ".")) for part in parts)):
+            raise CertificationError(f"unsafe archive entry: {raw_name!r}")
+        if not regular:
+            raise CertificationError(f"unsupported non-regular archive entry: {raw_name!r}")
+        key = tuple(unicodedata.normalize("NFC", part).casefold() for part in parts)
+        if key in explicit:
+            raise CertificationError(f"colliding archive path: {raw_name!r}")
+        for length in range(1, len(parts) + 1):
+            prefix, spelling = key[:length], parts[:length]
+            old = nodes.get(prefix)
+            leaf = length == len(parts)
+            if old is not None and (
+                old[0] != spelling or not old[1] or leaf and not directory
+            ):
+                raise CertificationError(f"colliding archive path: {raw_name!r}")
+            nodes[prefix] = (spelling, directory if leaf else True)
+        explicit.add(key)
+        result.append((Path(*parts), member, directory))
+    return result
+
+
 def extract_verified_package(
     source: Path, destination: Path, content_hash: str | None = None,
 ) -> Path:
@@ -1031,18 +1187,18 @@ def extract_verified_package(
             f"package cache entry must contain one nupkg and hash: {source}")
     package_hash = base64.b64encode(
         hashlib.sha512(nupkgs[0].read_bytes()).digest()).decode()
-    if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
-        raise CertificationError(f"package archive hash is invalid: {source}")
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.mkdir(parents=True)
-    with zipfile.ZipFile(nupkgs[0]) as archive:
-        for info in archive.infolist():
-            name = Path(packer.entry_name(info.filename))
-            if info.is_dir():
+    with archive_read_errors(hash_files[0]):
+        if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
+            raise CertificationError(f"package archive hash is invalid: {source}")
+    with archive_read_errors(nupkgs[0]), zipfile.ZipFile(nupkgs[0]) as archive:
+        members = validated_archive_members(archive)
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.mkdir(parents=True)
+        for name, info, directory in members:
+            if directory:
+                (destination / name).mkdir(parents=True, exist_ok=True)
                 continue
-            if name.is_absolute() or ".." in name.parts:
-                raise CertificationError(f"unsafe package entry {info.filename}")
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(archive.read(info))
@@ -1068,6 +1224,8 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
     controller.mutable = state / "mutable"
     controller.toolchains = state / "toolchains"
     controller.bwrap = real(Path(shutil.which("bwrap", path=os.defpath) or ""))
+    if not controller.bwrap.is_file():
+        raise CertificationError("bubblewrap is required for the ADR-0198 restricted boundary")
     script = [
         "set -eu",
         f"! touch {shlex.quote(str(tree / 'forbidden-write'))}",
@@ -1118,11 +1276,13 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
 
 def package_payload_hash(path: Path) -> str:
     digest = hashlib.sha256()
-    with zipfile.ZipFile(path) as archive:
-        names = sorted(name for name in archive.namelist() if not name.endswith("/"))
-        for name in names:
-            encoded = name.encode()
-            data = archive.read(name)
+    with archive_read_errors(path), zipfile.ZipFile(path) as archive:
+        members = sorted(validated_archive_members(archive), key=lambda row: row[1].filename)
+        for _, info, directory in members:
+            if directory:
+                continue
+            encoded = info.filename.encode()
+            data = archive.read(info)
             digest.update(len(encoded).to_bytes(4, "little"))
             digest.update(encoded)
             digest.update(len(data).to_bytes(8, "little"))
@@ -1132,10 +1292,10 @@ def package_payload_hash(path: Path) -> str:
 
 def verify_resolved_sdk_payload(package: Path, resolved: Path) -> str:
     expected: dict[str, str] = {}
-    with zipfile.ZipFile(package) as archive:
-        for info in archive.infolist():
-            name = packer.entry_name(info.filename).lstrip("/")
-            if info.is_dir() or not name.startswith(("Sdk/", "tools/", "build/")):
+    with archive_read_errors(package), zipfile.ZipFile(package) as archive:
+        for relative, info, directory in validated_archive_members(archive):
+            name = relative.as_posix()
+            if directory or not name.startswith(("Sdk/", "tools/", "build/")):
                 continue
             expected[name] = sha256_bytes(archive.read(info))
     actual: dict[str, str] = {}
@@ -1402,12 +1562,103 @@ def bind_external_task_assembly(
     return {"path": str(path), "sha256": digest}
 
 
-def system_owned_tree(root: Path) -> bool:
-    for path in (root, *root.rglob("*")):
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+def system_owned_tree(root: Path, components_only: bool = False) -> bool:
+    root_info = root.lstat()
+    if stat.S_ISLNK(root_info.st_mode) or root_info.st_uid != 0 or root_info.st_mode & 0o022:
+        return False
+    if components_only:
+        for relative in TRUSTED_DOTNET_COMPONENTS:
+            ancestor = root
+            for part in relative.parts[:-1]:
+                ancestor = ancestor / part
+                if not ancestor.exists():
+                    return False
+                ancestor_info = ancestor.lstat()
+                if (stat.S_ISLNK(ancestor_info.st_mode)
+                        or not stat.S_ISDIR(ancestor_info.st_mode)
+                        or ancestor_info.st_uid != 0
+                        or ancestor_info.st_mode & 0o022):
+                    return False
+    roots = (
+        tuple(root / relative for relative in TRUSTED_DOTNET_COMPONENTS)
+        if components_only else (root,)
+    )
+    for target in roots:
+        if not target.exists():
             return False
+        candidates = (target, *target.rglob("*")) if target.is_dir() else (target,)
+        for path in candidates:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                return False
     return True
+
+
+def extract_verified_dotnet_archive(
+    archive_path: Path,
+    destination: Path,
+    allowed_hashes: set[str],
+    snapshot_path: Path | None = None,
+) -> Path:
+    if not archive_path.is_file():
+        raise CertificationError(f"dotnet archive does not exist: {archive_path}")
+    owned_file(archive_path, "dotnet archive")
+    if (not allowed_hashes
+            or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in allowed_hashes)):
+        raise CertificationError(
+            "dotnet archive verification requires lowercase SHA-256 hashes")
+    if destination.exists() or destination.is_symlink():
+        raise CertificationError(
+            f"dotnet archive extraction root must not already exist: {destination}")
+    frozen_archive = (
+        snapshot_path
+        if snapshot_path is not None
+        else destination.parent / f".{destination.name}.archive"
+    )
+    if snapshot_path is None:
+        reject_root_collisions({
+            "dotnet archive": archive_path,
+            "default dotnet archive snapshot": frozen_archive,
+        })
+    created_snapshot = frozen_archive != archive_path
+    if created_snapshot:
+        if frozen_archive.exists() or frozen_archive.is_symlink():
+            raise CertificationError(
+                f"frozen dotnet archive snapshot must not already exist: {frozen_archive}")
+        atomic_bytes(frozen_archive, archive_path.read_bytes())
+        os.chmod(frozen_archive, 0o400)
+    if owned_file(frozen_archive, "frozen dotnet archive").st_mode & 0o222:
+        raise CertificationError(f"frozen dotnet archive snapshot must be read-only: {frozen_archive}")
+    actual = sha256_file(frozen_archive)
+    if actual not in allowed_hashes:
+        if created_snapshot and frozen_archive.exists():
+            os.chmod(frozen_archive, 0o600)
+            frozen_archive.unlink(missing_ok=True)
+        raise CertificationError(
+            f"dotnet archive hash is not in the approved set: {archive_path}")
+    allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
+    with archive_read_errors(archive_path, "dotnet archive"):
+        with tarfile.open(frozen_archive, "r:*") as archive:
+            members = validated_archive_members(archive)
+            destination.mkdir(parents=True, mode=0o700)
+            for rel, member, directory in members:
+                if not rel.parts or rel.parts[0] not in allowed_roots:
+                    continue
+                target = destination / rel
+                if directory:
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise CertificationError(f"cannot read dotnet archive entry: {member.name!r}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(extracted.read())
+                os.chmod(target, 0o755 if (member.mode & 0o111) else 0o644)
+    dotnet_manifest_sha256(destination)
+    executable = destination / "dotnet"
+    if not executable.is_file():
+        raise CertificationError(f"extracted dotnet archive has no dotnet host: {destination}")
+    return executable
 
 
 def dotnet_manifest_sha256(root: Path) -> str:
@@ -1430,7 +1681,11 @@ def dotnet_manifest_sha256(root: Path) -> str:
 
 
 @functools.cache
-def trusted_dotnet() -> Path:
+def trusted_dotnet(
+    extra_host_hashes: frozenset[str] = frozenset(),
+    extra_root_manifests: frozenset[str] = frozenset(),
+    allow_system_components_only: bool = False,
+) -> Path:
     account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     system_candidates = (
         Path("/usr/share/dotnet/dotnet"),
@@ -1438,6 +1693,8 @@ def trusted_dotnet() -> Path:
         Path("/usr/bin/dotnet"),
         Path("/bin/dotnet"),
     )
+    allowed_host_hashes = ALLOWED_DOTNET_HOST_HASHES | set(extra_host_hashes)
+    allowed_root_manifests = ALLOWED_DOTNET_ROOT_MANIFESTS | set(extra_root_manifests)
     reasons: list[str] = []
     for candidate in system_candidates:
         executable = real(candidate)
@@ -1451,7 +1708,8 @@ def trusted_dotnet() -> Path:
             info = executable.stat()
             if info.st_uid != 0 or info.st_mode & 0o022:
                 reasons.append(f"{executable}: not root-owned or group/other-writable")
-            elif not system_owned_tree(executable.parent):
+            elif not system_owned_tree(
+                    executable.parent, components_only=allow_system_components_only):
                 reasons.append(
                     f"{executable.parent}: contains a symbolic link or a file that is "
                     "not root-owned or is group/other-writable")
@@ -1463,9 +1721,9 @@ def trusted_dotnet() -> Path:
             reasons.append(f"{candidate}: not a file")
         elif not (executable.parent / "sdk" / TRUSTED_DOTNET_SDK_VERSION).is_dir():
             reasons.append(f"{executable.parent}: no sdk/{TRUSTED_DOTNET_SDK_VERSION}")
-        elif sha256_file(executable) not in ALLOWED_DOTNET_HOST_HASHES:
+        elif sha256_file(executable) not in allowed_host_hashes:
             reasons.append(f"{executable}: host hash is not in the approved set")
-        elif dotnet_manifest_sha256(executable.parent) not in ALLOWED_DOTNET_ROOT_MANIFESTS:
+        elif dotnet_manifest_sha256(executable.parent) not in allowed_root_manifests:
             reasons.append(f"{executable.parent}: layout manifest is not in the approved set")
         else:
             return executable
@@ -1480,8 +1738,10 @@ def is_sandbox_vstest_process(root_host_pid: int | None, claimed: Any) -> bool:
     launcher (`dotnet vstest`), so the claimed PID must resolve to a live host
     process in that namespace whose ancestry reaches the launcher.
     """
+    proc_root = Path("/proc")
     if (root_host_pid is None or not isinstance(claimed, int)
-            or isinstance(claimed, bool) or claimed <= 1):
+            or isinstance(claimed, bool) or claimed <= 1
+            or not proc_root.is_dir()):
         return False
 
     def status(pid: int) -> dict[str, str]:
@@ -1631,16 +1891,25 @@ def dotnet_root() -> Path:
 class Controller:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        caller_arg = args.migrated_tree if getattr(args, "migrated_tree", None) is not None else args.tree
+        self.is_migrated_tree = getattr(args, "migrated_tree", None) is not None
         self.lexical_roots = {
-            "caller tree": args.tree,
+            "caller tree": caller_arg,
             "bootstrap package": args.bootstrap,
             "package cache": args.package_cache,
             "controller work": args.work,
         }
-        self.caller = real(args.tree)
+        if getattr(args, "dotnet_archive", None) is not None:
+            self.lexical_roots["dotnet archive"] = args.dotnet_archive
+        self.caller = real(caller_arg)
         self.bootstrap = real(args.bootstrap)
         self.package_cache = real(args.package_cache)
         self.work = real(args.work)
+        self.dotnet_archive = (
+            real(args.dotnet_archive)
+            if getattr(args, "dotnet_archive", None) is not None else None
+        )
+        self.extracted_dotnet: Path | None = None
         self.source = self.work / "source"
         self.stage1 = self.work / "stage-1"
         self.stage2 = self.work / "stage-2"
@@ -1677,6 +1946,12 @@ class Controller:
             raise CertificationError(f"caller tree does not exist: {self.caller}")
         if not self.bootstrap.is_file():
             raise CertificationError(f"bootstrap package does not exist: {self.bootstrap}")
+        if self.dotnet_archive is not None:
+            if not self.dotnet_archive.is_file():
+                raise CertificationError(
+                    f"dotnet archive does not exist: {self.dotnet_archive}")
+            if self.dotnet_archive.stat().st_nlink != 1:
+                raise CertificationError("dotnet archive is hard-linked")
         if self.args.stage1_version is not None:
             if not packer.VERSION_RE.fullmatch(self.args.stage1_version):
                 raise CertificationError(
@@ -1690,16 +1965,17 @@ class Controller:
             raise CertificationError("--work must name a new controller-owned directory")
         if self.work.parent.is_symlink():
             raise CertificationError("--work parent is a symbolic link")
-        reject_root_collisions({
+        collision_roots = {
             "caller tree": self.caller,
             "bootstrap package": self.bootstrap,
             "package cache": self.package_cache,
             "controller work": self.work,
-        })
+        }
+        if self.dotnet_archive is not None:
+            collision_roots["dotnet archive"] = self.dotnet_archive
+        reject_root_collisions(collision_roots)
         if not self.package_cache.is_dir():
             raise CertificationError(f"package cache does not exist: {self.package_cache}")
-        if not self.bwrap.is_file():
-            raise CertificationError("bubblewrap is required for the ADR-0198 restricted boundary")
         for name in self.report["assemblies"]:
             path = Path(name)
             if path.is_absolute() or not path.parts or ".." in path.parts:
@@ -1743,12 +2019,26 @@ class Controller:
                        for value in self.args.test_adapter_sha256)):
             raise CertificationError(
                 "--test-adapter-sha256 values must be unique lowercase SHA-256 hashes")
+        for flag_name, flag_values in (
+            ("--dotnet-archive-sha256", getattr(self.args, "dotnet_archive_sha256", [])),
+            ("--dotnet-host-sha256", getattr(self.args, "dotnet_host_sha256", [])),
+            ("--dotnet-root-manifest-sha256", getattr(self.args, "dotnet_root_manifest_sha256", [])),
+        ):
+            if (len(flag_values) != len(set(flag_values))
+                    or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in flag_values)):
+                raise CertificationError(
+                    f"{flag_name} values must be unique lowercase SHA-256 hashes")
 
     def freeze_controller_inputs(self) -> None:
         source = self.bootstrap
         inputs = self.toolchains / "controller-inputs"
         destination = inputs / source.name
         atomic_bytes(destination, source.read_bytes())
+        archive_source = self.dotnet_archive
+        archive_destination: Path | None = None
+        if archive_source is not None:
+            archive_destination = inputs / "dotnet-archive" / archive_source.name
+            atomic_bytes(archive_destination, archive_source.read_bytes())
         helper_source = inputs / "selfhost"
         helper_source.mkdir()
         helper_files = (
@@ -1776,6 +2066,9 @@ class Controller:
         helper_manifest = directory_manifest(inputs)
         make_read_only(inputs)
         self.bootstrap = destination
+        if archive_destination is not None:
+            self.dotnet_archive_source = archive_source
+            self.dotnet_archive = archive_destination
         self.report["bootstrap"] = {
             "source": str(source),
             "snapshot": str(destination),
@@ -2154,16 +2447,15 @@ class Controller:
     def seed_sdk_cache(self, stage: str, package: Path) -> dict[str, Any]:
         version = package_version(package)
         destination = self.writable(stage, "packages") / SDK_ID.casefold() / version.casefold()
-        if destination.exists():
-            shutil.rmtree(destination)
-        destination.mkdir(parents=True)
-        with zipfile.ZipFile(package) as archive:
-            for info in archive.infolist():
-                normalized = Path(packer.entry_name(info.filename))
-                if info.is_dir():
+        with archive_read_errors(package), zipfile.ZipFile(package) as archive:
+            members = validated_archive_members(archive)
+            if destination.exists():
+                shutil.rmtree(destination)
+            destination.mkdir(parents=True)
+            for normalized, info, directory in members:
+                if directory:
+                    (destination / normalized).mkdir(parents=True, exist_ok=True)
                     continue
-                if normalized.is_absolute() or ".." in normalized.parts:
-                    raise CertificationError(f"unsafe package entry {info.filename}")
                 target = destination / normalized
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(info))
@@ -2191,9 +2483,40 @@ class Controller:
             "payloadSha256": verify_resolved_sdk_payload(package, destination),
         }
 
+    def resolve_installed_dotnet(self) -> Path:
+        if self.dotnet_archive is not None:
+            if self.extracted_dotnet is None:
+                allowed = ALLOWED_DOTNET_ARCHIVE_HASHES | set(
+                    getattr(self.args, "dotnet_archive_sha256", []))
+                snapshot = (
+                    self.dotnet_archive
+                    if self.toolchains in self.dotnet_archive.parents
+                    else self.toolchains / "controller-inputs" / "dotnet-archive" / self.dotnet_archive.name
+                )
+                extracted_root = self.toolchains / "dotnet-archive"
+                self.extracted_dotnet = extract_verified_dotnet_archive(
+                    self.dotnet_archive, extracted_root, allowed, snapshot_path=snapshot)
+                self.dotnet_archive = snapshot
+                snapshot_sha256 = sha256_file(snapshot)
+                if snapshot_sha256 not in allowed:
+                    raise CertificationError(
+                        f"frozen dotnet archive {snapshot} has unapproved SHA-256 {snapshot_sha256}")
+                make_read_only(extracted_root)
+                self.report["dotnetArchive"] = {
+                    "source": str(getattr(self, "dotnet_archive_source", snapshot)),
+                    "path": str(snapshot),
+                    "sha256": snapshot_sha256,
+                    "manifestSha256": dotnet_manifest_sha256(extracted_root),
+                }
+            return self.extracted_dotnet
+        return trusted_dotnet(
+            frozenset(getattr(self.args, "dotnet_host_sha256", [])),
+            frozenset(getattr(self.args, "dotnet_root_manifest_sha256", [])),
+            bool(getattr(self.args, "allow_system_dotnet_manifest", False)))
+
     def seed_sdk_resolution(self, stage: str, package: Path) -> dict[str, Any]:
-        self.dotnet = trusted_dotnet()
-        installed_root = dotnet_root()
+        self.dotnet = self.resolve_installed_dotnet()
+        installed_root = self.dotnet.parent
         destination = self.stage_dotnet(stage)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.mkdir()
@@ -2202,22 +2525,24 @@ class Controller:
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             if source.is_dir():
-                shutil.copytree(source, target, copy_function=shutil.copy2)
+                clone_snapshot(source, target)
             else:
                 shutil.copy2(source, target)
+                os.chmod(target, target.stat().st_mode | stat.S_IWUSR)
         resolution = destination / "sdk" / TRUSTED_DOTNET_SDK_VERSION / "Sdks"
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")
         package_root = resolution / SDK_ID
-        package_root.mkdir()
-        with zipfile.ZipFile(package) as archive:
-            for info in archive.infolist():
-                name = Path(packer.entry_name(info.filename))
-                if info.is_dir() or not name.parts or name.parts[0] not in {"Sdk", "build", "tools"}:
+        with archive_read_errors(package), zipfile.ZipFile(package) as archive:
+            members = validated_archive_members(archive)
+            package_root.mkdir()
+            for name, info, directory in members:
+                if not name.parts or name.parts[0] not in {"Sdk", "build", "tools"}:
                     continue
-                if name.is_absolute() or ".." in name.parts:
-                    raise CertificationError(f"unsafe SDK payload entry {info.filename}")
                 target = package_root / name
+                if directory:
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(info))
         payload = verify_resolved_sdk_payload(package, package_root)
@@ -3409,15 +3734,16 @@ class Controller:
             "Sdk/", "build/",
         )
         temporary = produced.with_suffix(".new")
-        with zipfile.ZipFile(self.bootstrap) as source, zipfile.ZipFile(
+        with archive_read_errors(self.bootstrap), zipfile.ZipFile(
+                self.bootstrap) as source, zipfile.ZipFile(
                 temporary, "w", zipfile.ZIP_DEFLATED) as sink:
-            for info in source.infolist():
-                normalized = packer.entry_name(info.filename)
+            for relative, info, directory in validated_archive_members(source):
+                normalized = relative.as_posix()
                 if normalized == ".signature.p7s" or normalized in replacements:
                     continue
                 if normalized.startswith(replaced_prefixes):
                     continue
-                data = source.read(info.filename)
+                data = source.read(info)
                 if normalized.endswith(".nuspec"):
                     text, count = re.subn(
                         r"<(version)>[^<]*</version>",
@@ -3431,7 +3757,8 @@ class Controller:
                 sink.writestr(name, data)
         os.replace(temporary, produced)
         try:
-            packer.verify(produced, self.bootstrap)
+            with archive_read_errors(produced):
+                packer.verify(produced, self.bootstrap)
         except packer.SelfHostError as error:
             raise CertificationError(str(error)) from error
         return produced
@@ -3695,11 +4022,15 @@ class Controller:
     def certify(self) -> int:
         try:
             self.preflight()
-            manifest, git_identity = freeze_source(self.caller, self.source)
+            if self.is_migrated_tree:
+                manifest, git_identity = freeze_migrated_tree(self.caller, self.source)
+            else:
+                manifest, git_identity = freeze_source(self.caller, self.source)
             self.report["source"] = {
                 "manifestSha256": sha256_bytes(
                     json.dumps([asdict(row) for row in manifest], sort_keys=True).encode()),
-                "files": len(manifest), "git": git_identity,
+                "files": sum(not isinstance(row, DirectoryIdentity) for row in manifest),
+                "git": git_identity,
             }
             atomic_json(self.evidence / "source-manifest.json", [asdict(row) for row in manifest])
             clone_snapshot(self.source, self.stage1)
@@ -3707,6 +4038,9 @@ class Controller:
             bootstrap_version = package_version(self.bootstrap)
             pin_matches(self.stage1, bootstrap_version)
             reject_secret_restore_configuration(self.stage1)
+            if not self.bwrap.is_file():
+                raise CertificationError(
+                    "bubblewrap is required for the ADR-0198 restricted boundary")
             stage_package(self.stage1, self.bootstrap)
             self.stage_packages["stage-1"] = self.bootstrap
             self.seed_sdk_cache("stage-1", self.bootstrap)
@@ -3776,12 +4110,15 @@ class Controller:
             # Final trust-boundary check, immediately before the verdict: the
             # frozen snapshot and the caller worktree must both be unchanged.
             verify_manifest(self.source, manifest)
-            verify_caller_unchanged(self.caller, git_identity)
+            if self.is_migrated_tree:
+                verify_migrated_caller_unchanged(self.caller, git_identity)
+            else:
+                verify_caller_unchanged(self.caller, git_identity)
             self.report["certified"] = True
             atomic_json(self.reports / "stage2-report.json", self.report)
             print(f"self-host stage 2: CERTIFIED ({self.reports / 'stage2-report.json'})")
             return 0
-        except (CertificationError, OSError, PeError, zipfile.BadZipFile) as error:
+        except (CertificationError, OSError, PeError, *ARCHIVE_READ_ERRORS) as error:
             self.report["certified"] = False
             self.report["error"] = str(error)
             if self.reports.is_dir():
@@ -3796,6 +4133,9 @@ class Controller:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tree", type=Path)
+    parser.add_argument(
+        "--migrated-tree", type=Path, dest="migrated_tree",
+        help="pre-migrated source directory frozen by manifest hash")
     parser.add_argument("--bootstrap", type=Path)
     parser.add_argument("--work", type=Path)
     parser.add_argument("--project", action="append")
@@ -3803,6 +4143,21 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--test", action="append", default=[])
     parser.add_argument(
         "--test-adapter-sha256", action="append", default=[], metavar="SHA256")
+    parser.add_argument(
+        "--dotnet-archive", type=Path,
+        help="pinned .NET SDK archive extracted into a controller-owned root")
+    parser.add_argument(
+        "--dotnet-archive-sha256", action="append", default=[], metavar="SHA256",
+        help="approved SHA-256 hash for --dotnet-archive")
+    parser.add_argument(
+        "--dotnet-host-sha256", action="append", default=[], metavar="SHA256",
+        help="additional approved SHA-256 hash for a user-installed dotnet host")
+    parser.add_argument(
+        "--dotnet-root-manifest-sha256", action="append", default=[], metavar="SHA256",
+        help="additional approved layout-manifest SHA-256 hash for a dotnet installation")
+    parser.add_argument(
+        "--allow-system-dotnet-manifest", action="store_true",
+        help="accept a root-owned system dotnet installation when its trusted components are root-owned and symlink-free")
     parser.add_argument(
         "--min-tests", action="append", default=[], metavar="PROJECT=N",
         help="minimum executed tests for a selected test project")
@@ -3822,6 +4177,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--freeze-source", nargs=2, metavar=("TREE", "SNAPSHOT"), type=Path,
         help="materialize one immutable source snapshot from Git")
+    parser.add_argument(
+        "--freeze-migrated-tree", nargs=2, metavar=("TREE", "SNAPSHOT"), type=Path,
+        help="freeze a pre-migrated directory into a new, disjoint snapshot")
+    parser.add_argument(
+        "--verify-dotnet-archive", nargs=3,
+        metavar=("ARCHIVE", "EXPECTED_SHA256", "DESTINATION"),
+        help="verify and extract one pinned .NET SDK archive")
     parser.add_argument(
         "--validate-project", nargs=2, metavar=("TREE", "PROJECT"), type=Path,
         help="run the controller's fail-closed project XML validation only")
@@ -3890,6 +4252,30 @@ def main(argv: list[str]) -> int:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
+    if args.freeze_migrated_tree:
+        try:
+            manifest, git_identity = freeze_migrated_tree(*args.freeze_migrated_tree)
+            print(json.dumps({
+                "files": sum(not isinstance(row, DirectoryIdentity) for row in manifest),
+                "git": git_identity,
+            }, sort_keys=True))
+        except (CertificationError, OSError) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
+    if args.verify_dotnet_archive:
+        archive_name, expected_sha256, destination_name = args.verify_dotnet_archive
+        try:
+            executable = extract_verified_dotnet_archive(
+                real(Path(archive_name)), Path(destination_name).resolve(), {expected_sha256})
+            print(json.dumps({
+                "dotnet": str(executable),
+                "manifestSha256": dotnet_manifest_sha256(executable.parent),
+            }, sort_keys=True))
+        except (CertificationError, OSError, *ARCHIVE_READ_ERRORS) as error:
+            print(f"selfhost-stage2: {error}", file=sys.stderr)
+            return 2
+        return 0
     if args.compare_pe:
         try:
             first, second, equal = compare_pe(*args.compare_pe)
@@ -3932,7 +4318,10 @@ def main(argv: list[str]) -> int:
         return 0
     if args.probe_toolchain:
         try:
-            print(trusted_dotnet())
+            print(trusted_dotnet(
+                frozenset(args.dotnet_host_sha256),
+                frozenset(args.dotnet_root_manifest_sha256),
+                bool(args.allow_system_dotnet_manifest)))
         except CertificationError as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
@@ -3993,7 +4382,7 @@ def main(argv: list[str]) -> int:
         root, manifest_path = args.verify_manifest
         try:
             rows = [
-                FileIdentity(**row)
+                manifest_identity(row)
                 for row in json.loads(manifest_path.read_text(encoding="utf-8"))
             ]
             verify_manifest(real(root), rows)
@@ -4023,7 +4412,7 @@ def main(argv: list[str]) -> int:
         root, manifest = args.verify_directory_manifest
         try:
             expected = [
-                FileIdentity(**row)
+                manifest_identity(row)
                 for row in json.loads(manifest.read_text(encoding="utf-8"))
             ]
             if directory_manifest(real(root)) != expected:
@@ -4044,7 +4433,7 @@ def main(argv: list[str]) -> int:
         source, destination = args.verify_package_cache
         try:
             extract_verified_package(real(source), destination.resolve())
-        except (CertificationError, OSError, zipfile.BadZipFile) as error:
+        except (CertificationError, OSError, *ARCHIVE_READ_ERRORS) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
@@ -4090,8 +4479,10 @@ def main(argv: list[str]) -> int:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
-    if args.tree is None or args.bootstrap is None or args.work is None:
-        parser.error("--tree, --bootstrap, and --work are required for certification")
+    if args.tree is not None and args.migrated_tree is not None:
+        parser.error("pass either --tree or --migrated-tree, not both")
+    if (args.tree is None and args.migrated_tree is None) or args.bootstrap is None or args.work is None:
+        parser.error("--tree (or --migrated-tree), --bootstrap, and --work are required for certification")
     return Controller(args).certify()
 
 

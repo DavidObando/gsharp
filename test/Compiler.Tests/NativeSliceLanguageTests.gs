@@ -603,7 +603,7 @@ True
 
     shared {
         func Programs() sequence[[]object] {
-            yield[]object{`package NativePostfix
+            yield []object{`package NativePostfix
 import System
 func Main() {
     let values = slice[int32]{10}
@@ -613,7 +613,7 @@ func Main() {
 }`, `10
 11
 `}
-            yield[]object{`package NativeRawArrayConversions
+            yield []object{`package NativeRawArrayConversions
 import System
 class array { var Value int32 }
 class slice { var Value int32 }
@@ -626,7 +626,7 @@ func Main() {
     let recoveredSlices = []slice(boxedSlices)
     Console.WriteLine(recoveredArrays[0].Value + recoveredSlices[0].Value)
 }`, "16\n"}
-            yield[]object{`package NativeSourceAliases
+            yield []object{`package NativeSourceAliases
 import System
 type slice = int32
 type array = int32
@@ -637,7 +637,7 @@ func Main() {
     let fourth $array = 4
     Console.WriteLine(first + second + third + fourth)
 }`, "10\n"}
-            yield[]object{`package NativeNamePrecedence
+            yield []object{`package NativeNamePrecedence
 import System
 class slice[T] { var Value T }
 class array[T] { var Value T }
@@ -663,7 +663,7 @@ func Main() {
 5
 6
 `}
-            yield[]object{`package NativeFunctionPrecedence
+            yield []object{`package NativeFunctionPrecedence
 import System
 func slice[T](value T) T { return value }
 func array[T](value T) T { return value }
@@ -682,7 +682,7 @@ func Main() {
 6
 7
 `}
-            yield[]object{`package NativeBuffers
+            yield []object{`package NativeBuffers
 import System
 import Gsharp.Values
 struct Frame {
@@ -738,7 +738,7 @@ True
 2
 2
 `}
-            yield[]object{`package NativeRanges
+            yield []object{`package NativeRanges
 import System
 import Gsharp.Values
 var s = slice[int32].Create(2, 6)
@@ -778,7 +778,7 @@ Console.WriteLine(elements[0] == nil)`, `2
 True
 True
 `}
-            yield[]object{`package NativePatterns
+            yield []object{`package NativePatterns
 import System
 var s = slice[int32]{1, 2, 3}
 if s is [1, ..rest] {
@@ -797,7 +797,7 @@ for value in s {
 9
 7
 `}
-            yield[]object{`package NativeModifiers
+            yield []object{`package NativeModifiers
 import System
 import System.Collections.Generic
 import System.Threading.Tasks
@@ -870,7 +870,7 @@ True
 False
 0
 `}
-            yield[]object{`package NativeOrder
+            yield []object{`package NativeOrder
 import System
 var s = slice[int32]{1, 2}
 var trace = ""

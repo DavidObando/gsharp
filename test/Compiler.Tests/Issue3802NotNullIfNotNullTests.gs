@@ -220,7 +220,7 @@ Console.WriteLine(Twice("ab"))
         func Cases() sequence[[]object] {
             // The exact reduction of the gate regression:
             // tools/cs2gs/Cs2Gs.Pipeline/RepositoryMirror.DestinationRelativePath.
-            yield[]object{"change-extension-non-null-argument", `
+            yield []object{"change-extension-non-null-argument", `
 package P
 import System
 import System.IO
@@ -232,7 +232,7 @@ func DestinationRelativePath(source string) string {
 Console.WriteLine(DestinationRelativePath("tools/cs2gs/Foo.cs"))
 `, []string{"tools/cs2gs/Foo.gs"}}
             // Two more BCL carriers on the same type.
-            yield[]object{"get-file-name-and-extension", `
+            yield []object{"get-file-name-and-extension", `
 package P
 import System
 import System.IO
@@ -252,7 +252,7 @@ Console.WriteLine(Ext("a/b/c.cs"))
             // argument IS nil the result really is nil, so the narrowed shape must
             // never be relied on to be non-nil. Binding this to `string?` still
             // works, and the value observed at runtime is nil.
-            yield[]object{"nil-argument-still-yields-nil-at-runtime", `
+            yield []object{"nil-argument-still-yields-nil-at-runtime", `
 package P
 import System
 import System.IO
@@ -271,7 +271,7 @@ Console.WriteLine(Dest("x.cs")!!)
             // when it points at a nullable location — reading it naively narrows
             // the result and breaks issue #3727's `Volatile.Read(&r) != nil`. The
             // nullability that counts is the POINTEE's, and here it is nil.
-            yield[]object{"byref-argument-uses-the-pointee-nullability", `
+            yield []object{"byref-argument-uses-the-pointee-nullability", `
 package P
 import System
 import System.Threading

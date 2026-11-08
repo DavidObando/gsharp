@@ -156,7 +156,7 @@ func Test() object {
     let values = List[int32]()
     return values.Add
 }`, "imported instance method group", "Add")
-            yield[]object{"conditional", `package P
+            yield []object{"conditional", `package P
 import System.Collections.Generic
 
 func Test() {

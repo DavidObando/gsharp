@@ -94,7 +94,7 @@ open class Issue5739InterpolatedStringNarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"interpolation_tostring_removes_global_fact", `import System
+            yield []object{"interpolation_tostring_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -111,7 +111,7 @@ func Run(b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Box{}))`, "GS0158@14:14", "reject", ""}
-            yield[]object{"interpolation_tostring_removes_member_path_fact", `import System
+            yield []object{"interpolation_tostring_removes_member_path_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -132,7 +132,7 @@ func Run(holder Holder, b Box) int32 {
 }
 var gHolder Holder = Holder(C{})
 Console.WriteLine(Run(gHolder, Box{}))`, "GS0158@18:25", "reject", ""}
-            yield[]object{"interpolation_in_if_condition_removes_global_and_member_path_facts", `import System
+            yield []object{"interpolation_in_if_condition_removes_global_and_member_path_facts", `import System
 class C {
     var Value int32 = 1
 }
@@ -166,7 +166,7 @@ func RunMember(holder Holder, b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(RunGlobal(Box{}) + RunMember(Holder(C{}), Box{}))`, "GS0158@18:22 GS0158@20:18 GS0158@27:33 GS0158@29:29", "reject", ""}
-            yield[]object{"interpolation_in_loop_and_backward_jump_span_removes_global_and_member_path_facts", `import System
+            yield []object{"interpolation_in_loop_and_backward_jump_span_removes_global_and_member_path_facts", `import System
 class C {
     var Value int32 = 1
 }
@@ -222,7 +222,7 @@ func InSpanAndAcrossSpanEntry(holder Holder, b Box, flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(InLoopHeader(Box{}) + InLoopBody(Holder(C{}), Box{}, true) + AcrossLoopEntry(Holder(C{}), Box{}) + InSpanAndAcrossSpanEntry(Holder(C{}), Box{}, true))`, "GS0158@17:18 GS0158@25:22 GS0158@25:43 GS0158@35:19 GS0158@35:40 GS0158@45:15 GS0158@45:36 GS0158@49:19 GS0158@49:40", "reject", ""}
-            yield[]object{"interpolation_in_defer_argument_removes_global_and_member_path_facts", `import System
+            yield []object{"interpolation_in_defer_argument_removes_global_and_member_path_facts", `import System
 class C {
     var Value int32 = 1
 }
@@ -244,7 +244,7 @@ func Run(holder Holder, b Box) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Holder(C{}), Box{}))`, "GS0158@19:14 GS0158@19:35", "reject", ""}
-            yield[]object{"control_primitive_and_string_holes_keep_global_and_member_path_facts", `import System
+            yield []object{"control_primitive_and_string_holes_keep_global_and_member_path_facts", `import System
 class C {
     var Value int32 = 4
 }
@@ -265,7 +265,7 @@ func Run(holder Holder, n int32, flag bool, ch char, str string) int32 {
 }
 var g C? = C{Value: 3}
 Console.WriteLine(Run(Holder(C{Value: 6}), 42, true, 'x', "ok"))`, "", "run", "25"}
-            yield[]object{"control_ref_parameter_kept_across_interpolation_tostring_A3", `import System
+            yield []object{"control_ref_parameter_kept_across_interpolation_tostring_A3", `import System
 class Box {
     override func ToString() string -> "box"
 }

@@ -405,7 +405,7 @@ class Formatter {
         /// is expected to declare a handler.
         /// @returns Labelled resolvers; the caller disposes each.
         private func HandlerBearingClosures() sequence[(Label string, Resolver ReferenceResolver)] {
-            yield("host runtime", ReferenceResolver.Default())
+            yield ("host runtime", ReferenceResolver.Default())
             for closure in TargetingPackClosures() {
                 yield closure
             }
@@ -427,7 +427,7 @@ class Formatter {
                 if refDirectory == nil {
                     continue
                 }
-                yield(
+                yield (
                     Path.GetFileName(versionDirectory),
                     ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"))
                 )

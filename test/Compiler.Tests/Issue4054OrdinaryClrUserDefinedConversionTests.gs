@@ -480,86 +480,86 @@ public readonly struct Fahrenheit
         /// Positive programs that compile, IL-verify, execute, and print.
         /// @returns Case name, source body, and expected stdout lines.
         func SuccessfulCalls() sequence[[]object] {
-            yield[]object{"static-bcl-and-helper-methods", `Console.WriteLine(Math.Abs(Celsius{ Degrees: 0.0 - 2.5 }))
+            yield []object{"static-bcl-and-helper-methods", `Console.WriteLine(Math.Abs(Celsius{ Degrees: 0.0 - 2.5 }))
 Console.WriteLine(ConversionTargets.StaticValue(Celsius{ Degrees: 3.5 }))`, []string{"2.5", "3.5"}}
-            yield[]object{"instance-methods-and-value-reference-results", `let target = InstanceTarget()
+            yield []object{"instance-methods-and-value-reference-results", `let target = InstanceTarget()
 Console.WriteLine(target.Value(Celsius{ Degrees: 4.5 }))
 Console.WriteLine(target.Text(Label{ Text: "ready" }))`, []string{"4.5", "ready"}}
-            yield[]object{"inherited-and-extension-methods", `let inherited = LocalTarget()
+            yield []object{"inherited-and-extension-methods", `let inherited = LocalTarget()
 let extended = InstanceTarget()
 Console.WriteLine(inherited.Inherited(Celsius{ Degrees: 4.75 }))
 Console.WriteLine(extended.ExtensionValue(Celsius{ Degrees: 5.25 }))`, []string{"4.75", "5.25"}}
-            yield[]object{"overload-competition-prefers-the-conversion-target", `Console.WriteLine(ConversionTargets.Prefer(Celsius{ Degrees: 5.5 }))
+            yield []object{"overload-competition-prefers-the-conversion-target", `Console.WriteLine(ConversionTargets.Prefer(Celsius{ Degrees: 5.5 }))
 Console.WriteLine(ConversionTargets.PreferText(Label{ Text: "value" }))`, []string{"double", "string"}}
-            yield[]object{"generic-and-params-calls", `Console.WriteLine(ConversionTargets.Generic[float64](Celsius{ Degrees: 6.5 }))
+            yield []object{"generic-and-params-calls", `Console.WriteLine(ConversionTargets.Generic[float64](Celsius{ Degrees: 6.5 }))
 Console.WriteLine(ConversionTargets.Params(
     Celsius{ Degrees: 1.25 },
     Celsius{ Degrees: 2.75 }))`, []string{"6.5", "4"}}
-            yield[]object{"conversion-beside-a-deferred-lambda", `Console.WriteLine(ConversionTargets.WithLambda(
+            yield []object{"conversion-beside-a-deferred-lambda", `Console.WriteLine(ConversionTargets.WithLambda(
     Celsius{ Degrees: 6.75 },
     x -> x + 1.0))`, []string{"7.75"}}
-            yield[]object{"inferred-generic-identity-beats-a-concrete-conversion", `Console.WriteLine(ConversionTargets.GenericRank(Celsius{ Degrees: 7.0 }))
+            yield []object{"inferred-generic-identity-beats-a-concrete-conversion", `Console.WriteLine(ConversionTargets.GenericRank(Celsius{ Degrees: 7.0 }))
 Console.WriteLine(ConversionTargets.GenericParamsRank(Celsius{ Degrees: 8.0 }))`, []string{"generic", "generic"}}
-            yield[]object{"an-implicit-operator-beats-an-explicit-reference-cross-cast", `Console.WriteLine(ConversionTargets.InterfaceValue(CrossCastSource()))
+            yield []object{"an-implicit-operator-beats-an-explicit-reference-cross-cast", `Console.WriteLine(ConversionTargets.InterfaceValue(CrossCastSource()))
 Console.WriteLine(ConversionTargets.ParamsDisposable(CrossCastSource()))`, []string{
                     "DisposableValue",
                     "DisposableValue"
                 }}
-            yield[]object{
+            yield []object{
                 "a-user-conversion-survives-the-erased-mismatch-check",
                 "Console.WriteLine(ConversionTargets.GenericTarget(\n    GenericSource{ Text: \"generic-target\" }))",
                 []string{"generic-target"}
             }
-            yield[]object{
+            yield []object{
                 "a-symbolic-generic-static-receiver-applies-the-operator",
                 "Console.WriteLine(GenericStatic[Celsius].InterfaceValue(CrossCastSource()))",
                 []string{"DisposableValue"}
             }
-            yield[]object{"imported-conversion-control", `Console.WriteLine(ConversionTargets.StaticValue(Fahrenheit(7.5)))
+            yield []object{"imported-conversion-control", `Console.WriteLine(ConversionTargets.StaticValue(Fahrenheit(7.5)))
 Console.WriteLine(ConversionTargets.Prefer(Fahrenheit(8.5)))`, []string{"7.5", "double"}}
         }
 
         /// Calls that remain ambiguous or inapplicable.
         /// @returns Case name, source body, and expected diagnostic.
         func RejectedCalls() sequence[[]object] {
-            yield[]object{
+            yield []object{
                 "unrelated-user-defined-targets-stay-ambiguous",
                 "Console.WriteLine(ConversionTargets.Ambiguous(AmbiguousValue{ Value: 1 }))",
                 "GS0160"
             }
-            yield[]object{
+            yield []object{
                 "an-erased-object-does-not-fit-an-unrelated-parameter",
                 "Console.WriteLine(ConversionTargets.Reject(Celsius{ Degrees: 2.5 }))",
                 "GS0159"
             }
-            yield[]object{
+            yield []object{
                 "an-explicit-only-operator-does-not-make-a-call-applicable",
                 "Console.WriteLine(ConversionTargets.StaticValue(ExplicitOnly{ Value: 2.5 }))",
                 "GS0159"
             }
-            yield[]object{
+            yield []object{
                 "a-lifted-operator-is-not-admitted-before-lowering-supports-it",
                 "let value Celsius? = Celsius{ Degrees: 2.5 }\nConsole.WriteLine(ConversionTargets.NullableValue(value))",
                 "GS0159"
             }
-            yield[]object{
+            yield []object{
                 "same-compilation-standard-conversions-keep-imported-precedence",
                 "Console.WriteLine(ConversionTargets.StandardRank(LocalRankSource{}))",
                 "GS0160"
             }
-            yield[]object{
+            yield []object{
                 "imported-standard-conversion-control",
                 "Console.WriteLine(ConversionTargets.StandardRank(ImportedRankSource()))",
                 "GS0160"
             }
-            yield[]object{"constrained-instance-ambiguity-is-reported", `func CallAmbiguous[T IConstrainedTarget](target T, value AmbiguousValue) string {
+            yield []object{"constrained-instance-ambiguity-is-reported", `func CallAmbiguous[T IConstrainedTarget](target T, value AmbiguousValue) string {
     return target.ConstrainedAmbiguous(value)
 }
 
 Console.WriteLine(CallAmbiguous(
     ConstrainedTarget(),
     AmbiguousValue{ Value: 1 }))`, "GS0160"}
-            yield[]object{"constrained-static-ambiguity-is-reported", `func CallStaticAmbiguous[T IStaticConstrainedTarget[T]](value AmbiguousValue) string {
+            yield []object{"constrained-static-ambiguity-is-reported", `func CallStaticAmbiguous[T IStaticConstrainedTarget[T]](value AmbiguousValue) string {
     return T.ConstrainedStaticAmbiguous(value)
 }
 

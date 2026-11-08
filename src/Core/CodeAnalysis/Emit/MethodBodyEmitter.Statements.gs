@@ -221,6 +221,13 @@ internal partial class MethodBodyEmitter {
             "the binder roots a fixed-buffer pin at the buffer field access",
             expression: "elementAccess.Receiver as BoundFieldAccessExpression"
         )
+        if StatementBinder.IsFixedVariable(bufferAccess, this.IsHeapPromotedFixedBufferVariable) {
+            EmitDiagnosticException.ThrowDiagnostic(
+                (node.Syntax as FixedStatementSyntax)?.PinnedSource ?? node.Syntax,
+                DiagnosticDescriptors.FixedBufferAlreadyFixed,
+                bufferAccess.Field.Name
+            )
+        }
         this.EmitFieldAddress(bufferAccess) // &recv.name
         this.il.OpCode(ILOpCode.Ldflda)
         this.il.Token(this.ResolveFieldAddressHandle(elementAccess)) // &recv.name.FixedElementField

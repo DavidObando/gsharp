@@ -178,33 +178,33 @@ open class Issue1482NumericWideningLatticeTests {
 
         func NativeIntWideningRows() sequence[[]object] {
             // nint (System.IntPtr) widens to int64/single/double/decimal.
-            yield[]object{"System.IntPtr", "System.Int64", true}
-            yield[]object{"System.IntPtr", "System.Single", true}
-            yield[]object{"System.IntPtr", "System.Double", true}
-            yield[]object{"System.IntPtr", "System.Decimal", true}
+            yield []object{"System.IntPtr", "System.Int64", true}
+            yield []object{"System.IntPtr", "System.Single", true}
+            yield []object{"System.IntPtr", "System.Double", true}
+            yield []object{"System.IntPtr", "System.Decimal", true}
             // nint does NOT widen to unsigned 64-bit nor narrow to int32.
-            yield[]object{"System.IntPtr", "System.UInt64", false}
-            yield[]object{"System.IntPtr", "System.Int32", false}
+            yield []object{"System.IntPtr", "System.UInt64", false}
+            yield []object{"System.IntPtr", "System.Int32", false}
             // nuint (System.UIntPtr) widens to uint64/single/double/decimal.
-            yield[]object{"System.UIntPtr", "System.UInt64", true}
-            yield[]object{"System.UIntPtr", "System.Single", true}
-            yield[]object{"System.UIntPtr", "System.Double", true}
-            yield[]object{"System.UIntPtr", "System.Decimal", true}
+            yield []object{"System.UIntPtr", "System.UInt64", true}
+            yield []object{"System.UIntPtr", "System.Single", true}
+            yield []object{"System.UIntPtr", "System.Double", true}
+            yield []object{"System.UIntPtr", "System.Decimal", true}
             // nuint does NOT widen to signed int64.
-            yield[]object{"System.UIntPtr", "System.Int64", false}
+            yield []object{"System.UIntPtr", "System.Int64", false}
             // The narrower integral and char sources widen INTO the native ints.
-            yield[]object{"System.SByte", "System.IntPtr", true}
-            yield[]object{"System.Byte", "System.IntPtr", true}
-            yield[]object{"System.Byte", "System.UIntPtr", true}
-            yield[]object{"System.Int16", "System.IntPtr", true}
-            yield[]object{"System.UInt16", "System.IntPtr", true}
-            yield[]object{"System.UInt16", "System.UIntPtr", true}
-            yield[]object{"System.Int32", "System.IntPtr", true}
-            yield[]object{"System.UInt32", "System.UIntPtr", true}
-            yield[]object{"System.Char", "System.IntPtr", true}
-            yield[]object{"System.Char", "System.UIntPtr", true}
+            yield []object{"System.SByte", "System.IntPtr", true}
+            yield []object{"System.Byte", "System.IntPtr", true}
+            yield []object{"System.Byte", "System.UIntPtr", true}
+            yield []object{"System.Int16", "System.IntPtr", true}
+            yield []object{"System.UInt16", "System.IntPtr", true}
+            yield []object{"System.UInt16", "System.UIntPtr", true}
+            yield []object{"System.Int32", "System.IntPtr", true}
+            yield []object{"System.UInt32", "System.UIntPtr", true}
+            yield []object{"System.Char", "System.IntPtr", true}
+            yield []object{"System.Char", "System.UIntPtr", true}
             // uint32 does NOT widen to the signed native int (it can be wider).
-            yield[]object{"System.UInt32", "System.IntPtr", false}
+            yield []object{"System.UInt32", "System.IntPtr", false}
         }
 
         private func Lookup(clrName string)(ClrType Type, Symbol TypeSymbol) {

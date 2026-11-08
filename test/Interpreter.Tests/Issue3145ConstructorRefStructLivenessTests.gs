@@ -85,7 +85,7 @@ class Holder {
 
         func Drivers() sequence[[]object] {
             for driver in Enum.GetValues[Issue3145ConstructorRefStructLivenessTests.Driver]() {
-                yield[]object{driver}
+                yield []object{driver}
             }
         }
 

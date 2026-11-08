@@ -695,13 +695,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=3 sha256=370BCD14FAFAE042"
+      "rows=4 sha256=885C7C90D09F5A55"
     ],
     "FieldDef": [
       "rows=4 sha256=E06CE79358FA8500"
     ],
     "MemberRef": [
-      "rows=9 sha256=6F3681605BE9E455"
+      "rows=10 sha256=183AE1648A184D49"
     ],
     "MethodBodies": [
       "rows=5 sha256=C831E7EE577F1FDB"
@@ -713,7 +713,7 @@
       "rows=2 sha256=1B19F5FE8432036A"
     ],
     "TypeRef": [
-      "rows=9 sha256=DB90449FCA053297"
+      "rows=10 sha256=1414790E9AF20C19"
     ]
   },
   "samples/DefaultInterfaceMethods.gs": {
@@ -1213,13 +1213,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=3 sha256=CA6AE7C7491F70CB"
+      "rows=5 sha256=3F4BF0AA3F175E8D"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
     "MemberRef": [
-      "rows=5 sha256=1E6CD60A169A6A14"
+      "rows=6 sha256=8A2918751466E2B7"
     ],
     "MethodBodies": [
       "rows=4 sha256=36A8BF360D042DD8"
@@ -1231,7 +1231,7 @@
       "rows=2 sha256=48638991E4937019"
     ],
     "TypeRef": [
-      "rows=5 sha256=BF7AB5B66D0D5F92"
+      "rows=6 sha256=2BA7AD7FEBA1E93E"
     ]
   },
   "samples/GenericExtensionFunctions.gs": {
@@ -1240,13 +1240,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=6 sha256=5E6187F2E42CF02A"
+      "rows=9 sha256=69CBF5E19D9C1AA1"
     ],
     "FieldDef": [
       "rows=1 sha256=7A4EF08644AE82B4"
     ],
     "MemberRef": [
-      "rows=6 sha256=B481044C308AF88F"
+      "rows=7 sha256=37CCC2C3BB2CAEFE"
     ],
     "MethodBodies": [
       "rows=4 sha256=EE80DAFF5F40F88B"
@@ -1258,7 +1258,7 @@
       "rows=2 sha256=41FB2C506FC17E00"
     ],
     "TypeRef": [
-      "rows=6 sha256=1D1F0FE5877E8C35"
+      "rows=7 sha256=F136BA6BA91544D6"
     ]
   },
   "samples/GenericLocalRecursion.gs": {
@@ -1267,13 +1267,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=7 sha256=374CF13D8A9CE06A"
+      "rows=15 sha256=3BA5E808BFA8334D"
     ],
     "FieldDef": [
       "rows=0 sha256=E3B0C44298FC1C14"
     ],
     "MemberRef": [
-      "rows=10 sha256=ECA2DBA1D0C01D32"
+      "rows=11 sha256=E3CE83FFA8736A37"
     ],
     "MethodBodies": [
       "rows=12 sha256=3952CD753A1D467E"
@@ -1285,7 +1285,7 @@
       "rows=5 sha256=2710EA2D473692BE"
     ],
     "TypeRef": [
-      "rows=7 sha256=C448D19D51452614"
+      "rows=8 sha256=EDE45892BD9EDF4D"
     ]
   },
   "samples/GenericMethodDelegates.gs": {
@@ -1294,13 +1294,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=5 sha256=4C07EBAF38E53600"
+      "rows=10 sha256=122D2ABF4F981188"
     ],
     "FieldDef": [
       "rows=3 sha256=00CB465A3344916B"
     ],
     "MemberRef": [
-      "rows=24 sha256=9F379A476BC0849D"
+      "rows=25 sha256=FA6750695FA4A737"
     ],
     "MethodBodies": [
       "rows=12 sha256=90A5B1A2936BDA0E"
@@ -1312,7 +1312,7 @@
       "rows=3 sha256=4F99B77E52928FB5"
     ],
     "TypeRef": [
-      "rows=9 sha256=56C7EE16F05D321D"
+      "rows=10 sha256=938B9C172716C239"
     ]
   },
   "samples/GenericMethodTypeArgs.gs": {
@@ -1377,13 +1377,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=9 sha256=ECB917730795BCEE"
+      "rows=15 sha256=F271935127B3AACB"
     ],
     "FieldDef": [
       "rows=3 sha256=2216A35BE26D52AC"
     ],
     "MemberRef": [
-      "rows=10 sha256=24F861B2BF3904D9"
+      "rows=11 sha256=7A8C0BFBDE467871"
     ],
     "MethodBodies": [
       "rows=10 sha256=D2E50F72B2511548"
@@ -1395,7 +1395,7 @@
       "rows=5 sha256=5904BAF9E32C8EEC"
     ],
     "TypeRef": [
-      "rows=6 sha256=AFB2A901A5A93092"
+      "rows=7 sha256=79AB3B360901A3D2"
     ]
   },
   "samples/GenericNamedDelegate.gs": {
@@ -1404,13 +1404,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=6 sha256=36A9DE3912936C81"
+      "rows=10 sha256=C5C970216BD75750"
     ],
     "FieldDef": [
       "rows=4 sha256=F22C70ADBBD2DF4A"
     ],
     "MemberRef": [
-      "rows=14 sha256=B131CE3618791059"
+      "rows=15 sha256=10B295478D8481A8"
     ],
     "MethodBodies": [
       "rows=11 sha256=292D1DA9E11E5294"
@@ -1422,7 +1422,7 @@
       "rows=5 sha256=736639E514C42555"
     ],
     "TypeRef": [
-      "rows=8 sha256=9971408C1CAAC655"
+      "rows=9 sha256=C25C906D96F6F042"
     ]
   },
   "samples/GenericTypeParameterAsTypeArgument.gs": {
@@ -1432,13 +1432,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=3 sha256=843F6D018E0443C2"
+      "rows=6 sha256=5EE736D8DCAFAB63"
     ],
     "FieldDef": [
       "rows=4 sha256=6EE6139831FBD66B"
     ],
     "MemberRef": [
-      "rows=13 sha256=289A761474421AC9"
+      "rows=14 sha256=A9DBA98A1A63E084"
     ],
     "MethodBodies": [
       "rows=5 sha256=8910BE33B3AAF965"
@@ -1450,7 +1450,7 @@
       "rows=2 sha256=DC27A84C16CDCFA6"
     ],
     "TypeRef": [
-      "rows=9 sha256=36B6D9451662880D"
+      "rows=10 sha256=695AD7A8FB0EB332"
     ]
   },
   "samples/GetOnlyCollectionInit.gs": {
@@ -2005,13 +2005,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=3 sha256=FD1BDAA04506DC21"
+      "rows=4 sha256=7ECA3D191A139080"
     ],
     "FieldDef": [
       "rows=4 sha256=DA1F9FAF9CAEAB41"
     ],
     "MemberRef": [
-      "rows=19 sha256=547BB36EA25529E6"
+      "rows=20 sha256=E2BB1A1B9F1AE6B6"
     ],
     "MethodBodies": [
       "rows=3 sha256=A0A755320EF515D3"
@@ -2023,7 +2023,7 @@
       "rows=2 sha256=6B96F8B5D86874F2"
     ],
     "TypeRef": [
-      "rows=13 sha256=C56AB75CE56C900D"
+      "rows=14 sha256=A19639438DFFCF3B"
     ]
   },
   "samples/MethodGroupToDelegate.gs": {
@@ -2114,13 +2114,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=16 sha256=B3A9F2EFAC2C53E1"
+      "rows=24 sha256=B7FA14DDB32A4EDE"
     ],
     "FieldDef": [
       "rows=13 sha256=D432841F2B0D2AD9"
     ],
     "MemberRef": [
-      "rows=23 sha256=541A7E6EAF5971A8"
+      "rows=24 sha256=A4FBDE74F2DC0F3E"
     ],
     "MethodBodies": [
       "rows=14 sha256=63E619A588A35EA1"
@@ -2132,7 +2132,7 @@
       "rows=10 sha256=73914B37AB712B61"
     ],
     "TypeRef": [
-      "rows=6 sha256=AFB2A901A5A93092"
+      "rows=7 sha256=79AB3B360901A3D2"
     ]
   },
   "samples/NamedArguments.gs": {
@@ -2750,13 +2750,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=44 sha256=A3368603EBA5F79F"
+      "rows=45 sha256=723A210B092D3607"
     ],
     "FieldDef": [
       "rows=14 sha256=F6064DD17146AC07"
     ],
     "MemberRef": [
-      "rows=29 sha256=5834E58DF2B11A2C"
+      "rows=30 sha256=E7B686F7B38A5528"
     ],
     "MethodBodies": [
       "rows=30 sha256=B29C886D30A9029D"
@@ -2768,7 +2768,7 @@
       "rows=6 sha256=461C3B34D380C3A6"
     ],
     "TypeRef": [
-      "rows=19 sha256=21E3CD70BC8FA156"
+      "rows=20 sha256=27032AC93132F3B2"
     ]
   },
   "samples/PrivateInterfaceHelpers.gs": {
@@ -2942,7 +2942,7 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=25 sha256=4D4F5B0F92B09B9C"
+      "rows=29 sha256=8FCC5A9A574EF73A"
     ],
     "FieldDef": [
       "rows=9 sha256=CB004FA27ED39B6E"
@@ -3410,13 +3410,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=13 sha256=58E5962B9947AC56"
+      "rows=17 sha256=BADE00B62B00FA94"
     ],
     "FieldDef": [
       "rows=19 sha256=1E7F7F05459E5E99"
     ],
     "MemberRef": [
-      "rows=56 sha256=8B1843718C5E60FC"
+      "rows=57 sha256=E578943EF22B76EF"
     ],
     "MethodBodies": [
       "rows=21 sha256=77B390FDD58FA0C7"
@@ -3491,13 +3491,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=5 sha256=56AB8D00DF052EC0"
+      "rows=6 sha256=FBC9279D037DBFBA"
     ],
     "FieldDef": [
       "rows=3 sha256=FE9FA3171FE35EA1"
     ],
     "MemberRef": [
-      "rows=6 sha256=6C86847C3B2A976C"
+      "rows=7 sha256=D7E33DEB8D234574"
     ],
     "MethodBodies": [
       "rows=4 sha256=4E6CC9B7725A4738"
@@ -3509,7 +3509,7 @@
       "rows=2 sha256=9594732CC410F61B"
     ],
     "TypeRef": [
-      "rows=8 sha256=728A625CA1E462A2"
+      "rows=9 sha256=DF31EE64630364A1"
     ]
   },
   "samples/VariadicCarriers.gs": {
@@ -3573,13 +3573,13 @@
       "System.Console, 10.0.0.0, B03F5F7F11D50A3A, flags=0, culture=, hash="
     ],
     "CustomAttribute": [
-      "rows=18 sha256=77D61CB9FDD893F6"
+      "rows=19 sha256=46C1D202500FAFBE"
     ],
     "FieldDef": [
       "rows=12 sha256=532BE8678B82B1BE"
     ],
     "MemberRef": [
-      "rows=11 sha256=7801602EF878CEC6"
+      "rows=12 sha256=B98ECA1F387D77FD"
     ],
     "MethodBodies": [
       "rows=12 sha256=AF740C37CDF8ABA3"
@@ -3591,7 +3591,7 @@
       "rows=7 sha256=797902598B9B0D16"
     ],
     "TypeRef": [
-      "rows=11 sha256=9ECB89653C6CF70A"
+      "rows=12 sha256=4940DCC79BFFF489"
     ]
   },
   "samples/WebsiteBindings.gs": {

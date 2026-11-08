@@ -446,7 +446,7 @@ stderr:
         /// @returns The case data.
         func Cases() sequence[[]object] {
             // Gap 1: every compound form on a protected field of an imported base.
-            yield[]object{"compound-imported-base-field", `
+            yield []object{"compound-imported-base-field", `
 package P
 import System
 import System.Text.RegularExpressions
@@ -469,7 +469,7 @@ Console.WriteLine(Runner().Step())
             // Gap 1: same-compilation base, overridden property. The base
             // accessors must be called non-virtually for both halves of the
             // compound, or the override's x100 read shows up.
-            yield[]object{"compound-overridden-base-property", `
+            yield []object{"compound-overridden-base-property", `
 package P
 import System
 
@@ -503,7 +503,7 @@ Console.WriteLine(Derived().Go())
             // Gap 3: the generated Regex constructor validates its timeout through
             // the protected internal static Regex.ValidateMatchTimeout, qualified
             // and unqualified, and from a static member.
-            yield[]object{"protected-static-imported-regex", `
+            yield []object{"protected-static-imported-regex", `
 package P
 import System
 import System.Text.RegularExpressions
@@ -532,7 +532,7 @@ Console.WriteLine(Generated.Probe(TimeSpan.FromSeconds(2.0)))
 `, []string{"rejected", "valid"}}
             // Gap 3: same-compilation base. Unqualified inherited static methods,
             // and qualified protected static field and property compound writes.
-            yield[]object{"protected-static-source-base", `
+            yield []object{"protected-static-source-base", `
 package P
 import System
 
@@ -566,7 +566,7 @@ Console.WriteLine(Derived.GoStatic().ToString())
             // overrides, so a non-virtual call left in the closure method would
             // fail ILVerify (ThisMismatch / LdftnNonFinalVirtual); the forwarder
             // keeps the call on the class's own `this`.
-            yield[]object{"base-in-function-literal", `
+            yield []object{"base-in-function-literal", `
 package P
 import System
 import System.Threading.Tasks
@@ -610,7 +610,7 @@ Console.WriteLine(Derived().GoAsync().Result)
             // The forwarder pass now also forwards base auto-property accessors
             // in async and iterator bodies, where `this` is a hoisted state
             // machine field; before, they were left as non-virtual calls there.
-            yield[]object{"base-auto-property-in-async-body", `
+            yield []object{"base-auto-property-in-async-body", `
 package P
 import System
 import System.Threading.Tasks
@@ -638,7 +638,7 @@ Console.WriteLine(Derived().GoAsync(6).Result.ToString())
             // Generic, ref, out and in base calls, called directly. A generic base
             // method must be called through a MethodSpec; before, the call named
             // the open method (StackUnexpected, InvalidProgramException).
-            yield[]object{"generic-and-byref-base-calls-direct", `
+            yield []object{"generic-and-byref-base-calls-direct", `
 package P
 import System
 
@@ -691,7 +691,7 @@ Console.WriteLine(Derived().Go())
             // each goes through a forwarder: a generic forwarder for a generic
             // base method (constraints carried over), by-reference parameters kept
             // by-reference, and a ref-returning forwarder for a ref return.
-            yield[]object{"generic-and-byref-base-calls-forwarded", `
+            yield []object{"generic-and-byref-base-calls-forwarded", `
 package P
 import System
 import System.Threading.Tasks
@@ -763,7 +763,7 @@ Console.WriteLine(Derived().GoAsync().Result)
             // A forwarder for a method of a generic base class names the type
             // arguments the derived class passes to that base, not the base's
             // own type parameters. An imported base's out parameter stays out.
-            yield[]object{"forwarded-generic-base-class-and-imported-out", `
+            yield []object{"forwarded-generic-base-class-and-imported-out", `
 package P
 import System
 import System.Collections.Generic
@@ -818,7 +818,7 @@ Console.WriteLine(d.GoAsync().Result)
 `, []string{"base 3 baseG 4u", "base s", "True 5", "True 5"}}
             // `base.E += h` / `base.E -= h` on non-virtual source and imported
             // events, including from a function literal.
-            yield[]object{"base-event-subscription", `
+            yield []object{"base-event-subscription", `
 package P
 import System
 import System.ComponentModel
@@ -853,7 +853,7 @@ Part().Go()
 `, []string{"handler", "disposed"}}
             // `base.P ??= v` on source and imported properties, directly and in a
             // function literal.
-            yield[]object{"base-property-null-coalescing-assignment", `
+            yield []object{"base-property-null-coalescing-assignment", `
 package P
 import System
 
@@ -901,7 +901,7 @@ Console.WriteLine(Err().Go())
             // operator on the member's type runs (not GS0129, and not the binary
             // `+` when both are declared). A property is read once and a
             // value-type result is written back through the base setter.
-            yield[]object{"base-member-user-compound-operators", `
+            yield []object{"base-member-user-compound-operators", `
 package P
 import System
 
@@ -986,7 +986,7 @@ Console.WriteLine(Derived().Go())
             // the concrete bound (`Animal`), not a VAR the forwarder's class does
             // not have (UnsatisfiedMethodInst / VerificationException). The test
             // covers fully and partially closed bases, a call and a method group.
-            yield[]object{"forwarded-generic-method-with-dependent-bound", `
+            yield []object{"forwarded-generic-method-with-dependent-bound", `
 package P
 import System
 
@@ -1027,7 +1027,7 @@ Console.WriteLine(Zoo().Go())
             // The source-base counterpart: an enclosing method's type parameter
             // flows into a generic source base method and a generic base class's
             // method from function literals, as a call and a method group.
-            yield[]object{"forwarded-source-base-call-with-enclosing-method-type-parameter", `
+            yield []object{"forwarded-source-base-call-with-enclosing-method-type-parameter", `
 package P
 import System
 
@@ -1059,7 +1059,7 @@ Console.WriteLine(S[int32]().Go("s", 3))
             // allows any type as a generic-parameter constraint, and Roslyn emits
             // the same `<>n__0<U> where U : System.Int32` for the equivalent C#
             // lambda / async base call. Pinned so it stays verifiable and runs.
-            yield[]object{"forwarded-dependent-bound-closed-over-value-type", `
+            yield []object{"forwarded-dependent-bound-closed-over-value-type", `
 package P
 import System
 import System.Threading.Tasks
@@ -1089,7 +1089,7 @@ Console.WriteLine(Derived().GoAsync().Result)
             // method, a `() -> Task` group over a `Task<int32>` one). Each gets
             // its own forwarder; one shared forwarder handed one of them a value
             // of the wrong type (StackUnexpected, DelegateCtor).
-            yield[]object{"forwarder-per-observed-return-type", `
+            yield []object{"forwarder-per-observed-return-type", `
 package P
 import System
 import System.Threading.Tasks
@@ -1128,7 +1128,7 @@ Console.WriteLine(Derived().Go())
             // A constructor with managed-reference work moves into an
             // initialization plan before the forwarder pass runs; a base call in a
             // function literal there must still be forwarded.
-            yield[]object{"base-call-in-initialization-plan-constructor", `
+            yield []object{"base-call-in-initialization-plan-constructor", `
 package P
 import System
 
@@ -1152,7 +1152,7 @@ Console.WriteLine(Derived(3).Result)
             // An async base method converted to a delegate inside a function
             // literal: the forwarder returns the Task the delegate observes, not
             // the declared `void`/`int32` result.
-            yield[]object{"async-base-method-group-in-function-literal", `
+            yield []object{"async-base-method-group-in-function-literal", `
 package P
 import System
 import System.Threading.Tasks
@@ -1199,7 +1199,7 @@ Console.WriteLine(Derived().Go())
 `, []string{"base run", "7 e"}}
             // `base.E += h` / `-=` when the derived class declares a same-named
             // event: the subscription must reach the base event's accessors.
-            yield[]object{"base-event-shadowed-by-derived-event", `
+            yield []object{"base-event-shadowed-by-derived-event", `
 package P
 import System
 import System.ComponentModel
@@ -1241,7 +1241,7 @@ Comp().Go()
             // A field or property at a nearer base level hides a farther event of
             // the same name: `base.E += h` combines into the nearer delegate
             // member rather than subscribing to the farther event.
-            yield[]object{"nearer-value-member-hides-farther-base-event", `
+            yield []object{"nearer-value-member-hides-farther-base-event", `
 package P
 import System
 
@@ -1281,7 +1281,7 @@ Derived().Go()
             // emitted (Task, Task<T>, the sequence), not the G#-declared result.
             // A `void` forwarder for `async func Complete()` left the Task on the
             // stack (ILVerify ReturnVoid / StackUnderflow).
-            yield[]object{"forwarded-async-and-iterator-base-calls", `
+            yield []object{"forwarded-async-and-iterator-base-calls", `
 package P
 import System
 import System.Threading.Tasks
@@ -1335,7 +1335,7 @@ Console.WriteLine(t.Go().Result)
 `, []string{"base complete", "base complete", "e 4 7 7 3"}}
             // Issue #4331: postfix chains after a base member, read and write,
             // on source and imported bases, directly and in a function literal.
-            yield[]object{"base-member-postfix-chains", `
+            yield []object{"base-member-postfix-chains", `
 package P
 import System
 import System.Text
@@ -1394,7 +1394,7 @@ Console.WriteLine(Pattern().Go())
             // protected static Regex.ValidateMatchTimeout, and a RegexRunner
             // subclass that increments base.runtextpos and calls base.Crawlpos()
             // from a translated local function.
-            yield[]object{"regex-generated-shape", `
+            yield []object{"regex-generated-shape", `
 package P
 import System
 import System.Text.RegularExpressions
@@ -1430,7 +1430,7 @@ Console.WriteLine(GeneratedRunner().Scan(10))
             // completed (an implicit await around the instance call), so it was
             // never marked as a base call: it dispatched virtually, re-entered
             // the override and overflowed the stack.
-            yield[]object{"suspend-base-call", `
+            yield []object{"suspend-base-call", `
 package P
 import System
 
@@ -1456,7 +1456,7 @@ Console.WriteLine(run())
             // Issue #4392: A -> B -> C. C's `base` reaches B's implementation (not
             // A's, not C's own), from the suspend body itself and from a function
             // literal inside it; generic and void suspend methods too.
-            yield[]object{"suspend-base-call-three-levels", `
+            yield []object{"suspend-base-call-three-levels", `
 package P
 import System
 
@@ -1519,7 +1519,7 @@ run()
             // function literal, a `go` operand and an `async let` initializer (both
             // run in a goroutine closure), and a non-virtual base method that
             // inference colours suspending, which colours its base caller too.
-            yield[]object{"suspend-base-call-other-shapes", (`
+            yield []object{"suspend-base-call-other-shapes", (`
 package P
 import System
 import System.Threading.Tasks

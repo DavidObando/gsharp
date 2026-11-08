@@ -33,7 +33,7 @@ partial class CSharpToGSharpTranslator {
             switch member {
                 case field is FieldDeclarationSyntax {
                     for (m, s) in this.TranslateField(field, lift) {
-                        yield(m, s)
+                        yield (m, s)
                     }
                 }
                 case method is MethodDeclarationSyntax {
@@ -67,12 +67,12 @@ partial class CSharpToGSharpTranslator {
                         forceExtensionReceiver: preservedOwnedExtension
                     )
                     if methodMember != nil {
-                        yield(methodMember, methodIsStatic)
+                        yield (methodMember, methodIsStatic)
                     }
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
                         let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
                         if adapter != nil {
-                            yield(adapter, false)
+                            yield (adapter, false)
                         }
                     }
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
@@ -86,24 +86,24 @@ partial class CSharpToGSharpTranslator {
                             companionSymbol
                         )
                         if companion != nil {
-                            yield(companion, companionIsStatic)
+                            yield (companion, companionIsStatic)
                         }
                     }
                 }
                 case extensionBlock is ExtensionBlockDeclarationSyntax {
                     for (m, s) in this.TranslateExtensionBlock(extensionBlock, ownerKind) {
-                        yield(m, s)
+                        yield (m, s)
                     }
                 }
                 case op is OperatorDeclarationSyntax {
                     let (opMember, opIsStatic) = this.TranslateOperator(op)
                     if opMember != nil {
-                        yield(opMember, opIsStatic)
+                        yield (opMember, opIsStatic)
                     }
                 }
                 case eventField is EventFieldDeclarationSyntax {
                     for (m, s) in this.TranslateEventField(eventField) {
-                        yield(m, s)
+                        yield (m, s)
                     }
                 }
                 case explicitEvent is EventDeclarationSyntax {
@@ -112,7 +112,7 @@ partial class CSharpToGSharpTranslator {
                 case nestedDelegate is DelegateDeclarationSyntax {
                     let translatedDelegate GMember? = this.TranslateDelegateDeclaration(nestedDelegate)
                     if translatedDelegate != nil {
-                        yield(translatedDelegate, true)
+                        yield (translatedDelegate, true)
                     }
                 }
                 case property is PropertyDeclarationSyntax {
@@ -193,7 +193,7 @@ partial class CSharpToGSharpTranslator {
                             this.context,
                             property.Identifier.GetLocation()
                         )
-                        yield(
+                        yield (
                             FieldDeclaration(
                                 BindingKind.Let,
                                 this.EmittedName(propertySymbol, property.Identifier.ValueText),
@@ -211,8 +211,8 @@ partial class CSharpToGSharpTranslator {
                         out var staticBackingField,
                         out var staticProperty
                     ) {
-                        yield(staticBackingField!!, true)
-                        yield(staticProperty!!, true)
+                        yield (staticBackingField!!, true)
+                        yield (staticProperty!!, true)
                         break
                     }
                     let (propMember, propIsStatic, fieldKeywordBackingField) = this.TranslateProperty(
@@ -226,9 +226,9 @@ partial class CSharpToGSharpTranslator {
                         // property itself, mirroring a hand-written computed
                         // property with an explicit backing field (ADR-0051 §2).
                         // Static/instance-ness must match the property's own.
-                        yield(fieldKeywordBackingField, propIsStatic)
+                        yield (fieldKeywordBackingField, propIsStatic)
                     }
-                    yield(propMember!!, propIsStatic)
+                    yield (propMember!!, propIsStatic)
                 }
                 case indexer is IndexerDeclarationSyntax {
                     yield this.TranslateIndexer(indexer)
@@ -244,7 +244,7 @@ partial class CSharpToGSharpTranslator {
                     // re-emitted here as a synthesized parameterless `init() { ... }`.
                     if lift.DropConstructor && lift.Constructor == ctor {
                         if lift.ResidualInitStatements.Count > 0 {
-                            yield(
+                            yield (
                                 ConstructorDeclaration(
                                     List[Parameter](),
                                     BlockStatement(List[GStatement](lift.ResidualInitStatements))
@@ -256,13 +256,13 @@ partial class CSharpToGSharpTranslator {
                     }
                     let built GMember? = this.TranslateConstructor(ctor, propertyCtorInits)
                     if built != nil {
-                        yield(built, ctor.Modifiers.Any(SyntaxKind.StaticKeyword))
+                        yield (built, ctor.Modifiers.Any(SyntaxKind.StaticKeyword))
                     }
                 }
                 case destructor is DestructorDeclarationSyntax {
                     // A C# finalizer `~T()` maps to the G# `deinit { ... }` block
                     // (ADR-0068, reference types only).
-                    yield(
+                    yield (
                         DestructorDeclaration(
                             this.TranslateBody(destructor, "finalizer on '${destructor.Identifier.Text}'"),
                             this.MapAttributes(destructor.AttributeLists)
@@ -273,7 +273,7 @@ partial class CSharpToGSharpTranslator {
                 case nestedType is BaseTypeDeclarationSyntax {
                     let nested GMember? = this.Visit(nestedType)
                     if nested != nil {
-                        yield(nested, true)
+                        yield (nested, true)
                     }
                 }
                 case conversion is ConversionOperatorDeclarationSyntax {
@@ -469,9 +469,9 @@ partial class CSharpToGSharpTranslator {
                                     staticFieldKeywordBacking
                                 ) = this.TranslateProperty(property, propertyAttributes)
                                 if staticFieldKeywordBacking != nil {
-                                    yield(staticFieldKeywordBacking, staticPropIsStatic)
+                                    yield (staticFieldKeywordBacking, staticPropIsStatic)
                                 }
-                                yield(staticPropMember!!, staticPropIsStatic)
+                                yield (staticPropMember!!, staticPropIsStatic)
                                 break
                             }
                             if receiver == nil {
@@ -574,7 +574,7 @@ partial class CSharpToGSharpTranslator {
                     isOpen: this.IsMemberEmittedOpen(symbol, symbol?.IsOverride == true),
                     isOverride: symbol?.IsOverride == true
                 )
-                yield(declaration, symbol != nil && symbol.IsStatic)
+                yield (declaration, symbol != nil && symbol.IsStatic)
             }
         }
 
@@ -815,7 +815,7 @@ partial class CSharpToGSharpTranslator {
                         this.context,
                         declarator.GetLocation()
                     )
-                    yield(
+                    yield (
                         FieldDeclaration(
                             BindingKind.FixedBuffer,
                             this.EmittedName(symbol, declarator.Identifier.ValueText),
@@ -943,7 +943,7 @@ partial class CSharpToGSharpTranslator {
                     visibility: MapVisibility(symbol, this.context, field),
                     attributes: this.MapAttributes(field.AttributeLists)
                 )
-                yield(declaration, symbol != nil && symbol.IsStatic)
+                yield (declaration, symbol != nil && symbol.IsStatic)
             }
         }
 

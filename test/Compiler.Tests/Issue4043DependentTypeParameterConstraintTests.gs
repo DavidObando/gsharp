@@ -389,7 +389,7 @@ Console.WriteLine("x")`
         func SatisfyingShapes() sequence[[]object] {
             // The issue's own repro shape: a generic METHOD whose second parameter
             // is bounded by its first.
-            yield[]object{"a-generic-method-whose-parameter-bounds-its-sibling", `package P
+            yield []object{"a-generic-method-whose-parameter-bounds-its-sibling", `package P
 import System
 
 open class Base {
@@ -421,7 +421,7 @@ Console.WriteLine(Fixture.Dependent[Base, Base]())`, []string{"dependent", "depe
             // parameter carries an ordinary class bound and its sibling carries
             // none. Two of the three bodies are empty in the original, which is why
             // the gate needs only declaration binding and emission.
-            yield[]object{"the-self-migration-gates-own-constraint-fixture", `package P
+            yield []object{"the-self-migration-gates-own-constraint-fixture", `package P
 import System
 
 open class CrossContextBase {
@@ -448,7 +448,7 @@ ConstraintFixture.Dependent[CrossContextBase, CrossContextDerived]()
 ConstraintFixture.Mixed[string, CrossContextDerived]()
 Console.WriteLine(ConstraintFixture.Identity[string]("fixture"))`, []string{"fixture"}}
             // A generic TYPE whose second parameter is bounded by its first.
-            yield[]object{"a-generic-class-whose-parameter-bounds-its-sibling", `package P
+            yield []object{"a-generic-class-whose-parameter-bounds-its-sibling", `package P
 import System
 
 open class Base {
@@ -468,7 +468,7 @@ Console.WriteLine(p.Tag)`, []string{"pair"}}
             // A generic METHOD parameter bounded by the ENCLOSING type's parameter.
             // The interesting metadata case: an MVAR-owned GenericParam whose
             // constraint is a VAR.
-            yield[]object{"a-method-parameter-bounded-by-the-enclosing-types-parameter", `package P
+            yield []object{"a-method-parameter-bounded-by-the-enclosing-types-parameter", `package P
 import System
 
 open class Base {
@@ -492,7 +492,7 @@ Console.WriteLine(Box[Base].Accept[Derived](Derived()))`, []string{"accepted"}}
             // `<TDerived, TBase> where TDerived : TBase`, so a single pass that
             // checked each argument as it bound it would ask about an argument it
             // had not read yet.
-            yield[]object{"a-bound-that-names-a-later-parameter", `package P
+            yield []object{"a-bound-that-names-a-later-parameter", `package P
 import System
 
 open class Base {
@@ -511,7 +511,7 @@ let b = Backwards[Derived, Base]{Tag: "backwards"}
 Console.WriteLine(b.Tag)`, []string{"backwards"}}
             // An INTERFACE at the bounding position: the relation is
             // implementation, not derivation.
-            yield[]object{"a-bound-satisfied-by-implementing-an-interface", `package P
+            yield []object{"a-bound-satisfied-by-implementing-an-interface", `package P
 import System
 
 interface IShape {
@@ -538,7 +538,7 @@ Console.WriteLine(Fixture.Dependent[IShape, Square](Square()))`, []string{"iface
             // binding, so the reflective interface check returned false without
             // ever reading its declared interfaces and reported a GS0152 on a
             // legal program.
-            yield[]object{"review-a-source-class-implementing-the-bounding-interface", `package P
+            yield []object{"review-a-source-class-implementing-the-bounding-interface", `package P
 import System
 
 class D : IDisposable {
@@ -558,7 +558,7 @@ Console.WriteLine(Fixture.Take[IDisposable, D]())`, []string{"took"}}
             // REVIEW FINDING (#4068): the same shape one level removed — the source
             // class reaches the bound interface through a G#-declared interface
             // rather than by implementing it itself.
-            yield[]object{"review-a-source-class-reaching-the-bound-through-a-declared-interface", `package P
+            yield []object{"review-a-source-class-reaching-the-bound-through-a-declared-interface", `package P
 import System
 
 interface ICloser : IDisposable {
@@ -582,7 +582,7 @@ Console.WriteLine(Fixture.Take[IDisposable, C]())`, []string{"took"}}
             // relation has no closed answer and the instantiation is accepted. A
             // check that rejected here would break every generic that passes its
             // own parameters on.
-            yield[]object{"a-forwarded-open-instantiation-is-accepted", `package P
+            yield []object{"a-forwarded-open-instantiation-is-accepted", `package P
 import System
 
 open class Base {
@@ -608,7 +608,7 @@ class Fixture {
 Console.WriteLine(Fixture.Outer[Base, Derived]())`, []string{"inner"}}
             // Issue #4091: a type parameter's dependent bound can itself carry the
             // class constraint required by a constructed G# generic.
-            yield[]object{"a-class-constraint-reached-through-a-dependent-bound", `package P
+            yield []object{"a-class-constraint-reached-through-a-dependent-bound", `package P
 import System
 
 open class SchemeOptions {
@@ -640,7 +640,7 @@ Console.WriteLine(f[SchemeOptions, SchemeOptions]())`, []string{"c"}}
                 )
             )
             let longChainArguments = string.Join(", ", Enumerable.Repeat("SchemeOptions", chainLength))
-            yield[]object{"a-class-constraint-after-65-dependent-bound-links", (`package P
+            yield []object{"a-class-constraint-after-65-dependent-bound-links", (`package P
 import System
 
 open class SchemeOptions {
@@ -660,7 +660,7 @@ Console.WriteLine(f[` + "$longChainArguments" + `]())`), []string{"long"}}
             // type, so a VALUE type is a legal argument when the bounding parameter
             // was given one. This is the shape that would have broken had the bound
             // been stuffed into `ClassConstraint`.
-            yield[]object{"a-value-type-at-a-dependently-bounded-parameter", `package P
+            yield []object{"a-value-type-at-a-dependently-bounded-parameter", `package P
 import System
 
 class Fixture {
@@ -674,7 +674,7 @@ class Fixture {
 Console.WriteLine(Fixture.Dependent[int32, int32](7))`, []string{"value"}}
             // `object` at the bounding position is the universal bound — every
             // argument converts, value types included.
-            yield[]object{"object-at-the-bounding-position-admits-anything", `package P
+            yield []object{"object-at-the-bounding-position-admits-anything", `package P
 import System
 
 class Fixture {
@@ -694,7 +694,7 @@ Console.WriteLine(Fixture.Dependent[object, string]("s"))`, []string{"universal"
         /// parameter — never a `TypeLoadException` at run time.
         /// @returns Case name, G# source, expected diagnostic id.
         func ConstraintViolations() sequence[[]object] {
-            yield[]object{"an-unrelated-class-at-a-dependently-bounded-method-parameter", `package P
+            yield []object{"an-unrelated-class-at-a-dependently-bounded-method-parameter", `package P
 import System
 
 open class Base {
@@ -714,7 +714,7 @@ class Fixture {
 }
 
 Console.WriteLine(Fixture.Dependent[Base, Unrelated]())`, "GS0152"}
-            yield[]object{"the-relation-the-wrong-way-round", `package P
+            yield []object{"the-relation-the-wrong-way-round", `package P
 import System
 
 open class Base {
@@ -734,7 +734,7 @@ class Fixture {
 }
 
 Console.WriteLine(Fixture.Dependent[Derived, Base]())`, "GS0152"}
-            yield[]object{"an-unrelated-class-at-a-dependently-bounded-type-parameter", `package P
+            yield []object{"an-unrelated-class-at-a-dependently-bounded-type-parameter", `package P
 import System
 
 open class Base {
@@ -751,7 +751,7 @@ class Pair[TBase, TDerived TBase] {
 
 let p = Pair[Base, Unrelated]{Tag: "pair"}
 Console.WriteLine(p.Tag)`, "GS0152"}
-            yield[]object{"an-unrelated-class-at-a-parameter-bounded-by-the-enclosing-type", `package P
+            yield []object{"an-unrelated-class-at-a-parameter-bounded-by-the-enclosing-type", `package P
 import System
 
 open class Base {
@@ -771,7 +771,7 @@ class Box[T] {
 }
 
 Console.WriteLine(Box[Base].Accept[Unrelated](Unrelated()))`, "GS0152"}
-            yield[]object{"a-type-that-does-not-implement-the-bounding-interface", `package P
+            yield []object{"a-type-that-does-not-implement-the-bounding-interface", `package P
 import System
 
 interface IShape {
@@ -797,21 +797,21 @@ Console.WriteLine(Fixture.Dependent[IShape, NotAShape]())`, "GS0152"}
         /// once the whole list is resolved.
         /// @returns Case name, G# source.
         func CircularConstraints() sequence[[]object] {
-            yield[]object{"a-self-referential-bound", `package P
+            yield []object{"a-self-referential-bound", `package P
 import System
 
 class Selfy[T T] {
 }
 
 Console.WriteLine("x")`}
-            yield[]object{"a-two-parameter-cycle", `package P
+            yield []object{"a-two-parameter-cycle", `package P
 import System
 
 class Cyc[A B, B A] {
 }
 
 Console.WriteLine("x")`}
-            yield[]object{"a-three-parameter-cycle", `package P
+            yield []object{"a-three-parameter-cycle", `package P
 import System
 
 class Cyc3[A B, B C, C A] {

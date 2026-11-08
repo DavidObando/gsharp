@@ -93,7 +93,7 @@ open class Issue5710DataStructEqualityNarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"data_struct_equals_removes_global_fact", `import System
+            yield []object{"data_struct_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -116,7 +116,7 @@ func Run(left Pair, right Pair) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "GS0158@17:22", "reject", ""}
-            yield[]object{"data_struct_not_equals_removes_global_fact", `import System
+            yield []object{"data_struct_not_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -140,7 +140,7 @@ func Run(left Pair, right Pair) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "GS0158@19:18", "reject", ""}
-            yield[]object{"data_struct_relational_equals_pattern_removes_global_fact", `import System
+            yield []object{"data_struct_relational_equals_pattern_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -163,7 +163,7 @@ func Run(left Pair, right Pair) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "GS0158@17:22", "reject", ""}
-            yield[]object{"data_struct_relational_not_equals_pattern_removes_global_fact", `import System
+            yield []object{"data_struct_relational_not_equals_pattern_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -187,7 +187,7 @@ func Run(left Pair, right Pair) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "GS0158@19:18", "reject", ""}
-            yield[]object{"nested_data_struct_equals_removes_global_fact", `import System
+            yield []object{"nested_data_struct_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -211,7 +211,7 @@ func Run(left Outer, right Outer) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Outer(Pair(1, Part{N: 1})), Outer(Pair(1, Part{N: 2}))))`, "GS0158@18:22", "reject", ""}
-            yield[]object{"inline_struct_equals_removes_global_fact", `import System
+            yield []object{"inline_struct_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -234,7 +234,7 @@ func Run(left Wrap, right Wrap) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Wrap(Part{N: 1}), Wrap(Part{N: 2})))`, "GS0158@17:22", "reject", ""}
-            yield[]object{"comparable_type_parameter_equals_removes_global_fact", `import System
+            yield []object{"comparable_type_parameter_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -257,7 +257,7 @@ func Same[T comparable](left T, right T) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Same(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "GS0158@17:22", "reject", ""}
-            yield[]object{"nullable_data_struct_equals_removes_closure_assigned_fact", `import System
+            yield []object{"nullable_data_struct_equals_removes_closure_assigned_fact", `import System
 class C {
     var Value int32 = 4
 }
@@ -283,7 +283,7 @@ func Run() int32 {
     return 0
 }
 Console.WriteLine(Run())`, "GS0158@21:26", "reject", ""}
-            yield[]object{"loop_header_and_body_data_struct_equals_removes_global_fact", `import System
+            yield []object{"loop_header_and_body_data_struct_equals_removes_global_fact", `import System
 class C {
     var Value int32 = 1
 }
@@ -316,7 +316,7 @@ func InBody(left Pair, right Pair, flag bool) int32 {
 }
 var g C? = C{}
 Console.WriteLine(InHeader(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})) + InBody(Pair(1, Part{N: 1}), Pair(1, Part{N: 2}), true))`, "GS0158@16:18 GS0158@25:26", "reject", ""}
-            yield[]object{"control_primitive_field_equality_keeps_global_fact", `import System
+            yield []object{"control_primitive_field_equality_keeps_global_fact", `import System
 class C {
     var Value int32 = 9
 }
@@ -334,7 +334,7 @@ func Run(left Pair, right Pair) int32 {
 }
 var g C? = C{}
 Console.WriteLine(Run(Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "", "run", "9"}
-            yield[]object{"control_ref_parameter_kept_across_data_struct_equality_A3", `import System
+            yield []object{"control_ref_parameter_kept_across_data_struct_equality_A3", `import System
 class C {
     var Value int32 = 7
 }
@@ -354,7 +354,7 @@ func Run(ref c C?, left Pair, right Pair) int32 {
 }
 var item C? = C{}
 Console.WriteLine(Run(ref item, Pair(1, Part{N: 1}), Pair(1, Part{N: 2})))`, "", "run", "7"}
-            yield[]object{"control_nullable_data_struct_nil_equality_keeps_global_fact", `import System
+            yield []object{"control_nullable_data_struct_nil_equality_keeps_global_fact", `import System
 class C {
     var Value int32 = 5
 }
