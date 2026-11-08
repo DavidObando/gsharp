@@ -34,6 +34,11 @@ partial class CSharpToGSharpTranslator {
             return drained
         }
 
+        func GetManagedReferenceArrayProjectionMetrics()(CacheCount int32, QueryCount int32) -> (
+            this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall.Count,
+            this.state.ManagedReferenceArrayNullable.ProjectedMethodQueryCount
+        )
+
         override func VisitEnumDeclaration(node Microsoft.CodeAnalysis.CSharp.Syntax.EnumDeclarationSyntax) GMember {
             let symbol ISymbol? = this.context.GetDeclaredSymbol(node)
             let cases = List[EnumCase]()
@@ -894,11 +899,11 @@ partial class CSharpToGSharpTranslator {
                 }
                 case d is float64 {
                     return this.MapSpecialFloatConstant(d, isDouble: true, fallbackNode?.GetLocation()) ??
-                        LiteralExpression.Float(d.ToString(CultureInfo.InvariantCulture))
+                        LiteralExpression.Float(this.ToFloatLiteralText(d))
                 }
                 case f is float32 {
                     return this.MapSpecialFloatConstant(f, isDouble: false, fallbackNode?.GetLocation()) ??
-                        LiteralExpression.Float(f.ToString(CultureInfo.InvariantCulture))
+                        LiteralExpression.Float(this.ToFloatLiteralText(f, isSingle: true))
                 }
                 case m is decimal {
                     return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture))

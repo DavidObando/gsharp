@@ -103,7 +103,14 @@ partial class CSharpToGSharpTranslator {
                 .GetConstantValue(invocation) is {HasValue: true, Value: string name} {
                 return LiteralExpression.String(name)
             }
-            this.TryGetManagedReferenceArrayProjectedMethod(invocation, out _)
+            if this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol invokedMethod &&
+                this
+                .MethodMayRequireManagedReferenceArrayProjection(invokedMethod) {
+                this.TryGetManagedReferenceArrayProjectedMethod(invocation, out _)
+            }
             var target GExpression?
             var typeArguments IReadOnlyList[GTypeReference]? = nil
             // Issue #2351: an extension-method call site (reduced instance
@@ -1059,7 +1066,7 @@ partial class CSharpToGSharpTranslator {
                 return receiver
             }
             if this.state.PendingSpillPrologue != nil {
-                let temp = this.NewSpillName()
+                let temp = this.AllocateCapturedReceiverName(receiverSyntax)
                 this.state.PendingSpillPrologue!!.Add(
                     LocalDeclarationStatement(BindingKind.Let, temp, initializer: receiver)
                 )
@@ -1068,6 +1075,10 @@ partial class CSharpToGSharpTranslator {
             this.context.ReportUnsupported(receiverSyntax, unsupportedMessage)
             return receiver
         }
+
+        private func AllocateCapturedReceiverName(
+            receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) string -> this.AllocateScopedSynthesizedLocalName("receiver", receiverSyntax)
 
         private func IsStableMethodGroupReceiver(
             receiverSyntax Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
@@ -1693,7 +1704,7 @@ partial class CSharpToGSharpTranslator {
                 return operationParameter
             }
             let parameter IParameterSymbol? = this.GetArgumentParameter(argument, method, operationParameter)
-            if parameter != nil &&
+            if parameter != nil && this.MethodMayRequireManagedReferenceArrayProjection(method) &&
                 argument
                 .Parent
                 ?.Parent is Microsoft
@@ -2965,9 +2976,16 @@ partial class CSharpToGSharpTranslator {
             initializer InitializerExpressionSyntax?
         ) GExpression? {
             var type = type
-            if typeSymbol is INamedTypeSymbol systemObject && systemObject.SpecialType == SpecialType.System_Object {
+            if typeSymbol is INamedTypeSymbol primitive &&
+                type is NamedTypeReference &&
+                (
+                primitive.SpecialType == SpecialType.System_Object ||
+                    primitive.SpecialType == SpecialType.System_String ||
+                    primitive.SpecialType == SpecialType.System_IntPtr ||
+                    primitive.SpecialType == SpecialType.System_UIntPtr
+            ) {
                 type = NamedTypeReference(
-                    this.typeMapper.GetOrCreateImportedTypeAlias(systemObject, this.context, creationNode.GetLocation())
+                    this.typeMapper.GetOrCreateImportedTypeAlias(primitive, this.context, creationNode.GetLocation())
                 )
             }
             let hasCtorArgs = arguments.Count > 0
@@ -4553,6 +4571,7 @@ partial class CSharpToGSharpTranslator {
             call Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             out projected IMethodSymbol?
         ) bool {
+            this.state.ManagedReferenceArrayNullable.ProjectedMethodQueryCount++
             if this
                 .state
                 .ManagedReferenceArrayNullable
@@ -4561,15 +4580,11 @@ partial class CSharpToGSharpTranslator {
                 return projected != nil
             }
             projected = nil
-            if this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method {
-                this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall.Add(call, nil)
-                return false
-            }
-            if !CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
-                method,
-                this.context.Compilation
-            ) {
-                this.state.ManagedReferenceArrayNullable.ManagedReferenceArrayProjectedMethodByCall.Add(call, nil)
+            if this
+                .context
+                .GetSymbolInfo(call)
+                .Symbol is not IMethodSymbol method ||
+                !this.MethodMayRequireManagedReferenceArrayProjection(method) {
                 return false
             }
             // Cache an in-progress sentinel before inspecting arguments and
@@ -6386,11 +6401,8 @@ partial class CSharpToGSharpTranslator {
                                 .ContainingType
                                 ?.IsGenericType == true
                         ) &&
-                            CSharpToGSharpTranslator
-                            .MethodMayRequireManagedReferenceArrayProjection(
-                            projectedCallMethod,
-                            this.context.Compilation
-                        ) {
+                            this
+                            .MethodMayRequireManagedReferenceArrayProjection(projectedCallMethod) {
                             this.RecordManagedReferenceArrayProjectionParent(projectedCall, projectedValue)
                             continue
                         }
@@ -11835,9 +11847,8 @@ partial class CSharpToGSharpTranslator {
             /// (`new object()`, `new string(' ', n)`, target-typed `new()`)
             /// must spell a callable CLR type name instead — otherwise gsc reports
             /// GS0130 ("Function 'string' doesn't exist"). Most aliases use a
-            /// qualified name; `object`/`string` use imported
-            /// `Object`/`String` because namespace-qualified constructor
-            /// expressions are not bindable.
+            /// qualified name. Object creation maps `object` and `string` through
+            /// collision-safe import aliases before reaching this fallback.
             /// Non-keyword type names are returned unchanged.
             private func ConstructionCalleeName(typeName string) string -> switch typeName {
                 case "object": "Object"
@@ -12057,6 +12068,25 @@ partial class CSharpToGSharpTranslator {
                 }
             }
         }
+
+        private func MethodMayRequireManagedReferenceArrayProjection(method IMethodSymbol?) bool {
+            if method == nil {
+                return false
+            }
+            if this
+                .state
+                .ManagedReferenceArrayNullable
+                .MethodProjectionEligibility
+                .TryGetValue(method, out var eligible) {
+                return eligible
+            }
+            let computed = CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                method,
+                this.context.Compilation
+            )
+            this.state.ManagedReferenceArrayNullable.MethodProjectionEligibility[method] = computed
+            return computed
+        }
     }
 
     shared {
@@ -12064,20 +12094,20 @@ partial class CSharpToGSharpTranslator {
             method IMethodSymbol?,
             compilation Compilation
         ) bool {
-            return method != nil &&
-                (
-                TypeContainsRecognizedManagedReferenceConsumer(method.ContainingType, compilation) ||
-                    TypeContainsRecognizedManagedReferenceConsumer(method.ReceiverType, compilation) ||
-                    TypeContainsRecognizedManagedReferenceConsumer(method.ReturnType, compilation) ||
-                    method
-                    .Parameters
-                    .Any(
-                    (parameter IParameterSymbol) -> TypeContainsRecognizedManagedReferenceConsumer(
-                        parameter.Type,
-                        compilation
-                    )
-                )
-            )
+            if method == nil {
+                return false
+            }
+            if TypeContainsRecognizedManagedReferenceConsumer(method.ContainingType, compilation) ||
+                TypeContainsRecognizedManagedReferenceConsumer(method.ReceiverType, compilation) ||
+                TypeContainsRecognizedManagedReferenceConsumer(method.ReturnType, compilation) {
+                return true
+            }
+            for parameter in method.Parameters {
+                if TypeContainsRecognizedManagedReferenceConsumer(parameter.Type, compilation) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func TypeContainsRecognizedManagedReferenceConsumer(type ITypeSymbol?, compilation Compilation) bool {

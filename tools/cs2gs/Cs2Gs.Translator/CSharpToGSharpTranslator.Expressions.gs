@@ -366,8 +366,13 @@ partial class CSharpToGSharpTranslator {
                     // (ilverify StackUnexpected). Honor the bound `ConvertedType`
                     // and emit a float literal so the value matches its target
                     // type (ADR-0115 §B.12).
-                    if this.IsConvertedToFloatingPoint(literal) {
-                        return LiteralExpression.Float(this.ToFloatLiteralText(literal.Token.Value))
+                    if this.IsConvertedToFloatingPoint(literal, out var convertedKind) {
+                        return LiteralExpression.Float(
+                            this.ToFloatLiteralText(
+                                literal.Token.Value,
+                                isSingle: convertedKind == SpecialType.System_Single
+                            )
+                        )
                     }
                     return LiteralExpression.Int(this.NormalizeIntegerLiteralText(literal))
                 }
@@ -1010,45 +1015,34 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsConvertedToFloatingPoint(
-            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax
+            literal Microsoft.CodeAnalysis.CSharp.Syntax.LiteralExpressionSyntax,
+            out convertedKind SpecialType
         ) bool {
             let info = this.context.GetTypeInfo(literal)
-            let original ITypeSymbol? = info.Type
-            let converted ITypeSymbol? = info.ConvertedType
-            if converted == nil || SymbolEqualityComparer.Default.Equals(original, converted) {
-                return false
-            }
-            let originalIsIntegral = original != nil &&
-                (
-                original.SpecialType == SpecialType.System_SByte ||
-                    original.SpecialType == SpecialType.System_Byte ||
-                    original.SpecialType == SpecialType.System_Int16 ||
-                    original.SpecialType == SpecialType.System_UInt16 ||
-                    original.SpecialType == SpecialType.System_Int32 ||
-                    original.SpecialType == SpecialType.System_UInt32 ||
-                    original.SpecialType == SpecialType.System_Int64 ||
-                    original.SpecialType == SpecialType.System_UInt64
-            )
-            let convertedIsFloat = converted.SpecialType == SpecialType.System_Single ||
-                converted.SpecialType == SpecialType.System_Double
-            return originalIsIntegral && convertedIsFloat
+            convertedKind = SpecialType.None
+            return TryGetNumericKind(info.Type, out var originalKind) &&
+                IsIntegralNumericKind(originalKind) &&
+                TryGetNumericKind(info.ConvertedType, out convertedKind) &&
+                (convertedKind == SpecialType.System_Single || convertedKind == SpecialType.System_Double)
         }
 
-        private func ToFloatLiteralText(value object?) string {
-            // The token's *spelling* can be hex (`0xFF`), binary (`0b1010`),
-            // digit-separated (`1_000`), or suffixed (`30L`); appending ".0" to
-            // that raw text either produces an invalid G# float (`0xFF.0`,
-            // `30L.0`) or silently misses cases that already contain a stray
-            // 'e'/'E' hex digit (`0xAE`). Deriving the text from the token's
-            // already-parsed *value* instead sidesteps spelling entirely: format
-            // the numeric value as decimal and ensure it carries a fractional
-            // part so the G# lexer classifies it as float64.
-            let number = Convert.ToDouble(value, CultureInfo.InvariantCulture)
-            let text = number.ToString("R", CultureInfo.InvariantCulture)
-            return if text.IndexOfAny([]char{'.', 'e', 'E'}) >= 0 {
+        private func ToFloatLiteralText(value object?, isSingle bool = false) string {
+            // The token spelling can be hexadecimal, binary, digit-separated, or suffixed.
+            // Format its parsed value at the destination precision to avoid double rounding.
+            let text = if isSingle {
+                Convert.ToSingle(value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture)
+            } else {
+                Convert.ToDouble(value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture)
+            }
+            let literal = if text.IndexOfAny([]char{'.', 'e', 'E'}) >= 0 {
                 text
             } else {
                 text + ".0"
+            }
+            return literal + if isSingle {
+                "f"
+            } else {
+                ""
             }
         }
 
@@ -6627,20 +6621,8 @@ partial class CSharpToGSharpTranslator {
             return paths
         }
 
-        private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string {
-            let stem = "tupleValue"
-            var candidate = stem
-            for var suffix = 2;
-                !this
-                .context
-                .SemanticModel
-                .LookupSymbols(node.SpanStart, name: candidate)
-                .IsEmpty ||
-                !this.TryClaimSynthesizedLocalName(candidate, node); suffix++ {
-                candidate = "${stem}_$suffix"
-            }
-            return candidate
-        }
+        private func FreshTupleValueName(node Microsoft.CodeAnalysis.SyntaxNode) string ->
+        this.AllocateScopedSynthesizedLocalName("tupleValue", node)
 
         private func FormatTupleProjection(path List[int32]) string {
             let sb = StringBuilder()

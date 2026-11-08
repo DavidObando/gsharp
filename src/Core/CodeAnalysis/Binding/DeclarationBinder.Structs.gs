@@ -4094,6 +4094,9 @@ internal partial class DeclarationBinder {
                 return (constField, BoundErrorExpression(initializer), initializer.Location)
             }
             fieldType = boundInit.Type
+        }
+        fieldType = ConstantExpressionEvaluator.GetDeclarationType(boundInit, fieldType)
+        if fieldType != constField.Type {
             constField.SetType(fieldType)
             if $scope.TryLookupSymbol(constField.Name) is ImplicitStaticFieldVariableSymbol implicitVar &&
                 object.ReferenceEquals(implicitVar.Field, constField) {

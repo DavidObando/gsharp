@@ -4051,13 +4051,35 @@ def main(argv: list[str]) -> int:
     if args.verify_package_content:
         package_name, expected_hash, work_name = args.verify_package_content
         work = real(Path(work_name))
+        repo_root = Path(__file__).resolve().parents[1]
         try:
             work.mkdir(mode=0o700)
-            actual_hash = base64.b64encode(hashlib.sha512(
-                real(Path(package_name)).read_bytes()).digest()).decode()
+            helper_project = repo_root / "build" / "selfhost" / "PackageContentHash.gsproj"
+            helper_out = work / "bin"
+            helper_obj = work / "obj"
+            helper_dll = helper_out / "Adr0198.PackageContentHash.dll"
+            build_cmd = [
+                "dotnet", "build", str(helper_project),
+                "--configuration", "Release", "--nologo", "-v:q",
+                f"-p:BaseIntermediateOutputPath={helper_obj}{os.sep}",
+                f"-p:MSBuildProjectExtensionsPath={helper_obj}{os.sep}",
+                "-o", str(helper_out),
+            ]
+            built = subprocess.run(
+                build_cmd, cwd=repo_root, text=True, capture_output=True)
+            if built.returncode != 0 or not helper_dll.is_file():
+                raise CertificationError(
+                    f"trusted package-content-hash build failed: {built.stdout}{built.stderr}")
+            ran = subprocess.run(
+                ["dotnet", str(helper_dll), str(real(Path(package_name)))],
+                cwd=repo_root, text=True, capture_output=True)
+            actual_hash = ran.stdout.strip()
+            if ran.returncode != 0 or not actual_hash:
+                raise CertificationError(
+                    f"cannot compute the NuGet content hash for {package_name}")
             if not hmac.compare_digest(actual_hash, expected_hash):
                 raise CertificationError("package content hash differs from the lock")
-        except (CertificationError, OSError) as error:
+        except (CertificationError, OSError, subprocess.SubprocessError) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0

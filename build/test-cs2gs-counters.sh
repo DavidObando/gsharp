@@ -276,6 +276,8 @@ grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
 grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
 grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
 grep -Fq '| `__cs2gs_` | 0 | 0 | never emitted; reserved alias prefix was not implemented (#4299) |' <<< "$report"
+grep -Fq '| `__pattern` | 0 | 0 | retired by #4303 (mutable switch-pattern capture temporary) |' <<< "$report"
+grep -Fq '| `__scrutinee` | 0 | 0 | retired by #4305 (binder-less loop-condition pattern temporary) |' <<< "$report"
 grep -Fq '| `__yielded` | 0 | 0 | retired by #4859 (iterator yield-value temporary; a needed hoist is a readable item local) |' <<< "$report"
 
 # Issue #4302: the retired family remains counted, and any code occurrence

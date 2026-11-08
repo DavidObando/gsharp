@@ -1306,17 +1306,18 @@ partial class SemanticModel {
                 return symbol
             }
             case field is FieldInfo {
+                let isConst = ConstantExpressionEvaluator.TryGetClrFieldConstantValue(field, out var constantValue)
                 let symbol = FieldSymbol(
                     field.Name,
                     MemberLookup.GetClrFieldTypeSymbol(owner, field),
                     ClrAccessibility(field.Attributes),
                     isReadOnly: field.IsInitOnly,
                     isStatic: field.IsStatic,
-                    isConst: field.IsLiteral
+                    isConst: isConst
                 )
                 symbol.ImportedMember = field
-                if field.IsLiteral {
-                    symbol.SetConstantValue(field.GetRawConstantValue())
+                if isConst {
+                    symbol.SetConstantValue(constantValue)
                 }
                 symbol.AnchorContainingType(declaringType)
                 return symbol

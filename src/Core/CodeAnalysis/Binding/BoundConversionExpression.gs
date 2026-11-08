@@ -48,4 +48,10 @@ class BoundConversionExpression : BoundExpression {
     prop IsChecked bool {
         get;
     }
+
+    /// Gets or sets whether the pattern binder added this conversion to the input type.
+    internal prop IsPatternInputConversion bool {
+        get;
+        set;
+    }
 }

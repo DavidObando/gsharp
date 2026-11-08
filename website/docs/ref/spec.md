@@ -1257,7 +1257,16 @@ Constructor-owned field initialization follows these rules. Plain struct literal
 * A **`const`** field is a **compile-time constant**: it is implicitly static and
   read-only, its initializer must fold to a constant expression, and it is
   emitted as a CLR literal field (a `Constant` metadata row) usable in constant
-  contexts and from other assemblies. A `const` field with no initializer reports
+  contexts and from other assemblies. Decimal constants instead use static
+  read-only storage and `DecimalConstantAttribute`; imported decimal constants
+  fold from that attribute without running the declaring type's initializer.
+  Reference-type fields and locals can hold the constant `nil`, including a
+  reference-type `default`. Only `string` permits a non-null reference constant.
+  A null constant cannot establish a non-null reference type, even when its type
+  clause omits `?`.
+  Named local function literals retain their existing `const` binding form.
+  These function bindings do not represent CLR field constants.
+  A `const` field with no initializer reports
   `GS0375`; a `const` field whose initializer is not a constant expression reports
   `GS0376`.
 * Fresh **data struct** construction uses an ordinary instance constructor.

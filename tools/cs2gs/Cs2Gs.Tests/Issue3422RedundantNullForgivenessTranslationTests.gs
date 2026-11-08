@@ -211,8 +211,9 @@ public static class C
 
     public static int Run() => Bind("abc");
 }`)
-        Assert.Contains("let __spill0 = value!!", printed, StringComparison.Ordinal)
-        Assert.Contains("(delta int32) -> __spill0.Measure(delta)", printed, StringComparison.Ordinal)
+        Assert.Contains("let receiver = value!!", printed, StringComparison.Ordinal)
+        Assert.Contains("(delta int32) -> receiver.Measure(delta)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal)
         Assert.DoesNotContain("Ext.Measure", printed, StringComparison.Ordinal)
         let result = EmittedOracle.Evaluate(printed + Environment.NewLine + "C.Run()")
         Assert.DoesNotContain(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.IsError)

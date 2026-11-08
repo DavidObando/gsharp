@@ -98,7 +98,7 @@ partial class TestParityStage : IMigrationStage {
                 .ToString(CultureInfo.InvariantCulture) + " case(s) (#4633)."
             return this.NameParityFailure(context, "TEST-NAME-PARITY", none)
         }
-        let result = TestNameParity.Compare(oracle.Tests, actual)
+        let result = TestNameParity.Compare(oracle, actual)
         let verdict = (context.Options.TestNameParityBaseline ?? TestNameParityBaseline.Empty).Evaluate(
             context.App.Id,
             result

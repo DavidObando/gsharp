@@ -8375,6 +8375,10 @@ internal partial class StatementBinder {
                 // GS0362 because the kind dispatch has no target type.
                 variableType = type
                 convertedInitializer = BoundDefaultExpression(defaultInit, variableType)
+                if syntax.Keyword?.Kind == SyntaxKind.ConstKeyword {
+                    variableType = ConstantExpressionEvaluator.GetDeclarationType(convertedInitializer, variableType)
+                    convertedInitializer = BoundDefaultExpression(defaultInit, variableType)
+                }
             } else if type != nil &&
                 (
                 syntax.Initializer is IfExpressionSyntax ||
@@ -8473,6 +8477,9 @@ internal partial class StatementBinder {
                     variableType = TypeSymbol.Error
                 } else {
                     variableType = TupleTypeSymbol.ResolveNilElements(variableType)
+                    if syntax.Keyword?.Kind == SyntaxKind.ConstKeyword {
+                        variableType = ConstantExpressionEvaluator.GetDeclarationType(initializer, variableType)
+                    }
                     convertedInitializer = conversions.BindConversion(
                         syntax.Initializer!!.Location,
                         initializer,
@@ -8520,6 +8527,17 @@ internal partial class StatementBinder {
                         functionLiteral
                     )
                 }
+            }
+        }
+        if syntax.Keyword?.Kind == SyntaxKind.ConstKeyword && convertedInitializer is {} constantInitializer {
+            let constantType = ConstantExpressionEvaluator.GetDeclarationType(constantInitializer, variableType)
+            if constantType != variableType {
+                variableType = constantType
+                convertedInitializer = conversions.BindConversion(
+                    syntax.Initializer?.Location ?? syntax.Identifier.Location,
+                    constantInitializer,
+                    variableType
+                )
             }
         }
         let variable VariableSymbol? = preDeclaredSelf ??
@@ -8683,7 +8701,13 @@ internal partial class StatementBinder {
                     constLocal.IsConst = true
                     constLocal.ConstantValue = constValue
                 }
-            } else if declaredVariable is GlobalVariableSymbol &&
+            } else if (
+                declaredVariable is GlobalVariableSymbol ||
+                    (
+                    !LambdaBinder.TryGetFunctionLiteral(convertedInitializer, out _) &&
+                        Conversion.IsReferenceLikeTarget(declaredVariable.Type.StripToBareShape())
+                )
+            ) &&
                 !(convertedInitializer is BoundErrorExpression) &&
                 !ConstantExpressionEvaluator
                 .ContainsCheckedOutOfRangeFloatingConstantConversion(convertedInitializer) {
@@ -11371,9 +11395,25 @@ internal partial class StatementBinder {
         }
 
         private func IsNullOperand(operand BoundExpression) bool {
-            let value = BoundConstantPattern.UnwrapInputConversion(operand.Type, operand)
+            var value = operand
+            while value is BoundConversionExpression conversion {
+                if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {
+                    break
+                }
+                value = conversion.Expression
+            }
             return value.Type == TypeSymbol.Null ||
                 value is BoundLiteralExpression{Value: nil} ||
+                (
+                value is BoundFieldAccessExpression field && ConstantExpressionEvaluator.IsNullConstantSymbol(
+                    field.Field
+                )
+            ) ||
+                (
+                value is BoundVariableExpression variable && ConstantExpressionEvaluator.IsNullConstantSymbol(
+                    variable.Variable
+                )
+            ) ||
                 (value is BoundDefaultExpression && IsNullDefault(value.Type))
         }
 
@@ -11416,12 +11456,10 @@ internal partial class StatementBinder {
         /// of a reference or nullable type) never reaches it. A nullable value input holds its underlying type,
         /// whose `Equals` runs no user code only for a primitive, an enum or `decimal`.
         internal func ConstantPatternRunsUserCode(node BoundConstantPattern) bool {
-            let value = BoundConstantPattern.UnwrapInputConversion(node.Type, node.Value)
             return ConstantPatternTestRunsUserCode(
                 BoundConstantPattern.ClassifyTest(node.Type, node.Value),
                 node.Type,
-                value is BoundLiteralExpression{Value: nil} ||
-                    (value is BoundDefaultExpression && IsNullDefault(value.Type))
+                IsNullOperand(node.Value)
             )
         }
 

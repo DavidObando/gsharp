@@ -41,7 +41,12 @@ internal shared class ConstantExpressionEvaluator {
             return TryBuild(expression, out var built) &&
                 TryConvert(built!!, targetType, isChecked: false, out var converted) &&
                 TryNormalizeFinalPayload(converted!!, targetType, out var payload) &&
-                TryInvoke(payload!!, out value)
+                TryInvoke(payload!!, out value) &&
+                (
+                value == nil || targetType.StripToBareShape() == TypeSymbol.String || !Conversion.IsReferenceLikeTarget(
+                    targetType.StripToBareShape()
+                )
+            )
         } catch (ex Exception) when IsFoldFailure(ex) {
             return false
         }
@@ -58,6 +63,72 @@ internal shared class ConstantExpressionEvaluator {
         } catch (ex Exception) when IsFoldFailure(ex) {
             return false
         }
+    }
+
+    /// A null reference constant cannot establish a non-null declaration type.
+    internal func GetDeclarationType(expression BoundExpression, type TypeSymbol) TypeSymbol {
+        let contextual = if expression is BoundDefaultExpression{Type: var defaultType} &&
+            defaultType == TypeSymbol.Error {
+            cast[BoundExpression](BoundDefaultExpression(expression.Syntax, type))
+        } else {
+            expression
+        }
+        return if type.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
+            contextual is not BoundLiteralExpression{Value: not nil} &&
+            TryFold(contextual, type, out var value) &&
+            value == nil {
+            type.ForNullConstant()
+        } else {
+            type
+        }
+    }
+
+    /// Returns whether the symbol has a known null constant payload.
+    internal func IsNullConstantSymbol(symbol Symbol?) bool -> switch symbol {
+        case FieldSymbol{IsConst: true, HasConstantValue: true, ConstantValue: nil}: true
+        case LocalVariableSymbol{IsConst: true, ConstantValue: nil}: true
+        case GlobalVariableSymbol{IsConst: true, ConstantValue: nil}: true
+        case ImplicitStaticFieldVariableSymbol field: IsNullConstantSymbol(field.Field)
+        default: false
+    }
+
+    /// Reads CLR constant metadata without running a field initializer.
+    /// @param field The imported field.
+    /// @param value The constant value on success.
+    /// @returns `true` for literal fields and decimal constant attributes.
+    internal func TryGetClrFieldConstantValue(field FieldInfo, out value object?) bool {
+        value = nil
+        if field.IsLiteral {
+            value = field.GetRawConstantValue()
+            return true
+        }
+        if !field.IsStatic || !field.IsInitOnly || !field.FieldType.IsSameAs(typeof(decimal)) {
+            return false
+        }
+        for attribute in field.GetCustomAttributesData() {
+            if attribute
+                .AttributeType
+                .FullName != "System.Runtime.CompilerServices.DecimalConstantAttribute" ||
+                attribute
+                .ConstructorArguments
+                .Count != 5 {
+                continue
+            }
+            let args = attribute.ConstructorArguments
+            let scale = Convert.ToByte(args[0].Value, CultureInfo.InvariantCulture)
+            if scale > 28 {
+                return false
+            }
+            value = Decimal(
+                unchecked(int32(Convert.ToInt64(args[4].Value, CultureInfo.InvariantCulture))),
+                unchecked(int32(Convert.ToInt64(args[3].Value, CultureInfo.InvariantCulture))),
+                unchecked(int32(Convert.ToInt64(args[2].Value, CultureInfo.InvariantCulture))),
+                Convert.ToByte(args[1].Value, CultureInfo.InvariantCulture) != 0,
+                scale
+            )
+            return true
+        }
+        return false
     }
 
     /// Finds a native-width integer anywhere in the supported constant tree.
@@ -91,6 +162,15 @@ internal shared class ConstantExpressionEvaluator {
         switch expression {
             case literal is BoundLiteralExpression {
                 return TryBuildConstant(literal.Value, literal.Type, out built)
+            }
+            case defaultValue is BoundDefaultExpression when Conversion.IsReferenceLikeTarget(
+                defaultValue.Type.StripToBareShape()
+            ) {
+                return TryBuildConstant(nil, defaultValue.Type, out built)
+            }
+            case BoundClrPropertyAccessExpression{Receiver: nil, Member: FieldInfo field} fieldAccess when
+            TryGetClrFieldConstantValue(field, out var constantValue) {
+                return TryBuildConstant(constantValue, fieldAccess.Type, out built)
             }
             case conversion is BoundConversionExpression {
                 return TryBuild(conversion.Expression, out var operand) &&
@@ -367,6 +447,13 @@ internal shared class ConstantExpressionEvaluator {
 
     private func TryBuildConstant(value object?, type TypeSymbol, @NotNullWhen(true) out built Expression?) bool {
         built = nil
+        if value == nil && type.StripToBareShape() is not TypeParameterSymbol && Conversion.IsReferenceLikeTarget(
+            type.StripToBareShape()
+        ) &&
+            type.StripToBareShape() != TypeSymbol.String {
+            built = Expression.Constant(nil, typeof(object))
+            return true
+        }
         if !TryGetRuntimeType(type, out var runtimeType) {
             return false
         }
@@ -392,6 +479,15 @@ internal shared class ConstantExpressionEvaluator {
         @NotNullWhen(true) out converted Expression?
     ) bool {
         converted = nil
+        let bareTarget = targetType.StripToBareShape()
+        if bareTarget is not TypeParameterSymbol && bareTarget != TypeSymbol.String && Conversion.IsReferenceLikeTarget(
+            bareTarget
+        ) &&
+            TryInvoke(source, out var referenceValue) &&
+            referenceValue == nil {
+            converted = Expression.Constant(nil, typeof(object))
+            return true
+        }
         if targetType is NullableTypeSymbol nullable && nullable.UnderlyingType.ClrType is {IsValueType: true} {
             return false
         }

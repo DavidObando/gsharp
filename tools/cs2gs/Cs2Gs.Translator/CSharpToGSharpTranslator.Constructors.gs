@@ -2716,11 +2716,65 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func AllocateSynthesizedLocalName(stem string, site Microsoft.CodeAnalysis.SyntaxNode) string {
-            var candidate = stem
-            for var suffix = 2; !this.TryClaimSynthesizedLocalName(candidate, site); suffix++ {
-                candidate = "${stem}_$suffix"
+            let owner INamedTypeSymbol? = this
+                .state
+                .CurrentEmittedAggregate ??
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(site.SpanStart)
+                ?.ContainingType
+            let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
+            var suffix = allocator.GetNextLocalSuffix(owner, stem)
+            while true {
+                let candidate = if suffix <= 1 {
+                    stem
+                } else {
+                    "${stem}_$suffix"
+                }
+                suffix++
+                if !this.TryClaimSynthesizedLocalName(candidate, site) {
+                    continue
+                }
+                allocator.SetNextLocalSuffix(owner, stem, suffix)
+                return candidate
             }
-            return candidate
+        }
+
+        private func AllocateScopedSynthesizedLocalName(
+            stem string,
+            site Microsoft.CodeAnalysis.SyntaxNode,
+            extraCollision((string) -> bool)? = nil
+        ) string {
+            let owner INamedTypeSymbol? = this
+                .state
+                .CurrentEmittedAggregate ??
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(site.SpanStart)
+                ?.ContainingType
+            let allocator = LiftedLocalFunctionNameAllocator.For(this.context.Compilation)
+            var suffix = allocator.GetNextLocalSuffix(owner, stem)
+            while true {
+                let candidate = if suffix <= 1 {
+                    stem
+                } else {
+                    "${stem}_$suffix"
+                }
+                suffix++
+                if (extraCollision != nil && extraCollision(candidate)) ||
+                    !this
+                    .context
+                    .SemanticModel
+                    .LookupSymbols(site.SpanStart, name: candidate)
+                    .IsEmpty ||
+                    !this.TryClaimSynthesizedLocalName(candidate, site) {
+                    continue
+                }
+                allocator.SetNextLocalSuffix(owner, stem, suffix)
+                return candidate
+            }
         }
 
         // Issue #4302: the names a lifted helper emitted into `aggregate`
