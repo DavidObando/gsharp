@@ -426,6 +426,10 @@ internal shared class ObliviousNullabilityAnalyzer {
     ]()
 
     private class RefArraySourceIndex {
+        let Outputs Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ISymbol]]
+        ](SymbolEqualityComparer.Default)
         let Sources Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] = Dictionary[
             ISymbol,
             Dictionary[int32, List[ISymbol]]
@@ -441,6 +445,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         var Size int32 = 1
         let Sources List[ISymbol] = List[ISymbol]()
         let Writes List[ExpressionSyntax] = List[ExpressionSyntax]()
+        let Outputs List[ISymbol] = List[ISymbol]()
 
         func Root() RefArraySourceSlot {
             var root = this
@@ -4546,6 +4551,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 ConnectRefArraySources(slots, target!!, reference.Expression, model)
             }
             for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
+                    argument
+                ) is IArgumentOperation{Parameter: {} output} {
+                    let (owner, depth) = RefArrayStorage(argument.Expression, model)
+                    if owner != nil && depth > 0 {
+                        RefArraySourceSlotFor(slots, owner, depth).Root().Outputs.Add(Canonical(output)!!)
+                    }
+                }
                 if argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && model.GetOperation(
                     argument
                 ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
@@ -4574,14 +4587,19 @@ internal shared class ObliviousNullabilityAnalyzer {
         for owner in slots {
             let positions = Dictionary[int32, List[ISymbol]]()
             let writes = Dictionary[int32, List[ExpressionSyntax]]()
+            let outputs = Dictionary[int32, List[ISymbol]]()
             for slot in owner.Value {
                 let sources = slot.Value.Root().Sources
                 let values = slot.Value.Root().Writes
+                let writtenOutputs = slot.Value.Root().Outputs
                 if sources.Count > 0 {
                     positions.Add(slot.Key, sources)
                 }
                 if values.Count > 0 {
                     writes.Add(slot.Key, values)
+                }
+                if writtenOutputs.Count > 0 {
+                    outputs.Add(slot.Key, writtenOutputs)
                 }
             }
             if positions.Count > 0 {
@@ -4589,6 +4607,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             if writes.Count > 0 {
                 index.Writes.Add(owner.Key, writes)
+            }
+            if outputs.Count > 0 {
+                index.Outputs.Add(owner.Key, outputs)
             }
         }
         return index
@@ -4658,6 +4679,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 smaller.Sources.Clear()
                 larger.Writes.AddRange(smaller.Writes)
                 smaller.Writes.Clear()
+                larger.Outputs.AddRange(smaller.Outputs)
+                smaller.Outputs.Clear()
             }
             if type is not IArrayTypeSymbol array {
                 break
@@ -7738,21 +7761,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 .TryGetValue(depth, out var writes) {
                 let visited = visitedArrayWrites ?? HashSet[List[ExpressionSyntax]]()
                 if visited.Add(writes) {
-                    try {
-                        for written in writes {
-                            CollectScalarValueFlow(
-                                target,
-                                written,
-                                model.Compilation.GetSemanticModel(written.SyntaxTree),
-                                tainted,
-                                edges,
-                                scalarTupleEdges,
-                                $scope,
-                                visitedArrayWrites: visited
-                            )
-                        }
-                    } finally {
-                        visited.Remove(writes)
+                    for written in writes {
+                        CollectScalarValueFlow(
+                            target,
+                            written,
+                            model.Compilation.GetSemanticModel(written.SyntaxTree),
+                            tainted,
+                            edges,
+                            scalarTupleEdges,
+                            $scope,
+                            visitedArrayWrites: visited
+                        )
                     }
                 }
             }
@@ -7914,6 +7933,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                     positions.TryGetValue(depth, out var sources) {
                     for source in sources {
                         yield source
+                    }
+                }
+                if owner != nil &&
+                    RefArraySources
+                    .GetValue(model.Compilation, BuildRefArraySources)
+                    .Outputs
+                    .TryGetValue(owner, out var outputPositions) &&
+                    outputPositions.TryGetValue(depth, out var outputs) {
+                    for output in outputs {
+                        yield output
                     }
                 }
             }

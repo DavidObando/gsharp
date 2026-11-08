@@ -52,8 +52,31 @@ public static class Obj {
     @InlineData("typed-alias")
     @InlineData("array-write")
     @InlineData("array-write-cycle")
+    @InlineData("out-element")
+    @InlineData("nullable-ref-argument")
     func ConnectedStorageReads_PreserveCSharpOutput(shape string) {
         let source = switch shape {
+            case "out-element": `public static class Obj {
+    private static void Clear(out string value) { value = null; }
+    private static string Read() {
+        var xs = new[] { "x" };
+        ref string[] ys = ref xs;
+        Clear(out ys[0]);
+        return xs[0];
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-ref-argument": `public static class Obj {
+#nullable enable
+    private static void Keep(ref string value) { }
+    public static string Run() {
+        string? text = "x";
+#nullable disable
+        Keep(ref text);
+        ref string alias = ref text;
+        return alias ?? "fallback";
+    }
+}`
             case "array-write": `public static class Obj {
     private static string Read() {
         var xs = new[] { "x" };
@@ -114,7 +137,15 @@ public static class Obj {
     public static string Run() => Read() ?? "null";
 }`
         }
-        AssertParity(source, Translate(source), "null")
+        AssertParity(
+            source,
+            Translate(source),
+            if shape == "nullable-ref-argument" {
+                "x"
+            } else {
+                "null"
+            }
+        )
     }
 
     @Fact
@@ -1034,10 +1065,7 @@ public static class Constraint {
                 context.Unload()
             }
             Assert.Equal(expected, oracle)
-            let root = GsharpTestProjectRunner.FindRepoRootAbove(AppContext.BaseDirectory)
-            Assert.NotNull(root)
-            let compiler = Path.Combine(root!!, "out", "bin", "Release", "Compiler", "gsc.dll")
-            Assert.True(File.Exists(compiler), "Build gsc before running this test.")
+            let compiler = FindCompiler()
             let directory = Path.Combine(AppContext.BaseDirectory, "issue4726", Guid.NewGuid().ToString("N"))
             Directory.CreateDirectory(directory)
             try {
@@ -1067,6 +1095,7 @@ public static class Constraint {
                 RedirectStandardError = true,
                 UseShellExecute = false
             }
+
             for argument in arguments {
                 start.ArgumentList.Add(argument)
             }
@@ -1079,6 +1108,18 @@ public static class Constraint {
                 throw TimeoutException("The compiler or translated program did not finish.")
             }
             return (process.ExitCode, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult())
+        }
+
+        private func FindCompiler() string {
+            var directory DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while directory != nil {
+                let compiler = Path.Combine(directory.FullName, "Compiler", "gsc.dll")
+                if File.Exists(compiler) {
+                    return compiler
+                }
+                directory = directory.Parent
+            }
+            throw FileNotFoundException("Build gsc before running runtime parity tests.")
         }
     }
 }

@@ -2481,6 +2481,24 @@ partial class CSharpToGSharpTranslator {
                     if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
                         argument
                     ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                        let storageType = ObliviousNullabilityAnalyzer.SymbolValueType(
+                            model.GetSymbolInfo(argument.Expression).Symbol
+                        ) ??
+                            model
+                            .GetTypeInfo(argument.Expression).Type
+                        if storageType?.IsReferenceType == true &&
+                            storageType?.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated &&
+                            parameter
+                            .Type
+                            .NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .NotAnnotated {
+                            continue
+                        }
                         this.ConnectRefStorage(this.GetRefStorageSlot(parameter, 0), argument.Expression, model)
                     }
                 }
