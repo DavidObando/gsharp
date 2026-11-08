@@ -183,7 +183,7 @@ open class ProjectState {
                 .ToString() == text &&
                 (
                 if rawBytes == nil {
-                    !existing.Diagnostics.Any((d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0628")
+                    !HasRawByteEncodingDiagnostic(existing)
                 } else {
                     existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes!!)
                 }
@@ -641,6 +641,10 @@ open class ProjectState {
             }
             return true
         }
+
+        private func HasRawByteEncodingDiagnostic(tree SyntaxTree) bool -> tree.Diagnostics.Any(
+            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0628" || d.Id == "GS0632"
+        )
 
         private func NormalizePath(path string) string {
             return ServerPathIdentity.Normalize(path)
