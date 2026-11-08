@@ -39,7 +39,7 @@ class Issue4779NullableReflectionArgumentsSelfMigrationTests {
         var document LoadedDocument? = nil
         var printed = string.Empty
         if !isGSharpTree {
-            project = await CSharpProjectLoader.LoadProjectAsync(testsProjectPath)
+            project = await SelfMigratedCompilerSource.LoadProjectAsync(testsProjectPath)
             Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
             document = Assert.Single(
                 project.Documents,
@@ -70,7 +70,20 @@ class Issue4779NullableReflectionArgumentsSelfMigrationTests {
             let source = Path.Combine(directory, "Issue4770NullableClassifierCoalescingTests.gs")
             let guardPath = Path.Combine(directory, "Issue4779NullableReflectionArgumentsSelfMigrationTests.gs")
             let helperPath = Path.Combine(directory, "CompilerHelper.gs")
-            let helperPaths = List[string]{helperPath}
+            let sourceLoaderHelperPath = Path.Combine(directory, "SelfMigratedCompilerSourceHelper.gs")
+            File.WriteAllText(sourceLoaderHelperPath, `package Cs2Gs.Tests
+
+import Cs2Gs.Translator.Loading
+import System.Threading.Tasks
+
+internal shared class SelfMigratedCompilerSource {
+    internal async func LoadProjectAsync(projectPath string) LoadedCSharpProject {
+        let projects = await CSharpProjectLoader.LoadProjectWithReferencesAsync(projectPath)
+        return projects[0]
+    }
+}
+`)
+            let helperPaths = List[string]{helperPath, sourceLoaderHelperPath}
             let image = Path.Combine(directory, "Issue4779.Translated.dll")
             let nativeProduct = typeof(Issue4770NullableClassifierCoalescingTests).Assembly.Location
             let native = Path.Combine(directory, AssemblyName.GetAssemblyName(nativeProduct).Name + ".dll")
@@ -219,7 +232,7 @@ public class LocalFunctionHoistTranslationTests
                     GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(helperUnit, helperContext))
                 )
                 File.WriteAllText(Path.ChangeExtension(helperPath, ".cs"), helperSource)
-                let pipeline = await CSharpProjectLoader.LoadProjectAsync(
+                let pipeline = await SelfMigratedCompilerSource.LoadProjectAsync(
                     Path.Combine(root, "tools", "cs2gs", "Cs2Gs.Pipeline", "Cs2Gs.Pipeline.csproj")
                 )
                 Assert.True(pipeline.BoundWithoutErrors, string.Join(Environment.NewLine, pipeline.ErrorDiagnostics))
