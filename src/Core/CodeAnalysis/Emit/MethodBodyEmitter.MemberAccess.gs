@@ -1625,10 +1625,10 @@ internal partial class MethodBodyEmitter {
                 this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
                 return
             }
-            if receiver is not BoundVariableExpression && ExpressionBinder.IsLvalue(receiver) &&
-                this
-                .outer
-                .IsAddressableReceiverStorage(receiver, this.CanLoadVariableAddress) {
+            if receiver is not BoundVariableExpression && this.outer.IsAddressableReceiverStorage(
+                receiver,
+                this.CanLoadVariableAddress
+            ) {
                 this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
                 return
             }

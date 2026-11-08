@@ -75,6 +75,26 @@ run()`
         Assert.Equal(Lines("17", "17", "17", "17"), CompileAndRun(source))
     }
 
+    @Theory
+    @InlineData("pair.Item1")
+    @InlineData("pair.Item2.Item1")
+    func BlockWrappedTupleBufferDecay_PreservesLocalStorage(element string) {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    b.Name[0] = int8(17)
+    var pair = (b, (b, 0))
+    var evaluations = 0
+    let p *int8 = ({ evaluations += 1
+        ELEMENT }).Name
+    p[0] = int8(41)
+    Console.WriteLine(int32(p[0]))
+    Console.WriteLine(int32(ELEMENT.Name[0]))
+    Console.WriteLine(evaluations)
+}
+run()`.Replace("ELEMENT", element, StringComparison.Ordinal)
+        Assert.Equal(Lines("41", "41", "1"), CompileAndRun(source))
+    }
+
     @Fact
     func CapturedBufferPins_PreserveStorageAcrossCollections() {
         let source = BoneInfoPrelude + `unsafe func run() {
