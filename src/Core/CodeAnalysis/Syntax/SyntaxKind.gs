@@ -289,5 +289,6 @@ enum SyntaxKind {
     IndexedCollectionElement,
     MemberCollectionElement,
     ByteStringToken,
-    Utf8StringToken
+    Utf8StringToken,
+    YieldKeyword
 }

@@ -1039,7 +1039,7 @@ Console.WriteLine("${a} ${b} ${c} ${d} ${e}")`
         func SourceCallForms() sequence[[]object] {
             // The issue's own shape, plus base., lambda, field, readonly field,
             // array element, static, and an implicit int32 -> int64 conversion.
-            yield[]object{"instance-base-lambda-static", `package P
+            yield []object{"instance-base-lambda-static", `package P
 import System
 
 open class Base {
@@ -1080,7 +1080,7 @@ class C : Base {
 Console.WriteLine(C().Go())`, []string{"109 10 105 140 141 108 6 4 12 109 102"}}
             // Free functions (formerly GS0242), a generic `in T`, and a named
             // delegate invoke (formerly GS0242).
-            yield[]object{"function-generic-delegate", `package P
+            yield []object{"function-generic-delegate", `package P
 import System
 
 func Top(in x int32) int32 -> x + 1
@@ -1101,7 +1101,7 @@ Console.WriteLine(callback(4) + naturalIn(local) + naturalIn(in local))`, []stri
             // extension; a struct passing `this` and its own readonly field; a
             // user indexer with `in` parameters (#4421); and a call inside an
             // async function.
-            yield[]object{"constructor-extension-struct-async", `package P
+            yield []object{"constructor-extension-struct-async", `package P
 import System
 import System.Threading.Tasks
 
@@ -1173,7 +1173,7 @@ Console.WriteLine(idx[in i] + idx[2] + idx[i, 3])`, []string{"3", "3", "5", "21"
             // `out` parameter and a `ref`/`ref readonly` alias local pass their
             // existing address (the slot's own `T&`, never the address of it).
             // The explicit `Inner(in x)` beside the implicit one is the control.
-            yield[]object{"forward-existing-reference", `package P
+            yield []object{"forward-existing-reference", `package P
 import System
 
 func Inner(in x int32) int32 -> x + 1
@@ -1213,7 +1213,7 @@ Console.WriteLine(WithConst())`, []string{"22", "22", "11", "5", "9", "4"}}
             // method group through a convenience-init chain, a typed lambda through
             // a generic method's function-literal adapter, an open type parameter
             // passed through a generic method, and an untyped `default`.
-            yield[]object{"lambda-group-generic-default", `package P
+            yield []object{"lambda-group-generic-default", `package P
 import System
 
 func Top(in x int32) int32 -> x + 1
@@ -1247,7 +1247,7 @@ Console.WriteLine(k.M(default))`, []string{"8", "15", "24", "12", "9", "6", "1",
             // function-literal adapter, an untyped lambda at a non-generic `in`
             // delegate parameter, and an open type parameter passed through; plus
             // the same lambda shapes on instance and extension calls.
-            yield[]object{"shared-static-lambdas", `package P
+            yield []object{"shared-static-lambdas", `package P
 import System
 
 class S {
@@ -1280,7 +1280,7 @@ Console.WriteLine(S.Pass(10))`, []string{"2", "6", "12", "8", "25", "9", "10"}}
             // constructor; the temp takes the slot type, not `FormattableString`),
             // a reordered named `nil`, and an untyped lambda through a named
             // delegate's `in` function parameter.
-            yield[]object{"formattable-nil-delegate", `package P
+            yield []object{"formattable-nil-delegate", `package P
 import System
 
 func F(in x IFormattable) string -> x.ToString(nil, nil)
@@ -1305,7 +1305,7 @@ Console.WriteLine(FN(x: "n=${n}", b: 1))`, []string{"n=5", "k=5", "nil2", "21", 
             // Named arguments keep lexical evaluation order when an omitted-`in`
             // rvalue is reordered into its parameter slot (free function, instance
             // method, constructor); a side-effect-free lvalue stays in its slot.
-            yield[]object{"named-argument-order", `package P
+            yield []object{"named-argument-order", `package P
 import System
 
 class Holder {
@@ -1377,18 +1377,18 @@ Console.WriteLine(l7.Text)`, []string{
         /// Gets argument shapes that must still be rejected, with the expected diagnostic.
         func RejectedArguments() sequence[[]object] {
             // No implicit conversion: the ordinary by-value diagnostic, on every path.
-            yield[]object{"member-no-conversion", `class C {
+            yield []object{"member-no-conversion", `class C {
     func In(in x int32) int32 -> x
     func Go() int32 -> this.In("s")
 }`, "GS0154"}
-            yield[]object{"function-no-conversion", "func Top(in x int32) int32 -> x\nlet r = Top(\"s\")", "GS0154"}
-            yield[]object{"constructor-no-conversion", `class C {
+            yield []object{"function-no-conversion", "func Top(in x int32) int32 -> x\nlet r = Top(\"s\")", "GS0154"}
+            yield []object{"constructor-no-conversion", `class C {
     init(in x int32) { }
 }
 let c = C("s")`, "GS0154"}
             // A `ref` parameter still requires the modifier; before the fix the
             // member path emitted the value unverifiably instead.
-            yield[]object{"member-ref-without-modifier", `class C {
+            yield []object{"member-ref-without-modifier", `class C {
     func R(ref x int32) { x = x + 1 }
     func Go() {
         var v = 1
@@ -1399,13 +1399,13 @@ let c = C("s")`, "GS0154"}
             // check: an open type parameter passed through a generic instance,
             // `shared` or extension method, and a function literal adapted for a
             // generic `ref` delegate parameter.
-            yield[]object{"generic-instance-ref-without-modifier", `class C {
+            yield []object{"generic-instance-ref-without-modifier", `class C {
     func R[T](ref x T) { }
 }
 func G[U](c C, u U) {
     c.R(u)
 }`, "GS0235"}
-            yield[]object{"generic-shared-ref-without-modifier", `class C {
+            yield []object{"generic-shared-ref-without-modifier", `class C {
     shared {
         func R[T](ref x T) { }
     }
@@ -1413,14 +1413,14 @@ func G[U](c C, u U) {
 func G[U](u U) {
     C.R(u)
 }`, "GS0235"}
-            yield[]object{"generic-extension-out-without-modifier", `struct Q {
+            yield []object{"generic-extension-out-without-modifier", `struct Q {
     var X int32
 }
 func (q Q) R[T](out x T) { x = default }
 func G[U](q Q, u U) {
     q.R(u)
 }`, "GS0235"}
-            yield[]object{"generic-function-literal-ref-without-modifier", `class C {
+            yield []object{"generic-function-literal-ref-without-modifier", `class C {
     func F[T](ref f (T) -> T, v T) T -> f(v)
 }
 let r = C().F((x int32) -> x + 1, 2)`, "GS0235"}

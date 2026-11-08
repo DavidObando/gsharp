@@ -95,9 +95,9 @@ ref struct S {
 }`
 
         func Closures() sequence[[]object] {
-            yield[]object{"host runtime"}
+            yield []object{"host runtime"}
             for pack in TargetingPackDirectories() {
-                yield[]object{pack}
+                yield []object{pack}
             }
         }
 

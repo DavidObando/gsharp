@@ -692,7 +692,7 @@ Run` + suffix + "()\n"
             for surface in surfaces {
                 for insideFunction in[]bool{false, true} {
                     for driver in drivers {
-                        yield[]object{surface, insideFunction, driver}
+                        yield []object{surface, insideFunction, driver}
                     }
                 }
             }

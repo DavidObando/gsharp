@@ -468,7 +468,7 @@ public static class PairFactory
         /// @returns Case name, G# source, expected stdout lines.
         func BindingLiterals() sequence[[]object] {
             // THE ISSUE'S OWN REPRO. GS0157 on the parent.
-            yield[]object{"the-issues-repro-a-literal-over-a-same-compilation-type-argument", `package P
+            yield []object{"the-issues-repro-a-literal-over-a-same-compilation-type-argument", `package P
 import System
 import HelperLib2
 
@@ -481,7 +481,7 @@ Console.WriteLine(lit.Tag)`, []string{"z"}}
             // Expected asks for — and the reified runtime type is asserted, so
             // "it printed the right answer" is not the whole claim. `Handler<object>`
             // would print `HelperLib2.Handler`1[System.Object]`.
-            yield[]object{"the-literal-and-the-constructor-spellings-reify-the-same-closed-type", `package P
+            yield []object{"the-literal-and-the-constructor-spellings-reify-the-same-closed-type", `package P
 import System
 import HelperLib2
 
@@ -503,7 +503,7 @@ Console.WriteLine(lit.GetType().ToString())`, []string{
             // A TYPE PARAMETER as the argument. The constructor path admits one, so
             // the literal must too — and #4037's forwarding rule is what makes the
             // FORWARDED spelling the legal one.
-            yield[]object{"a-literal-over-a-forwarded-type-parameter", `package P
+            yield []object{"a-literal-over-a-forwarded-type-parameter", `package P
 import System
 import HelperLib2
 
@@ -519,7 +519,7 @@ Console.WriteLine(viaParam[MyOptions]())`, []string{"p"}}
             // A SAME-COMPILATION class at an UNCONSTRAINED imported generic — the
             // commonest shape, and the one that would have shown any regression in
             // ordinary code. GS0157 on the parent too.
-            yield[]object{"a-literal-of-an-unconstrained-imported-generic-over-a-same-compilation-class", `package P
+            yield []object{"a-literal-of-an-unconstrained-imported-generic-over-a-same-compilation-class", `package P
 import System
 import HelperLib2
 
@@ -534,7 +534,7 @@ Console.WriteLine(b.Tag)
 Console.WriteLine(b.GetType().ToString())`, []string{"u", "HelperLib2.Box`1[P.Thing]"}}
             // MUST NOT CHANGE: the IMPORTED type argument, which bound before this
             // change and is the spelling Issue4032's green row uses.
-            yield[]object{"control-a-literal-over-an-imported-type-argument-still-binds", `package P
+            yield []object{"control-a-literal-over-an-imported-type-argument-still-binds", `package P
 import System
 import HelperLib2
 
@@ -553,7 +553,7 @@ Console.WriteLine(lit.GetType().ToString())`, []string{"z", "HelperLib2.Handler`
             // tell it from an oblivious member — and now reports it like any other
             // `T?`. What this row asserts is the literal SPELLING still binding,
             // which it does; the reads are how the row observes the values.
-            yield[]object{"control-the-three-lossy-but-real-spellings-still-bind", `package P
+            yield []object{"control-the-three-lossy-but-real-spellings-still-bind", `package P
 import System
 import HelperLib2
 
@@ -574,7 +574,7 @@ Console.WriteLine(named.Tag)`, []string{"3", "3", "nt"}}
             // #4032's constraint check. On the parent this reported GS0157
             // ("Cannot find type Handler") — the wrong message for the wrong
             // reason. Now it reports the violation.
-            yield[]object{"a-literal-over-a-same-compilation-class-that-misses-the-bound", `package P
+            yield []object{"a-literal-over-a-same-compilation-class-that-misses-the-bound", `package P
 import System
 import HelperLib2
 
@@ -585,7 +585,7 @@ class NotOptions {
 let bad = Handler[NotOptions]{Tag: "z"}
 Console.WriteLine(bad.Tag)`, "GS0152"}
             // #4037's forwarding rule, reached through the literal.
-            yield[]object{"a-literal-over-an-unforwarded-type-parameter", `package P
+            yield []object{"a-literal-over-an-unforwarded-type-parameter", `package P
 import System
 import HelperLib2
 

@@ -96,7 +96,7 @@ open class Issue3140OutParameterWriteBackDriverTests {
         func ReceiverShapeMatrix() sequence[[]object] {
             for receiver in Enum.GetValues[ReceiverKind]() {
                 for shape in Enum.GetValues[ArgumentShape]() {
-                    yield[]object{receiver, shape}
+                    yield []object{receiver, shape}
                 }
             }
         }
@@ -106,7 +106,7 @@ open class Issue3140OutParameterWriteBackDriverTests {
         func WriteBackOperandMatrix() sequence[[]object] {
             for receiver in Enum.GetValues[ReceiverKind]() {
                 for operand in Enum.GetValues[OperandKind]() {
-                    yield[]object{receiver, operand}
+                    yield []object{receiver, operand}
                 }
             }
         }

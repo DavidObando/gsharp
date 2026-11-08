@@ -137,28 +137,28 @@ enum Status {
         /// @returns Row name, G# declaration, expected reified description.
         func Rows() sequence[[]object] {
             // --- The four kinds named in the issue, over a source enum. ---
-            yield[]object{
+            yield []object{
                 "MapOverSourceEnum",
                 "typeof(Box[map[string, Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.Dictionary`2@System.Private.CoreLib[System.String@System.Private.CoreLib,P.Status@P]]"
             }
-            yield[]object{
+            yield []object{
                 "TupleOverSourceEnum",
                 "typeof(Box[(int32, Status)])",
                 "HelperLib4098.Box`1@HelperLib4098[System.ValueTuple`2@System.Private.CoreLib[System.Int32@System.Private.CoreLib,P.Status@P]]"
             }
-            yield[]object{
+            yield []object{
                 "FuncOverSourceEnum",
                 "typeof(Box[func(Status) bool])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Func`2@System.Private.CoreLib[P.Status@P,System.Boolean@System.Private.CoreLib]]"
             }
-            yield[]object{
+            yield []object{
                 "ChanOverSourceEnum",
                 "typeof(Box[chan[Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Threading.Channels.Channel`1@System.Threading.Channels[P.Status@P]]"
             }
             // --- The fifth kind, named in Issue4073's remarks but not in #4098. ---
-            yield[]object{
+            yield []object{
                 "SequenceOverSourceEnum",
                 "typeof(Box[sequence[Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.IEnumerable`1@System.Private.CoreLib[P.Status@P]]"
@@ -166,28 +166,28 @@ enum Status {
             // --- The erasure-surrogate shape: the component has a NON-null
             // ClrType, closed over the `object` surrogate, so the structural
             // symbol's own ClrType is non-null and resolves to the WRONG type.
-            yield[]object{
+            yield []object{
                 "MapOverImportedGenericOfSourceEnum",
                 "typeof(Box[map[string, List[Status]]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.Dictionary`2@System.Private.CoreLib[System.String@System.Private.CoreLib,System.Collections.Generic.List`1@System.Private.CoreLib[P.Status@P]]]"
             }
             // --- Projection decisions that only bite at specific shapes. ---
-            yield[]object{
+            yield []object{
                 "VoidFuncOverSourceEnum",
                 "typeof(Box[func(Status)])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Action`1@System.Private.CoreLib[P.Status@P]]"
             }
-            yield[]object{
+            yield []object{
                 "ReceiveOnlyChanOverSourceEnum",
                 "typeof(Box[in chan[Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Threading.Channels.ChannelReader`1@System.Threading.Channels[P.Status@P]]"
             }
-            yield[]object{
+            yield []object{
                 "SendOnlyChanOverSourceEnum",
                 "typeof(Box[out chan[Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Threading.Channels.ChannelWriter`1@System.Threading.Channels[P.Status@P]]"
             }
-            yield[]object{
+            yield []object{
                 "NestedStructuralOverSourceEnum",
                 "typeof(Box[map[string, (int32, Status)]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.Dictionary`2@System.Private.CoreLib[System.String@System.Private.CoreLib,System.ValueTuple`2@System.Private.CoreLib[System.Int32@System.Private.CoreLib,P.Status@P]]]"
@@ -198,7 +198,7 @@ enum Status {
             // The async-sequence arm picks a DIFFERENT open definition from the
             // sync one (`IAsyncEnumerable` rather than `IEnumerable`), and the two
             // share a symbol name, so nothing but the reified type tells them apart.
-            yield[]object{
+            yield []object{
                 "AsyncSequenceOverSourceEnum",
                 "typeof(Box[async sequence[Status]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.IAsyncEnumerable`1@System.Private.CoreLib[P.Status@P]]"
@@ -207,7 +207,7 @@ enum Status {
             // would read back plausibly at a glance, so the nesting is asserted
             // structurally: `ValueTuple`8` whose eighth argument is itself a
             // `ValueTuple`1` over the source enum.
-            yield[]object{
+            yield []object{
                 "LargeTupleOverSourceEnum",
                 "typeof(Box[(int32, int32, int32, int32, int32, int32, int32, Status)])",
                 "HelperLib4098.Box`1@HelperLib4098[System.ValueTuple`8@System.Private.CoreLib[" +
@@ -219,22 +219,22 @@ enum Status {
             }
             // --- Controls: the same kinds over components that HAVE a CLR type.
             // These serialise correctly today and must keep doing so.
-            yield[]object{
+            yield []object{
                 "ControlMapOverImported",
                 "typeof(Box[map[string, int32]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.Dictionary`2@System.Private.CoreLib[System.String@System.Private.CoreLib,System.Int32@System.Private.CoreLib]]"
             }
-            yield[]object{
+            yield []object{
                 "ControlTupleOverImported",
                 "typeof(Box[(int32, string)])",
                 "HelperLib4098.Box`1@HelperLib4098[System.ValueTuple`2@System.Private.CoreLib[System.Int32@System.Private.CoreLib,System.String@System.Private.CoreLib]]"
             }
-            yield[]object{
+            yield []object{
                 "ControlFuncOverImported",
                 "typeof(Box[func(int32) bool])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Func`2@System.Private.CoreLib[System.Int32@System.Private.CoreLib,System.Boolean@System.Private.CoreLib]]"
             }
-            yield[]object{
+            yield []object{
                 "ControlChanOverImported",
                 "typeof(Box[chan[int32]])",
                 "HelperLib4098.Box`1@HelperLib4098[System.Threading.Channels.Channel`1@System.Threading.Channels[System.Int32@System.Private.CoreLib]]"

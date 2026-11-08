@@ -393,19 +393,19 @@ class NestedIntDerived4744 : Outer4744[int32].Base {
             // ---- #4089: the OPEN question over a G#-declared generic INTERFACE.
             // The issue's own repro, verbatim in shape. Compiled AND IL-verified on
             // the parent; only the RUN showed the defect.
-            yield[]object{"the-4089-repro-an-unforwarded-gs-declared-generic-interface-base", `class Holder[T] : IGsBox[T] {
+            yield []object{"the-4089-repro-an-unforwarded-gs-declared-generic-interface-base", `class Holder[T] : IGsBox[T] {
     public func Unbox() T { return default(T) }
 }
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
             // The FIELD spelling the issue names beside it.
-            yield[]object{"an-unforwarded-gs-declared-generic-interface-at-a-field-type", `class Holder[T] {
+            yield []object{"an-unforwarded-gs-declared-generic-interface-at-a-field-type", `class Holder[T] {
     public var B IGsBox[T]
 }
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
             // A bound that exists but does not imply the interface's declared one.
-            yield[]object{"a-bound-that-does-not-imply-the-interfaces-declared-one", `class Holder[T Unrelated] {
+            yield []object{"a-bound-that-does-not-imply-the-interfaces-declared-one", `class Holder[T Unrelated] {
     public var B IGsBox[T]
 }
 
@@ -417,7 +417,7 @@ Console.WriteLine("x")`, "GS0580", "GS0152"}
             // identical program with `GsLate` declared ABOVE reported GS0580 on the
             // parent — measured both ways, which is what makes this the same hole
             // rather than a second one.
-            yield[]object{"a-definition-declared-below-the-field-that-uses-it", `class Unf[T] {
+            yield []object{"a-definition-declared-below-the-field-that-uses-it", `class Unf[T] {
     public var F GsLate[T]
 }
 
@@ -428,31 +428,31 @@ open class GsLate[TL SchemeOptions] {
 Console.WriteLine("x")`, "GS0580", "GS0152"}
             // ---- #4090: the CLOSED question, everywhere.
             // The issue's own repro, base-clause half.
-            yield[]object{"the-4090-repro-a-closed-violating-argument-in-a-base-clause", `class Bad : GsHandler[Unrelated] {
+            yield []object{"the-4090-repro-a-closed-violating-argument-in-a-base-clause", `class Bad : GsHandler[Unrelated] {
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // ... and its variable-type half. This one binds AFTER the flush, on
             // the in-place path, so the row covers the other side of the latch.
-            yield[]object{
+            yield []object{
                 "the-4090-repro-a-closed-violating-argument-at-a-variable-type",
                 "var f GsHandler[Unrelated]\nConsole.WriteLine(\"x\")",
                 "GS0152",
                 "GS0580"
             }
-            yield[]object{"a-closed-violating-argument-at-a-field-type", `class Holder {
+            yield []object{"a-closed-violating-argument-at-a-field-type", `class Holder {
     public var H GsHandler[Unrelated]
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
-            yield[]object{"a-closed-violating-argument-at-a-return-type", `func take() GsHandler[Unrelated] {
+            yield []object{"a-closed-violating-argument-at-a-return-type", `func take() GsHandler[Unrelated] {
     return nil
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // Inside a method BODY, which binds through a freshly derived scope
             // chain and therefore takes the in-place path rather than the queue.
-            yield[]object{"a-closed-violating-argument-inside-a-method-body", `class Holder {
+            yield []object{"a-closed-violating-argument-inside-a-method-body", `class Holder {
     public func M() {
         var local GsHandler[Unrelated]
         Console.WriteLine("no")
@@ -462,14 +462,14 @@ Console.WriteLine("x")`, "GS0152", "GS0580"}
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // The G#-declared generic INTERFACE, closed. #4089's site asking
             // #4090's question.
-            yield[]object{"a-closed-violating-argument-at-a-gs-declared-generic-interface", `class Holder {
+            yield []object{"a-closed-violating-argument-at-a-gs-declared-generic-interface", `class Holder {
     public var B IGsBox[Unrelated]
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // NESTED inside another construction: the inner clause is bound by the
             // same recursive walk, so it is asked too.
-            yield[]object{"a-closed-violating-argument-nested-inside-another-construction", `class Holder {
+            yield []object{"a-closed-violating-argument-nested-inside-another-construction", `class Holder {
     public var N GsList[GsHandler[string]]
 }
 
@@ -478,14 +478,14 @@ Console.WriteLine("x")`, "GS0152", "GS0580"}
             // `BindAndConstructUserGenericSegment` rather than
             // `BindNonNullableTypeClause`. Both sites are wired; this is the row
             // that says so.
-            yield[]object{"a-closed-violating-argument-at-a-qualified-name", `class Holder {
+            yield []object{"a-closed-violating-argument-at-a-qualified-name", `class Holder {
     public var Q P.GsHandler[string]
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // A SPECIAL constraint, closed: `SchemeOptions` is a class, so it does
             // not satisfy `struct`.
-            yield[]object{"a-closed-argument-violating-a-special-constraint", `class Holder {
+            yield []object{"a-closed-argument-violating-a-special-constraint", `class Holder {
     public var S GsStruct[SchemeOptions]
 }
 
@@ -493,50 +493,50 @@ Console.WriteLine("x")`, "GS0152", "GS0580"}
             // A DEPENDENT bound (#4043), closed — the shape that only has an answer
             // once the BOUNDING parameter's own argument is known, which is why the
             // checker maps the whole vector before asking any position.
-            yield[]object{"a-closed-argument-violating-a-dependent-bound", `class Holder {
+            yield []object{"a-closed-argument-violating-a-dependent-bound", `class Holder {
     public var P GsPair[SchemeOptions, Unrelated]
 }
 
 Console.WriteLine("x")`, "GS0152", "GS0580"}
             // ---- #4762: named-delegate constructions validate closed and open
             // type-parameter constraints just like class and interface clauses.
-            yield[]object{
+            yield []object{
                 "the-4762-repro-a-closed-violating-argument-at-a-named-delegate-typeof",
                 `Console.WriteLine(typeof(GsRefDelegate[int32]))`,
                 "GS0152",
                 "GS0580"
             }
-            yield[]object{"a-closed-violating-argument-at-a-qualified-named-delegate", `var d P.GsOptionsDelegate[Unrelated]
+            yield []object{"a-closed-violating-argument-at-a-qualified-named-delegate", `var d P.GsOptionsDelegate[Unrelated]
 Console.WriteLine("x")`, "GS0152", "GS0580"}
-            yield[]object{"an-unforwarded-named-delegate-at-a-field-type", `class Holder[U] {
+            yield []object{"an-unforwarded-named-delegate-at-a-field-type", `class Holder[U] {
     public var D GsRefDelegate[U]
 }
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
-            yield[]object{"a-named-delegate-declared-below-the-field-that-uses-it", `class Holder[U] {
+            yield []object{"a-named-delegate-declared-below-the-field-that-uses-it", `class Holder[U] {
     public var D LateDelegate[U]
 }
 
 delegate LateDelegate[TL SchemeOptions](value TL) TL;
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
-            yield[]object{"an-unforwarded-named-delegate-conversion", `func bad[U](f (U) -> U) object -> GsRefDelegate[U](f)
+            yield []object{"an-unforwarded-named-delegate-conversion", `func bad[U](f (U) -> U) object -> GsRefDelegate[U](f)
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
-            yield[]object{"a-dependent-bound-on-a-bare-class-parameter-does-not-forward-class", `func bad[A class, B A](f (B) -> B) object -> GsRefDelegate[B](f)
+            yield []object{"a-dependent-bound-on-a-bare-class-parameter-does-not-forward-class", `func bad[A class, B A](f (B) -> B) object -> GsRefDelegate[B](f)
 
 Console.WriteLine("x")`, "GS0580", "GS0152"}
             // ---- #4744: dependent source-interface and source-class constraints
             // reject mismatched closed type arguments after substitution.
-            yield[]object{"the-4744-negative-a-mismatched-dependent-source-interface-method-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+            yield []object{"the-4744-negative-a-mismatched-dependent-source-interface-method-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
 
 let item = Item4744[int32]{Saved: 7}
 Console.WriteLine(readValue[string, Item4744[int32]](item))`, "GS0152", "GS0580"}
-            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-source-interface-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+            yield []object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-source-interface-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
 
 let item = Item4744[string?]{Saved: nil}
 Console.WriteLine(readValue[string, Item4744[string?]](item))`, "GS0152", "GS0580"}
-            yield[]object{
+            yield []object{
                 "a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-interface-constraint",
                 `func readList[V, T IList[V]](items T) V -> items[0]
 
@@ -545,39 +545,39 @@ Console.WriteLine(readList[string, List[string?]](items))`,
                 "GS0152",
                 "GS0580"
             }
-            yield[]object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-class-constraint", `func read[V, T List[V]](x T) int32 -> x.Count
+            yield []object{"a-nullable-argument-does-not-satisfy-a-non-nullable-dependent-imported-class-constraint", `func read[V, T List[V]](x T) int32 -> x.Count
 
 Console.WriteLine(read[string, List[string?]](List[string?]{nil}))`, "GS0152", "GS0580"}
-            yield[]object{"a-dependent-bound-does-not-propagate-the-default-constructor-constraint", `func makeNew[T init()]() T -> T()
+            yield []object{"a-dependent-bound-does-not-propagate-the-default-constructor-constraint", `func makeNew[T init()]() T -> T()
 func forward[A init(), B A]() B -> makeNew[B]()
 
 Console.WriteLine(forward[SchemeOptions, SchemeOptions]().Name)`, "GS0152", "GS0580"}
-            yield[]object{"a-mismatched-dependent-source-class-method-constraint", `func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
+            yield []object{"a-mismatched-dependent-source-class-method-constraint", `func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
 
 Console.WriteLine(readBase[string, IntDerived4744](IntDerived4744()))`, "GS0152", "GS0580"}
-            yield[]object{
+            yield []object{
                 "a-mismatched-enclosing-generic-argument-on-a-nested-base-constraint",
                 `Console.WriteLine(Outer4744[string].Use[NestedIntDerived4744](NestedIntDerived4744()))`,
                 "GS0152",
                 "GS0580"
             }
-            yield[]object{"a-slice-argument-does-not-satisfy-a-fixed-array-interface-constraint", `func readFixedArray[T IValue4744[[3]int32]](item T) int32 -> item.Value[0]
+            yield []object{"a-slice-argument-does-not-satisfy-a-fixed-array-interface-constraint", `func readFixedArray[T IValue4744[[3]int32]](item T) int32 -> item.Value[0]
 
 let item = Item4744[[]int32]{Saved: []int32{1, 2, 3}}
 Console.WriteLine(readFixedArray[Item4744[[]int32]](item))`, "GS0152", "GS0580"}
-            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-interface-constraint", `class SelfNullableList : List[SelfNullableList?] {
+            yield []object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-interface-constraint", `class SelfNullableList : List[SelfNullableList?] {
 }
 
 func first[T IList[T]](x T) T -> x[0]
 
 Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
-            yield[]object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-class-constraint", `class SelfNullableList : List[SelfNullableList?] {
+            yield []object{"a-nullable-self-argument-does-not-satisfy-an-invariant-imported-class-constraint", `class SelfNullableList : List[SelfNullableList?] {
 }
 
 func first[T List[T]](x T) int32 -> x.Count
 
 Console.WriteLine(first[SelfNullableList](SelfNullableList()))`, "GS0152", "GS0580"}
-            yield[]object{
+            yield []object{
                 "a-slice-element-list-does-not-satisfy-a-substituted-fixed-array-imported-interface-constraint",
                 `func readFixed[V, T IList[[3]V]](xs T) [3]V -> xs[0]
 
@@ -593,24 +593,24 @@ Console.WriteLine(readFixed[string, List[[]string]](List[[]string]{[]string{"a"}
         /// @returns Case name, the G# body appended to the prelude, expected stdout lines.
         func AcceptedConstructions() sequence[[]object] {
             // #4089's own control: the forwarded spelling.
-            yield[]object{"the-4089-control-a-forwarded-gs-declared-generic-interface", `class Holder[T SchemeOptions] : IGsBox[T] {
+            yield []object{"the-4089-control-a-forwarded-gs-declared-generic-interface", `class Holder[T SchemeOptions] : IGsBox[T] {
     public func Unbox() T { return default(T) }
 }
 
 Console.WriteLine(Holder[SchemeOptions]().Unbox() == nil)`, []string{"True"}}
             // ... at a field type too.
-            yield[]object{"a-forwarded-gs-declared-generic-interface-at-a-field-type", `class Holder[T SchemeOptions] {
+            yield []object{"a-forwarded-gs-declared-generic-interface-at-a-field-type", `class Holder[T SchemeOptions] {
     public var B IGsBox[T]
 }
 
 Console.WriteLine("x")`, []string{"x"}}
             // #4090's own control: the satisfied closed spelling.
-            yield[]object{"the-4090-control-a-satisfied-closed-argument-in-a-base-clause", `class Good : GsHandler[SchemeOptions] {
+            yield []object{"the-4090-control-a-satisfied-closed-argument-in-a-base-clause", `class Good : GsHandler[SchemeOptions] {
 }
 
 Console.WriteLine(Good().Tag)`, []string{"g"}}
             // A DERIVED argument satisfies a base-class bound.
-            yield[]object{"a-derived-closed-argument-satisfies-a-base-class-bound", `class Good : GsHandler[DerivedOptions] {
+            yield []object{"a-derived-closed-argument-satisfies-a-base-class-bound", `class Good : GsHandler[DerivedOptions] {
 }
 
 var alsoOk GsHandler[DerivedOptions]
@@ -618,7 +618,7 @@ Console.WriteLine(Good().Tag)`, []string{"g"}}
             // The definition declared BELOW its satisfied use — the mirror of the
             // red source-order row, so the deferral is shown to accept as well as
             // reject independently of order.
-            yield[]object{"a-definition-declared-below-its-satisfied-use", `class Holder {
+            yield []object{"a-definition-declared-below-its-satisfied-use", `class Holder {
     public var F GsLate[SchemeOptions]
 }
 
@@ -630,20 +630,20 @@ Console.WriteLine(GsLate[SchemeOptions]().Tag)`, []string{"late"}}
             // FLUSH BOUNDARY, arm 1: the implementation is inherited from a BASE
             // CLASS. Green at both candidate flush points (traced); the row exists
             // so a future move of the boundary is caught.
-            yield[]object{"an-interface-bound-satisfied-through-a-base-class", `class Uses : GsBoxed[ViaBaseClass] {
+            yield []object{"an-interface-bound-satisfied-through-a-base-class", `class Uses : GsBoxed[ViaBaseClass] {
 }
 
 Console.WriteLine(Uses().Tag)`, []string{"b"}}
             // FLUSH BOUNDARY, arm 2: the bound interface is reached through a BASE
             // INTERFACE, whose own base list is populated only when the interface's
             // members bind.
-            yield[]object{"an-interface-bound-satisfied-through-a-base-interface", `class Uses : GsBoxed[ViaBaseInterface] {
+            yield []object{"an-interface-bound-satisfied-through-a-base-interface", `class Uses : GsBoxed[ViaBaseInterface] {
 }
 
 Console.WriteLine(Uses().Tag)`, []string{"b"}}
             // A satisfied DEPENDENT bound, the green half of the vector-wide
             // substitution.
-            yield[]object{"a-satisfied-dependent-bound", `class Holder {
+            yield []object{"a-satisfied-dependent-bound", `class Holder {
     public var P GsPair[SchemeOptions, DerivedOptions]
 }
 
@@ -651,7 +651,7 @@ Console.WriteLine(GsPair[SchemeOptions, DerivedOptions]().Tag)`, []string{"pair"
             // CRTP over a G#-declared generic INTERFACE bound — the shape #2519's
             // lifecycle exists to keep working, now that #4089 asks a question at
             // that site at all.
-            yield[]object{"a-crtp-interface-bound-over-a-gs-declared-interface", `interface ICmp[TC ICmp[TC]] {
+            yield []object{"a-crtp-interface-bound-over-a-gs-declared-interface", `interface ICmp[TC ICmp[TC]] {
     func CompareWith(other TC) int32;
 }
 
@@ -668,7 +668,7 @@ class NodeBag : Bag[Node] {
 
 Console.WriteLine(NodeBag().Label)`, []string{"bag"}}
             // An unconstrained definition asks nothing of a closed argument.
-            yield[]object{"an-unconstrained-definition-accepts-any-closed-argument", `class Holder {
+            yield []object{"an-unconstrained-definition-accepts-any-closed-argument", `class Holder {
     public var L GsList[Unrelated]
 }
 
@@ -694,13 +694,13 @@ Console.WriteLine(GsList[Unrelated]().Tag)`, []string{"l"}}
             // NOTHING else — 28/31, all fourteen refusals unchanged — so the
             // interface widening neither loosens nor tightens anything this fixture
             // asserts in either direction.
-            yield[]object{"a-source-class-satisfies-the-imported-interface-it-implements", `class Uses : GsDisposable[DisposableSource] {
+            yield []object{"a-source-class-satisfies-the-imported-interface-it-implements", `class Uses : GsDisposable[DisposableSource] {
 }
 
 Console.WriteLine(Uses().Tag)`, []string{"d"}}
             // ... and the imported-BASE arm: the interface arrives through an
             // imported base class, which a source class holds in its own slot.
-            yield[]object{"a-source-class-satisfies-the-interface-its-imported-base-carries", `class Uses : GsEnumerable[EnumerableSource] {
+            yield []object{"a-source-class-satisfies-the-interface-its-imported-base-carries", `class Uses : GsEnumerable[EnumerableSource] {
 }
 
 Console.WriteLine(Uses().Tag)`, []string{"e"}}
@@ -709,7 +709,7 @@ Console.WriteLine(Uses().Tag)`, []string{"e"}}
             // `unmanaged`, which the `struct` check gates. Without this the very
             // first fixture #4090's enforcement touched
             // (Issue2390NullableSameCompilationEnumBoxingEmitTests) went red.
-            yield[]object{"a-source-enum-satisfies-a-struct-constraint", `class Uses {
+            yield []object{"a-source-enum-satisfies-a-struct-constraint", `class Uses {
     public var S GsStruct[Color]
     public var U GsUnmanaged[Color]
 }
@@ -717,7 +717,7 @@ Console.WriteLine(Uses().Tag)`, []string{"e"}}
 Console.WriteLine(GsStruct[Color]().Tag + GsUnmanaged[Color]().Tag)`, []string{"su"}}
             // ... and at a G#-declared generic INTERFACE implementation, which is
             // the shape #2390's own fixture writes.
-            yield[]object{"a-source-enum-satisfies-a-struct-constraint-at-an-interface-implementation", `class Source : IEnumSource[Color] {
+            yield []object{"a-source-enum-satisfies-a-struct-constraint-at-an-interface-implementation", `class Source : IEnumSource[Color] {
     func Find() Color? -> Color.Blue
 }
 
@@ -729,13 +729,13 @@ Console.WriteLine(s.Find())`, []string{"Blue"}}
             // reported a false GS0152 on the `main` this branch started from; it
             // passes here because #4124's consolidation fixed the shared leaf
             // underneath it, with none of this change's code in the path.
-            yield[]object{"the-constructor-spelling-of-a-source-class-carrying-an-imported-interface", `let a = GsDisposable[DisposableSource]()
+            yield []object{"the-constructor-spelling-of-a-source-class-carrying-an-imported-interface", `let a = GsDisposable[DisposableSource]()
 let b = GsEnumerable[EnumerableSource]()
 Console.WriteLine(a.Tag + b.Tag)`, []string{"de"}}
             // #4744: a dependent source-interface or source-class constraint is
             // substituted with the call's or type clause's type-argument map before
             // checking satisfaction.
-            yield[]object{"the-4744-repro-a-dependent-source-interface-and-class-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
+            yield []object{"the-4744-repro-a-dependent-source-interface-and-class-constraint", `func readValue[V, T IValue4744[V]](item T) V -> item.Value
 func readInferred[V, T IValue4744[V]](seed V, item T) V -> item.Value
 func readBase[V, T ValueBase4744[V]](item T) V -> item.Saved
 func readList[V, T IValue4744[List[V]]](item T) int32 -> item.Value.Count
@@ -839,7 +839,7 @@ Console.WriteLine(useMapBase[MapDerived4744](MapDerived4744()).ToString() + ":" 
                 }}
             // #4762: satisfied closed and forwarded open generic named-delegate
             // constructions compile, IL-verify, and run.
-            yield[]object{"the-4762-control-satisfied-and-forwarded-named-delegate-constructions", `class Holder[U class] {
+            yield []object{"the-4762-control-satisfied-and-forwarded-named-delegate-constructions", `class Holder[U class] {
     public var D GsRefDelegate[U]
 }
 

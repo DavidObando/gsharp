@@ -316,7 +316,7 @@ func probe(name string, f func()) {
         private const FullSource string = Declarations + NullBody + LiveBody + "nullMain()\nliveMain()\n"
 
         func Cases() sequence[[]object] {
-            yield[]object{
+            yield []object{
                 "a-null-receiver-fails-at-the-accessor-call",
                 NullSource,
                 []string{
@@ -329,7 +329,7 @@ func probe(name string, f func()) {
                     "null-interface-prop-get: NRE"
                 }
             }
-            yield[]object{
+            yield []object{
                 "a-live-receiver-keeps-its-dispatch-and-its-base-calls",
                 LiveSource,
                 []string{

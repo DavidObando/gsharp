@@ -93,7 +93,7 @@ stderr:
         /// @returns The case data.
         func Cases() sequence[[]object] {
             // The reduction of the defect.
-            yield[]object{"nested-initializer-names-enclosing-type-parameter", `
+            yield []object{"nested-initializer-names-enclosing-type-parameter", `
 package P
 import System
 
@@ -117,7 +117,7 @@ Console.WriteLine(o.Make(7).item.ToString())
 `, []string{"0", "7"}}
             // The ClrBaseline shape: an enclosing-parameterised initializer sitting
             // beside a field whose type mentions the nested type itself.
-            yield[]object{"hchan-waiter-shape", `
+            yield []object{"hchan-waiter-shape", `
 package P
 import System
 import System.Collections.Generic
@@ -146,7 +146,7 @@ Console.WriteLine(h.Pop())
             // ANTI-VACUITY: with BOTH levels generic and DIFFERENT names, each
             // initializer must pick its own level's parameter. A scope that merely
             // "has some type parameters" would pass the first case and fail here.
-            yield[]object{"inner-and-outer-parameters-are-distinguished", `
+            yield []object{"inner-and-outer-parameters-are-distinguished", `
 package P
 import System
 
@@ -165,7 +165,7 @@ Console.WriteLine(Outer[int32]().Describe[string]())
 `, []string{"0|nil"}}
             // ANTI-VACUITY: an inner parameter that SHADOWS the outer's name must
             // win inside the nested type — the outermost-first seeding order.
-            yield[]object{"inner-parameter-shadows-same-named-outer", `
+            yield []object{"inner-parameter-shadows-same-named-outer", `
 package P
 import System
 

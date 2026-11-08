@@ -197,7 +197,8 @@ public static class Events
             _ = RelayAsync();
         };
 }`)
-        Assert.Contains("__underscore object", printed)
+        Assert.Contains("underscore object", printed)
+        Assert.DoesNotContain("__underscore", printed)
         Assert.Contains("RelayAsync()", printed)
         Assert.DoesNotContain("_ = RelayAsync()", printed)
     }

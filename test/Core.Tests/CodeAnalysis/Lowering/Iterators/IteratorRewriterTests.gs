@@ -136,12 +136,12 @@ open class IteratorRewriterTests {
             $package: Package
         )
         let functionType = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, sequenceType)
-        let yield = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
+        let yieldStmt = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
         let literal = BoundFunctionLiteralExpression(
             nil,
             literalFunction,
             functionType,
-            Block(yield),
+            Block(yieldStmt),
             ImmutableArray[VariableSymbol].Empty
         )
         let variable = LocalVariableSymbol("values", isReadOnly: true, functionType)
@@ -156,7 +156,7 @@ open class IteratorRewriterTests {
         )
         let plan = Assert.Single(result.Plans)
         Assert.Same(literalFunction, plan.Function)
-        Assert.Equal(1, plan.YieldStates[yield])
+        Assert.Equal(1, plan.YieldStates[yieldStmt])
     }
 
     @Fact
@@ -169,12 +169,12 @@ open class IteratorRewriterTests {
             $package: Package
         )
         let innerType = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, sequenceType)
-        let yield = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
+        let yieldStmt = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
         let innerLiteral = BoundFunctionLiteralExpression(
             nil,
             innerFunction,
             innerType,
-            Block(yield),
+            Block(yieldStmt),
             ImmutableArray[VariableSymbol].Empty
         )
         let outerFunction = FunctionSymbol("outer", ImmutableArray[ParameterSymbol].Empty, innerType, $package: Package)
@@ -201,8 +201,8 @@ open class IteratorRewriterTests {
 
     @Fact
     func Detection_TraversesBranchesAndTryFinally_ButNotNestedFunctions() {
-        let yield = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
-        let branch = BoundIfStatement(nil, BoundLiteralExpression(nil, true), Block(yield), Block())
+        let yieldStmt = BoundYieldStatement(nil, BoundLiteralExpression(nil, 1))
+        let branch = BoundIfStatement(nil, BoundLiteralExpression(nil, true), Block(yieldStmt), Block())
         let tryFinally = BoundTryStatement(nil, Block(branch), ImmutableArray[BoundCatchClause].Empty, Block())
         Assert.True(IteratorDetection.ContainsYield(Block(tryFinally)))
         let sequenceType = SequenceTypeSymbol.Get(TypeSymbol.Int32)
@@ -217,7 +217,7 @@ open class IteratorRewriterTests {
             nil,
             nestedFunction,
             functionType,
-            Block(yield),
+            Block(yieldStmt),
             ImmutableArray[VariableSymbol].Empty
         )
         let lambda = LocalVariableSymbol("lambda", isReadOnly: true, functionType)

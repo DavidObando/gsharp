@@ -388,7 +388,7 @@ Console.WriteLine(take[C2]())`
             // THE ISSUE'S OWN REPRO, verbatim. Both spellings — a generic FUNCTION
             // call and a generic TYPE construction — route through
             // `Binder.SatisfiesConstraint`, so both reported GS0152.
-            yield[]object{"the-issues-repro-a-source-class-implements-an-imported-interface", `package P
+            yield []object{"the-issues-repro-a-source-class-implements-an-imported-interface", `package P
 import System
 
 class D : IDisposable {
@@ -408,7 +408,7 @@ Console.WriteLine(take[D]())
 Console.WriteLine(Box[D]().Tag)`, []string{"took", "b"}}
             // Through the SOURCE base chain: `EnumerateDeclaredClrInterfaces`
             // walks `BaseClass` as well as the class's own list.
-            yield[]object{"a-source-base-class-supplies-the-imported-interface", `package P
+            yield []object{"a-source-base-class-supplies-the-imported-interface", `package P
 import System
 
 open class Base : IDisposable {
@@ -426,7 +426,7 @@ func take[T IDisposable]() string {
 Console.WriteLine(take[Sub]())`, []string{"took-sub"}}
             // Through a G#-DECLARED interface that itself extends the imported
             // one — the `EnumerateInterfaceClrBases` arm of the same walk.
-            yield[]object{"a-gs-declared-interface-projects-onto-the-imported-one", `package P
+            yield []object{"a-gs-declared-interface-projects-onto-the-imported-one", `package P
 import System
 
 interface IGs : IDisposable {
@@ -446,7 +446,7 @@ Console.WriteLine(take[D2]())`, []string{"took-iface"}}
             // constrained parameter as its own argument, so the expected vector is
             // `[T]` and the symbolic walk had to learn the substitution the
             // reflective half already performs.
-            yield[]object{"a-self-referential-generic-bound-over-a-source-class", `package P
+            yield []object{"a-self-referential-generic-bound-over-a-source-class", `package P
 import System
 
 class Cmp : IComparable[Cmp] {
@@ -467,7 +467,7 @@ Console.WriteLine(take[Cmp]())`, []string{"took-cmp"}}
             // implements the imported interface DIRECTLY, and one that inherits it
             // from an IMPORTED base (`ArrayList` carries `IEnumerable`). Measured
             // `2 x GS0152` on this branch's parent `b4478875` and `de` here.
-            yield[]object{"issue-4136-a-direct-implementation-and-an-imported-base-at-a-constructor", `package P
+            yield []object{"issue-4136-a-direct-implementation-and-an-imported-base-at-a-constructor", `package P
 import System
 import System.Collections
 
@@ -494,7 +494,7 @@ Console.WriteLine(a.Tag + b.Tag)`, []string{"de"}}
             // CLR type, so the reflective half answers it and the new fallback is
             // never consulted. This is the control #4136's "Expected" section
             // names.
-            yield[]object{"an-imported-type-argument-is-still-answered-reflectively", `package P
+            yield []object{"an-imported-type-argument-is-still-answered-reflectively", `package P
 import System
 import System.IO
 
@@ -511,7 +511,7 @@ Console.WriteLine(take[MemoryStream]())`, []string{"took-imported"}}
         /// @returns Case name and G# source.
         func StillRefused() sequence[[]object] {
             // The plain negative: a source class that implements nothing.
-            yield[]object{"a-source-class-that-does-not-implement-the-interface", `package P
+            yield []object{"a-source-class-that-does-not-implement-the-interface", `package P
 import System
 
 class E {
@@ -524,7 +524,7 @@ func take[T IDisposable]() string {
 Console.WriteLine(take[E]())`}
             // A source class carrying the WRONG imported interface. The walk
             // reaches an interface list; it must still compare it.
-            yield[]object{"a-source-class-that-implements-a-different-imported-interface", `package P
+            yield []object{"a-source-class-that-implements-a-different-imported-interface", `package P
 import System
 
 class F : ICloneable {
@@ -541,7 +541,7 @@ Console.WriteLine(take[F]())`}
             // A GENERIC bound is decided on the SYMBOLIC arguments, so the wrong
             // argument is still wrong even though both project to the identical
             // erased `IComparable<object>`.
-            yield[]object{"a-generic-bound-with-the-wrong-symbolic-argument", `package P
+            yield []object{"a-generic-bound-with-the-wrong-symbolic-argument", `package P
 import System
 
 class Other {

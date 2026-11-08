@@ -240,10 +240,10 @@ class MyErr : Exception {
         /// @returns Case name, the G# body appended to the prelude, expected diagnostic id.
         func BareBoundViolations() sequence[[]object] {
             // The issue's own repro, verbatim.
-            yield[]object{"the-issues-own-repro", "var c Chain[ChA, ChB]\nConsole.WriteLine(\"compiled\")", "GS0152"}
+            yield []object{"the-issues-own-repro", "var c Chain[ChA, ChB]\nConsole.WriteLine(\"compiled\")", "GS0152"}
             // The constructor spelling, which additionally emitted IL that
             // ILVerify refuses with UnsatisfiedMethodParentInst.
-            yield[]object{
+            yield []object{
                 "the-constructor-spelling-of-the-same-instantiation",
                 "let c = Chain[ChA, ChB]()\nConsole.WriteLine(c.Tag)",
                 "GS0152"
@@ -251,7 +251,7 @@ class MyErr : Exception {
             // Only ONE side erased is enough: an IMPORTED `string` at TDerived
             // against a same-compilation `ChA` at TBase. `string` is sealed and
             // derives from nothing the program declares.
-            yield[]object{
+            yield []object{
                 "an-imported-derived-against-an-erased-base",
                 "var c Chain[ChA, string]\nConsole.WriteLine(\"compiled\")",
                 "GS0152"
@@ -259,7 +259,7 @@ class MyErr : Exception {
             // A VALUE TYPE at a class-typed bound. The CLR admits a value type at
             // a dependent bound only when the bound is `object` (measured against
             // the runtime, see the green row below); `ChBase` is not.
-            yield[]object{
+            yield []object{
                 "a-value-type-at-a-class-typed-bound",
                 "var c Chain[ChBase, int32]\nConsole.WriteLine(\"compiled\")",
                 "GS0152"
@@ -267,7 +267,7 @@ class MyErr : Exception {
             // The bound is a same-compilation INTERFACE the argument does not
             // implement. The relation is implementation, not derivation, and both
             // arms belong to assignability.
-            yield[]object{
+            yield []object{
                 "an-interface-bound-the-argument-does-not-implement",
                 "var c Chain[IFoo, ChA]\nConsole.WriteLine(\"compiled\")",
                 "GS0152"
@@ -276,7 +276,7 @@ class MyErr : Exception {
             // most likely way to reintroduce the defect: `ChBase` does not derive
             // from `ChDerived`, so the reversed spelling of the green control must
             // be refused.
-            yield[]object{
+            yield []object{
                 "the-reversed-derivation",
                 "var c Chain[ChDerived, ChBase]\nConsole.WriteLine(\"compiled\")",
                 "GS0152"
@@ -293,13 +293,13 @@ class MyErr : Exception {
             // #4063 with identity would have been the worse failure. It is a green
             // row in `Issue4041DependentConstraintOverErasedClassesTests` too, and
             // it stays green there.
-            yield[]object{
+            yield []object{
                 "a-bare-dependent-bound-that-holds-over-erased-classes",
                 "var c Chain[ChBase, ChDerived]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
             }
             // Identity is one arm of assignability, not a violation of it.
-            yield[]object{
+            yield []object{
                 "the-identical-erased-class-on-both-sides",
                 "var c Chain[ChBase, ChBase]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
@@ -307,14 +307,14 @@ class MyErr : Exception {
             // The interface arm, satisfied. A same-compilation class has no CLR
             // type while binding, so this is answered off the symbol's declared
             // interface list.
-            yield[]object{
+            yield []object{
                 "a-source-class-implementing-the-bound-interface",
                 "var c Chain[IFoo, ChImpl]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
             }
             // Fully IMPORTED: nothing is erased, the symbolic arm never fires, and
             // the pre-#4041 path answers exactly as before.
-            yield[]object{
+            yield []object{
                 "the-issues-own-fully-imported-control",
                 "var c Chain[object, string]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
@@ -324,14 +324,14 @@ class MyErr : Exception {
             // `typeof(Chain<,>).MakeGenericType(typeof(object), typeof(int))`
             // constructs and instantiates, while the `ChBase` spelling above
             // throws ArgumentException.
-            yield[]object{
+            yield []object{
                 "the-universal-object-bound-admits-a-value-type",
                 "var c Chain[object, int32]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
             }
             // Two IMPORTED types related by derivation. Not erased at all, so this
             // pins that the gate on `AnyDependentPositionIsErased` still holds.
-            yield[]object{
+            yield []object{
                 "two-imported-types-related-by-derivation",
                 "var c Chain[Exception, InvalidOperationException]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
@@ -339,7 +339,7 @@ class MyErr : Exception {
             // A SOURCE class deriving from an IMPORTED base, checked against that
             // imported base. The symbol has no CLR type of its own, so the walk has
             // to reach `ImportedBaseType`.
-            yield[]object{
+            yield []object{
                 "a-source-class-deriving-from-the-imported-bound",
                 "var c Chain[Exception, MyErr]\nConsole.WriteLine(\"compiled\")",
                 []string{"compiled"}
@@ -347,7 +347,7 @@ class MyErr : Exception {
             // OPEN: the bound is forwarded through a G# generic, so both sides
             // still mention type parameters and there is no closed answer. The
             // check must decline; the CLR only loads the instantiation once closed.
-            yield[]object{"an-open-forwarded-instantiation-is-left-alone", `class Holder[TB, TD TB] {
+            yield []object{"an-open-forwarded-instantiation-is-left-alone", `class Holder[TB, TD TB] {
     public var C Chain[TB, TD]
 }
 
@@ -355,7 +355,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // The generic METHOD spelling of the same bare bound, satisfied. The
             // imported METHOD path has had its own constraint check since
             // #750/ADR-0088 and shares this checker.
-            yield[]object{
+            yield []object{
                 "a-generic-method-with-a-matched-bare-bound",
                 "Console.WriteLine(Picker.Pick[ChBase, ChDerived]())",
                 []string{"picked"}
@@ -371,7 +371,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // forwarding the bare bound through a G# generic function is where a
             // guard that answered instead of declining would manufacture a
             // GS0152 on a legal program.
-            yield[]object{"an-open-forwarded-bare-bound-at-a-generic-method", `func pick[TB, TD TB]() string {
+            yield []object{"an-open-forwarded-bare-bound-at-a-generic-method", `func pick[TB, TD TB]() string {
     return Picker.Pick[TB, TD]()
 }
 

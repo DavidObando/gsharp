@@ -15,7 +15,7 @@ import type {Optional} from 'utility-types';
 const identifier = /\$?[\p{L}_][\p{L}\p{Nd}_]*/uy;
 // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
 const keywords =
-  /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while)\b/;
+  /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while|yield)\b/;
 
 function wordAt(source: string, index: number): string {
   identifier.lastIndex = index;
@@ -451,7 +451,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // unconditionally an extension now, so `extension` is an ordinary
   // identifier again — it is deliberately absent from this list.
   const contextualKeywords =
-    /\b(?:abstract|adapt|add|and|any|array|base|cancelled|cast|checked|comparable|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|managed|nameof|not|or|out|params|partial|prop|raise|readonly|record|ref|remove|scoped|set|shared|sizeof|slice|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:abstract|adapt|add|and|any|array|base|cancelled|cast|checked|comparable|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|managed|nameof|not|or|out|params|partial|prop|raise|readonly|record|ref|remove|scoped|set|shared|sizeof|slice|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the

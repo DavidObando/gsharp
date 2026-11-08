@@ -413,46 +413,46 @@ public static class MixedOb
         /// Calls whose resolved imported parameter rejects rule 3.
         /// @returns Name, source, diagnostic line, and parameter name.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"imported-call", `package P
+            yield []object{"imported-call", `package P
 import Issue4480.Library
 
 let xs = Ob.Strings()
 let count = Calls.Required(xs)`, 5, "values"}
-            yield[]object{"imported-constructor", `package P
+            yield []object{"imported-constructor", `package P
 import System.Collections.Generic
 import Issue4480.Library
 
 let copy = List[string](Ob.Strings())`, 5, "collection"}
-            yield[]object{"imported-in-call", `package P
+            yield []object{"imported-in-call", `package P
 import Issue4480.Library
 
 let xs = Ob.Strings()
 let count = Calls.RequiredIn(xs)`, 5, "values"}
-            yield[]object{"imported-expanded-call", `package P
+            yield []object{"imported-expanded-call", `package P
 import Issue4480.Library
 
 let count = Calls.RequiredMany(Ob.Strings())`, 4, "values"}
-            yield[]object{"imported-expanded-constructor", `package P
+            yield []object{"imported-expanded-constructor", `package P
 import Issue4480.Library
 
 let value = RequiredParams(Ob.Strings())`, 4, "values"}
-            yield[]object{"imported-mixed-nullability-call", `package P
+            yield []object{"imported-mixed-nullability-call", `package P
 import Issue4480.Library
 
 let count = MixedCalls.Required(MixedOb.Pair())`, 4, "values"}
-            yield[]object{"imported-expanded-named-call", `package P
+            yield []object{"imported-expanded-named-call", `package P
 import Issue4480.Library
 
 let count = Calls.RequiredNamed(
     values: Ob.Strings(),
     marker: 0)`, 5, "values"}
-            yield[]object{"gsharp-parity", `package P
+            yield []object{"gsharp-parity", `package P
 import System.Collections.Generic
 import Issue4480.Library
 
 func Required(values IEnumerable[string]) int32 -> values.Count()
 let count = Required(Ob.Strings())`, 6, "values"}
-            yield[]object{"constrained-instance-call", `package P
+            yield []object{"constrained-instance-call", `package P
 import System.Collections.Generic
 import Issue4480.Library
 
@@ -460,7 +460,7 @@ func Via[T IInstanceCalls](receiver T) int32 {
     return receiver.Required(Ob.Strings())
 }
 let count = Via[InstanceCalls](InstanceCalls())`, 6, "values"}
-            yield[]object{"constrained-static-call", `package P
+            yield []object{"constrained-static-call", `package P
 import System.Collections.Generic
 import Issue4480.Library
 
@@ -468,19 +468,19 @@ func Via[T IStaticCalls[T]]() int32 {
     return T.Required(Ob.Strings())
 }
 let count = Via[StaticCalls]()`, 6, "values"}
-            yield[]object{"imported-base-constructor", `package P
+            yield []object{"imported-base-constructor", `package P
 import Issue4480.Library
 
 class Derived : RequiredBase {
     init() : base(Ob.Strings()) { }
 }`, 5, "values"}
-            yield[]object{"imported-expanded-base-constructor", `package P
+            yield []object{"imported-expanded-base-constructor", `package P
 import Issue4480.Library
 
 class Derived : RequiredParamsBase {
     init() : base(Ob.Strings(), Ob.Strings()) { }
 }`, 5, "values"}
-            yield[]object{"source-container-imported-call", `package P
+            yield []object{"source-container-imported-call", `package P
 import System.Collections
 import System.Collections.Generic
 import Issue4480.Library
@@ -493,23 +493,23 @@ class Repo[T] : IEnumerable[T] {
 }
 
 let count = Calls.Required(Repo(Ob.Strings()[0]))`, 13, "values"}
-            yield[]object{"symbolic-static-receiver", `package P
+            yield []object{"symbolic-static-receiver", `package P
 import Issue4480.Library
 
 func Probe[T]() int32 -> GenericCalls[T].Required(Ob.Strings())
 let count = Probe[int32]()`, 4, "values"}
-            yield[]object{"symbolic-static-receiver-in", `package P
+            yield []object{"symbolic-static-receiver-in", `package P
 import Issue4480.Library
 
 func Probe[T]() int32 -> GenericCalls[T].RequiredIn(Ob.Strings())
 let count = Probe[int32]()`, 4, "values"}
-            yield[]object{"constrained-generic-instance-slot", `package P
+            yield []object{"constrained-generic-instance-slot", `package P
 import System.Collections.Generic
 import Issue4480.Library
 
 func Probe[R ITaker[IEnumerable[string]]](receiver R) int32 -> receiver.Required(Ob.Strings())
 let count = Probe(Taker())`, 5, "values"}
-            yield[]object{"constrained-generic-static-slot", `package P
+            yield []object{"constrained-generic-static-slot", `package P
 import System.Collections.Generic
 import Issue4480.Library
 

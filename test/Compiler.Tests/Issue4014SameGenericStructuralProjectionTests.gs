@@ -302,7 +302,7 @@ Console.WriteLine(Probes.TakeStringList(xs))`
         func RejectedCases() sequence[[]object] {
             // The issue's own repro. On the parent this compiled, IL-verified, ran,
             // and printed `0` — one element in, zero out.
-            yield[]object{"the-reported-repro-a-list-of-int32-does-not-project-to-a-list-of-string", `package P
+            yield []object{"the-reported-repro-a-list-of-int32-does-not-project-to-a-list-of-string", `package P
 import System
 import System.Collections.Generic
 
@@ -314,7 +314,7 @@ Console.WriteLine(zs.Count.ToString())`, "GS0490"}
             // predicted was "presumably reachable the same way". It is, and it is
             // the route the conversion arm alone would not have closed. Measured on
             // the parent: compiled, ran, printed `0`.
-            yield[]object{"the-argument-position-of-the-same-pair-is-rejected", `package P
+            yield []object{"the-argument-position-of-the-same-pair-is-rejected", `package P
 import System
 import System.Collections.Generic
 
@@ -337,7 +337,7 @@ Console.WriteLine(take(xs).ToString())`, "GS0154"}
             // soundness for `Dictionary` rested on the accident that it exposes no
             // settable member a plan could be built from, where `List` exposes
             // `Capacity`; that accident is no longer what is load-bearing.
-            yield[]object{"a-dictionary-differing-only-in-its-value-type-is-rejected", `package P
+            yield []object{"a-dictionary-differing-only-in-its-value-type-is-rejected", `package P
 import System
 import System.Collections.Generic
 
@@ -354,7 +354,7 @@ Console.WriteLine(e.Count.ToString())`, "GS0155"}
             // MEMBER SURFACE instead: `List`'s surface is `Capacity`/`Count`,
             // identically `int32` on both sides, so the author cannot supply what
             // they cannot name.
-            yield[]object{"an-explicit-spread-of-the-same-pair-is-rejected", `package P
+            yield []object{"an-explicit-spread-of-the-same-pair-is-rejected", `package P
 import System
 import System.Collections.Generic
 
@@ -365,7 +365,7 @@ Console.WriteLine(zs.Count.ToString())`, "GS0490"}
             // The same spread WITH an explicit member that is not the one carrying
             // the difference. On the parent this compiled and printed `0` then `4`:
             // a capacity the author asked for, and every element gone.
-            yield[]object{"an-explicit-spread-supplying-an-unrelated-member-is-still-rejected", `package P
+            yield []object{"an-explicit-spread-supplying-an-unrelated-member-is-still-rejected", `package P
 import System
 import System.Collections.Generic
 
@@ -375,7 +375,7 @@ let zs = List[string]{ ...xs, Capacity: 4 }
 Console.WriteLine(zs.Count.ToString())`, "GS0490"}
             // The same pair reached through a G# function parameter rather than a
             // local, so the refusal cannot depend on how the value was introduced.
-            yield[]object{"the-same-pair-is-rejected-when-the-source-is-a-parameter", `package P
+            yield []object{"the-same-pair-is-rejected-when-the-source-is-a-parameter", `package P
 import System
 import System.Collections.Generic
 
@@ -393,7 +393,7 @@ Console.WriteLine(hand(List[int32]()).ToString())`, "GS0490"}
             // Identity is not a projection and must be untouched: same generic
             // definition, SAME closed type. This is also the shape of #2889's
             // erased slot, stated at its simplest.
-            yield[]object{"control-identity-between-two-constructions-of-the-same-type-still-assigns", `package P
+            yield []object{"control-identity-between-two-constructions-of-the-same-type-still-assigns", `package P
 import System
 import System.Collections.Generic
 
@@ -405,7 +405,7 @@ Console.WriteLine(b.Count.ToString())`, []string{"1"}}
             // projected onto an imported CLR target through its public settable
             // member surface. Without this row the fix would only be shown to say
             // no.
-            yield[]object{"control-a-genuine-projection-onto-an-imported-clr-target-still-lowers", `package P
+            yield []object{"control-a-genuine-projection-onto-an-imported-clr-target-still-lowers", `package P
 import System
 import System.Text
 
@@ -422,7 +422,7 @@ Console.WriteLine(builder.Capacity.ToString())`, []string{"24"}}
             // type, so this is an ordinary ADR-0148 projection and stays legal.
             // The new rule is about two constructions of ONE definition, not about
             // generic targets and not about `Capacity`.
-            yield[]object{"control-a-user-class-still-projects-into-a-generic-clr-target", `package P
+            yield []object{"control-a-user-class-still-projects-into-a-generic-clr-target", `package P
 import System
 import System.Collections.Generic
 
@@ -437,7 +437,7 @@ Console.WriteLine(lst.Capacity.ToString())`, []string{"8"}}
             // the rule cannot fire — and it must not, because here the projection
             // is FAITHFUL: a G# class's public fields ARE its state, so the value
             // arrives. Green on the parent and green here.
-            yield[]object{"control-a-user-generic-class-projects-between-constructions-and-carries-the-value", `package P
+            yield []object{"control-a-user-generic-class-projects-between-constructions-and-carries-the-value", `package P
 import System
 
 class Box[T] {
@@ -456,7 +456,7 @@ Console.WriteLine(c.Value.ToString())`, []string{"7"}}
             // would have refused this. Also in
             // `Issue2889LambdaThunkNestedGenericTests`; kept here because it is
             // this change's counterexample too.
-            yield[]object{"control-issue-2889-an-erased-invoke-slot-still-accepts-a-user-enum-list", `package P
+            yield []object{"control-issue-2889-an-erased-invoke-slot-still-accepts-a-user-enum-list", `package P
 import System
 import System.Collections.Generic
 
@@ -467,7 +467,7 @@ let enumAction System.Action[List[Mode]] =
 enumAction(List[Mode]{ Mode.Second })`, []string{"1"}}
             // #4004's counterexample, kept green so any future attempt to decide
             // this per type-argument POSITION trips over it immediately.
-            yield[]object{"control-task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
+            yield []object{"control-task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
 import System
 import System.Threading.Tasks
 
@@ -476,7 +476,7 @@ let c = t.ContinueWith[string](func(prev Task) string { return "cw" })
 Console.WriteLine(c.Result)`, []string{"cw"}}
             // The remedy the diagnostic leaves the author: build the target and
             // move the elements yourself. It must remain expressible.
-            yield[]object{"control-the-explicit-remedy-still-moves-every-element", `package P
+            yield []object{"control-the-explicit-remedy-still-moves-every-element", `package P
 import System
 import System.Collections.Generic
 

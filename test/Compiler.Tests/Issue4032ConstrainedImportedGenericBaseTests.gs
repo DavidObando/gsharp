@@ -326,7 +326,7 @@ public class Unconstrained<T>
         /// @returns Case name, G# source, expected diagnostic id.
         func ConstraintViolations() sequence[[]object] {
             // An IMPORTED type argument that does not derive from the bound.
-            yield[]object{"an-imported-type-argument-that-misses-the-base-constraint", `package P
+            yield []object{"an-imported-type-argument-that-misses-the-base-constraint", `package P
 import System
 import HelperLib2
 
@@ -338,7 +338,7 @@ Console.WriteLine(b.Tag)`, "GS0152"}
             // A SAME-COMPILATION class that does not derive from the bound. The
             // interesting one: its CLR surrogate is `object`, so the check has to
             // read the symbol's own base chain to answer at all.
-            yield[]object{"a-same-compilation-class-that-misses-the-base-constraint", `package P
+            yield []object{"a-same-compilation-class-that-misses-the-base-constraint", `package P
 import System
 import HelperLib2
 
@@ -353,7 +353,7 @@ let b = Bad2()
 Console.WriteLine(b.Tag)`, "GS0152"}
             // A SPECIAL constraint, so the message comes from the attribute mask
             // rather than from a bound type.
-            yield[]object{"a-reference-type-at-a-struct-constrained-base", `package P
+            yield []object{"a-reference-type-at-a-struct-constrained-base", `package P
 import System
 import HelperLib2
 
@@ -362,7 +362,7 @@ class BadStruct : StructConstrained[string] {
 
 let b = BadStruct()
 Console.WriteLine(b.Tag)`, "GS0152"}
-            yield[]object{"a-value-type-at-a-class-constrained-base", `package P
+            yield []object{"a-value-type-at-a-class-constrained-base", `package P
 import System
 import HelperLib2
 
@@ -376,18 +376,18 @@ Console.WriteLine(b.Tag)`, "GS0152"}
             // this change checked only the clause sites. Each of these compiled,
             // emitted an instantiation the CLR refuses, and threw
             // `TypeLoadException` on that build.
-            yield[]object{"review-a-direct-constructor-call-on-a-violating-instantiation", `package P
+            yield []object{"review-a-direct-constructor-call-on-a-violating-instantiation", `package P
 import System
 import HelperLib2
 
 let h = Handler[string]()
 Console.WriteLine(h.Tag)`, "GS0152"}
-            yield[]object{"review-a-static-member-through-a-violating-receiver", `package P
+            yield []object{"review-a-static-member-through-a-violating-receiver", `package P
 import System
 import HelperLib2
 
 Console.WriteLine(Handler[string].Describe())`, "GS0152"}
-            yield[]object{"review-an-object-literal-of-a-violating-instantiation", `package P
+            yield []object{"review-an-object-literal-of-a-violating-instantiation", `package P
 import System
 import HelperLib2
 
@@ -404,7 +404,7 @@ Console.WriteLine(h.Tag)`, "GS0152"}
             // `TypeLoadException: GenericArguments[1] … violates the constraint of
             // type parameter 'U'`. The bound is now answered on the SYMBOLIC
             // vector, where `IList[A]` and `List[Bee]`'s `IList[Bee]` differ.
-            yield[]object{"a-dependent-constraint-over-two-distinct-erased-classes", `package P
+            yield []object{"a-dependent-constraint-over-two-distinct-erased-classes", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
@@ -423,7 +423,7 @@ Console.WriteLine("compiled")`, "GS0152"}
             // records as additionally failing `ilverify` with
             // `UnsatisfiedMethodParentInst`. One repair covers both because the
             // constructor path routes through the same shared checker #4032 built.
-            yield[]object{"a-dependent-constraint-violated-through-the-constructor-spelling", `package P
+            yield []object{"a-dependent-constraint-violated-through-the-constructor-spelling", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
@@ -440,7 +440,7 @@ let c = Coupled[A, List[Bee]]()
 Console.WriteLine(c.Tag)`, "GS0152"}
             // Not only base clauses: any closed generic TYPE clause goes through
             // the same construction.
-            yield[]object{"a-field-type-that-violates-the-constraint", `package P
+            yield []object{"a-field-type-that-violates-the-constraint", `package P
 import System
 import HelperLib2
 
@@ -457,7 +457,7 @@ Console.WriteLine("x")`, "GS0152"}
         /// @returns Case name, G# source, expected stdout lines.
         func SatisfyingShapes() sequence[[]object] {
             // THE ISSUE'S OWN REPRO. Reported as GS0149; measured green.
-            yield[]object{"the-issues-repro-a-same-compilation-class-at-a-constrained-imported-base", `package P
+            yield []object{"the-issues-repro-a-same-compilation-class-at-a-constrained-imported-base", `package P
 import System
 import HelperLib2
 
@@ -470,7 +470,7 @@ class MyHandler : Handler[MyOptions] {
 let h = MyHandler()
 Console.WriteLine(h.Tag)`, []string{"t"}}
             // The issue's `new()` control.
-            yield[]object{"the-issues-new-control", `package P
+            yield []object{"the-issues-new-control", `package P
 import System
 import HelperLib2
 
@@ -483,7 +483,7 @@ class MyHandler : HandlerNew[MyOptions] {
 let h = MyHandler()
 Console.WriteLine(h.Tag)`, []string{"n"}}
             // The issue's no-constraint control.
-            yield[]object{"control-the-unconstrained-base-still-binds", `package P
+            yield []object{"control-the-unconstrained-base-still-binds", `package P
 import System
 import HelperLib2
 
@@ -498,7 +498,7 @@ Console.WriteLine(h.Tag)`, []string{"u"}}
             // THE ASP.NET SHAPE, and #4031's reduction. `AddScheme[TOptions,
             // THandler]`'s second constraint MENTIONS the first, which is the
             // dependent-bound case #4016's projection broke.
-            yield[]object{"the-aspnet-addscheme-shape-that-4031-could-only-pin-through-the-corpus", `package P
+            yield []object{"the-aspnet-addscheme-shape-that-4031-could-only-pin-through-the-corpus", `package P
 import System
 import HelperLib2
 
@@ -512,7 +512,7 @@ let b = AuthenticationBuilder()
 Console.WriteLine(b.AddScheme[MyOptions, MyHandler]("bearer"))`, []string{"added:bearer"}}
             // A satisfying IMPORTED type argument, so the green side is not only
             // the erased-symbol path.
-            yield[]object{"an-imported-type-argument-that-satisfies-the-base-constraint", `package P
+            yield []object{"an-imported-type-argument-that-satisfies-the-base-constraint", `package P
 import System
 import HelperLib2
 
@@ -522,7 +522,7 @@ class Derived : Handler[SchemeOptions] {
 let d = Derived()
 Console.WriteLine(d.Tag)`, []string{"t"}}
             // Special constraints, satisfied.
-            yield[]object{"satisfied-special-constraints", `package P
+            yield []object{"satisfied-special-constraints", `package P
 import System
 import HelperLib2
 
@@ -543,7 +543,7 @@ Console.WriteLine(OkStruct().Tag)`, []string{"c", "v"}}
             // FIXED by the follow-up PR; this row keeps the imported-argument
             // spelling exactly as it was, so that the fix is measured by the new
             // fixture rather than by silently changing a #4032 row.
-            yield[]object{"review-the-expression-spellings-still-bind-when-the-constraint-holds", `package P
+            yield []object{"review-the-expression-spellings-still-bind-when-the-constraint-holds", `package P
 import System
 import HelperLib2
 
@@ -573,7 +573,7 @@ Console.WriteLine(lit.Tag)`, []string{"t", "described", "z"}}
             // `Issue4037UnforwardedConstrainedGenericBaseTests`. What belongs here
             // is the invariant #4032 owns: a forwarded open instantiation is not
             // constraint-CHECKED against the erased vector, and stays green.
-            yield[]object{"control-open-instantiations-are-not-constraint-checked", `package P
+            yield []object{"control-open-instantiations-are-not-constraint-checked", `package P
 import System
 import HelperLib2
 
@@ -594,7 +594,7 @@ Console.WriteLine(openLocal[SchemeOptions]())`, []string{"1"}}
             // A same-compilation class at an UNCONSTRAINED imported generic is the
             // commonest shape in the whole corpus. It must not have acquired a
             // constraint answer.
-            yield[]object{"control-a-same-compilation-class-at-an-unconstrained-generic", `package P
+            yield []object{"control-a-same-compilation-class-at-an-unconstrained-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -623,7 +623,7 @@ Console.WriteLine(lookup["a"].N)`, []string{"1", "4"}}
         /// the CLR comparison rather than answered symbolically.
         /// @returns Case name, G# source, expected stdout lines.
         func DependentBoundControls() sequence[[]object] {
-            yield[]object{"a-dependent-constraint-matched-over-one-erased-class", `package P
+            yield []object{"a-dependent-constraint-matched-over-one-erased-class", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
@@ -634,14 +634,14 @@ class A {
 
 var c Coupled[A, List[A]]
 Console.WriteLine("compiled")`, []string{"compiled"}}
-            yield[]object{"a-dependent-constraint-matched-over-imported-types", `package P
+            yield []object{"a-dependent-constraint-matched-over-imported-types", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
 
 var c Coupled[string, List[string]]
 Console.WriteLine("compiled")`, []string{"compiled"}}
-            yield[]object{"a-covariant-dependent-constraint-over-erased-classes", `package P
+            yield []object{"a-covariant-dependent-constraint-over-erased-classes", `package P
 import System
 import System.Collections.Generic
 import HelperLib2

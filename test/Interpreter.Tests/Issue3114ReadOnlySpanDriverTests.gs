@@ -483,14 +483,14 @@ func Main() {
 402
 `)} {
                 for driver in Enum.GetValues[Issue3114ReadOnlySpanDriverTests.Driver]() {
-                    yield[]object{sample, expected, driver}
+                    yield []object{sample, expected, driver}
                 }
             }
         }
 
         func Drivers() sequence[[]object] {
             for driver in Enum.GetValues[Issue3114ReadOnlySpanDriverTests.Driver]() {
-                yield[]object{driver}
+                yield []object{driver}
             }
         }
 

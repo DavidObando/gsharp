@@ -315,7 +315,7 @@ internal shared class MemberTokenResolver {
             ) &&
                 receiverExpression != nil &&
                 memberName != nil {
-                yield(receiverExpression, memberName)
+                yield (receiverExpression, memberName)
             }
         }
     }
@@ -333,7 +333,7 @@ internal shared class MemberTokenResolver {
             for initializer in creation.Initializers {
                 if MatchesToken(initializer.PropertyIdentifier, token) {
                     if creation.Target != nil {
-                        yield(creation.Target!!, initializer.PropertyIdentifier.Text)
+                        yield (creation.Target!!, initializer.PropertyIdentifier.Text)
                     }
                 }
             }
@@ -343,7 +343,7 @@ internal shared class MemberTokenResolver {
                 if MatchesToken(member.Initializer.FieldIdentifier, token) && SemanticLookup.GetInitializerTarget(
                     collection
                 ) is {} target {
-                    yield(target, member.Initializer.FieldIdentifier.ValueText)
+                    yield (target, member.Initializer.FieldIdentifier.ValueText)
                 }
             }
         }

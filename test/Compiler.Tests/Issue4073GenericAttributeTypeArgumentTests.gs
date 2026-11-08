@@ -370,49 +370,49 @@ delegate Plain(value int32);
         /// @returns Case name, the annotated G# declaration, and the expected reified arguments in order.
         func TypeArguments() sequence[[]object] {
             // --- The issue's shape and its argument-kind siblings. ---
-            yield[]object{"constructed-generic-over-source-enum", `@Marker(typeof(Box[Status]))
+            yield []object{"constructed-generic-over-source-enum", `@Marker(typeof(Box[Status]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[P.Status@P]"}}
-            yield[]object{"constructed-generic-over-source-class", `@Marker(typeof(Box[Local]))
+            yield []object{"constructed-generic-over-source-class", `@Marker(typeof(Box[Local]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[P.Local@P]"}}
-            yield[]object{"nested-constructed-generic-over-source-enum", `@Marker(typeof(Box[Box[Status]]))
+            yield []object{"nested-constructed-generic-over-source-enum", `@Marker(typeof(Box[Box[Status]]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[HelperLib4073.Box`1@HelperLib4073[P.Status@P]]"}}
-            yield[]object{"two-parameter-generic-over-source-enum-and-class", `@Marker(typeof(Pair[Status, Local]))
+            yield []object{"two-parameter-generic-over-source-enum-and-class", `@Marker(typeof(Pair[Status, Local]))
 class Target {
 }`, []string{"HelperLib4073.Pair`2@HelperLib4073[P.Status@P,P.Local@P]"}}
-            yield[]object{"slice-of-source-enum-as-argument", `@Marker(typeof(Box[[]Status]))
+            yield []object{"slice-of-source-enum-as-argument", `@Marker(typeof(Box[[]Status]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[P.Status@P[]]"}}
-            yield[]object{"nilable-source-enum-as-argument", `@Marker(typeof(Box[Status?]))
+            yield []object{"nilable-source-enum-as-argument", `@Marker(typeof(Box[Status?]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[System.Nullable`1@System.Private.CoreLib[P.Status@P]]"}}
             // The reported failure mode: a generic whose parameter is CONSTRAINED,
             // so reflection materialisation refuses the surrogate outright.
-            yield[]object{"constrained-generic-over-source-enum", `@Marker(typeof(Constrained[Status]))
+            yield []object{"constrained-generic-over-source-enum", `@Marker(typeof(Constrained[Status]))
 class Target {
 }`, []string{"HelperLib4073.Constrained`1@HelperLib4073[P.Status@P]"}}
             // --- Argument POSITIONS. Same defect, three different encoders. ---
-            yield[]object{"named-argument", `@Marker(typeof(string), Named: typeof(Box[Status]))
+            yield []object{"named-argument", `@Marker(typeof(string), Named: typeof(Box[Status]))
 class Target {
 }`, []string{"System.String@System.Private.CoreLib", "HelperLib4073.Box`1@HelperLib4073[P.Status@P]"}}
-            yield[]object{"array-element-in-named-argument", `@Marker(typeof(string), Many: []Type{typeof(Box[Status])})
+            yield []object{"array-element-in-named-argument", `@Marker(typeof(string), Many: []Type{typeof(Box[Status])})
 class Target {
 }`, []string{"System.String@System.Private.CoreLib", "HelperLib4073.Box`1@HelperLib4073[P.Status@P]"}}
-            yield[]object{"array-positional-argument", `@Many([]Type{typeof(Box[Status]), typeof(Local)})
+            yield []object{"array-positional-argument", `@Many([]Type{typeof(Box[Status]), typeof(Local)})
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[P.Status@P]", "P.Local@P"}}
             // The whole attribute vanished when a Type[] held a same-compilation
             // scalar typeof: the widened `object[]` container failed the ctor match.
-            yield[]object{"array-of-source-scalars", `@Many([]Type{typeof(Status), typeof(Local)})
+            yield []object{"array-of-source-scalars", `@Many([]Type{typeof(Status), typeof(Local)})
 class Target {
 }`, []string{"P.Status@P", "P.Local@P"}}
             // --- A same-compilation generic: a different branch, same wrong name. ---
-            yield[]object{"source-generic-over-source-enum", `@Marker(typeof(MyBox[Status]))
+            yield []object{"source-generic-over-source-enum", `@Marker(typeof(MyBox[Status]))
 class Target {
 }`, []string{"P.MyBox`1@P[P.Status@P]"}}
-            yield[]object{"source-generic-over-imported-argument", `@Marker(typeof(MyBox[int32]))
+            yield []object{"source-generic-over-imported-argument", `@Marker(typeof(MyBox[int32]))
 class Target {
 }`, []string{"P.MyBox`1@P[System.Int32@System.Private.CoreLib]"}}
             // --- A constructed generic DELEGATE. Review feedback on PR #4087: the
@@ -420,48 +420,48 @@ class Target {
             // the source-generic rows above. `CreateConstructed` PRESERVES
             // `TypeParameters`, so the arity suffix is right and `P.Pred`1`
             // RESOLVES — to the open definition, silently losing the argument.
-            yield[]object{"constructed-delegate-over-source-enum", `@Marker(typeof(Pred[Status]))
+            yield []object{"constructed-delegate-over-source-enum", `@Marker(typeof(Pred[Status]))
 class Target {
 }`, []string{"P.Pred`1@P[P.Status@P]"}}
-            yield[]object{"constructed-delegate-over-source-class", `@Marker(typeof(Pred[Local]))
+            yield []object{"constructed-delegate-over-source-class", `@Marker(typeof(Pred[Local]))
 class Target {
 }`, []string{"P.Pred`1@P[P.Local@P]"}}
             // Erasure is not what breaks this one: an IMPORTED argument lost the
             // instantiation just the same, exactly as `MyBox[int32]` did.
-            yield[]object{"constructed-delegate-over-imported-argument", `@Marker(typeof(Pred[int32]))
+            yield []object{"constructed-delegate-over-imported-argument", `@Marker(typeof(Pred[int32]))
 class Target {
 }`, []string{"P.Pred`1@P[System.Int32@System.Private.CoreLib]"}}
             // Nested as an ARGUMENT it is worse than a wrong name: the blob named an
             // open generic in an instantiation slot, so the reified type had no
             // `FullName` at all.
-            yield[]object{"imported-generic-over-constructed-delegate", `@Marker(typeof(Box[Pred[Status]]))
+            yield []object{"imported-generic-over-constructed-delegate", `@Marker(typeof(Box[Pred[Status]]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[P.Pred`1@P[P.Status@P]]"}}
-            yield[]object{"source-generic-over-constructed-delegate", `@Marker(typeof(MyBox[Pred[Status]]))
+            yield []object{"source-generic-over-constructed-delegate", `@Marker(typeof(MyBox[Pred[Status]]))
 class Target {
 }`, []string{"P.MyBox`1@P[P.Pred`1@P[P.Status@P]]"}}
             // --- Controls. Already correct before the fix; must not move. ---
-            yield[]object{"non-generic-delegate", `@Marker(typeof(Plain))
+            yield []object{"non-generic-delegate", `@Marker(typeof(Plain))
 class Target {
 }`, []string{"P.Plain@P"}}
             // The OPEN definition still serialises as the open definition — the
             // constructed arm must not fire on an empty argument vector.
-            yield[]object{"open-generic-delegate", `@Marker(typeof(Pred))
+            yield []object{"open-generic-delegate", `@Marker(typeof(Pred))
 class Target {
 }`, []string{"P.Pred`1@P"}}
-            yield[]object{"scalar-source-enum", `@Marker(typeof(Status))
+            yield []object{"scalar-source-enum", `@Marker(typeof(Status))
 class Target {
 }`, []string{"P.Status@P"}}
-            yield[]object{"scalar-source-class", `@Marker(typeof(Local))
+            yield []object{"scalar-source-class", `@Marker(typeof(Local))
 class Target {
 }`, []string{"P.Local@P"}}
-            yield[]object{"constructed-generic-over-imported-argument", `@Marker(typeof(Box[int32]))
+            yield []object{"constructed-generic-over-imported-argument", `@Marker(typeof(Box[int32]))
 class Target {
 }`, []string{"HelperLib4073.Box`1@HelperLib4073[System.Int32@System.Private.CoreLib]"}}
-            yield[]object{"scalar-imported-type", `@Marker(typeof(string))
+            yield []object{"scalar-imported-type", `@Marker(typeof(string))
 class Target {
 }`, []string{"System.String@System.Private.CoreLib"}}
-            yield[]object{"array-of-imported-scalars", `@Many([]Type{typeof(int32), typeof(string)})
+            yield []object{"array-of-imported-scalars", `@Many([]Type{typeof(int32), typeof(string)})
 class Target {
 }`, []string{"System.Int32@System.Private.CoreLib", "System.String@System.Private.CoreLib"}}
         }

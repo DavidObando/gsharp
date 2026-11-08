@@ -252,8 +252,8 @@ partial class CSharpToGSharpTranslator {
                 this
                 .context
                 .GetSymbolInfo(identifier)
-                .Symbol is IParameterSymbol {
-                return IdentifierExpression("__underscore")
+                .Symbol is IParameterSymbol underscoreParam {
+                return IdentifierExpression(this.EmittedName(underscoreParam, "underscore"))
             }
             if identifier.Identifier.ValueText == "_" && this.context.GetSymbolInfo(identifier).Symbol == nil {
                 return IdentifierExpression("_")

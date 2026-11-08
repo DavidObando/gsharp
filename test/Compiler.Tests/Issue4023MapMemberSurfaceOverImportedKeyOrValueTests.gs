@@ -138,7 +138,7 @@ public struct ImportedPoint
         func AcceptedCases() sequence[[]object] {
             // The three members the issue names, over an IMPORTED class value,
             // each read back through Count so a no-op would be visible.
-            yield[]object{"count-remove-and-containskey-over-an-imported-class-value", `package Demo
+            yield []object{"count-remove-and-containskey-over-an-imported-class-value", `package Demo
 import System
 import HelperLib
 
@@ -155,7 +155,7 @@ main2()`, []string{"2", "True", "True", "1", "False"}}
             // The issue's worst row: `for k, v in m` over an imported value was a
             // GS9998 internal compiler error. Both the key AND the value are read
             // in the body.
-            yield[]object{"for-k-v-in-a-map-with-an-imported-class-value", `package Demo
+            yield []object{"for-k-v-in-a-map-with-an-imported-class-value", `package Demo
 import System
 import HelperLib
 
@@ -174,7 +174,7 @@ main2()`, []string{"k=first"}}
             // first seen: the class's own ClrType is null, so the erasure reaches
             // for its imported base's ClrType and lands back in the same
             // cross-context hole.
-            yield[]object{"count-and-keys-over-a-same-compilation-class-with-an-imported-base", `package Demo
+            yield []object{"count-and-keys-over-a-same-compilation-class-with-an-imported-base", `package Demo
 import System
 import HelperLib
 
@@ -197,7 +197,7 @@ func main2() {
 
 main2()`, []string{"1", "x", "derived"}}
             // The members the issue did NOT name, over an imported class value.
-            yield[]object{"add-containsvalue-trygetvalue-and-clear-over-an-imported-class-value", `package Demo
+            yield []object{"add-containsvalue-trygetvalue-and-clear-over-an-imported-class-value", `package Demo
 import System
 import HelperLib
 
@@ -221,7 +221,7 @@ main2()`, []string{"1", "True", "True", "added", "0"}}
             // An imported STRUCT value — the axis the issue's "value is a CLASS"
             // diagnosis misses, and the one that also exposed a spurious `box` at
             // the argument before the fix took its final shape.
-            yield[]object{"the-full-surface-over-an-imported-struct-value", `package Demo
+            yield []object{"the-full-surface-over-an-imported-struct-value", `package Demo
 import System
 import HelperLib
 
@@ -240,7 +240,7 @@ func main2() {
 main2()`, []string{"1", "True", "a=7"}}
             // A BCL struct and a BCL generic reached the same hole: neither is a
             // class, and neither needs a user library at all.
-            yield[]object{"the-full-surface-over-a-bcl-struct-and-a-bcl-generic-value", `package Demo
+            yield []object{"the-full-surface-over-a-bcl-struct-and-a-bcl-generic-value", `package Demo
 import System
 import System.Collections.Generic
 
@@ -262,7 +262,7 @@ func main2() {
 
 main2()`, []string{"1", "True", "a=2", "1", "True", "True", "0"}}
             // The KEY position, which the issue does not mention at all.
-            yield[]object{"the-member-surface-over-an-imported-key", `package Demo
+            yield []object{"the-member-surface-over-an-imported-key", `package Demo
 import System
 import HelperLib
 
@@ -288,7 +288,7 @@ main2()`, []string{"1", "True", "key=3"}}
         /// scope; they are not proof.
         /// @returns Name, G# source, expected stdout lines.
         func ControlCases() sequence[[]object] {
-            yield[]object{"control-the-dictionary-spelling-of-the-same-type", `package Demo
+            yield []object{"control-the-dictionary-spelling-of-the-same-type", `package Demo
 import System
 import System.Collections.Generic
 import HelperLib
@@ -304,7 +304,7 @@ func main2() {
 }
 
 main2()`, []string{"1", "True", "a=base"}}
-            yield[]object{"control-map-index-read-and-write-over-an-imported-value", `package Demo
+            yield []object{"control-map-index-read-and-write-over-an-imported-value", `package Demo
 import System
 import HelperLib
 
@@ -317,7 +317,7 @@ func main2() {
 }
 
 main2()`, []string{"written"}}
-            yield[]object{"control-a-map-over-shapes-that-never-lost-their-members", `package Demo
+            yield []object{"control-a-map-over-shapes-that-never-lost-their-members", `package Demo
 import System
 
 class Plain {
@@ -348,7 +348,7 @@ main2()`, []string{"1", "True", "b=t", "True"}}
             // An OPEN map — key or value is a type parameter — is the shape
             // #3311's symbolic Dictionary view was built for. It must keep
             // working: the fix changes when a map has a CLR type at all.
-            yield[]object{"control-an-open-map-over-type-parameters", `package Demo
+            yield []object{"control-an-open-map-over-type-parameters", `package Demo
 import System
 
 func countVia[K, V](m map[K, V], probe K) int32 {
@@ -371,7 +371,7 @@ main2()`, []string{"2"}}
         /// member surface to anything the map does not have.
         /// @returns Name, G# source, an expected diagnostic id.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"a-member-a-dictionary-does-not-have-is-still-refused", `package Demo
+            yield []object{"a-member-a-dictionary-does-not-have-is-still-refused", `package Demo
 import System
 import HelperLib
 
@@ -386,7 +386,7 @@ main2()`, "GS0159"}
             // by design and NOT an instance of this issue. Pinned because the
             // matrix that found this bug also found this row, and a future reader
             // should not chase it.
-            yield[]object{"len-of-a-map-is-retired-by-adr-0174-not-broken-by-this-issue", `package Demo
+            yield []object{"len-of-a-map-is-retired-by-adr-0174-not-broken-by-this-issue", `package Demo
 import System
 
 func main2() {

@@ -65,7 +65,7 @@ stderr:
     shared {
         /// Gets executable delegate-combination cases.
         func Cases() sequence[[]object] {
-            yield[]object{"imported-local-and-expression", `package P
+            yield []object{"imported-local-and-expression", `package P
 import System
 
 func First() { Console.WriteLine("first") }
@@ -92,7 +92,7 @@ callbacks -= first
 callbacks?()
 callbacks -= second
 Console.WriteLine(callbacks == nil)`, []string{"first", "second", "second", "first", "first", "second", "True"}}
-            yield[]object{"structural-local", `package P
+            yield []object{"structural-local", `package P
 import System
 
 let first (() -> void) = () -> Console.WriteLine("structural-first")
@@ -105,7 +105,7 @@ callbacks -= first
 callbacks?()
 callbacks = callbacks - second
 Console.WriteLine(callbacks == nil)`, []string{"structural-first", "structural-second", "structural-second", "True"}}
-            yield[]object{"named-field-and-property", `package P
+            yield []object{"named-field-and-property", `package P
 import System
 
 delegate Handler(value string);
@@ -145,7 +145,7 @@ box.Property?("property-removed")`, []string{
                     "second:field-removed",
                     "second:property-removed"
                 }}
-            yield[]object{"source-and-clr-method-groups", `package P
+            yield []object{"source-and-clr-method-groups", `package P
 import System
 
 func Print(value string) { Console.WriteLine("source:" + value) }

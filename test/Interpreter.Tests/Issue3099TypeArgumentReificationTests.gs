@@ -281,57 +281,57 @@ Reify[int32]()`
 
     shared {
         func TypeArgumentCases() sequence[[]object] {
-            yield[]object{"class", `class Payload {
+            yield []object{"class", `class Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "Payload"}
-            yield[]object{"struct", `struct Payload {
+            yield []object{"struct", `struct Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "Payload"}
-            yield[]object{"enum", `enum Payload {
+            yield []object{"enum", `enum Payload {
     Eleven = 11,
     TwentyTwo = 22,
     ThirtyThree = 33,
 }`, "Payload"}
-            yield[]object{"string", string.Empty, "string"}
-            yield[]object{"nested-class", `class Owner {
+            yield []object{"string", string.Empty, "string"}
+            yield []object{"nested-class", `class Owner {
     class Payload {
         let Eleven int32
         var TwentyTwo string
     }
 }`, "Owner.Payload"}
-            yield[]object{"nested-struct", `class Owner {
+            yield []object{"nested-struct", `class Owner {
     struct Payload {
         let Eleven int32
         var TwentyTwo string
     }
 }`, "Owner.Payload"}
-            yield[]object{"generic-owner-nested-class", `class Owner[T] {
+            yield []object{"generic-owner-nested-class", `class Owner[T] {
     class Payload {
         let Eleven T
         var TwentyTwo string
     }
 }`, "Owner[int32].Payload"}
-            yield[]object{"generic-owner-nested-struct", `class Owner[T] {
+            yield []object{"generic-owner-nested-struct", `class Owner[T] {
     struct Payload {
         let Eleven T
         var TwentyTwo string
     }
 }`, "Owner[int32].Payload"}
-            yield[]object{"generic-owner-multi-arity-nested", `class Owner[TFirst, TSecond] {
+            yield []object{"generic-owner-multi-arity-nested", `class Owner[TFirst, TSecond] {
     class Payload {
         let Eleven TFirst
         var TwentyTwo TSecond
     }
 }`, "Owner[int32, string].Payload"}
-            yield[]object{"generic-owner-nested-generic", `class Owner[T] {
+            yield []object{"generic-owner-nested-generic", `class Owner[T] {
     class Payload[U] {
         let Eleven T
         var TwentyTwo U
     }
 }`, "Owner[int32].Payload[string]"}
-            yield[]object{"generic-owner-deep-nested", `class Owner[T] {
+            yield []object{"generic-owner-deep-nested", `class Owner[T] {
     class Middle[U] {
         class Payload {
             let Eleven T
@@ -339,7 +339,7 @@ Reify[int32]()`
         }
     }
 }`, "Owner[int32].Middle[string].Payload"}
-            yield[]object{"gsharp-generic", `struct Payload[T] {
+            yield []object{"gsharp-generic", `struct Payload[T] {
     let Value T
     var Imported List[T]
     var Slice []T
@@ -350,19 +350,19 @@ Reify[int32]()`
     }
     const Kilo int32 = 1000
 }`, "Payload[int32]"}
-            yield[]object{"imported-generic", `struct Payload {
+            yield []object{"imported-generic", `struct Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "List[Payload]"}
-            yield[]object{"nullable", `struct Payload {
+            yield []object{"nullable", `struct Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "Payload?"}
-            yield[]object{"slice", `struct Payload {
+            yield []object{"slice", `struct Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "[]Payload"}
-            yield[]object{"array", `struct Payload {
+            yield []object{"array", `struct Payload {
     let Eleven int32
     var TwentyTwo string
 }`, "[3]Payload"}

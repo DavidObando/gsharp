@@ -397,7 +397,7 @@ Console.WriteLine(FirstChar("gsharp"))
         }
 
         private func PinningCapableClosures() sequence[(Label string, Resolver ReferenceResolver)] {
-            yield("host runtime", ReferenceResolver.Default())
+            yield ("host runtime", ReferenceResolver.Default())
             for closure in TargetingPackClosures() {
                 yield closure
             }
@@ -419,7 +419,7 @@ Console.WriteLine(FirstChar("gsharp"))
                 if refDirectory == nil {
                     continue
                 }
-                yield(
+                yield (
                     Path.GetFileName(versionDirectory),
                     ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"))
                 )

@@ -1045,75 +1045,15 @@ partial class CSharpToGSharpTranslator {
             return attributes
         }
 
+        // Issue #3467 / #4307: `EmittedNameAllocator` keeps `_` for unreferenced
+        // source `_` parameters and imported metadata `_` parameters, and renames
+        // a single referenced source `_` parameter to `underscore` (`underscore_2`,
+        // etc. on collision) across its declaration, body references, and named
+        // arguments.
         private func MapParameterName(
             symbol IParameterSymbol,
             fallbackNode Microsoft.CodeAnalysis.SyntaxNode?
-        ) string? {
-            let underscoreParameter Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ParameterSyntax? = fallbackNode as Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ParameterSyntax ??
-                symbol
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() as Microsoft
-                .CodeAnalysis
-                .CSharp
-                .Syntax
-                .ParameterSyntax
-            if symbol.Name != "_" || underscoreParameter == nil {
-                return this.EmittedName(symbol, symbol.Name)
-            }
-            // Issue #3467: gsc accepts `_` as a (repeatable) discard parameter
-            // name, so an unreferenced C# `_` parameter keeps its spelling. A
-            // single `_` parameter that the body actually READS (legal C#: `_`
-            // is only a discard when it cannot bind) still needs a real
-            // identifier, since G# `_` is a true blank; only that case renames
-            // to `__underscore` (paired with the identifier-reference rewrite
-            // in TranslateIdentifierName).
-            let underscoreCount = if underscoreParameter.Parent is ParameterListSyntax parameterList {
-                parameterList.Parameters.Count(
-                    (p Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax) -> p.Identifier.ValueText == "_"
-                )
-            } else {
-                1
-            }
-            if underscoreCount > 1 {
-                return "_"
-            }
-            let body Microsoft.CodeAnalysis.SyntaxNode? = underscoreParameter.Ancestors().FirstOrDefault(
-                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is AnonymousFunctionExpressionSyntax ||
-                    ancestor is LocalFunctionStatementSyntax ||
-                    ancestor is BaseMethodDeclarationSyntax
-            )
-            let model = if body == nil {
-                this.context.SemanticModel
-            } else {
-                this.context.Compilation.GetSemanticModel(body.SyntaxTree)
-            }
-            let referenced = body != nil &&
-                body
-                .DescendantNodes()
-                .OfType[IdentifierNameSyntax]()
-                .Any(
-                (identifier IdentifierNameSyntax) -> identifier
-                    .Identifier
-                    .ValueText == "_" &&
-                    SymbolEqualityComparer
-                    .Default
-                    .Equals(model.GetSymbolInfo(identifier).Symbol, symbol)
-            )
-            return if referenced {
-                "__underscore"
-            } else {
-                "_"
-            }
-        }
+        ) string? -> this.EmittedName(symbol, symbol.Name)
 
         /// Computes the G# default-value expression for an optional C# parameter,
         /// or `null` when the parameter is required or its default cannot be
@@ -2868,20 +2808,7 @@ partial class CSharpToGSharpTranslator {
                 .ContainingSymbol {
                 for symbol in this.GetLiftedHelperOccupiedSymbols(scope_) {
                     if !SymbolEqualityComparer.Default.Equals(symbol, localFunction) {
-                        let name string? = if symbol is IParameterSymbol{Name: "_"} parameter &&
-                            parameter
-                            .DeclaringSyntaxReferences
-                            .FirstOrDefault()
-                            ?.GetSyntax() is Microsoft
-                            .CodeAnalysis
-                            .CSharp
-                            .Syntax
-                            .ParameterSyntax syntax {
-                            this.MapParameterName(parameter, syntax)
-                        } else {
-                            this.EmittedName(symbol, symbol.Name)
-                        }
-                        occupied.Add(name!!)
+                        occupied.Add(this.EmittedName(symbol, symbol.Name)!!)
                     }
                 }
             }
@@ -2924,7 +2851,12 @@ partial class CSharpToGSharpTranslator {
                 return cached
             }
             let symbols = List[ISymbol]()
-            for reference in $scope!!.DeclaringSyntaxReferences {
+            let references = if $scope is IMethodSymbol{AssociatedSymbol: {} associated} {
+                $scope.DeclaringSyntaxReferences.AsEnumerable().Concat(associated.DeclaringSyntaxReferences)
+            } else {
+                $scope!!.DeclaringSyntaxReferences.AsEnumerable()
+            }
+            for reference in references {
                 using let scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree)
                 symbols.AddRange(
                     reference

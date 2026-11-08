@@ -105,7 +105,7 @@ open class Issue5168CatchFilterWriteNarrowingTests {
         func RejectedCases() sequence[[]object] {
             // The reduction from the issue: the first filter stores nil and
             // declines, so the second clause reads nil.
-            yield[]object{"later-clause", `
+            yield []object{"later-clause", `
 package P
 import System
 
@@ -128,7 +128,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // The filter accepts, so its own handler body reads nil.
-            yield[]object{"own-clause", `
+            yield []object{"own-clause", `
 package P
 import System
 
@@ -149,7 +149,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // The write is made by a closure that the filter calls.
-            yield[]object{"callback-filter", `
+            yield []object{"callback-filter", `
 package P
 import System
 
@@ -172,7 +172,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // The filter of the second clause writes, and the third reads.
-            yield[]object{"third-clause", `
+            yield []object{"third-clause", `
 package P
 import System
 
@@ -197,7 +197,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // The finally block runs after the declining filter.
-            yield[]object{"finally-block", `
+            yield []object{"finally-block", `
 package P
 import System
 
@@ -224,7 +224,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // An enclosing filter runs in the first pass, before the inner finally.
-            yield[]object{"enclosing-filter-inner-finally", `
+            yield []object{"enclosing-filter-inner-finally", `
 package P
 import System
 
@@ -250,7 +250,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // A replacement exception from a finally reaches an inner catch after the outer filter ran.
-            yield[]object{"enclosing-filter-inner-catch", `
+            yield []object{"enclosing-filter-inner-catch", `
 package P
 import System
 
@@ -280,7 +280,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // An enclosing filter assigns a callable alias, so the alias no longer proves an external call.
-            yield[]object{"enclosing-filter-callable-alias", `
+            yield []object{"enclosing-filter-callable-alias", `
 package P
 import System
 
@@ -310,7 +310,7 @@ func Run(callback () -> void) int32 {
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
             // An enclosing filter reads a property whose factory clears the variable; the filter has no call expression.
-            yield[]object{"enclosing-filter-getter", `
+            yield []object{"enclosing-filter-getter", `
 package P
 import System
 
@@ -336,7 +336,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // An enclosing filter assigns the variable directly.
-            yield[]object{"enclosing-filter-assignment", `
+            yield []object{"enclosing-filter-assignment", `
 package P
 import System
 
@@ -359,7 +359,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // A replacement exception reaches the first clause after the filter of the second clause ran.
-            yield[]object{"earlier-clause-after-later-filter", `
+            yield []object{"earlier-clause-after-later-filter", `
 package P
 import System
 
@@ -390,7 +390,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // An outer filter replaces a callable alias, and an inner catch handles a replacement exception.
-            yield[]object{"enclosing-filter-alias-after-inner-try", `
+            yield []object{"enclosing-filter-alias-after-inner-try", `
 package P
 import System
 
@@ -423,7 +423,7 @@ func Run(callback () -> void) int32 {
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
             // A branch join must not restore a fact that an enclosing filter cleared.
-            yield[]object{"enclosing-filter-if-join", `
+            yield []object{"enclosing-filter-if-join", `
 package P
 import System
 
@@ -457,7 +457,7 @@ func Run(flag bool) int32 {
 func Main() { Console.WriteLine(Run(true)) }
 `}
             // The exit state of a try keeps the callable alias that its own declining filter replaced.
-            yield[]object{"own-filter-alias-after-try", `
+            yield []object{"own-filter-alias-after-try", `
 package P
 import System
 
@@ -484,7 +484,7 @@ func Run(callback () -> void) int32 {
 func Main() { Console.WriteLine(Run(() -> { })) }
 `}
             // A write nested in the index of a ref operand still runs.
-            yield[]object{"enclosing-filter-nested-ref-in-index", `
+            yield []object{"enclosing-filter-nested-ref-in-index", `
 package P
 import System
 
@@ -511,7 +511,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `}
             // The summary of a compound statement keeps the alias that the filter of a try inside it replaced.
-            yield[]object{"own-filter-alias-in-if", `
+            yield []object{"own-filter-alias-in-if", `
 package P
 import System
 
@@ -540,7 +540,7 @@ func Run(callback () -> void, flag bool) int32 {
 func Main() { Console.WriteLine(Run(() -> { }, true)) }
 `}
             // A using declaration runs its initializer, which can run a filter of an enclosing try.
-            yield[]object{"using-initializer-under-filter", `
+            yield []object{"using-initializer-under-filter", `
 package P
 import System
 
@@ -580,7 +580,7 @@ func Main() { Console.WriteLine(Run()) }
         /// @returns The case data.
         func AcceptedCases() sequence[[]object] {
             // A filter that only reads keeps the narrowing in every clause.
-            yield[]object{"filter-without-write", `
+            yield []object{"filter-without-write", `
 package P
 import System
 
@@ -600,7 +600,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // A filter that writes another variable leaves the narrowing alone.
-            yield[]object{"filter-writes-other-variable", `
+            yield []object{"filter-writes-other-variable", `
 package P
 import System
 
@@ -624,7 +624,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"4"}}
             // The write is real, and the program re-proves the fact first.
-            yield[]object{"guard-after-filter-write", `
+            yield []object{"guard-after-filter-write", `
 package P
 import System
 
@@ -648,7 +648,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"-1"}}
             // A filter of an enclosing try that names no narrowed variable keeps the narrowing.
-            yield[]object{"enclosing-filter-unrelated", `
+            yield []object{"enclosing-filter-unrelated", `
 package P
 import System
 
@@ -675,7 +675,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3", "1"}}
             // A filter that only reads the narrowed local keeps the narrowing in the filter and the handlers.
-            yield[]object{"filter-reads-narrowed-local", `
+            yield []object{"filter-reads-narrowed-local", `
 package P
 import System
 
@@ -694,7 +694,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // An `in` argument cannot write its storage.
-            yield[]object{"filter-passes-in-argument", `
+            yield []object{"filter-passes-in-argument", `
 package P
 import System
 
@@ -714,7 +714,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // An index input of a ref operand is only read, so the narrowed local keeps its fact.
-            yield[]object{"filter-ref-operand-index-read", `
+            yield []object{"filter-ref-operand-index-read", `
 package P
 import System
 
@@ -735,7 +735,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // The store of an assignment happens after a filter that ran during its right side.
-            yield[]object{"assignment-from-call-under-filter", `
+            yield []object{"assignment-from-call-under-filter", `
 package P
 import System
 
@@ -756,7 +756,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // An index input of a ?? = target is only read.
-            yield[]object{"filter-coalescing-index-read", `
+            yield []object{"filter-coalescing-index-read", `
 package P
 import System
 
@@ -776,7 +776,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"3"}}
             // A store in a finally block establishes a fresh fact under a filter.
-            yield[]object{"finally-store-under-filter", `
+            yield []object{"finally-store-under-filter", `
 package P
 import System
 
@@ -799,7 +799,7 @@ func Run() int32 {
 func Main() { Console.WriteLine(Run()) }
 `, []string{"4"}}
             // The index of a member target is only read.
-            yield[]object{"filter-member-of-indexed-ref-read", `
+            yield []object{"filter-member-of-indexed-ref-read", `
 package P
 import System
 

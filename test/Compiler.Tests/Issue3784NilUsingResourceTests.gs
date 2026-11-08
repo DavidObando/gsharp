@@ -93,7 +93,7 @@ stderr:
         /// @returns The case data.
         func Cases() sequence[[]object] {
             // The reduction of the defect: a nilable resource that IS nil.
-            yield[]object{"nil-resource-is-a-no-op", `
+            yield []object{"nil-resource-is-a-no-op", `
 package P
 import System
 import System.IO
@@ -108,7 +108,7 @@ Console.WriteLine(Run())
             // The exact shape the migrated src/Compiler/Program.cs carries: a
             // conditional whose nil arm is spelled `default(T?)`, nested two deep
             // so the inner cleanup runs inside the outer protected region.
-            yield[]object{"optional-stream-pair-both-nil", `
+            yield []object{"optional-stream-pair-both-nil", `
 package P
 import System
 import System.IO
@@ -125,7 +125,7 @@ Console.WriteLine(Emit(nil, nil))
 `, []string{"emitted"}}
             // ANTI-VACUITY: a real resource must still be disposed exactly once,
             // and the nil sibling in the same statement list must still be skipped.
-            yield[]object{"real-resource-still-disposed-once", `
+            yield []object{"real-resource-still-disposed-once", `
 package P
 import System
 import System.IO
@@ -155,7 +155,7 @@ Console.WriteLine(probe.Count.ToString())
             // ANTI-VACUITY: an exception thrown inside the protected region still
             // reaches the caller, and the nil cleanup does not mask it with an NRE
             // of its own.
-            yield[]object{"throw-through-a-nil-resource", `
+            yield []object{"throw-through-a-nil-resource", `
 package P
 import System
 import System.IO

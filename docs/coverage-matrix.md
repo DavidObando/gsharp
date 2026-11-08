@@ -286,6 +286,7 @@ WhileLetStatement
 WhileStatement
 WhitespaceToken
 WithExpression
+YieldKeyword
 YieldStatement
 
 [BoundNodeKind]

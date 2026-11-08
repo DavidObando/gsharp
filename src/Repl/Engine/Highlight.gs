@@ -83,22 +83,22 @@ shared class Highlight {
                     continue
                 }
                 if frag.Position > cursor {
-                    yield(cursor, token.Text.Substring(cursor - token.Position, frag.Position - cursor), stringColor)
+                    yield (cursor, token.Text.Substring(cursor - token.Position, frag.Position - cursor), stringColor)
                 }
                 for exprToken in SyntaxTree.ParseTokens(frag.Text) {
                     if string.IsNullOrEmpty(exprToken.Text) {
                         continue
                     }
-                    yield(frag.Position + exprToken.Position, exprToken.Text, ColorFor(exprToken.Kind))
+                    yield (frag.Position + exprToken.Position, exprToken.Text, ColorFor(exprToken.Kind))
                 }
                 cursor = frag.Position + frag.Text.Length
             }
             if tokenEnd > cursor {
-                yield(cursor, token.Text.Substring(cursor - token.Position, tokenEnd - cursor), stringColor)
+                yield (cursor, token.Text.Substring(cursor - token.Position, tokenEnd - cursor), stringColor)
             }
             yield break
         }
-        yield(token.Position, token.Text, ColorFor(token.Kind))
+        yield (token.Position, token.Text, ColorFor(token.Kind))
     }
 
     private func ColorFor(kind SyntaxKind) SemanticColor {
