@@ -1692,7 +1692,7 @@ internal partial class StatementBinder {
                     ) {
                         continue
                     }
-                    if ConversionOperatorReaches(source, target) {
+                    if ConversionOperatorReaches(source, target, conversion.AllowExplicit) {
                         return true
                     }
                 }
@@ -1917,7 +1917,7 @@ internal partial class StatementBinder {
 
     // A conversion operator converts the value to the target, directly or between their value types (a lifted
     // conversion). Every check without the `?` of a nullable value type is kept, so no operator is missed.
-    private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol) bool {
+    private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol, allowExplicit bool = false) bool {
         let sourceValue = StripNullableValue(source)
         let targetValue = StripNullableValue(target)
         if TypeSymbol.ContainsTypeParameter(sourceValue) || TypeSymbol.ContainsTypeParameter(targetValue) ||
@@ -1941,14 +1941,14 @@ internal partial class StatementBinder {
                     sourceTuple.ElementTypes[index]
                 let targetElement = StripReferenceNullability(targetTuple.ElementTypes[index]) ??
                     targetTuple.ElementTypes[index]
-                if ConversionOperatorReaches(sourceElement, targetElement) {
+                if ConversionOperatorReaches(sourceElement, targetElement, allowExplicit) {
                     return true
                 }
             }
         }
-        return conversions.HasUserDefinedImplicitConversion(source, target) ||
-            conversions.HasUserDefinedImplicitConversion(sourceValue, target) ||
-            conversions.HasUserDefinedImplicitConversion(sourceValue, targetValue) || Conversion.Classify(
+        return conversions.HasUserDefinedConversion(source, target, allowExplicit) ||
+            conversions.HasUserDefinedConversion(sourceValue, target, allowExplicit) ||
+            conversions.HasUserDefinedConversion(sourceValue, targetValue, allowExplicit) || Conversion.Classify(
             sourceValue,
             targetValue
         )
@@ -2356,7 +2356,7 @@ internal partial class StatementBinder {
             TestedType(candidate, out _) != nil {
             return false
         }
-        if test.ValueIsNull || RegionPatternValueIsNull(test) {
+        if test.ValueIsNull || RegionPatternValueIsNull(test, effects) {
             return false
         }
         if test.Subject is not{} subject || ConversionTypes(subject, effects) is not{} inputs || inputs.Count == 0 {
@@ -2383,10 +2383,30 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func RegionPatternValueIsNull(test RegionPatternTest) bool {
-        guard let path = test.ConstantValuePath else {
+    private func RegionPatternValueIsNull(test RegionPatternTest, effects RegionEffects) bool {
+        guard let constant = test.ConstantValue else {
             return false
         }
+        if constant.Path is {} path && !RegionConstantPathIsNull(path) {
+            return false
+        }
+        for target in constant.Targets {
+            guard let types = ConversionTypes(target, effects) else {
+                return false
+            }
+            if types.Count == 0 || types.Any(
+                (type TypeSymbol) -> !Conversion.IsReferenceLikeTarget(type) && !NullableLifting.IsAnyValueTypeNullable(
+                    type as NullableTypeSymbol
+                ) &&
+                    !NullableLifting.IsValueTypeNullableClr(type.ClrType)
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func RegionConstantPathIsNull(path RegionReceiverPath) bool {
         if path.RootIsCall || path.RootType != nil || path.RootLiteralType != nil {
             return false
         }

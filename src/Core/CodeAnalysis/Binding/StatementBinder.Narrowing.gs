@@ -8694,7 +8694,18 @@ internal partial class StatementBinder {
                     Invariant.Required(nativeType, "a detected native integer has a type", expression: "nativeType")
                         .Name
                 )
-            } else if ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue) {
+            } else if ConstantExpressionEvaluator.TryFold(
+                convertedInitializer,
+                declaredVariable.Type,
+                out constValue
+            ) ||
+                (
+                declaredVariable is LocalVariableSymbol && NullableLifting.IsAnyValueTypeNullable(
+                    declaredVariable.Type as NullableTypeSymbol
+                ) &&
+                    ConstantExpressionEvaluator.TryEvaluate(convertedInitializer, out constValue) && constValue == nil
+            ) {
+                // Nullable value constants have no CLR Constant row. Keep their null payload on local symbols only.
                 if declaredVariable is GlobalVariableSymbol global {
                     global.SetConstantValue(constValue)
                 } else if declaredVariable is LocalVariableSymbol constLocal {

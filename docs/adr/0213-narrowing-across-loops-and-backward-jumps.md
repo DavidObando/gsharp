@@ -1339,6 +1339,12 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   cannot resolve still counts, and a non-empty map literal (`map[K, V]{k: v}`) counts as a construction because key
   insertion calls `GetHashCode` and `Equals`. The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of
   a tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+- *Intrinsic casts and null constants (#5879, #5881).* `cast[T](operand)` records a conversion site, not an invocation.
+  The shared conversion classifier includes explicit operators at this site, and the walker visits the operand's effects.
+  Null-pattern provenance follows defaults, null-preserving conversions, and `const` declarations inside the region.
+  The consumer checks each conversion target as a reference or nullable value type.
+  Mutable `var` and non-`const` `let` origins do not prove constant null values.
+  Nested-region composition preserves these value records without changing cached records.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
   value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
   a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its

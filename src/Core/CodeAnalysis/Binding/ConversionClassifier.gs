@@ -463,6 +463,17 @@ internal class ConversionClassifier {
         targetType TypeSymbol
     ) bool -> HasUserDefinedImplicitConversionForTypes(sourceType, targetType)
 
+    /// Checks whether an implicit or explicit conversion operator applies.
+    /// @param sourceType The source type.
+    /// @param targetType The conversion target.
+    /// @param allowExplicit Whether explicit operators can apply.
+    /// @returns Whether a conversion operator can apply.
+    func HasUserDefinedConversion(
+        sourceType TypeSymbol,
+        targetType TypeSymbol,
+        allowExplicit bool
+    ) bool -> HasUserDefinedConversionForTypes(sourceType, targetType, allowExplicit)
+
     /// Core `BindConversion` overload: classifies the conversion from
     /// [`expression`](paramref)'s static type to [`type`](paramref),
     /// surfaces the appropriate diagnostic when the classification is
@@ -5875,25 +5886,29 @@ internal class ConversionClassifier {
         /// @param sourceType The source type.
         /// @param targetType The target type.
         /// @returns `true` when an implicit conversion operator applies.
-        func HasUserDefinedImplicitConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol) bool {
+        func HasUserDefinedImplicitConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol) bool ->
+        HasUserDefinedConversionForTypes(sourceType, targetType, allowExplicit: false)
+
+        /// Checks symbolic, lifted and imported conversion operators through the binder's shared resolution.
+        /// @param sourceType The source type.
+        /// @param targetType The conversion target.
+        /// @param allowExplicit Whether explicit operators can apply.
+        /// @returns Whether a conversion operator can apply.
+        func HasUserDefinedConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol, allowExplicit bool) bool {
             if sourceType is NullableTypeSymbol liftedSource &&
-                TryResolveLiftedUserDefinedSymbolConversion(
-                liftedSource,
-                targetType,
-                allowExplicit: false,
-                out _,
-                out _
-            ) {
+                TryResolveLiftedUserDefinedSymbolConversion(liftedSource, targetType, allowExplicit, out _, out _) {
                 return true
             }
-            if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _) {
+            if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit, out _) {
                 return true
             }
-            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod) &&
-                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
-                sourceType,
-                targetType,
-                symbolicMethod!!
+            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod, allowExplicit) &&
+                (
+                allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                    sourceType,
+                    targetType,
+                    symbolicMethod!!
+                )
             ) {
                 return true
             }
@@ -5902,11 +5917,17 @@ internal class ConversionClassifier {
                 ClrOperatorResolution.TryResolveConversionForTypes(
                 sourceType,
                 targetType,
-                allowExplicit: false,
+                allowExplicit,
                 out var method,
                 out _
             ) &&
-                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(sourceType, targetType, method!!)
+                (
+                allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                    sourceType,
+                    targetType,
+                    method!!
+                )
+            )
         }
 
         /// ADR-0087 §3 R5 / issue #765: when a method is invoked on a constructed
