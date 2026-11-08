@@ -5625,7 +5625,8 @@ internal partial class ExpressionBinder {
                 syntax
             } else {
                 default(SyntaxNode?)
-            }
+            },
+            syntax
         )
         if requiresFixed &&
             TryGetFixedBufferFieldAccess(pointer, out var bufferAccess) &&
@@ -7144,12 +7145,14 @@ internal partial class ExpressionBinder {
             receiver BoundExpression,
             declaringType StructSymbol,
             field FieldSymbol,
-            escapeSyntax SyntaxNode? = nil
+            escapeSyntax SyntaxNode? = nil,
+            fixedBufferSyntax SyntaxNode? = nil
         ) BoundExpression {
             let fieldAccess = BoundFieldAccessExpression(nil, receiver, declaringType, field)
             // Preserve escaping-source syntax for validation after capture and state-machine promotion.
             let addressOf = BoundAddressOfExpression(nil, fieldAccess, unmanaged: true){
-                FixedBufferEscapeSyntax = escapeSyntax
+                FixedBufferEscapeSyntax = escapeSyntax,
+                FixedBufferSyntax = fixedBufferSyntax ?? escapeSyntax
             }
             if field.FixedBufferElementType is not{} elementType {
                 throw InvalidOperationException("Fixed-buffer field is missing its element type.")

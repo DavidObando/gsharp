@@ -28,6 +28,32 @@ import Xunit
 /// CS0266). Also covers the bare-name decay of issue #4377.
 open class Issue4378FixedBufferPinBinderTests {
     @Theory
+    @InlineData("return int32((h.B.Name)[await NextIndex()])")
+    @InlineData("return int32(h.B.Name[await NextIndex()])")
+    @InlineData("return int32((b.Name)[await NextIndex()])")
+    @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
+    @InlineData("h.B.Name[await NextIndex()] += int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] += await NextByte()\n    return 0")
+    func AwaitingIndexBufferPointer_ReportsGS0638(statement string) {
+        let source = Prelude + `async func NextIndex() int32 {
+    await System.Threading.Tasks.Task.Yield()
+    return 0
+}
+async func NextByte() int8 {
+    await System.Threading.Tasks.Task.Yield()
+    return int8(1)
+}
+unsafe async func f(h Holder, b Bone) int32 {
+    ` + statement + `
+}`
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
     @InlineData(true)
     @InlineData(false)
     func InlineAwaitBufferPointer_ReportsGS0638(parameter bool) {

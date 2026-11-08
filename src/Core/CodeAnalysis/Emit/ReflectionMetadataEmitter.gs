@@ -4976,8 +4976,18 @@ internal class ReflectionMetadataEmitter {
         receiver BoundExpression,
         canLoadVariableAddress(VariableSymbol) -> bool
     ) bool -> switch receiver {
-        case variable is BoundVariableExpression: canLoadVariableAddress(variable.Variable)
-        case field is BoundFieldAccessExpression: if field.Receiver is {} owner {
+        case variable is BoundVariableExpression: (
+            variable.NarrowedType == nil ||
+                variable.NarrowedType == variable
+                .Variable
+                .Type ||
+                (
+                variable.Type is not TypeParameterSymbol &&
+                    (IsValueTypeSymbol(variable.Type) || variable.Type?.ClrType?.IsValueType == true)
+            )
+        ) &&
+            canLoadVariableAddress(variable.Variable)
+        case field is BoundFieldAccessExpression: field.NarrowedType == nil && if field.Receiver is {} owner {
             Binder.IsReferenceTypeForConstraint(owner.Type) || this.IsAddressableReceiverStorage(
                 owner,
                 canLoadVariableAddress

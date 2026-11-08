@@ -1274,6 +1274,13 @@ shared class SpillSequenceSpiller {
         /// guarantees awaits precede the (possibly ByRefLike) handler local, so
         /// no handler local is live across a suspension after this flattening.
         private func SpillBlockExpression(block BoundBlockExpression) BoundSpillSequenceExpression {
+            var remainingHasAwait = HasAwait(block.Expression)
+            for var i = block.Statements.Length - 1; i >= 0; i-- {
+                if remainingHasAwait && block.Statements[i] is BoundVariableDeclaration{Initializer: {} initializer} {
+                    MarkSpilledFixedBufferEscapes(initializer)
+                }
+                remainingHasAwait |= HasAwait(block.Statements[i])
+            }
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
             for statement in block.Statements {
                 RewriteStatementToList(statement, sideEffects)
@@ -1347,6 +1354,9 @@ shared class SpillSequenceSpiller {
             let rightHasAwait = HasAwait(binary.Right)
             if !leftHasAwait && !rightHasAwait {
                 return Trivial(binary)
+            }
+            if rightHasAwait {
+                MarkSpilledFixedBufferEscapes(binary.Left)
             }
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3644,6 +3654,9 @@ shared class SpillSequenceSpiller {
             if !aHasAwait && !bHasAwait {
                 return Trivial(original)
             }
+            if bHasAwait {
+                MarkSpilledFixedBufferEscapes(a)
+            }
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
             var left = a
@@ -3783,10 +3796,34 @@ shared class SpillSequenceSpiller {
                 sideEffects.Add(BoundExpressionStatement(nil, value))
                 return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
             }
+            MarkSpilledFixedBufferEscapes(value)
             let temp = MakeSpillTemp(value.Type)
             locals.Add(temp)
             sideEffects.Add(BoundVariableDeclaration(nil, temp, value))
             return BoundVariableExpression(nil, temp)
+        }
+
+        private func MarkSpilledFixedBufferEscapes(expression BoundExpression) {
+            switch expression {
+                case addressOf is BoundAddressOfExpression when addressOf.FixedBufferEscapeSyntax == nil &&
+                    addressOf.FixedBufferSyntax != nil {
+                    addressOf.FixedBufferEscapeSyntax = addressOf.FixedBufferSyntax
+                }
+                case conversion is BoundConversionExpression {
+                    MarkSpilledFixedBufferEscapes(conversion.Expression)
+                }
+                case binary is BoundBinaryExpression {
+                    MarkSpilledFixedBufferEscapes(binary.Left)
+                    MarkSpilledFixedBufferEscapes(binary.Right)
+                }
+                case block is BoundBlockExpression {
+                    MarkSpilledFixedBufferEscapes(block.Expression)
+                }
+                case conditional is BoundConditionalExpression {
+                    MarkSpilledFixedBufferEscapes(conditional.WhenTrue)
+                    MarkSpilledFixedBufferEscapes(conditional.WhenFalse)
+                }
+            }
         }
 
         private func MakeLabel() BoundLabel {

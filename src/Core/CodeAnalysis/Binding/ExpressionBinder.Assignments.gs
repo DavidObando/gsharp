@@ -4007,7 +4007,8 @@ internal partial class ExpressionBinder {
                 MakeFixedBufferPointer(
                     BoundVariableExpression(nil, implicitField.Receiver),
                     implicitField.StructType,
-                    implicitField.Field
+                    implicitField.Field,
+                    fixedBufferSyntax: syntax.TargetIdentifier
                 )
             } else {
                 let makeNarrowedField(TypeSymbol) -> BoundExpression = (

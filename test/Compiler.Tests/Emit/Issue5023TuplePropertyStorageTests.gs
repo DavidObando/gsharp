@@ -4,6 +4,51 @@ import GSharp.Compiler.Tests
 import Xunit
 
 open class Issue5023TuplePropertyStorageTests {
+    @Fact
+    func NarrowedTypeParameterBlockReceiver_UsesTypedSpillForConstrainedCalls() {
+        let source = `package Test
+import System
+interface IReader { func Read() int32; }
+struct ValueReader : IReader {
+    var Value int32 = 40
+    func Read() int32 {
+        Value++
+        return Value
+    }
+    override func ToString() string -> "V:${Value}"
+}
+class ReferenceReader : IReader {
+    var Value int32 = 50
+    func Read() int32 {
+        Value++
+        return Value
+    }
+    override func ToString() string -> "R:${Value}"
+}
+func ProbeInterface[T IReader](boxed object) {
+    var prefixes = 0
+    if boxed is T {
+        Console.WriteLine(({ prefixes++
+            boxed }).Read())
+        Console.WriteLine(boxed.Read())
+        Console.WriteLine(prefixes)
+    }
+}
+func ProbeObject[T](boxed object) {
+    var prefixes = 0
+    if boxed is T {
+        Console.WriteLine(({ prefixes++
+            boxed }).ToString())
+        Console.WriteLine(prefixes)
+    }
+}
+ProbeInterface[ValueReader](ValueReader{})
+ProbeInterface[ReferenceReader](ReferenceReader())
+ProbeObject[ValueReader](ValueReader{})
+ProbeObject[ReferenceReader](ReferenceReader())`
+        Assert.Equal("41\n41\n1\n51\n52\n1\nV:40\n1\nR:50\n1\n", CompileAndRun(source))
+    }
+
     @Theory
     @InlineData("({ prefixes++\n pair }).Item1", "pair.Item1")
     @InlineData("({ prefixes++\n pair }).Item2.Item1", "pair.Item2.Item1")

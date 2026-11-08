@@ -29,6 +29,36 @@ import Xunit
 /// the declaring struct decays exactly like the explicit `this.Name`.
 open class Issue4378FixedBufferPinEmitTests {
     @Theory
+    @InlineData("return int32((h.B.Name)[await NextIndex()])")
+    @InlineData("return int32(h.B.Name[await NextIndex()])")
+    @InlineData("return int32((b.Name)[await NextIndex()])")
+    @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
+    func AwaitingIndexBufferPointer_DriverRejectsUnpinnedDecay(statement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + `async func NextIndex() int32 {
+    await System.Threading.Tasks.Task.Yield()
+    return 0
+}
+async func NextByte() int8 {
+    await System.Threading.Tasks.Task.Yield()
+    return int8(1)
+}
+unsafe async func bad(h Holder, b BoneInfo) int32 {
+    ` + statement + `
+}`
+        let (code, output) = fixture.TryCompile(source, "awaiting-index-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.LastIndexOf("Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("awaiting-index-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Theory
     @InlineData(true)
     @InlineData(false)
     func InlineAwaitBufferPointer_DriverRejectsUnpinnedDecay(parameter bool) {
