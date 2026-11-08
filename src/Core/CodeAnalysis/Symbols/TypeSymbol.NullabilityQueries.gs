@@ -198,6 +198,13 @@ open partial class TypeSymbol : Symbol {
         }
     }
 
+    /// Returns the declaration type for a known null constant.
+    internal func ForNullConstant() TypeSymbol -> if ReferenceNullability == ReferenceNullabilityKind.NotNull {
+        NullableTypeSymbol.Get(this)
+    } else {
+        this
+    }
+
     shared {
         /// An eight-argument `ValueTuple`/`Tuple` nests elements eight
         /// onward in its `TRest` argument. (cref:TupleTypeSymbol) — what

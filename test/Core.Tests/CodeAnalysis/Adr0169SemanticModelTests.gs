@@ -1380,11 +1380,23 @@ func Run() {
             let root = QualifierInitializer(tree, name)
             let (type, qualifier, read) = QueryQualifier(model, root)
             Assert.Same(root.LeftPart, qualifier)
-            if read is BoundClrPropertyAccessExpression imported {
-                Assert.Equal(imported.Member.DeclaringType, type.ClrType)
-            } else {
-                Assert.Same(TypeSymbol.UInt8, Assert.IsType[BoundLiteralExpression](read).Type)
-            }
+            let literal = Assert.IsType[BoundLiteralExpression](read)
+            Assert.Same(
+                if name == "alternate" {
+                    TypeSymbol.UInt8
+                } else {
+                    TypeSymbol.Decimal
+                },
+                literal.Type
+            )
+            Assert.Equal(
+                if name == "alternate" {
+                    cast[object](byte.MaxValue)
+                } else {
+                    cast[object](0m)
+                },
+                literal.Value
+            )
             Assert.Equal(
                 if name == "alternate" {
                     typeof(byte)

@@ -901,13 +901,15 @@ internal partial class ExpressionBinder {
                             staticType = symbolicMemberType
                         }
                         staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
-                        if staticMember is FieldInfo symbolicLiteral && symbolicLiteral.IsLiteral {
+                        if staticMember is FieldInfo symbolicLiteral &&
+                            ConstantExpressionEvaluator
+                            .TryGetClrFieldConstantValue(symbolicLiteral, out var symbolicConstant) {
                             let literalType = if classSymbol.ClassType.IsEnum {
                                 cast[TypeSymbol](classSymbol.SymbolicReceiver!!)
                             } else {
                                 staticType
                             }
-                            return BoundLiteralExpression(nil, symbolicLiteral.GetRawConstantValue(), literalType)
+                            return BoundLiteralExpression(nil, symbolicConstant, literalType, symbolicLiteral)
                         }
                         return ConversionClassifier.AutoDereferenceRefReturn(
                             BoundClrPropertyAccessExpression(
@@ -922,8 +924,11 @@ internal partial class ExpressionBinder {
                     staticType = NormalizeImportedSemanticAggregate(staticType, staticMember)
                     // Literal (const) fields aren't real runtime fields, so
                     // inline their constant value rather than emit `ldsfld`.
-                    if staticMember is FieldInfo literal && literal.IsLiteral {
-                        return BoundLiteralExpression(nil, literal.GetRawConstantValue(), staticType)
+                    if staticMember is FieldInfo literal && ConstantExpressionEvaluator.TryGetClrFieldConstantValue(
+                        literal,
+                        out var constantValue
+                    ) {
+                        return BoundLiteralExpression(nil, constantValue, staticType, literal)
                     }
                     return ConversionClassifier.AutoDereferenceRefReturn(
                         BoundClrPropertyAccessExpression(nil, nil, staticMember, staticType)

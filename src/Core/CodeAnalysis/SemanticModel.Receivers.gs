@@ -918,6 +918,10 @@ partial class SemanticModel {
                 access.ConstrainedInterfaceType ?? access.Receiver?.Type ?? access.StaticContainerType,
                 access.Member
             )
+            case literal is BoundLiteralExpression{ImportedConstantField: {} field}: ImportedMemberSymbol(
+                literal.StaticQualifierType,
+                field
+            )
             default: default(Symbol?)
         }
     }

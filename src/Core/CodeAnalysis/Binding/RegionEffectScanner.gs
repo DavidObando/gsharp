@@ -1413,7 +1413,12 @@ internal sealed class RegionEffectScanner {
                     Rebase(test.Value)
                 },
                 test.ValueIsNull,
-                CandidateUnlessDeclared(test.Candidate)
+                CandidateUnlessDeclared(test.Candidate),
+                if test.ConstantValuePath?.RootName is {} root && IsDeclared(root) {
+                    default(RegionReceiverPath?)
+                } else {
+                    test.ConstantValuePath
+                }
             )
         }
         for var i = nilComparesBefore; i < current.NilCompareOperandPaths.Count; i++ {
@@ -2648,6 +2653,15 @@ internal sealed class RegionEffectScanner {
         }
     }
 
+    private func BuildConstantValuePath(expression ExpressionSyntax?) RegionReceiverPath? -> switch expression {
+        case parenthesized is ParenthesizedExpressionSyntax: BuildConstantValuePath(parenthesized.Expression)
+        case name is NameExpressionSyntax when !IsDeclared(name.IdentifierToken.ValueText):
+        RootPath(name.IdentifierToken.ValueText)
+        case accessor is AccessorExpressionSyntax:
+        AppendPath(BuildConstantValuePath(accessor.LeftPart), accessor.RightPart)
+        default: default(RegionReceiverPath?)
+    }
+
     // The path of the part that follows a dot after [`prefix`](paramref).
     private func AppendPath(prefix RegionReceiverPath?, part ExpressionSyntax) RegionReceiverPath? {
         if prefix == nil {
@@ -2778,7 +2792,8 @@ internal sealed class RegionEffectScanner {
                     BuildPath(unwrapped)
                 },
                 isNull,
-                tested
+                tested,
+                BuildConstantValuePath(unwrapped)
             )
         )
     }

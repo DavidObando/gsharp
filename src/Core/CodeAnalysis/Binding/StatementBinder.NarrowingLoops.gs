@@ -339,7 +339,7 @@ internal partial class StatementBinder {
             }
             case field is FieldInfo {
                 type = ClrNullability.GetFieldTypeSymbol(field)
-                touchesInitializingType = !field.IsLiteral &&
+                touchesInitializingType = !ConstantExpressionEvaluator.TryGetClrFieldConstantValue(field, out _) &&
                     ClrStaticMemberOwnerInitializes(field.DeclaringType ?? clrType)
                 return true
             }
@@ -2356,6 +2356,9 @@ internal partial class StatementBinder {
             TestedType(candidate, out _) != nil {
             return false
         }
+        if test.ValueIsNull || RegionPatternValueIsNull(test) {
+            return false
+        }
         if test.Subject is not{} subject || ConversionTypes(subject, effects) is not{} inputs || inputs.Count == 0 {
             return true
         }
@@ -2376,6 +2379,43 @@ internal partial class StatementBinder {
                     return true
                 }
             }
+        }
+        return false
+    }
+
+    private func RegionPatternValueIsNull(test RegionPatternTest) bool {
+        guard let path = test.ConstantValuePath else {
+            return false
+        }
+        if path.RootIsCall || path.RootType != nil || path.RootLiteralType != nil {
+            return false
+        }
+        guard let names = PatternNameSegments(path, nil) else {
+            return false
+        }
+        if names.Count == 1 {
+            return ConstantExpressionEvaluator.IsNullConstantSymbol($scope.TryLookupSymbol(names[0]))
+        }
+        guard let owner = ResolveTestedType(string.Join(".", names.Take(names.Count - 1)), 0) else {
+            return false
+        }
+        let name = names[names.Count - 1]
+        if owner is StructSymbol structure && TypeMemberModel.TryGetStaticFieldIncludingInherited(
+            structure,
+            name,
+            out var field,
+            out _
+        ) {
+            return ConstantExpressionEvaluator.IsNullConstantSymbol(field)
+        }
+        if owner is InterfaceSymbol contract {
+            return ConstantExpressionEvaluator.IsNullConstantSymbol(contract.GetStaticField(name))
+        }
+        if owner.ClrType is {} clr && ReflectionType(clr) is {} reflected && reflected.GetField(
+            name,
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy
+        ) is {} clrField {
+            return ConstantExpressionEvaluator.TryGetClrFieldConstantValue(clrField, out var value) && value == nil
         }
         return false
     }
@@ -2848,8 +2888,10 @@ internal partial class StatementBinder {
                             if !field.IsStatic && !reflected.IsSealed {
                                 return true
                             }
-                            if field.IsStatic &&
-                                !field.IsLiteral &&
+                            if field.IsStatic && !ConstantExpressionEvaluator.TryGetClrFieldConstantValue(
+                                field,
+                                out _
+                            ) &&
                                 ClrStaticMemberOwnerInitializes(field.DeclaringType ?? reflected) {
                                 return true
                             }

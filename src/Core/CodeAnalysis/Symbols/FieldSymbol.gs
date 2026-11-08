@@ -180,6 +180,9 @@ class FieldSymbol : Symbol {
     func SetConstantValue(value object?) {
         HasConstantValue = true
         ConstantValue = value
+        if IsConst && value == nil {
+            Type = Type.ForNullConstant()
+        }
     }
 
     /// Sets the resolved (cref:ExplicitOffset). Intended to be

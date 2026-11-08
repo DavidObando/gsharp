@@ -100,7 +100,8 @@ class BoundConstantPattern : BoundPattern {
             valueType TypeSymbol,
             value BoundExpression
         ) BoundExpression -> if value is BoundConversionExpression conversion &&
-            conversion.Type == valueType {
+            conversion.Type == valueType &&
+            conversion.IsPatternInputConversion {
             conversion.Expression
         } else {
             value
