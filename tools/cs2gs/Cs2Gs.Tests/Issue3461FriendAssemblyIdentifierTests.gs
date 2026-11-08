@@ -88,7 +88,7 @@ public static class Holder
         )
         try {
             loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Friend.Library" {
-                loadContext.LoadFromAssemblyPath(libraryPath)
+                loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             } else {
                 default(Assembly?)
             }

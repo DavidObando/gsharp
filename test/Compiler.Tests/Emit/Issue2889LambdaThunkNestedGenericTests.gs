@@ -478,7 +478,7 @@ public static class Runner
                 isCollectible: true
             )
             try {
-                let libraryAssembly = loadContext.LoadFromAssemblyPath(libraryPath)
+                let libraryAssembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAssembly
                     .GetName().Name {
                     libraryAssembly
@@ -493,7 +493,7 @@ public static class Runner
                 let sourceType = listType.GetGenericArguments().Single()
                 Assert.Equal("i2889publicapi.Src", sourceType.FullName)
                 Assert.NotEqual(typeof(object), sourceType)
-                let consumerAssembly = loadContext.LoadFromAssemblyPath(consumerPath)
+                let consumerAssembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 let run = consumerAssembly.GetType("Consumer.Runner")!!.GetMethod("Run")!!
                 Assert.Equal(1, run.Invoke(nil, nil))
             } finally {
@@ -597,13 +597,13 @@ stderr:
                     Path.GetFileNameWithoutExtension(libraryPath),
                     StringComparison.Ordinal
                 ) {
-                    loadContext.LoadFromAssemblyPath(libraryPath)
+                    loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 } else {
                     default(Assembly?)
                 }
             }
             try {
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let lambdaMethods = assembly
                     .GetTypes()
                     .SelectMany(

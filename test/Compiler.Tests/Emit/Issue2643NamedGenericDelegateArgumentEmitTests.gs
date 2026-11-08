@@ -135,11 +135,11 @@ func Main() {
             let context = AssemblyLoadContext("Issue2643." + caseName, isCollectible: true)
             try {
                 context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> switch name.Name {
-                    case "Lib2643": context.LoadFromAssemblyPath(libraries.LibraryPath)
-                    case "Lib2643.Models": context.LoadFromAssemblyPath(libraries.ModelsPath)
+                    case "Lib2643": context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraries.LibraryPath)))
+                    case "Lib2643.Models": context.LoadFromStream(MemoryStream(File.ReadAllBytes(libraries.ModelsPath)))
                     default: default(Assembly?)
                 }
-                let assembly = context.LoadFromAssemblyPath(consumerPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 let output = Console.Out
                 using let captured = StringWriter()
                 Console.SetOut(captured)

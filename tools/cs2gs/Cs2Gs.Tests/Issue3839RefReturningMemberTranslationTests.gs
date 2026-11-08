@@ -105,7 +105,7 @@ Translated G#:
         )
         let loadContext = AssemblyLoadContext("TranslatedRefMethod_ReturnsALiveAlias", isCollectible: true)
         try {
-            let library = loadContext.LoadFromAssemblyPath(libraryPath)
+            let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let holder = library.GetType("Repro.Holder") ??
                 throw InvalidOperationException(
                 "Repro.Holder is missing from the emitted assembly: " + string.Join(
@@ -125,7 +125,7 @@ Translated G#:
             )
             // Behaviour direction: a C# consumer writes through the reference.
             let driverPath = CompileDriver(workDir, libraryPath, readOnly)
-            let driver = loadContext.LoadFromAssemblyPath(driverPath)
+            let driver = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(driverPath)))
             let result object? = driver.GetType("Repro.Driver")!!.GetMethod("Run")!!.Invoke(nil, nil)
             Assert.Equal(99, Assert.IsType[int32](result))
         } finally {

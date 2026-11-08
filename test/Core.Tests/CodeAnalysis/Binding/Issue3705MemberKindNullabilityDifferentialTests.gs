@@ -1177,9 +1177,9 @@ func Main() {
         }
 
         private func DeleteOutputDirectory(directory string) {
-            try {
+            if Directory.Exists(directory) {
                 Directory.Delete(directory, recursive: true)
-            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }
     }
 }

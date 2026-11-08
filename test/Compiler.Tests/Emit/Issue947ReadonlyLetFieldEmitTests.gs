@@ -163,7 +163,7 @@ Console.WriteLine(p.x)`
             Assert.True(exit == 0, "gsc failed: $output")
             let alc = AssemblyLoadContext("issue947-initonly", isCollectible: true)
             try {
-                let asm = alc.LoadFromAssemblyPath(outPath)
+                let asm = alc.LoadFromStream(MemoryStream(File.ReadAllBytes(outPath)))
                 let pointType = asm.GetTypes().FirstOrDefault((t Type) -> t.Name == "Point") ??
                     throw InvalidOperationException("Point type not found")
                 let letField = pointType.GetField(

@@ -289,7 +289,7 @@ func Conversion() Expression[Func[Box[string]?, int32?]] {
             }
             IlVerifier.Verify(assemblyPath)
             let loadContext = AssemblyLoadContext(caseName, isCollectible: true)
-            return (loadContext.LoadFromAssemblyPath(assemblyPath), loadContext)
+            return (loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath))), loadContext)
         }
     }
 }

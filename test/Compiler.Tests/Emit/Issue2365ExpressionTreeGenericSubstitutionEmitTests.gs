@@ -254,14 +254,14 @@ class MigrationBuilder {
             LoadContext AssemblyLoadContext
         ) {
             let loadContext = AssemblyLoadContext(consumerAssemblyName, isCollectible: true)
-            let libraryAsm = loadContext.LoadFromAssemblyPath(libraryPath)
+            let libraryAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if name.Name == libraryAsm
                 .GetName().Name {
                 libraryAsm
             } else {
                 default(Assembly?)
             }
-            let consumerAsm = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumerAsm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             return (libraryAsm, consumerAsm, loadContext)
         }
     }

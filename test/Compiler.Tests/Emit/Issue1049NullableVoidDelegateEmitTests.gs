@@ -101,28 +101,31 @@ class C {
 
         private func LoadCompiled(source string) Assembly {
             let tempDir = Directory.CreateTempSubdirectory("gs_issue1049_").FullName
-            let srcPath = Path.Combine(tempDir, "test.gs")
-            let outPath = Path.Combine(tempDir, "test.dll")
-            File.WriteAllText(srcPath, source)
-            using let compileOut = StringWriter()
-            using let compileErr = StringWriter()
-            let prevOut = Console.Out
-            let prevErr = Console.Error
-            Console.SetOut(compileOut)
-            Console.SetError(compileErr)
-            var compileExit int32
             try {
-                compileExit = Program.Main(
-                    []string{"/out:" + outPath, "/target:library", "/targetframework:net10.0", srcPath}
-                )
+                let srcPath = Path.Combine(tempDir, "test.gs")
+                let outPath = Path.Combine(tempDir, "test.dll")
+                File.WriteAllText(srcPath, source)
+                using let compileOut = StringWriter()
+                using let compileErr = StringWriter()
+                let prevOut = Console.Out
+                let prevErr = Console.Error
+                Console.SetOut(compileOut)
+                Console.SetError(compileErr)
+                var compileExit int32
+                try {
+                    compileExit = Program.Main(
+                        []string{"/out:" + outPath, "/target:library", "/targetframework:net10.0", srcPath}
+                    )
+                } finally {
+                    Console.SetOut(prevOut)
+                    Console.SetError(prevErr)
+                }
+                Assert.True(compileExit == 0, "compile failed ($compileExit): $compileOut$compileErr")
+                IlVerifier.Verify(outPath)
+                return EmittedFixture.Load(outPath)
             } finally {
-                Console.SetOut(prevOut)
-                Console.SetError(prevErr)
+                Directory.Delete(tempDir, recursive: true)
             }
-            Assert.True(compileExit == 0, "compile failed ($compileExit): $compileOut$compileErr")
-            IlVerifier.Verify(outPath)
-            let ctx = AssemblyLoadContext(name: "gs_issue1049_" + Guid.NewGuid().ToString(), isCollectible: true)
-            return ctx.LoadFromAssemblyPath(outPath)
         }
     }
 }

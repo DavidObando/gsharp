@@ -106,7 +106,7 @@ Console.WriteLine(c.Host)`
             Assert.True(exit == 0, "gsc failed: $output")
             let alc = AssemblyLoadContext("issue946-modreq", isCollectible: true)
             try {
-                let asm = alc.LoadFromAssemblyPath(outPath)
+                let asm = alc.LoadFromStream(MemoryStream(File.ReadAllBytes(outPath)))
                 let configType = asm.GetTypes().FirstOrDefault((t Type) -> t.Name == "Config") ??
                     throw InvalidOperationException("Config type not found")
                 // The init-only property's setter return must carry the

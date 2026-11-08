@@ -90,6 +90,7 @@ internal class BinderContext {
     private var channelRuntime ChannelRuntimeBinder?
     private var closureAssignedNames HashSet[string]?
     private var closureAssignedNamesComputed bool
+    private var pointerEscapedNames HashSet[string]?
 
     /// Initializes a new instance of the (cref:BinderContext) class.
     /// @param parent The parent (cref:BoundScope) against which
@@ -868,8 +869,114 @@ internal class BinderContext {
             return
         }
         // A null set means any name may be assigned (fail-safe).
-        closureAssignedNames = computeNames()
+        let computed = computeNames()
+        if computed != nil && pointerEscapedNames != nil {
+            computed.UnionWith(pointerEscapedNames!!)
+        }
+        closureAssignedNames = computed
         closureAssignedNamesComputed = true
+    }
+
+    /// Issue #4605: records the variable names whose address was passed to a
+    /// pointer-typed parameter (`*T`), so a later unknown callable or escaped
+    /// closure treats them as potentially mutated through the stored pointer.
+    func RecordPointerEscapedName(name string) {
+        if string.IsNullOrEmpty(name) {
+            return
+        }
+        pointerEscapedNames ??= HashSet[string](StringComparer.Ordinal)
+        pointerEscapedNames!!.Add(name)
+        closureAssignedNames?.Add(name)
+    }
+
+    func RecordPointerEscapedArgument(argument BoundExpression?) {
+        var current = argument
+        while current is BoundConversionExpression conversion {
+            current = conversion.Expression
+        }
+        while current is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+            current = assertion.Operand
+        }
+        switch current {
+            case address is BoundAddressOfExpression {
+                RecordPointerEscapedOperand(address.Operand)
+            }
+            case conditional is BoundConditionalExpression {
+                RecordPointerEscapedArgument(conditional.WhenTrue)
+                RecordPointerEscapedArgument(conditional.WhenFalse)
+            }
+            case conditionalAddress is BoundConditionalAddressExpression {
+                RecordPointerEscapedOperand(conditionalAddress.WhenTrueOperand)
+                RecordPointerEscapedOperand(conditionalAddress.WhenFalseOperand)
+            }
+            case block is BoundBlockExpression {
+                RecordPointerEscapedArgument(block.Expression)
+            }
+        }
+    }
+
+    private func RecordPointerEscapedOperand(operand BoundExpression?) {
+        var current = operand
+        while true {
+            current = switch current {
+                case address is BoundAddressOfExpression: address.Operand
+                case conversion is BoundConversionExpression: conversion.Expression
+                case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion: assertion.Operand
+                case block is BoundBlockExpression: block.Expression
+                default: current
+            }
+            if !(current is BoundAddressOfExpression) &&
+                !(current is BoundConversionExpression) &&
+                !(current is BoundUnaryExpression && current.Op.Kind == BoundUnaryOperatorKind.NullAssertion) &&
+                !(current is BoundBlockExpression) {
+                break
+            }
+        }
+        if current is BoundVariableExpression variable {
+            RecordPointerEscapedVariable(variable.Variable)
+        } else if current is BoundConditionalAddressExpression conditional {
+            RecordPointerEscapedOperand(conditional.WhenTrueOperand)
+            RecordPointerEscapedOperand(conditional.WhenFalseOperand)
+        } else if current is BoundConditionalExpression conditionalExpr {
+            RecordPointerEscapedOperand(conditionalExpr.WhenTrue)
+            RecordPointerEscapedOperand(conditionalExpr.WhenFalse)
+        }
+    }
+
+    private func RecordPointerEscapedVariable(variable VariableSymbol?) {
+        var current = variable
+        let visited = HashSet[VariableSymbol](ReferenceEqualityComparer.Instance)
+        while current != nil && visited.Add(current) {
+            RecordPointerEscapedName(current.Name)
+            if current is not LocalVariableSymbol{RefKind: not RefKind.None} local {
+                break
+            }
+            var origin BoundExpression? = local.ManagedReferenceOrigin
+            while true {
+                if origin is BoundConversionExpression conversion {
+                    origin = conversion.Expression
+                } else if origin is BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
+                    origin = assertion.Operand
+                } else if origin is BoundAddressOfExpression address {
+                    origin = address.Operand
+                } else if origin is BoundBlockExpression block {
+                    origin = block.Expression
+                } else {
+                    break
+                }
+            }
+            if origin is BoundConditionalAddressExpression conditionalOrigin {
+                RecordPointerEscapedOperand(conditionalOrigin.WhenTrueOperand)
+                RecordPointerEscapedOperand(conditionalOrigin.WhenFalseOperand)
+                break
+            }
+            if origin is BoundConditionalExpression conditionalExprOrigin {
+                RecordPointerEscapedOperand(conditionalExprOrigin.WhenTrue)
+                RecordPointerEscapedOperand(conditionalExprOrigin.WhenFalse)
+                break
+            }
+            current = (origin as BoundVariableExpression)?.Variable
+        }
     }
 
     func TryGetNarrowedAccessPath(

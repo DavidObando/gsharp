@@ -924,7 +924,7 @@ public static class Runner
                 isCollectible: true
             )
             try {
-                let library = loadContext.LoadFromAssemblyPath(libraryPath)
+                let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
                 loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == library.GetName()
                     .Name {
                     library
@@ -932,7 +932,7 @@ public static class Runner
                     default(Assembly?)
                 }
                 Assert.NotEmpty(library.GetTypes())
-                let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+                let consumer = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                 Assert.NotEmpty(consumer.GetTypes())
                 let run = consumer.GetType("Consumer.Runner")!!.GetMethod("Run")!!
                 Assert.Equal(42, run.Invoke(nil, nil))
@@ -1323,7 +1323,7 @@ public sealed class DelegateBox<T>
             Assert.NotEmpty(EmittedFixture.Load(assemblyPath).GetTypes())
             let loadContext = AssemblyLoadContext("Issue2918_" + Guid.NewGuid().ToString("N"), isCollectible: true)
             try {
-                let contracts = loadContext.LoadFromAssemblyPath(contractsPath)
+                let contracts = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(contractsPath)))
                 loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == contracts
                     .GetName().Name {
                     contracts
@@ -1331,7 +1331,7 @@ public sealed class DelegateBox<T>
                     default(Assembly?)
                 }
                 Assert.NotEmpty(contracts.GetTypes())
-                let assembly = loadContext.LoadFromAssemblyPath(assemblyPath)
+                let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                 let types = assembly.GetTypes()
                 Assert.NotEmpty(types)
                 let lambdas = types

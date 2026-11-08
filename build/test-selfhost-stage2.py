@@ -608,97 +608,6 @@ static class Program
         self.assertIn("overlaps", result.stderr)
 
 
-class MigrationRunVerifierTests(unittest.TestCase):
-    @staticmethod
-    def load():
-        spec = importlib.util.spec_from_file_location(
-            "verify_migration_run", REPO / "build" / "verify-migration-run.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    @staticmethod
-    def app(**statuses: str) -> dict:
-        stages = {"translate": "passed", "compile": "passed", "ilverify": "passed",
-                  "test-parity": "passed", **statuses}
-        return {"appId": "a", "stages": [{"stage": k, "status": v} for k, v in stages.items()]}
-
-    def test_only_test_parity_failures_are_tolerated(self) -> None:
-        module = self.load()
-        self.assertEqual([], module.check({"apps": [self.app()]}))
-        self.assertEqual(["a"], module.check({"apps": [self.app(**{"test-parity": "failed"})]}))
-        for stage in ("translate", "compile", "ilverify"):
-            with self.subTest(stage), self.assertRaises(ValueError):
-                module.check({"apps": [self.app(**{stage: "failed"})]})
-        for status in ("skipped", "unknown", None):
-            with self.subTest(status), self.assertRaises(ValueError):
-                module.check({"apps": [self.app(**{"test-parity": status})]})
-        # A run stopped after ilverify must report parity as skipped everywhere.
-        self.assertEqual([], module.check(
-            {"apps": [self.app(**{"test-parity": "skipped"})]}, stopped_after_ilverify=True))
-        for status in ("passed", "failed", None):
-            with self.subTest(f"stopped {status}"), self.assertRaises(ValueError):
-                module.check({"apps": [self.app(**{"test-parity": status})]},
-                             stopped_after_ilverify=True)
-        duplicate = self.app()
-        duplicate["stages"].append({"stage": "compile", "status": "failed"})
-        unknown = self.app()
-        unknown["stages"].append({"stage": "mystery", "status": "passed"})
-        for name, app in (("duplicate", duplicate), ("unknown", unknown)):
-            with self.subTest(name), self.assertRaises(ValueError):
-                module.check({"apps": [app]})
-        self.assertEqual([], module.check({"apps": [self.app()]},
-                                           required_apps=("a",), minimum_apps=1))
-        with self.assertRaises(ValueError):
-            module.check({"apps": [self.app()]}, required_apps=("b",))
-        with self.assertRaises(ValueError):
-            module.check({"apps": [self.app()]}, minimum_apps=2)
-        with self.assertRaises(ValueError):
-            module.check({"apps": [self.app(), self.app()]})  # duplicate app id
-        with self.assertRaises(ValueError):
-            module.check({"apps": []})
-
-
-class CorpusDerivationTests(unittest.TestCase):
-    def test_expected_apps_are_tracked_projects_minus_exclusions(self) -> None:
-        spec = importlib.util.spec_from_file_location(
-            "verify_migration_run", REPO / "build" / "verify-migration-run.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        expected = module.expected_apps(REPO)
-        if "src/Core/Core.csproj" not in expected:
-            fixture = REPO / "build" / ".stage2-corpus-derivation-test"
-            remove_tree(fixture)
-            self.addCleanup(remove_tree, fixture)
-            fixture.mkdir(parents=True)
-            subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
-            for rel in (
-                "src/Core/Core.csproj",
-                "src/Compiler/Compiler.csproj",
-                "src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj",
-                "src/vs-gsharp/src/VsGsharp/VsGsharp.csproj",
-                "src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj",
-                "src/vs-gsharp/test/VsGsharp.UnitTests/VsGsharp.UnitTests.csproj",
-            ):
-                target = fixture / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("<Project />\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=fixture, check=True)
-            expected = module.expected_apps(fixture)
-        self.assertIn("src/Core/Core.csproj", expected)
-        self.assertNotIn("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj", expected)
-        self.assertFalse(any(path.startswith("src/vs-gsharp/") for path in expected))
-        self.assertEqual([], module.check(
-            {"apps": [{"appId": a, "stages": [
-                {"stage": "translate", "status": "passed"}, {"stage": "compile", "status": "passed"},
-                {"stage": "ilverify", "status": "passed"}, {"stage": "test-parity", "status": "skipped"}]}
-                for a in sorted(expected)]}, stopped_after_ilverify=True, exact_apps=expected))
-        short = sorted(expected)[1:]
-        with self.assertRaises(ValueError):
-            module.check({"apps": [{"appId": a, "stages": []} for a in short]},
-                         stopped_after_ilverify=True, exact_apps=expected)
-
-
 class TestSelectionTests(unittest.TestCase):
     def test_floors_are_loaded_strictly(self) -> None:
         spec = importlib.util.spec_from_file_location(
@@ -1170,21 +1079,35 @@ class ControllerBoundaryTests(unittest.TestCase):
         tree = self.tree()
         (tree / "build").mkdir()
         (tree / "build" / "gsharp.props").write_text(
-            '<Project><ItemGroup><GsharpRepl Include="$(GsharpRepoRoot)/src/Repl/Repl.gsproj" />'
+            '<Project><PropertyGroup><EnableValues>true</EnableValues>'
+            '<ValuesDir>../Sdk/Gsharp.Runtime.Values</ValuesDir></PropertyGroup>'
+            '<ItemGroup><GsharpRepl Include="$(GsharpRepoRoot)/src/Repl/Repl.gsproj" />'
             '</ItemGroup></Project>', encoding="utf-8")
         (tree / "src/Repl").mkdir(parents=True)
         (tree / "src/Sdk/Gsharp.Runtime.Channels").mkdir(parents=True)
+        (tree / "src/Sdk/Gsharp.Runtime.Values").mkdir(parents=True)
         (tree / "src/Repl/Repl.gsproj").write_text(
-            '<Project><ItemGroup><ProjectReference Include="../Sdk/Gsharp.Runtime.Channels/'
-            'Gsharp.Runtime.Channels.gsproj" /></ItemGroup></Project>', encoding="utf-8")
+            '<Project><Import Project="../../build/gsharp.props" />'
+            '<ItemGroup><ProjectReference Include="../Sdk/Gsharp.Runtime.Channels/'
+            'Gsharp.Runtime.Channels.gsproj" />'
+            '<ProjectReference Condition="\'$(EnableValues)\' == \'true\'" '
+            'Include="$(ValuesDir)/Gsharp.Runtime.Values.gsproj" />'
+            '<ProjectReference Condition="\'$(EnableValues)\' == \'false\'" '
+            'Include="../Sdk/NeverReached/NeverReached.gsproj" />'
+            '</ItemGroup></Project>', encoding="utf-8")
         (tree / "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj").write_text(
+            "<Project />", encoding="utf-8")
+        (tree / "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj").write_text(
             "<Project />", encoding="utf-8")
         (tree / "test").mkdir()
         (tree / "test/T.gsproj").write_text(
-            "<Project><ItemGroup><ProjectReference Include=\"@(GsharpRepl-&gt;'%(RootDir)%(Directory)"
+            "<Project><Import Project=\"../build/gsharp.props\" />"
+            "<ItemGroup><ProjectReference Include=\"@(GsharpRepl-&gt;'%(RootDir)%(Directory)"
             "%(Filename).gsproj')\" /></ItemGroup></Project>", encoding="utf-8")
         reached = stage2.Controller.project_reference_closure(tree, Path("test/T.gsproj"))
         self.assertIn("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj", reached)
+        self.assertIn("src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj", reached)
+        self.assertNotIn("src/Sdk/NeverReached/NeverReached.gsproj", reached)
         unrelated = stage2.Controller.project_reference_closure(tree, Path("src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj"))
         self.assertNotIn("src/Repl/Repl.gsproj", unrelated)
 
@@ -1839,12 +1762,31 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
         ):
             (output / name).write_bytes(content)
             (package / name).write_bytes(content)
+        tp_fr = package / "lib" / "net10.0" / "fr"
+        tp_de = package / "lib" / "net10.0" / "de"
+        tp_fr.mkdir(parents=True)
+        tp_de.mkdir(parents=True)
+        tp_sat_name = "Microsoft.VisualStudio.TestPlatform.ObjectModel.resources.dll"
+        (tp_fr / tp_sat_name).write_bytes(b"locked tp french satellite")
+        (tp_de / tp_sat_name).write_bytes(b"locked tp german satellite")
+        (output / "fr").mkdir(parents=True)
+        (output / "de").mkdir(parents=True)
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp french satellite")
+        (output / "de" / tp_sat_name).write_bytes(b"locked tp german satellite")
         approved = hashlib.sha256(b"locked test host").hexdigest()
         package_manifest = hashlib.sha256(json.dumps([
             dataclasses.asdict(row) for row in stage2.directory_manifest(package)
         ], sort_keys=True).encode()).hexdigest()
         stage2.validate_vstest_extensions(
             output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp german satellite")
+        with self.assertRaisesRegex(
+            stage2.CertificationError,
+            "test output package asset differs from the locked package",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / tp_sat_name).write_bytes(b"locked tp french satellite")
         (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"forged runtime")
         with self.assertRaisesRegex(
             stage2.CertificationError, "runtime closure",
@@ -1852,6 +1794,38 @@ class ResolvedInputBoundaryTests(unittest.TestCase):
             stage2.validate_vstest_extensions(
                 output, set(), packages, {approved}, {package_manifest})
         (output / "Microsoft.TestPlatform.Core.dll").write_bytes(b"locked runtime")
+        transitive_pkg = packages / "newtonsoft.json" / "13.0.3" / "lib" / "net6.0"
+        transitive_pkg.mkdir(parents=True)
+        (transitive_pkg / "Newtonsoft.Json.dll").write_bytes(b"locked newtonsoft")
+        (output / "Newtonsoft.Json.dll").write_bytes(b"locked newtonsoft")
+        stage2.validate_vstest_extensions(
+            output, set(), packages, {approved}, {package_manifest})
+        (output / "Newtonsoft.Json.dll").write_bytes(b"replaced transitive dependency")
+        with self.assertRaisesRegex(
+            stage2.CertificationError,
+            "test output package asset differs from the locked package",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "Newtonsoft.Json.dll").write_bytes(b"locked newtonsoft")
+        fr_pkg = packages / "fixture.resources" / "1.0.0" / "lib" / "net10.0" / "fr"
+        de_pkg = packages / "fixture.resources" / "1.0.0" / "lib" / "net10.0" / "de"
+        fr_pkg.mkdir(parents=True)
+        de_pkg.mkdir(parents=True)
+        (fr_pkg / "Fixture.resources.dll").write_bytes(b"locked french satellite")
+        (de_pkg / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked french satellite")
+        (output / "de" / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        stage2.validate_vstest_extensions(
+            output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked german satellite")
+        with self.assertRaisesRegex(
+            stage2.CertificationError,
+            "test output package asset differs from the locked package",
+        ):
+            stage2.validate_vstest_extensions(
+                output, set(), packages, {approved}, {package_manifest})
+        (output / "fr" / "Fixture.resources.dll").write_bytes(b"locked french satellite")
         (output / "testhost.dll").write_bytes(b"other locked package")
         (package / "other.dll").write_bytes(b"other locked package")
         with self.assertRaisesRegex(

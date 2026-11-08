@@ -121,11 +121,11 @@ func Main() {
         let context = AssemblyLoadContext("Issue2672", isCollectible: true)
         try {
             context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Issue2672Fixture" {
-                context.LoadFromAssemblyPath(fixturePath)
+                context.LoadFromStream(MemoryStream(File.ReadAllBytes(fixturePath)))
             } else {
                 default(Assembly?)
             }
-            let assembly = context.LoadFromAssemblyPath(outputPath)
+            let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
             let previous = Console.Out
             using let output = StringWriter()
             Console.SetOut(output)
@@ -228,11 +228,11 @@ public static class MiddlewareExtensions
             let context = AssemblyLoadContext(Path.GetFileNameWithoutExtension(outputPath), isCollectible: true)
             try {
                 context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Issue2672Fixture" {
-                    context.LoadFromAssemblyPath(fixturePath)
+                    context.LoadFromStream(MemoryStream(File.ReadAllBytes(fixturePath)))
                 } else {
                     default(Assembly?)
                 }
-                let assembly = context.LoadFromAssemblyPath(outputPath)
+                let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(outputPath)))
                 let previous = Console.Out
                 using let output = StringWriter()
                 Console.SetOut(output)

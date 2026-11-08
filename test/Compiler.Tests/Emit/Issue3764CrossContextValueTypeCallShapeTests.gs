@@ -123,7 +123,7 @@ open class Issue3764CrossContextValueTypeCallShapeTests {
         IlVerifier.Verify(probe)
         let context = AssemblyLoadContext("gs3764-${Guid.NewGuid():N}", isCollectible: true)
         try {
-            let assembly = context.LoadFromAssemblyPath(probe)
+            let assembly = context.LoadFromStream(MemoryStream(File.ReadAllBytes(probe)))
             let formatter Type? = assembly.GetType("Probe.Formatter", throwOnError: true)
             let instance object? = Activator.CreateInstance(formatter!!)
             let describe MethodInfo? = formatter!!.GetMethod("Describe", BindingFlags.Public | BindingFlags.Instance)
@@ -168,9 +168,9 @@ open class Issue3764CrossContextValueTypeCallShapeTests {
         /// <inheritdoc />
         /// ```
         func Dispose() {
-            try {
+            if Directory.Exists(this.directory) {
                 Directory.Delete(this.directory, recursive: true)
-            } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }
 
         private func Compile(name string, source string, references IEnumerable[string]) string {

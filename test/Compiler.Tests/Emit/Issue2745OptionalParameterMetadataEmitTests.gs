@@ -52,7 +52,7 @@ func RunGSharp() int32 -> Defaults().Score()`
         EmitCSharpConsumer(libraryPath, consumerPath)
         let loadContext = AssemblyLoadContext("Issue2745", isCollectible: true)
         try {
-            let library = loadContext.LoadFromAssemblyPath(libraryPath)
+            let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
             let defaults = library.GetType("Issue2745.Defaults", throwOnError: true)!!
             AssertReflectionDefaults(defaults)
             let program = library.GetTypes().Single((type Type) -> type.Name == "<Program>")
@@ -63,7 +63,7 @@ func RunGSharp() int32 -> Defaults().Score()`
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
                 )!!.Invoke(nil, nil)
             )
-            let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+            let consumer = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             Assert.Equal(
                 42,
                 consumer.GetType("Issue2745Consumer", throwOnError: true)!!.GetMethod("Run")!!.Invoke(nil, nil)

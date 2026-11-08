@@ -346,19 +346,19 @@ Probe.Run()`)
                 Assert.NotEmpty(typeof(Issue3149Greeter).Assembly.GetTypes())
                 let loadContext = AssemblyLoadContext("Issue3149_" + Guid.NewGuid().ToString("N"), isCollectible: true)
                 try {
-                    let library = loadContext.LoadFromAssemblyPath(referencePath)
+                    let library = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(referencePath)))
                     loadContext.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> {
                         if name.Name == library.GetName().Name {
                             return library
                         }
                         let dependencyPath = Path.Combine(AppContext.BaseDirectory, name.Name + ".dll")
                         return if File.Exists(dependencyPath) {
-                            loadContext.LoadFromAssemblyPath(dependencyPath)
+                            loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(dependencyPath)))
                         } else {
                             default(Assembly?)
                         }
                     }
-                    let consumer = loadContext.LoadFromAssemblyPath(assemblyPath)
+                    let consumer = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(assemblyPath)))
                     Assert.NotEmpty(consumer.GetTypes())
                     let probe = consumer.GetType(consumerPackage + ".Probe") ??
                         throw InvalidOperationException("Emitted Probe type was not found.")
