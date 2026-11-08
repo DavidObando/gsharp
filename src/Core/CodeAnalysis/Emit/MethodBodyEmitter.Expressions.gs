@@ -1556,7 +1556,7 @@ internal partial class MethodBodyEmitter {
                 "a field initializer targets either a field or a property, and the property form is handled above",
                 expression: "init.Field"
             )
-            if initField.IsReadOnly &&
+            if (initField.IsReadOnly || initField.Accessibility != Accessibility.Public) &&
                 literal
                 .StructType
                 .ClrType == nil &&
@@ -2296,8 +2296,20 @@ internal partial class MethodBodyEmitter {
             case uic is BoundUserInstanceCallExpression {
                 this.EmitUserInstanceCall(uic)
             }
+            case importedCall is BoundImportedInstanceCallExpression when importedCall.Method.ReturnType.IsByRef {
+                this.EmitExpression(importedCall)
+            }
             case propAcc is BoundPropertyAccessExpression {
                 this.EmitPropertyAccess(propAcc, addressOnly: true)
+            }
+            case BoundClrPropertyAccessExpression{Member: PropertyInfo clrProp} clrAccess when clrProp
+                .GetMethod
+                ?.ReturnType
+                .IsByRef == true {
+                this.EmitClrPropertyAccess(clrAccess)
+            }
+            case clrIdx is BoundClrIndexExpression when clrIdx.Indexer.GetMethod?.ReturnType.IsByRef == true {
+                this.EmitClrIndex(clrIdx)
             }
             case baseInterface is BoundBaseInterfaceCallExpression {
                 this.EmitBaseInterfaceCall(baseInterface)

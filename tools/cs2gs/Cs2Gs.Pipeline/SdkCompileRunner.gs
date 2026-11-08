@@ -1237,7 +1237,9 @@ class SdkCompileRunner {
                 "-p:RestoreConfigFile=" + projectNugetConfig,
                 "-p:RestorePackagesPath=" + Path.Combine(nugetRoot, ".nuget-packages"),
                 "-p:Cs2GsArtifactRoot=" + artifactDirectory,
-                "-p:GeneratePackageOnBuild=false"
+                "-p:GeneratePackageOnBuild=false",
+                "-p:RestoreForceEvaluate=true",
+                "-p:RestoreLockedMode=false"
             }
             if !string.IsNullOrEmpty(warningsNotAsErrors) {
                 args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors)

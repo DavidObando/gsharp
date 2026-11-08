@@ -2075,10 +2075,11 @@ internal partial class ExpressionBinder {
             // explicit `this.name` member access does, so `name[i]` indexes and
             // `fixed p *T = name { … }` pins it (issue #4378).
             if implicitField.Field.IsFixedBuffer {
-                return MakeFixedBufferPointer(
+                return BindFixedBufferPointer(
                     BoundVariableExpression(nil, implicitField.Receiver),
                     implicitField.StructType,
-                    implicitField.Field
+                    implicitField.Field,
+                    syntax
                 )
             }
             // Issue #208: apply any [MemberNotNull] post-call narrowing so that

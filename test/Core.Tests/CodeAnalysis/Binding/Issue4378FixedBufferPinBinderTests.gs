@@ -76,8 +76,8 @@ unsafe struct Bone {
         Name[i] = v
     }
 
-    func Ptr() *int8 {
-        return Name
+    func Bump(i int32) {
+        Name[i] += 1
     }
 }
 `
@@ -85,7 +85,53 @@ unsafe struct Bone {
     }
 
     @Theory
+    @InlineData("unsafe func f(h Holder) *int8 { return h.B.Name }")
+    @InlineData("unsafe func f(h Holder) { let q *int8 = h.B.Name }")
+    @InlineData("unsafe func f(ref b Bone) *int8 { return b.Name }")
+    @InlineData("unsafe func f(bones []Bone) *int8 { return bones[0].Name }")
+    @InlineData("unsafe func f(h Holder) *int8 { return &h.B.Name[0] }")
+    @InlineData("unsafe func f(h Holder) *int8 { return &{ let marker = 0\n h.B.Name[0] } }")
+    @InlineData(
+        "unsafe func f(h Holder, flag bool) *int8 { var local = Bone{}\n return &{ let marker = 0\n flag ? local.Name[0] : h.B.Name[1] } }"
+    )
+    @InlineData(
+        "unsafe func f(h Holder, maybe int32?) *int8 { var local = Bone{}\n return &(if let n = maybe { local.Name[0] } else { h.B.Name[1] }) }"
+    )
+    @InlineData(
+        "unsafe func f(h Holder, flag bool) { var local = Bone{}\n let _ = &(flag ? ref local.Name[0] : ref h.B.Name[1]) }"
+    )
+    @InlineData(
+        "unsafe func f() *int8 { var boxed object = Bone{}\n if boxed is Bone { return boxed.Name }\n return nil }"
+    )
+    @InlineData("unsafe struct S { fixed Name [4]int8\n func Ptr() *int8 { return Name } }")
+    @InlineData("unsafe struct S { fixed Name [4]int8\n func Ptr() *int8 { return this.Name } }")
+    func MovableBufferPointerOutsideFixed_ReportsGS0638(function string) {
+        let diagnostics = GetDiagnostics(Prelude + function).ToList()
+        let error = Assert.Single(diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Contains("'Name'", error.Message)
+    }
+
+    @Theory
+    @InlineData("unsafe func f(h Holder) int8 { return h.B.Name[0] }")
+    @InlineData("unsafe func f(h Holder) int8 { return unchecked(h.B.Name)[0] }")
+    @InlineData("unsafe func f(h Holder) int8 { return ({ let marker = 0\n h.B.Name })[0] }")
+    @InlineData("unsafe func f(h Holder) { h.B.Name[0] = 1\n h.B.Name[0] += 2 }")
+    @InlineData(
+        "unsafe func f() int8 { var boxed object = Bone{}\n if boxed is Bone { return boxed.Name[0] }\n return int8(0) }"
+    )
+    @InlineData("unsafe func f(h Holder) *int8 { var local = Bone{}\n return &local.Name[int32(h.B.Name[0])] }")
+    @InlineData("unsafe func f() *int8 { var b = Bone{}\n return b.Name }")
+    @InlineData("unsafe func f(b Bone) *int8 { return b.Name }")
+    @InlineData("unsafe func f(p *Bone) *int8 { return p->Name }")
+    @InlineData("unsafe func f() *int8 { var w = Wrap{}\n return w.B.Name }")
+    func FixedBufferDirectIndexOrFixedReceiver_AllowsDecay(function string) {
+        AssertNoErrors(Prelude + function)
+    }
+
+    @Theory
     @InlineData("unsafe func f(h Holder) { fixed p *int8 = h.B.Name { } }")
+    @InlineData("unsafe func f(h Holder) { fixed p *int8 = unchecked(h.B.Name) { } }")
     @InlineData("unsafe func f(ref b Bone) { fixed p *int8 = b.Name { } }")
     @InlineData("unsafe func f(bones []Bone) { fixed p *int8 = bones[0].Name { } }")
     @InlineData("unsafe func f(ws []Wrap) { fixed p *int8 = ws[0].B.Name { } }")

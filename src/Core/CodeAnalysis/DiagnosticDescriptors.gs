@@ -2613,6 +2613,11 @@ internal shared class DiagnosticDescriptors {
         DiagnosticSeverity.Error,
         "Cannot convert type '{0}' to '{1}' via a reference conversion, boxing conversion, unboxing conversion, wrapping conversion, or null type conversion.{2}"
     )
+    internal let MovableFixedBufferRequiresFixed DiagnosticDescriptor = DiagnosticDescriptor(
+        "GS0638",
+        DiagnosticSeverity.Error,
+        "Cannot take the pointer value of fixed-size buffer '{0}' because its containing storage is movable and not pinned; pin it with a 'fixed' statement or index an element directly ('{0}[i]') (C# spells the same rule CS1666)."
+    )
     internal let FatalCompilerIOError DiagnosticDescriptor = DiagnosticDescriptor(
         "GS9997",
         DiagnosticSeverity.Error,

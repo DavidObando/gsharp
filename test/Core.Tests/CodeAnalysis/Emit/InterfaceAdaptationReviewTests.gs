@@ -84,6 +84,16 @@ func Build(value int32) Reader {
         Assert.True(cache.Hits > int64(0))
         AssertSyntheticBodiesRegistered(first)
         AssertSyntheticBodiesRegistered(second)
+        Assert.NotEmpty(global.LatestRichAnonymousObjectPlans)
+        for plan in global.LatestRichAnonymousObjectPlans.Values {
+            Assert.NotNull(plan.MethodBodies)
+            let fields = plan
+                .GetType()
+                .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select((prop PropertyInfo) -> prop.PropertyType)
+                .ToArray()
+            Assert.DoesNotContain(typeof(ImmutableArray[BoundExpression]), fields)
+        }
     }
 
     @Fact

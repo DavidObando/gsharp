@@ -2973,7 +2973,16 @@ internal partial class StatementBinder {
         $scope = BoundScope($scope)
         try {
             let pointerType = bindTypeClause(syntax.TypeClause)
-            var source = bindExpression(syntax.PinnedSource, false)
+            let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
+            binderCtx.AllowedMovableFixedBufferSyntax = ExpressionBinder.GetRightmostMemberNameSyntax(
+                syntax.PinnedSource
+            )
+            var source BoundExpression
+            try {
+                source = bindExpression(syntax.PinnedSource, false)
+            } finally {
+                binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
+            }
             var fixedBufferSourceName string? = nil
             var pinKind FixedPinKind
             var elementType TypeSymbol
@@ -3396,18 +3405,30 @@ internal partial class StatementBinder {
         // instance classifies as movable through the reference-type receiver arm. Anything
         // not recognised is treated as movable — an unnecessary pin is sound,
         // whereas wrongly rejecting a movable variable would leave no way to pin it.
-        private func IsFixedVariable(expression BoundExpression?) bool -> switch expression {
+        internal func IsFixedVariable(expression BoundExpression?) bool -> switch expression {
             case boundVariableExpression is BoundVariableExpression when boundVariableExpression.Variable is ParameterSymbol &&
                 boundVariableExpression
                 .Variable
                 .IsReceiverParameter == true: false
-            case BoundVariableExpression{Variable: LocalVariableSymbol local}: local.RefKind == RefKind.None &&
-                !(local.Type is ByRefTypeSymbol)
-            case BoundFieldAccessExpression{Receiver: {} receiver} when !Binder.IsReferenceTypeForConstraint(
-                receiver.Type
+            case variable is BoundVariableExpression{
+                Variable: LocalVariableSymbol local
+            }: local.RefKind == RefKind.None &&
+                !(local.Type is ByRefTypeSymbol) &&
+                HasUnboxedValueStorage(variable)
+            case BoundFieldAccessExpression{Receiver: {} receiver} when HasUnboxedValueStorage(
+                receiver
             ): IsFixedVariable(receiver)
             case dereference is BoundDereferenceExpression: dereference.Operand.Type is PointerTypeSymbol
             default: false
+        }
+
+        private func HasUnboxedValueStorage(expression BoundExpression) bool {
+            let declaredType = switch expression {
+                case variable is BoundVariableExpression: variable.Variable.Type
+                case field is BoundFieldAccessExpression: field.Field.Type
+                default: expression.Type
+            }
+            return expression.Type is StructSymbol{IsClass: false} && declaredType is StructSymbol{IsClass: false}
         }
 
         // ADR-0125 / issue #1043: detect a span-like pin source — a type exposing a

@@ -1478,12 +1478,10 @@ checks, numeric empty-allocation inference or `migrationReady: false`.
 Actual implementation/ref witnesses independently inspect field order and
 construct canonical inputs; a round trip alone is not a copy oracle.
 
-The broader native-slice nested-field write gate remains blocked by
-[#5325](https://github.com/DavidObando/gsharp/issues/5325).
-Released 0.5.212 silently drops an imported nested value-field store through
-a slice element; the corresponding same-file case reports GS9998.
+The synchronous native-slice nested-field write gate ([#5325](https://github.com/DavidObando/gsharp/issues/5325))
+is resolved on `main` (#5336/#5348); suspending stores remain a separate gate (#5012).
 F2a tests whole-carrier stores and existing retained roots.
-It neither works around this compiler defect nor claims that full F2,
+It neither works around compiler defects nor claims that full F2,
 fixed views/promotion, equality/protocol admission or breaking rollout is ready.
 
 Before the exception approval below, these witnesses did not close the full-runtime gate: ILVerify 10.0.8

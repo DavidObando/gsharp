@@ -2138,7 +2138,7 @@ internal class ReflectionMetadataEmitter {
             // inline-struct first-row offsets pre-registered later in this
             // pass stay valid).
             let needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
-            let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> f.IsReadOnly && structLetFields.Contains(f))
+            let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> structLetFields.Contains(f))
             if s
                 .Methods
                 .IsDefaultOrEmpty &&
@@ -2336,7 +2336,7 @@ internal class ReflectionMetadataEmitter {
                 )
                 var nextTotalArity = Math.Max(2, maxExistingArity + 1)
                 for field in s.Fields {
-                    if !field.IsReadOnly || !structLetFields.Contains(field) {
+                    if !structLetFields.Contains(field) {
                         continue
                     }
                     let fieldCtor = MetadataTokens.MethodDefinitionHandle(methodRow++)
@@ -4306,6 +4306,10 @@ internal class ReflectionMetadataEmitter {
                 if type.InstanceFieldInitializers.TryGetValue(field, out var initializer) {
                     collector.VisitExpression(initializer)
                 }
+                if type.ValueStructDefaultCtorIsZeroInitialization &&
+                    MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(nil, type, field) is {} zeroInit {
+                    collector.VisitExpression(zeroInit)
+                }
             }
             for field in type.StaticFields {
                 if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
@@ -4359,7 +4363,7 @@ internal class ReflectionMetadataEmitter {
             return
         }
         for field in structSym.Fields {
-            if !field.IsReadOnly || !this.cache.StructLetFieldCtorHandles.TryGetValue(field, out var entry) {
+            if !this.cache.StructLetFieldCtorHandles.TryGetValue(field, out var entry) {
                 continue
             }
             var bodyOffset = -1
@@ -4434,7 +4438,7 @@ internal class ReflectionMetadataEmitter {
                     ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(def)
                 }
                 for init in node.Initializers {
-                    if init.Field is not{IsReadOnly: true} field {
+                    if init.Field is not{} field || (!field.IsReadOnly && field.Accessibility == Accessibility.Public) {
                         continue
                     }
                     if node.IsInTypeZeroInitializer(init) {
@@ -4446,7 +4450,11 @@ internal class ReflectionMetadataEmitter {
                     if usesOwning && init.IsDeclarationInitializer {
                         continue
                     }
-                    this.structFields.Add(def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == field.Name) ?? field)
+                    let defField = structType.GetDefinitionField(field) ?? def.Fields.FirstOrDefault(
+                        (f FieldSymbol) -> f.Name == field.Name
+                    ) ??
+                        field
+                    this.structFields.Add(defField)
                 }
             }
             base.VisitStructLiteralExpression(node)

@@ -2377,6 +2377,7 @@ above retain their longer explanations and examples.
 | GS0497 | Error | A function literal is an async iterator; declare a named async iterator and reference it instead.  | |
 | GS0498 | Error | A `goto` enters a `catch` or `finally` handler from outside that handler.  | |
 | GS0636 | Error | A `goto` enters a nested block from outside that block.  | |
+| GS0638 | Error | Cannot take the pointer value of a fixed-size buffer in movable storage outside a `fixed` statement; pin it with `fixed` or index an element directly (`name[i]`).  | |
 | GS0499 | Error | A field assignment targets a temporary struct value rather than writable storage.  | |
 | GS0500 | Error | A user-defined compound-assignment operator is not an instance method with exactly one parameter and no return value.  | |
 | GS0501 | Error | Imported metadata exposes multiple public parameterless members with the same name, so reflection lookup is ambiguous.  | |

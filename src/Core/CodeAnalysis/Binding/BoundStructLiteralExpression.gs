@@ -119,6 +119,7 @@ class BoundStructLiteralExpression : BoundExpression {
             if initializer.Field is not{} field ||
                 CanWriteInitializerField(initializer.FieldDeclaringType ?? StructType, field) ||
                 IsInTypeZeroInitializer(initializer) ||
+                (IsZeroInitialization && StructType.ClrType == nil && StructType.GetDefinitionField(field) != nil) ||
                 (CallsPrimaryConstructor && GetPrimaryMember(StructType, field.Name) == field) {
                 continue
             }

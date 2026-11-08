@@ -1063,6 +1063,9 @@ class InterfaceSymbol : TypeSymbol {
                 }
             )
             substMethod.ReturnRefKind = m.ReturnRefKind
+            if m.HasUnscopedRef {
+                substMethod.MarkUnscopedRef()
+            }
             if !m.Attributes.IsDefaultOrEmpty {
                 substMethod.SetAttributes(m.Attributes)
             }

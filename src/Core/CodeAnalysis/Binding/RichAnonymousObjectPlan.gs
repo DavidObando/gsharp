@@ -10,20 +10,20 @@ import System.Collections.Immutable
 
 internal class RichAnonymousObjectPlan {
     internal init(
-        constructedType StructSymbol,
-        arguments ImmutableArray[BoundExpression],
+        captureDescriptors ImmutableArray[(Name string, IsMutable bool, Field FieldSymbol)],
+        referencedTypeParameters ImmutableArray[TypeParameterSymbol],
         methodBodies Dictionary[FunctionSymbol, BoundBlockStatement]
     ) {
-        ConstructedType = constructedType
-        Arguments = arguments
+        CaptureDescriptors = captureDescriptors
+        ReferencedTypeParameters = referencedTypeParameters
         MethodBodies = methodBodies
     }
 
-    internal prop ConstructedType StructSymbol {
+    internal prop CaptureDescriptors ImmutableArray[(Name string, IsMutable bool, Field FieldSymbol)] {
         get;
     }
 
-    internal prop Arguments ImmutableArray[BoundExpression] {
+    internal prop ReferencedTypeParameters ImmutableArray[TypeParameterSymbol] {
         get;
     }
 

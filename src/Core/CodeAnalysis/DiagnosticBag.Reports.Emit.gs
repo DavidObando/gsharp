@@ -161,6 +161,18 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         bufferName
     )
 
+    /// GS0638 (ADR-0125 / issue #4383): taking the pointer value of a fixed-size
+    /// buffer field whose containing storage is movable outside a `fixed`
+    /// statement initializer and outside direct element indexing (`name[i]`).
+    /// Mirrors C#'s CS1666.
+    /// @param location The text location of the fixed-size buffer field reference.
+    /// @param bufferName The fixed-size buffer field name.
+    func ReportMovableFixedBufferRequiresFixed(location TextLocation, bufferName string) -> Report(
+        location,
+        DiagnosticDescriptors.MovableFixedBufferRequiresFixed,
+        bufferName
+    )
+
     /// GS0506: an `await` or `yield` suspension point appears in a
     /// `fixed` body. A pinned local cannot survive state-machine
     /// suspension, so the suspension must move outside the fixed statement.

@@ -213,6 +213,9 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
 - **`GS0506`** — `await` or `yield` appears directly inside a `fixed` body.
 - **`GS0507`** — a `fixed` statement pins a fixed-size buffer reached through an
   already-fixed variable (C# CS0213); see the 2026-09-23 amendment.
+- **`GS0638`** — taking the pointer value of a movable fixed-size buffer outside
+  a `fixed` statement initializer or direct element indexing (`name[i]`) (C#
+  CS1666, issue #4383).
 
 ## Amendment 2026-09-23: fixed-size buffer pin source (#4378)
 
@@ -278,12 +281,12 @@ object; such a buffer can still be addressed through its decayed `*T`.
 
 Two C# rules are **deliberately not ported**:
 
-- **CS1666** ("fixed size buffers contained in unfixed expressions") rejects
-  *taking the pointer value* of a movable buffer outside `fixed`
-  (`sbyte* q = this.Name;`), while still allowing indexing (`Name[i]`) since
-  C# 7.3. G#'s pre-existing decay makes both forms bind through the same
-  `*T`, and adopting CS1666 would reject G# code accepted today; it is left as a
-  possible follow-up rather than folded into this change.
+- ~~**CS1666** ("fixed size buffers contained in unfixed expressions")~~ Ported
+  in issue #4383 as **`GS0638`**: taking the pointer value of a movable
+  fixed-size buffer outside a `fixed` statement initializer (`sbyte* q =
+  holder.H.Name;` or `sbyte* q = this.Name;`) is rejected with `GS0638`, while
+  direct element indexing (`holder.H.Name[i]`, `Name[i]`) and already-fixed
+  storage (`local.Name`, `ptr->Name`) remain legal.
 - **`void*` targets.** C# accepts `fixed (void* p = Name)` through the implicit
   `T* → void*` conversion. The G# `fixed` statement keeps its existing rule
   that the pointee must equal the buffer's element type for every source kind.

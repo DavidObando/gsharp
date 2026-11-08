@@ -175,6 +175,63 @@ run()`
     }
 
     @Fact
+    func MovableBufferPointerOutsideFixed_DriverReportsGS0638_WhileIndexAndLocalBufferSucceed() {
+        let tempDir = Directory.CreateTempSubdirectory("gs_issue4383_").FullName
+        try {
+            let badPath = Path.Combine(tempDir, "bad.gs")
+            let badOut = Path.Combine(tempDir, "bad.dll")
+            File.WriteAllText(badPath, BoneInfoPrelude + `unsafe func bad(h Holder, flag bool, maybe int32?) *int8 {
+    let p *int8 = &{
+        let marker = 0
+        flag ? h.B.Name[0] : h.B.Name[1]
+    }
+    let q *int8 = &(if let n = maybe { h.B.Name[0] } else { h.B.Name[1] })
+    let _ = &(flag ? ref h.B.Name[0] : ref h.B.Name[1])
+    return h.B.Name
+}
+`)
+            using let compileOut = StringWriter()
+            using let compileErr = StringWriter()
+            let prevOut = Console.Out
+            let prevErr = Console.Error
+            Console.SetOut(compileOut)
+            Console.SetError(compileErr)
+            var badExit int32
+            try {
+                badExit = Program.Main(
+                    []string{"/out:" + badOut, "/target:library", "/targetframework:net10.0", badPath}
+                )
+            } finally {
+                Console.SetOut(prevOut)
+                Console.SetError(prevErr)
+            }
+            let combined = compileOut.ToString() + compileErr.ToString()
+            Assert.NotEqual(0, badExit)
+            Assert.False(File.Exists(badOut))
+            Assert.Equal(7, combined.Split("error GS0638:").Length - 1)
+            Assert.Contains("'Name'", combined)
+        } finally {
+            try {
+                Directory.Delete(tempDir, recursive: true)
+            } catch {
+                // ignored
+
+            }
+        }
+        let validSource = BoneInfoPrelude + `unsafe func run() {
+    var h = Holder()
+    h.B.Name[0] = int8(42)
+    var local = h.B
+    var localPtr *int8 = local.Name
+    Console.WriteLine(int32(h.B.Name[0]))
+    Console.WriteLine(int32(localPtr[0]))
+}
+
+run()`
+        Assert.Equal(Lines("42", "42"), CompileAndRun(validSource))
+    }
+
+    @Fact
     func BareBufferPin_EmitsPinnedByRefToFixedElementField() {
         // C# emits, for `fixed (sbyte* p = Name)` in a struct method:
         //   ldarg.0
