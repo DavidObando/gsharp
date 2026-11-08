@@ -2212,6 +2212,17 @@ internal partial class MethodBodyEmitter {
 
     /// ADR-0039: Emits address-of by dispatching on the operand shape.
     private func EmitAddressOf(node BoundAddressOfExpression) {
+        if node.IsUnmanaged &&
+            node.FixedBufferEscapeSyntax != nil &&
+            node.Operand is BoundFieldAccessExpression{Field: {IsFixedBuffer: true}} buffer &&
+            !StatementBinder
+            .IsFixedVariable(buffer, this.IsHeapPromotedFixedBufferVariable) {
+            EmitDiagnosticException.ThrowDiagnostic(
+                node.FixedBufferEscapeSyntax,
+                DiagnosticDescriptors.MovableFixedBufferRequiresFixed,
+                buffer.Field.Name
+            )
+        }
         switch node.Operand {
             case block is BoundBlockExpression {
                 // Issue #3355: execute prefix statements, then take the

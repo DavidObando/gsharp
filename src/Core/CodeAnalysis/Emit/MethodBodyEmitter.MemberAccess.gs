@@ -26,6 +26,19 @@ import System.Reflection.Metadata.Ecma335
 /// See `MethodBodyEmitter.cs` for the root partial (fields, constructor,
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
+    private func IsHeapPromotedFixedBufferVariable(variable VariableSymbol) bool -> (
+        this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out _)
+    ) ||
+        this
+        .iteratorEmitCtx
+        ?.FieldMap
+        .ContainsKey(variable) == true ||
+        this
+        .enclosingClosure
+        ?.CaptureFields
+        .ContainsKey(variable) == true ||
+        object.ReferenceEquals(variable, this.structThisParameter)
+
     private func EmitLoadVariable(variable VariableSymbol) {
         // Issue #216: const bindings have no IL slot — inline the literal value.
         if this.constValues != nil && this.constValues.TryGetValue(variable, out var cv) {
@@ -1607,6 +1620,10 @@ internal partial class MethodBodyEmitter {
             // here before this issue made such calls/properties lvalues, so
             // ReceiverSpillCollector never needed to plan a slot for it.
             if RefCapabilities.IsNativeRefReturningCall(receiver) {
+                this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
+                return
+            }
+            if receiver is not BoundVariableExpression && ExpressionBinder.IsLvalue(receiver) {
                 this.EmitAddressOf(BoundAddressOfExpression(nil, receiver, unmanaged: false))
                 return
             }

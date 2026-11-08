@@ -3006,11 +3006,8 @@ internal partial class StatementBinder {
                     // C# CS1708: the buffer belongs to a value (e.g. a call
                     // result), not a variable; there is no storage to pin.
                     Diagnostics.ReportFixedSourceNotPinnable(syntax.PinnedSource.Location, fixedBufferSourceName)
-                } else if IsFixedVariable(bufferAccess) {
-                    // C# CS0213: the storage cannot move, so there is nothing
-                    // to pin; the buffer is already usable as a pointer.
-                    Diagnostics.ReportFixedBufferAlreadyFixed(syntax.PinnedSource.Location, bufferAccess.Field.Name)
                 }
+                // Capture and state-machine promotion determine whether this storage needs pinning at emission.
                 source = MakeFixedBufferElementReference(bufferAccess)
             } else if ExpressionBinder.GetArraySliceElementType(source.Type) is {} arrayElement {
                 // This query covers []T, [N]T, and imported CLR arrays.
@@ -3403,9 +3400,11 @@ internal partial class StatementBinder {
         // reference-type object, an array element, and a static field. Applied to
         // the buffer field access itself, so a buffer declared directly on a class
         // instance classifies as movable through the reference-type receiver arm. Anything
-        // not recognised is treated as movable — an unnecessary pin is sound,
-        // whereas wrongly rejecting a movable variable would leave no way to pin it.
-        internal func IsFixedVariable(expression BoundExpression?) bool -> switch expression {
+        // not recognised is treated as movable. Emission supplies the actual promoted-variable storage map.
+        internal func IsFixedVariable(
+            expression BoundExpression?,
+            isHeapPromoted((VariableSymbol) -> bool)? = nil
+        ) bool -> switch expression {
             case boundVariableExpression is BoundVariableExpression when boundVariableExpression.Variable is ParameterSymbol &&
                 boundVariableExpression
                 .Variable
@@ -3414,22 +3413,41 @@ internal partial class StatementBinder {
                 Variable: LocalVariableSymbol local
             }: local.RefKind == RefKind.None &&
                 !(local.Type is ByRefTypeSymbol) &&
-                HasUnboxedValueStorage(variable)
+                isHeapPromoted?.Invoke(local) != true && HasUnboxedValueStorage(variable)
             case BoundFieldAccessExpression{Receiver: {} receiver} when HasUnboxedValueStorage(
                 receiver
-            ): IsFixedVariable(receiver)
+            ): IsFixedVariable(receiver, isHeapPromoted)
+            case BoundClrPropertyAccessExpression{
+                Member: FieldInfo field,
+                Receiver: {} receiver
+            } when !field.IsStatic &&
+                HasUnboxedValueStorage(receiver): IsFixedVariable(receiver, isHeapPromoted)
+            case tuple is BoundTupleElementAccessExpression when HasUnboxedValueStorage(
+                tuple.Receiver
+            ): IsFixedVariable(tuple.Receiver, isHeapPromoted)
+            case block is BoundBlockExpression: IsFixedVariable(block.Expression, isHeapPromoted)
+            case conditional is BoundConditionalExpression: IsFixedVariable(conditional.WhenTrue, isHeapPromoted) &&
+                IsFixedVariable(conditional.WhenFalse, isHeapPromoted)
             case dereference is BoundDereferenceExpression: dereference.Operand.Type is PointerTypeSymbol
+            case {} value when HasUnboxedValueStorage(value) && !ExpressionBinder.IsLvalue(value): true
             default: false
         }
 
         private func HasUnboxedValueStorage(expression BoundExpression) bool {
             let declaredType = switch expression {
                 case variable is BoundVariableExpression: variable.Variable.Type
-                case field is BoundFieldAccessExpression: field.Field.Type
+                case field is BoundFieldAccessExpression: field.SubstitutedType ?? field.Field.Type
+                case BoundClrPropertyAccessExpression{Member: FieldInfo}: ExpressionBinder.AddressedLeafStorageType(
+                    expression,
+                    useEffectiveNullability: false
+                )
                 default: expression.Type
             }
-            return expression.Type is StructSymbol{IsClass: false} && declaredType is StructSymbol{IsClass: false}
+            return IsUnboxedValueType(expression.Type) && IsUnboxedValueType(declaredType)
         }
+
+        private func IsUnboxedValueType(type TypeSymbol) bool -> type is TupleTypeSymbol ||
+            Binder.IsNonNullableValueTypeForConstraint(type)
 
         // ADR-0125 / issue #1043: detect a span-like pin source — a type exposing a
         // public instance `ref T GetPinnableReference()` (canonically `System.Span[T]`

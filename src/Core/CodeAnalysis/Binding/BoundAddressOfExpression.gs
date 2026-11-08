@@ -49,6 +49,9 @@ class BoundAddressOfExpression : BoundExpression {
         get;
     }
 
+    // Syntax anchoring also stamps immediate-index addresses; keep escape classification separate.
+    internal var FixedBufferEscapeSyntax SyntaxNode?
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

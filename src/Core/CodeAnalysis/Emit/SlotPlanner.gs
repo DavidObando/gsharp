@@ -1038,6 +1038,13 @@ internal class SlotPlanner {
             base.VisitTupleElementAccessExpression(node)
         }
 
+        protected override func VisitFieldAccessExpression(node BoundFieldAccessExpression) {
+            if node.Receiver != nil {
+                this.AddIfNeeded(node.Receiver)
+            }
+            base.VisitFieldAccessExpression(node)
+        }
+
         protected override func VisitClrMethodGroupExpression(node BoundClrMethodGroupExpression) {
             if node.Receiver != nil {
                 this.AddIfNeeded(node.Receiver)

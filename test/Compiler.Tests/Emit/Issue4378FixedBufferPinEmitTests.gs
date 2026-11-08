@@ -28,6 +28,78 @@ import Xunit
 /// Also covers issue #4377: a bare (implicit-`this`) buffer name inside
 /// the declaring struct decays exactly like the explicit `this.Name`.
 open class Issue4378FixedBufferPinEmitTests {
+    @Theory
+    @InlineData(`unsafe func bad() {
+    var b = BoneInfo{}
+    let p *int8 = b.Name
+    let read = func() int32 { return b.Parent }
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func bad() sequence[int32] {
+    var b = BoneInfo{}
+    yield 0
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    func HeapPromotedBufferPointer_DriverRejectsUnpinnedDecay(function string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let source = BoneInfoPrelude + function
+        let (code, output) = fixture.TryCompile(source, "heap-promoted-buffer", executable: false)
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0638:", output)
+        let line = source.Substring(0, source.IndexOf("b.Name", StringComparison.Ordinal)).Count(
+            (c char) -> c == '\n'
+        ) +
+            1
+        Assert.Contains("heap-promoted-buffer.gs($line,", output)
+        Assert.DoesNotContain("error GS9998:", output)
+    }
+
+    @Fact
+    func LocalBlockAndTupleBuffers_ExecuteWithoutPinning() {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    b.Name[0] = int8(17)
+    var pair = (b, (b, 0))
+    let block *int8 = ({ let marker = 0
+        b }).Name
+    let tuple *int8 = pair.Item1.Name
+    let nested *int8 = pair.Item2.Item1.Name
+    let temporary *int8 = (b, 0).Item1.Name
+    Console.WriteLine(int32(block[0]))
+    Console.WriteLine(int32(tuple[0]))
+    Console.WriteLine(int32(nested[0]))
+    Console.WriteLine(int32(temporary[0]))
+}
+run()`
+        Assert.Equal(Lines("17", "17", "17", "17"), CompileAndRun(source))
+    }
+
+    @Fact
+    func CapturedBufferPins_PreserveStorageAcrossCollections() {
+        let source = BoneInfoPrelude + `unsafe func run() {
+    var b = BoneInfo{}
+    let read = func() int32 { return int32(b.Name[0]) }
+    fixed p *int8 = b.Name {
+        GC.Collect()
+        p[0] = int8(29)
+        GC.Collect()
+        Console.WriteLine(read())
+    }
+    let write = func() int32 {
+        fixed p *int8 = b.Name {
+            GC.Collect()
+            p[0] += int8(1)
+            return int32(p[0])
+        }
+    }
+    Console.WriteLine(write())
+    Console.WriteLine(read())
+}
+run()`
+        Assert.Equal(Lines("29", "30", "30"), CompileAndRun(source))
+    }
+
     @Fact
     func ClassFieldReceiver_PinsAndReadsThroughPointer() {
         let source = BoneInfoPrelude + `unsafe func run() {

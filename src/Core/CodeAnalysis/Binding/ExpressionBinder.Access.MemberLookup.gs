@@ -5615,9 +5615,19 @@ internal partial class ExpressionBinder {
         syntax SyntaxNode?,
         allowMovablePointer bool = false
     ) BoundExpression {
-        let pointer = MakeFixedBufferPointer(receiver, declaringType, field)
-        if !allowMovablePointer &&
-            (syntax == nil || !object.ReferenceEquals(syntax, binderCtx.AllowedMovableFixedBufferSyntax)) &&
+        let requiresFixed = !allowMovablePointer &&
+            (syntax == nil || !object.ReferenceEquals(syntax, binderCtx.AllowedMovableFixedBufferSyntax))
+        let pointer = MakeFixedBufferPointer(
+            receiver,
+            declaringType,
+            field,
+            if requiresFixed {
+                syntax
+            } else {
+                default(SyntaxNode?)
+            }
+        )
+        if requiresFixed &&
             TryGetFixedBufferFieldAccess(pointer, out var bufferAccess) &&
             !StatementBinder
             .IsFixedVariable(bufferAccess) {
@@ -7133,10 +7143,14 @@ internal partial class ExpressionBinder {
         private func MakeFixedBufferPointer(
             receiver BoundExpression,
             declaringType StructSymbol,
-            field FieldSymbol
+            field FieldSymbol,
+            escapeSyntax SyntaxNode? = nil
         ) BoundExpression {
             let fieldAccess = BoundFieldAccessExpression(nil, receiver, declaringType, field)
-            let addressOf = BoundAddressOfExpression(nil, fieldAccess, unmanaged: true)
+            // Preserve escaping-source syntax for validation after capture and state-machine promotion.
+            let addressOf = BoundAddressOfExpression(nil, fieldAccess, unmanaged: true){
+                FixedBufferEscapeSyntax = escapeSyntax
+            }
             if field.FixedBufferElementType is not{} elementType {
                 throw InvalidOperationException("Fixed-buffer field is missing its element type.")
             }

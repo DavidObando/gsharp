@@ -1174,7 +1174,9 @@ abstract class BoundTreeRewriter {
         if operand == node.Operand {
             return node
         }
-        return BoundAddressOfExpression(node.Syntax, operand, node.IsUnmanaged, node.IsReadOnly)
+        return BoundAddressOfExpression(node.Syntax, operand, node.IsUnmanaged, node.IsReadOnly){
+            FixedBufferEscapeSyntax = node.FixedBufferEscapeSyntax
+        }
     }
 
     /// ADR-0061: Rewrites a conditional address-of expression.

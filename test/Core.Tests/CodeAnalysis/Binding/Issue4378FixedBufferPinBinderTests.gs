@@ -8,6 +8,7 @@ import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections.Generic
 import System.IO
 import System.Linq
@@ -23,6 +24,130 @@ import Xunit
 /// value that is not a variable, or a pointee mismatch, is GS0401 (C# CS1708 /
 /// CS0266). Also covers the bare-name decay of issue #4377.
 open class Issue4378FixedBufferPinBinderTests {
+    @Theory
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let p *int8 = b.Name
+    let read = func() int32 { return b.Parent }
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func f(b Bone) {
+    let read = func() int32 { return b.Parent }
+    let p *int8 = b.Name
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read = func() int32 {
+        let p *int8 = b.Name
+        return int32(p[0])
+    }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read[T] = func(value T) int32 { return b.Parent }
+    let p *int8 = b.Name
+    Console.WriteLine(int32(p[0]) + read[int32](0))
+}`)
+    @InlineData(`unsafe async func f(b Bone) int32 {
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    return int32(p[0])
+}`)
+    @InlineData(`unsafe async func f() int32 {
+    var b = Bone{}
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    return int32(p[0])
+}`)
+    @InlineData(`unsafe func f() sequence[int32] {
+    var b = Bone{}
+    yield 0
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    @InlineData(`unsafe async func f(b Bone) sequence[int32] {
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    @InlineData(`unsafe func f() {
+    let build = func() int32 {
+        var b = Bone{}
+        let read = func() int32 { return b.Parent }
+        let p *int8 = b.Name
+        return int32(p[0]) + read()
+    }
+    Console.WriteLine(build())
+}`)
+    @InlineData(`unsafe func f() {
+    let read = async func(b Bone) int32 {
+        await System.Threading.Tasks.Task.Yield()
+        let p *int8 = b.Name
+        return int32(p[0])
+    }
+    let ignored = read(Bone{})
+}`)
+    @InlineData(`unsafe func f() {
+    var pair = (Bone{}, 0)
+    let read = func() int32 { return pair.Item2 }
+    let p *int8 = pair.Item1.Name
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    func HeapPromotedBufferPointer_ReportsGS0638(function string) {
+        let source = Prelude + function
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
+    @InlineData("({ let marker = 0\n b }).Name")
+    @InlineData("pair.Item1.Name")
+    @InlineData("pair.Item2.Item1.Name")
+    @InlineData("(b, 0).Item1.Name")
+    @InlineData("({ let marker = 0\n pair }).Item2.Item1.Name")
+    @InlineData("({ var inner = Bone{}\n inner }).Name")
+    func LocalBlockAndTupleStorage_AllowsBufferDecay(expression string) {
+        AssertNoErrors(Prelude + `unsafe func f() {
+    var b = Bone{}
+    var pair = (b, (b, 0))
+    let p *int8 = ` + expression + `
+    Console.WriteLine(int32(p[0]))
+}`)
+    }
+
+    @Theory
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read = func() int32 { return b.Parent }
+    fixed p *int8 = b.Name { p[0] = 3 }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe func f(b Bone) {
+    let read = func() int32 {
+        fixed p *int8 = b.Name { return int32(p[0]) }
+    }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe async func f() int32 {
+    var b = Bone{}
+    await System.Threading.Tasks.Task.Yield()
+    fixed p *int8 = b.Name { return int32(p[0]) }
+}`)
+    @InlineData(`unsafe func f() sequence[int32] {
+    var b = Bone{}
+    yield 0
+    var result = 0
+    fixed p *int8 = b.Name { result = int32(p[0]) }
+    yield result
+}`)
+    func HeapPromotedBufferStorage_AllowsPinning(function string) {
+        AssertNoErrors(Prelude + function)
+    }
+
     @Fact
     func BareName_InsideDeclaringStruct_Pins() {
         const source = `
