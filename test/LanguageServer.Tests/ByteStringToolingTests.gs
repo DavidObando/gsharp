@@ -49,6 +49,17 @@ class ByteStringToolingTests {
             let buffer = project.UpdateFile(path, repaired.Text.ToString())
             Assert.Same(repaired, buffer)
             Assert.Empty(buffer.Diagnostics)
+
+            let malformedSource = "let value = $prefix\"\\q\"\n"
+            let malformedFirst = project.UpdateFile(path, malformedSource)
+            Assert.Contains(
+                malformedFirst.Diagnostics,
+                (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.Id == expectedDiagnosticId
+            )
+            let malformedCompilation = project.GetCompilation()
+            let malformedSecond = project.UpdateFile(path, malformedSource)
+            Assert.Same(malformedFirst, malformedSecond)
+            Assert.Same(malformedCompilation, project.GetCompilation())
         } finally {
             File.Delete(path)
         }

@@ -183,7 +183,7 @@ open class ProjectState {
                 .ToString() == text &&
                 (
                 if rawBytes == nil {
-                    !HasRawByteEncodingDiagnostic(existing)
+                    existing.Text.RawBytes == nil || !HasRawByteEncodingDiagnostic(existing)
                 } else {
                     existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes!!)
                 }
