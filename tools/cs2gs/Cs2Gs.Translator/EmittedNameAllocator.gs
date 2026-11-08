@@ -964,7 +964,11 @@ internal class EmittedNameAllocator {
 
         private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
             case parameter is IParameterSymbol: CanonicalParameter(parameter.OriginalDefinition)
-            case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
+            case method is IMethodSymbol: cast[ISymbol](
+                (
+                    (method.ReducedFrom ?? method).PartialDefinitionPart ?? (method.ReducedFrom ?? method)
+                ).OriginalDefinition
+            )
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
             case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)
             case type is INamedTypeSymbol: cast[ISymbol](type.OriginalDefinition)
@@ -973,6 +977,17 @@ internal class EmittedNameAllocator {
 
         private func CanonicalParameter(parameter IParameterSymbol) ISymbol {
             var parameter = parameter
+            if parameter.ContainingSymbol is IMethodSymbol{ReducedFrom: {} reducedFrom} &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal +
+                1 < reducedFrom
+                .Parameters
+                .Length &&
+                reducedFrom
+                .Parameters[parameter.Ordinal + 1]
+                .Name == parameter.Name {
+                parameter = reducedFrom.OriginalDefinition.Parameters[parameter.Ordinal + 1]
+            }
             if parameter.ContainingSymbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol associatedProperty} &&
                 parameter.Ordinal >= 0 &&
                 parameter.Ordinal < associatedProperty

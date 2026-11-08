@@ -1150,6 +1150,33 @@ public class C
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "1217")
     }
 
+    @Fact
+    func ReducedExtensionMethodWithReferencedUnderscoreParameter_RenamesNamedArgumentInInstanceCall() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int Base = 10;
+
+    public int Run() => this.Add(_: 2) + this.Unreferenced(_: 3) + this.Base.AddInt(_: 4);
+}
+
+public static class CExtensions
+{
+    public static int Add(this C c, int _) => c.Base + _ + 1;
+
+    public static int Unreferenced(this C c, int _) => c.Base + 5;
+
+    public static int AddInt(this int x, int _) => x + _ + 1;
+}`)
+        Assert.Contains("CExtensions.Add(this, underscore: 2)", printed, StringComparison.Ordinal)
+        Assert.Contains("CExtensions.Unreferenced(this, _: 3)", printed, StringComparison.Ordinal)
+        Assert.Contains("this.Base.AddInt(underscore: 4)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("Add(this, _: 2)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("AddInt(_: 4)", printed, StringComparison.Ordinal)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "43")
+    }
+
     shared {
         private func CompileExternalReference(source string) MetadataReference {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", source)})
