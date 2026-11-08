@@ -7531,6 +7531,13 @@ partial class CSharpToGSharpTranslator {
         ) bool -> this.GenericResultInfersNilableThroughByRefArgument(expression) ||
             this.ManagedReferenceArrayWidenedExpressionMayBeNull(expression) ||
             this.ImportedGenericTupleElementRequiresAssertion(expression) ||
+            ObliviousNullabilityAnalyzer
+            .IsTupleElementTainted(
+            this.context.Compilation,
+            expression,
+            this.context.SemanticModel,
+            this.context.SiblingCompilations
+        ) ||
             this.RecordClassSynthesizedToStringIsNilableInGSharp(expression)
 
         private func RecordClassSynthesizedToStringIsNilableInGSharp(

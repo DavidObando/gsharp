@@ -7,14 +7,31 @@ import System.Text
 import Xunit
 
 class Issue5858TupleReferenceTests {
-    @Fact
-    func StaticReadOnlyTuple_RefReturnDoesNotAddressADefensiveCopy() {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StaticReadOnlyTuple_RefReturnDoesNotAddressADefensiveCopy(nested bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
-        let emitted = fixture.Compile(`package TupleReadOnly5858
+        let state = if nested {
+            "struct Snapshot { var Row (Text string, Code int32) }\n"
+        } else {
+            ""
+        }
+        let field = if nested {
+            "let State Snapshot = Snapshot{Row: (\"keep\", 1)}"
+        } else {
+            "let Row (Text string, Code int32) = (\"keep\", 1)"
+        }
+        let selected = if nested {
+            "State.Row"
+        } else {
+            "Row"
+        }
+        let emitted = fixture.Compile("package TupleReadOnly5858\n" + state + `
 class Source {
     shared {
-        let Row (Text string, Code int32) = ("keep", 1)
-        func Borrow() ref readonly string { return ref Row.Text }
+        ` + field + `
+        func Borrow() ref readonly string { return ref ` + selected + `.Text }
     }
 }`, "TupleReadOnly5858", executable: false)
         let consumer = fixture.CompileCSharp(`using System;
@@ -31,12 +48,24 @@ public static class Consumer {
         let method = assemblies[0].GetType("TupleReadOnly5858.Source")!!.GetMethod("Borrow")!!
         let body = method.GetMethodBody()!!
         let code = body.GetILAsByteArray()!!
-        Assert.Equal(11, code.Length)
-        Assert.Equal(0x7f, int32(code[0]))
-        Assert.Equal(0x7c, int32(code[5]))
-        Assert.Equal(0x2a, int32(code[10]))
-        Assert.Equal("Row", method.Module.ResolveField(BitConverter.ToInt32(code, 1))!!.Name)
-        Assert.Equal("Item1", method.Module.ResolveField(BitConverter.ToInt32(code, 6))!!.Name)
+        let fields = if nested {
+            []string{"State", "Row", "Item1"}
+        } else {
+            []string{"Row", "Item1"}
+        }
+        Assert.Equal(5 * fields.Length + 1, code.Length)
+        for var i = 0; i < fields.Length; i++ {
+            Assert.Equal(
+                if i == 0 {
+                    0x7f
+                } else {
+                    0x7c
+                },
+                int32(code[5 * i])
+            )
+            Assert.Equal(fields[i], method.Module.ResolveField(BitConverter.ToInt32(code, 5 * i + 1))!!.Name)
+        }
+        Assert.Equal(0x2a, int32(code[code.Length - 1]))
         Assert.Equal("keep", assemblies[1].GetType("Consumer")!!.GetMethod("Run")!!.Invoke(nil, nil))
     }
 

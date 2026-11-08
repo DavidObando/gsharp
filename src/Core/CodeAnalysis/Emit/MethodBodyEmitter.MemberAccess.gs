@@ -1965,7 +1965,7 @@ internal partial class MethodBodyEmitter {
     }
 
     /// ADR-0039: Emits the field address (ldflda) for a user struct field.
-    private func EmitFieldAddress(fa BoundFieldAccessExpression) {
+    private func EmitFieldAddress(fa BoundFieldAccessExpression, preserveStorage bool = false) {
         let fieldHandle = this.ResolveFieldAddressHandle(fa)
         // ADR-0053: static field address — use ldsflda.
         if fa.Receiver == nil {
@@ -1979,7 +1979,9 @@ internal partial class MethodBodyEmitter {
             .Type
             ?.ClrType
             ?.IsValueType == false
-        if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
+        if preserveStorage {
+            this.EmitExplicitFieldReceiver(fa.Receiver!!)
+        } else if !receiverIsClass && fa.Receiver is BoundDereferenceExpression deref && TypeSymbol.IsUnmanagedPointer(
             deref.Operand.Type
         ) {
             // ADR-0122 §4/§10: `(*p).field` / `p->field`. The pointer value IS
@@ -2018,6 +2020,14 @@ internal partial class MethodBodyEmitter {
         }
         this.il.OpCode(ILOpCode.Ldflda)
         this.il.Token(fieldHandle)
+    }
+
+    private func EmitExplicitFieldReceiver(receiver BoundExpression) {
+        if Binder.IsReferenceTypeForConstraint(receiver.Type) || !ExpressionBinder.IsLvalue(receiver) {
+            this.EmitInstanceReceiver(receiver, isReadOnlyCall: true)
+        } else {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
+        }
     }
 
     // Resolves the field token `ldflda`/`ldsflda` uses for a user field access.

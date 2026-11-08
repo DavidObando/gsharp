@@ -2266,14 +2266,14 @@ internal partial class MethodBodyEmitter {
                 }
             }
             case fa is BoundFieldAccessExpression {
-                this.EmitFieldAddress(fa)
+                this.EmitFieldAddress(fa, preserveStorage: true)
             }
             case tuple is BoundTupleElementAccessExpression {
                 this.EmitTupleElementAccess(tuple, addressOnly: true)
             }
             case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
                 if access.Receiver != nil {
-                    this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: true)
+                    this.EmitExplicitFieldReceiver(access.Receiver)
                 }
                 this.il.OpCode(
                     if field.IsStatic {

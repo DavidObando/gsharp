@@ -5223,8 +5223,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         for node in root.DescendantNodes() {
             switch node {
                 case reference is RefExpressionSyntax when RefStorageTarget(reference, model) is {} target &&
-                    TryResolveTupleElementSource(reference.Expression, model, out var source) {
+                    TryResolveTupleElementSource(
+                    reference.Expression,
+                    model,
+                    out var source,
+                    unwrapSuppressions: true
+                ) {
                     tupleScalarEdges.Add((source, target))
+                    if IsDeclaredNullablePosition(SymbolValueType(target)) {
+                        tupleTainted.Add(source)
+                    }
                 }
                 case method is MethodDeclarationSyntax {
                     CollectTupleReturnFlows(
@@ -6134,21 +6142,32 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func TryResolveTupleElementSource(
         expression ExpressionSyntax?,
         model SemanticModel?,
-        out source TupleElementKey
+        out source TupleElementKey,
+        unwrapSuppressions bool = false
     ) bool {
         var expression = expression
         expression = UnwrapTupleValue(expression, model)
+        if unwrapSuppressions && expression != nil {
+            expression = Unwrap(expression, unwrapSuppressions: true)
+        }
         if expression is MemberAccessExpressionSyntax member && model.GetSymbolInfo(member)
-            .Symbol is IFieldSymbol field &&
-            model
-            .GetTypeInfo(member.Expression).Type is INamedTypeSymbol receiverTuple && receiverTuple.IsTupleType {
+            .Symbol is IFieldSymbol field {
+            let receiver = if unwrapSuppressions {
+                Unwrap(member.Expression, unwrapSuppressions: true)
+            } else {
+                member.Expression
+            }
+            if model.GetTypeInfo(receiver).Type is not INamedTypeSymbol receiverTuple || !receiverTuple.IsTupleType {
+                source = default(TupleElementKey)
+                return false
+            }
             let index = TupleElementIndex(receiverTuple, field)
             if index >= 0 {
-                if TryResolveTupleElementSource(member.Expression, model, out var parent) {
+                if TryResolveTupleElementSource(receiver, model, out var parent, unwrapSuppressions) {
                     source = TupleElementKey(parent.ContractSymbol, AppendTuplePath(parent.ContractPath, index))
                     return true
                 }
-                if TryResolveTupleSource(member.Expression, model, out var symbol, out _) {
+                if TryResolveTupleSource(receiver, model, out var symbol, out _) {
                     source = TupleElementKey(symbol, index.ToString(CultureInfo.InvariantCulture))
                     return true
                 }

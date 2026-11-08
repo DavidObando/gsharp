@@ -17,6 +17,59 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Theory
+    @InlineData("row.Text!")
+    @InlineData("(row.Text!)")
+    func SuppressedTupleRefAlias_StillSharesNullableStorage(expression string) {
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Read() {
+        ref string alias = ref ` + expression + `;
+        alias = null;
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        Assert.Contains("ref alias string? =", printed)
+        Assert.True(!printed.Contains("!!", StringComparison.Ordinal), printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NullableTupleRefAlias_SeedsItsStorageWithoutANullWrite(readOnly bool) {
+        let modifier = if readOnly {
+            "ref readonly"
+        } else {
+            "ref"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Run() {
+        ` + modifier + ` string? alias = ref row.Text;
+        return alias;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        Assert.Contains(
+            "ref " +
+                (
+                if readOnly {
+                    "readonly "
+                } else {
+                    ""
+                }
+            ) +
+                "alias string? = row.Text",
+            printed
+        )
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func TupleElementAlias_PreservesTheStorageAndNullWrites(clear bool) {
