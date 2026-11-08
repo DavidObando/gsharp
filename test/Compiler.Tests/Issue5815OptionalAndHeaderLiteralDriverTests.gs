@@ -6,6 +6,41 @@ import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
     @Fact
+    func ReviewUnsignedBoundarySuffixesVerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package Unsigned5872
+import System
+let first = 9223372036854775808UL
+let second = +0x8000_0000_0000_0000uL
+Console.Write("${first}:${second}")
+`, "unsigned", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("9223372036854775808:9223372036854775808"), fixture.RunBytes(dll))
+        let (code, output) = fixture.TryCompile("let value = -9223372036854775808UL", "negative-unsigned", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0128", output, StringComparison.Ordinal)
+        Assert.DoesNotContain("GS0004", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ReviewNestedCallableWideningVerifiesAndRequiresAllArguments() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let prefix = `package Nested5815
+import System
+let f = (x int32 = 7) -> x
+let pair = (f, 0)
+let erased = cast[((int32) -> int32, int32)](pair)
+`
+        let dll = fixture.Compile(prefix + "Console.Write(erased.Item1(3))", "nested", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("3"), fixture.RunBytes(dll))
+        let (code, output) = fixture.TryCompile(prefix + "Console.Write(erased.Item1())", "nested-omitted", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0144", output, StringComparison.Ordinal)
+        Assert.Contains(".gs(6,", output, StringComparison.Ordinal)
+    }
+
+    @Fact
     func InferredFunctionDefaultsVerifyAndExecute() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package Optional5815

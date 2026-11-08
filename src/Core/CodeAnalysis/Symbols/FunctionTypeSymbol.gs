@@ -118,6 +118,50 @@ class FunctionTypeSymbol : TypeSymbol {
     prop HasVariadic bool -> !IsVariadic.IsDefaultOrEmpty && IsVariadic[IsVariadic.Length - 1]
 
     shared {
+        internal func ContainsOptionalContract(type TypeSymbol) bool {
+            if type.StripToBareShape() is FunctionTypeSymbol function && !function.Parameters.IsDefaultOrEmpty {
+                return true
+            }
+            for element in type.GetElementPositions() {
+                if ContainsOptionalContract(element) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        internal func HaveCompatibleOptionalContracts(source TypeSymbol, target TypeSymbol) bool {
+            if object.ReferenceEquals(source, target) ||
+                source == TypeSymbol.Null ||
+                source == TypeSymbol.Error ||
+                target == TypeSymbol.Error {
+                return true
+            }
+            if target.StripToBareShape() is FunctionTypeSymbol targetFunction &&
+                !targetFunction
+                .Parameters
+                .IsDefaultOrEmpty {
+                if source.StripToBareShape() is not FunctionTypeSymbol sourceFunction ||
+                    !targetFunction.AcceptsOptionalContract(sourceFunction) {
+                    return false
+                }
+            }
+            let targetElements = target.GetElementPositions()
+            if targetElements.IsDefaultOrEmpty {
+                return true
+            }
+            let sourceElements = source.GetElementPositions()
+            if sourceElements.Length != targetElements.Length {
+                return !ContainsOptionalContract(target)
+            }
+            for var i = 0; i < targetElements.Length; i++ {
+                if !HaveCompatibleOptionalContracts(sourceElements[i], targetElements[i]) {
+                    return false
+                }
+            }
+            return true
+        }
+
         private let Cache ConcurrentDictionary[string, FunctionTypeSymbol] = ConcurrentDictionary[
             string,
             FunctionTypeSymbol

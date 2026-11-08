@@ -70,6 +70,37 @@ f(z: next(), y: next()) + trace * 1000`, 2721)
             Assert.Equal(1, diagnostic.Location.StartLine)
         }
     }
+
+    @Fact
+    func ReviewNestedConversionsPreserveTheCompleteCallableContract() {
+        for suffix in[]string{
+            "let pair = (f, 0)\nlet erased = cast[((int32) -> int32, int32)](pair)\nerased.Item1",
+            "let erased = cast[((int32) -> int32)?](f)\nerased?",
+            "let outer = () -> f\nlet erased = cast[() -> ((int32) -> int32)](outer)\nerased()"
+        } {
+            let prefix = "let f = (x int32 = 7) -> x\n" + suffix
+            let supplied = EmittedOracle.Evaluate(prefix + "(3)")
+            Assert.Empty(supplied.Diagnostics)
+            Assert.Equal(3, supplied.Value)
+            let omitted = EmittedOracle.Evaluate(prefix + "()")
+            let diagnostic = Assert.Single(omitted.Diagnostics.Where((d Diagnostic) -> d.IsError))
+            Assert.Equal("GS0144", diagnostic.Id)
+        }
+    }
+
+    @Fact
+    func ReviewNestedReassignmentRejectsChangedDefaults() {
+        for source in[]string{`let f = (x int32 = 7) -> x
+let g = (x int32 = 9) -> x
+var pair = (f, 0)
+pair = (g, 0)`, `let f = (x int32 = 7) -> x
+let g = (x int32 = 9) -> x
+var factory = () -> f
+factory = () -> g`} {
+            let result = EmittedOracle.Evaluate(source)
+            Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 3)
+        }
+    }
 }
 
 class Issue5864HeaderInitializerParsingTests {
@@ -95,6 +126,24 @@ class Issue5864HeaderInitializerParsingTests {
 }
 
 class Issue5872SignedInt64BoundaryTests {
+    @Theory
+    @InlineData("9223372036854775808UL")
+    @InlineData("9223372036854775808uL")
+    @InlineData("9223372036854775808LU")
+    @InlineData("0x8000_0000_0000_0000UL")
+    func ReviewUnsignedBoundariesRemainUnsigned(magnitude string) {
+        let expected = uint64(int64.MaxValue) + 1UL
+        for prefix in[]string{"", "+"} {
+            let result = EmittedOracle.Evaluate(prefix + magnitude)
+            Assert.Empty(result.Diagnostics)
+            Assert.Equal(expected, result.Value)
+        }
+        let rejected = EmittedOracle.Evaluate("-" + magnitude)
+        let diagnostic = Assert.Single(rejected.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0128", diagnostic.Id)
+        Assert.Equal(0, diagnostic.Location.StartCharacter)
+    }
+
     @Theory
     @InlineData("9223372036854775808L")
     @InlineData("9223372036854775808l")

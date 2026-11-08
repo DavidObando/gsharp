@@ -4,6 +4,18 @@ import Xunit
 
 class Issue5815CallableAndHeaderLiteralRuntimeTests {
     @Fact
+    func ReviewUnsignedBoundarySuffixesPreserveNativeOutput() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+using System;
+class P {
+    static void Main() {
+        Console.WriteLine(9223372036854775808UL);
+        Console.WriteLine(+0x8000_0000_0000_0000uL);
+    }
+}`, verifyIL: true)
+    }
+
+    @Fact
     func InferredLambdaDefaultSurvivesTranslationAndNaturalInvocation() {
         LiteralConstructionRuntimeParity.AssertMatches(`
 using System;

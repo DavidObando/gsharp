@@ -1488,16 +1488,6 @@ internal class ConversionClassifier {
             }
         }
         if conversion.IsIdentity {
-            // A conversion to a written function type must not retain the inferred literal's optional contract.
-            if expression.Type is FunctionTypeSymbol sourceCallable &&
-                type is FunctionTypeSymbol targetCallable &&
-                !sourceCallable
-                .Parameters
-                .IsDefaultOrEmpty &&
-                !object
-                .ReferenceEquals(sourceCallable, targetCallable) {
-                return BoundConversionExpression(nil, targetCallable, expression, binderCtx.IsCheckedContext)
-            }
             // ADR-0172 (as amended by issue #3643): same-shape tuples
             // differing only in element names are identity-convertible.
             // Warn (GS0541) only when the source is a tuple LITERAL whose
@@ -1535,7 +1525,14 @@ internal class ConversionClassifier {
                     )
                 }
             }
-            return expression
+            // Preserve the complete target type after tuple-literal adaptation, including nested callable metadata.
+            return if !object.ReferenceEquals(expression.Type, type) && FunctionTypeSymbol.ContainsOptionalContract(
+                expression.Type
+            ) {
+                BoundConversionExpression(nil, type!!, expression, binderCtx.IsCheckedContext)
+            } else {
+                expression
+            }
         }
         // ADR-0186 §4: the coercion check. `Conversion.Classify` already
         // decided whether this pairing is "a platform value into a

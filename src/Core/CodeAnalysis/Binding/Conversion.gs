@@ -356,6 +356,9 @@ class Conversion {
         ) Conversion {
             var from = from
             var to = to
+            if from != nil && to != nil && !FunctionTypeSymbol.HaveCompatibleOptionalContracts(from, to) {
+                return Conversion.None
+            }
             if to != nil && NativeProtocolMetadata.IsProtocol(to) &&
                 from != TypeSymbol.Null &&
                 from != TypeSymbol.Error &&
@@ -510,11 +513,6 @@ class Conversion {
             }
             from = Invariant.Required(from, "conversion classification always has a source type", expression: "from")
             to = Invariant.Required(to, "conversion classification always has a target type", expression: "to")
-            if from is FunctionTypeSymbol sourceCallable &&
-                to is FunctionTypeSymbol targetCallable &&
-                !targetCallable.AcceptsOptionalContract(sourceCallable) {
-                return Conversion.None
-            }
             if from == to {
                 return Conversion.Identity
             }

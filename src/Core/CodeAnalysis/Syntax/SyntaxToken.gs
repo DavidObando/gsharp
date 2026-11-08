@@ -70,7 +70,9 @@ open partial class SyntaxToken : SyntaxNode {
         Value is uint64 magnitude &&
         magnitude == uint64(int64.MaxValue) +
         1UL &&
-        Text.Length > 0 &&
+        Text.Length > 1 &&
+        Text[Text.Length - 2] != 'U' &&
+        Text[Text.Length - 2] != 'u' &&
         (Text[Text.Length - 1] == 'L' || Text[Text.Length - 1] == 'l')
 
     /// Gets the text span associated to the token.
