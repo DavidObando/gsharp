@@ -373,6 +373,37 @@ generic-imported
     }
 
     @Fact
+    func DistinctInheritedInterfaceReturnContractsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace DistinctReturnContracts;
+public interface IImportedNumber { int Read(); }
+public interface IImportedText { string Read(); }`, "DistinctReturnContracts")
+        let dll = fixture.Compile(`package DistinctInheritedReturns
+import System
+import DistinctReturnContracts
+interface INumber { func Read() int32; }
+interface IText { func Read() string; }
+interface IBoth : INumber, IText { }
+class Source : IBoth {
+    func (INumber) Read() int32 -> 31
+    func (IText) Read() string -> "text"
+}
+func Main() {
+    let both IBoth = Source()
+    Console.WriteLine(adapt[INumber](both).Read())
+    Console.WriteLine(adapt[IText](both).Read())
+    Console.WriteLine(adapt[IImportedNumber](both).Read())
+    Console.WriteLine(adapt[IImportedText](both).Read())
+}`, "distinct-inherited-returns", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`31
+text
+31
+text
+`, fixture.Run(dll))
+    }
+
+    @Fact
     func UserStaticVirtualPropertiesAreNotInstanceAdapterSlots() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(`package InvalidUserStaticAdapterProperty

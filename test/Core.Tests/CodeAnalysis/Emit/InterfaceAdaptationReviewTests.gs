@@ -21,6 +21,34 @@ import System.Runtime.Loader
 import Xunit
 
 class InterfaceAdaptationReviewTests {
+    @Theory
+    @InlineData("int32", "ref int32")
+    @InlineData("ref int32", "ref readonly int32")
+    @InlineData("string", "string?")
+    func InheritedInterfaceReturnRefKindsAndNullabilityRemainDistinct(firstReturn string, secondReturn string) {
+        let tree = SyntaxTree.Parse(`package DistinctReturnShapes
+interface IFirst { func Read() ` + firstReturn + `; }
+interface ISecond { func Read() ` + secondReturn + `; }
+interface IBoth : IFirst, ISecond { }
+func First(source IBoth) IFirst { return adapt[IFirst](source) }
+func Second(source IBoth) ISecond { return adapt[ISecond](source) }`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil)
+        Assert.Empty(program.Diagnostics)
+        let methods = program
+            .Structs
+            .Where((type StructSymbol) -> type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+            .SelectMany(
+            func (type StructSymbol) IEnumerable[FunctionSymbol] {
+                return type.Methods
+            }
+        )
+            .ToArray()
+        Assert.Equal(2, methods.Length)
+        Assert.False(methods[0].ReturnRefKind == methods[1].ReturnRefKind && methods[0].Type == methods[1].Type)
+    }
+
     @Fact
     func RichBaseArgumentHeapRetentionRejectsRefAndRefLikeShapes() {
         let refConstructor ConstructorInfo? = typeof(RefConstructorBase).GetConstructor(

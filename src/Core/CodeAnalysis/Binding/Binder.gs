@@ -3370,6 +3370,64 @@ partial class Binder {
         return (eventSymbol, bodies)
     }
 
+    private func GetUserSourceAdapterMethods(sourceMemberType TypeSymbol, name string) ImmutableArray[
+        (Owner TypeSymbol, Method FunctionSymbol)
+    ] {
+        if sourceMemberType is InterfaceSymbol sourceInterface {
+            let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
+            for iface in sourceInterface.SelfAndAllBaseInterfaces() {
+                iface.EnsureMembersResolved()
+                for method in iface.Methods {
+                    if method.Name != name ||
+                        method.Accessibility != Accessibility.Public ||
+                        method.HasExplicitInterfaceClause ||
+                        method.ExplicitInterfaceClauseTarget != nil {
+                        continue
+                    }
+                    let contract = GetUserAdapterMethodContract(iface, method)
+                    // Compare full interface contracts instead of overload identity alone.
+                    if !results.Any(
+                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> BoundScope.FunctionSignaturesEqual(
+                            candidate.Method,
+                            method
+                        ) &&
+                            MethodContractsMatch(
+                            GetUserAdapterMethodContract(cast[InterfaceSymbol](candidate.Owner), candidate.Method),
+                            method,
+                            iface
+                        ) &&
+                            MethodContractsMatch(contract, candidate.Method, candidate.Owner)
+                    ) {
+                        results.Add((iface, method))
+                    }
+                }
+            }
+            return results.ToImmutable()
+        }
+        if sourceMemberType is StructSymbol sourceStruct {
+            let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
+            let effectiveMethods = TypeMemberModel.GetMethods(
+                sourceStruct,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .ToHashSet()
+            for ancestor in sourceStruct.GetHierarchy() {
+                for method in ancestor.GetDeclaredInstanceMethods() {
+                    if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
+                        results.Add((ancestor, method))
+                    }
+                }
+            }
+            return results.ToImmutable()
+        }
+        return TypeMemberModel
+            .GetMethods(sourceMemberType, name, MemberQuery.Instance(MemberKinds.Method))
+            .Where((candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public)
+            .Select((candidate FunctionSymbol) -> (candidate.ContainingType ?? sourceMemberType, candidate))
+            .ToImmutableArray()
+    }
+
     private func MethodContractsMatch(
         target FunctionSymbol,
         source FunctionSymbol,
@@ -10907,45 +10965,6 @@ partial class Binder {
                 cloneMethod.MarkUnscopedRef()
             }
             return cloneMethod
-        }
-
-        private func GetUserSourceAdapterMethods(sourceMemberType TypeSymbol, name string) ImmutableArray[
-            (Owner TypeSymbol, Method FunctionSymbol)
-        ] {
-            let effectiveMethods = TypeMemberModel.GetMethods(
-                sourceMemberType,
-                name,
-                MemberQuery.Instance(MemberKinds.Method)
-            )
-                .ToHashSet()
-            if sourceMemberType is InterfaceSymbol sourceInterface {
-                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
-                for iface in sourceInterface.SelfAndAllBaseInterfaces() {
-                    iface.EnsureMembersResolved()
-                    for method in iface.Methods {
-                        if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
-                            results.Add((iface, method))
-                        }
-                    }
-                }
-                return results.ToImmutable()
-            }
-            if sourceMemberType is StructSymbol sourceStruct {
-                let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
-                for ancestor in sourceStruct.GetHierarchy() {
-                    for method in ancestor.GetDeclaredInstanceMethods() {
-                        if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
-                            results.Add((ancestor, method))
-                        }
-                    }
-                }
-                return results.ToImmutable()
-            }
-            return TypeMemberModel
-                .GetMethods(sourceMemberType, name, MemberQuery.Instance(MemberKinds.Method))
-                .Where((candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public)
-                .Select((candidate FunctionSymbol) -> (candidate.ContainingType ?? sourceMemberType, candidate))
-                .ToImmutableArray()
         }
 
         private func GetUserSourceAdapterProperties(sourceMemberType TypeSymbol) ImmutableArray[
