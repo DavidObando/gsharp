@@ -3422,9 +3422,8 @@ internal partial class StatementBinder {
                 Receiver: {} receiver
             } when !field.IsStatic &&
                 HasUnboxedValueStorage(receiver): IsFixedVariable(receiver, isHeapPromoted)
-            case tuple is BoundTupleElementAccessExpression when HasUnboxedValueStorage(
-                tuple.Receiver
-            ): IsFixedVariable(tuple.Receiver, isHeapPromoted)
+            case tuple is BoundTupleElementAccessExpression: HasUnboxedValueStorage(tuple.Receiver) &&
+                IsFixedVariable(tuple.Receiver, isHeapPromoted)
             case block is BoundBlockExpression: IsFixedVariable(block.Expression, isHeapPromoted)
             case conditional is BoundConditionalExpression: IsFixedVariable(conditional.WhenTrue, isHeapPromoted) &&
                 IsFixedVariable(conditional.WhenFalse, isHeapPromoted)

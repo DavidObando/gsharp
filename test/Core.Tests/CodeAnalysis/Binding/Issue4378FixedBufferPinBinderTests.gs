@@ -5,11 +5,14 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import Xunit
@@ -24,6 +27,48 @@ import Xunit
 /// value that is not a variable, or a pointee mismatch, is GS0401 (C# CS1708 /
 /// CS0266). Also covers the bare-name decay of issue #4377.
 open class Issue4378FixedBufferPinBinderTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BoxedTupleElement_IsMovableStorage(nested bool) {
+        // Tuple aliases do not parse yet; exercise the storage node directly.
+        let compilation = Compilation(SyntaxTree.Parse(Prelude))
+        let bone = Assert.Single(compilation.GlobalScope.Structs, (s StructSymbol) -> s.Name == "Bone")
+        let field = Assert.Single(bone.Fields, (f FieldSymbol) -> f.IsFixedBuffer)
+        let pair = TupleTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](bone, TypeSymbol.Int32))
+        let outer = if nested {
+            TupleTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](pair, TypeSymbol.Int32))
+        } else {
+            pair
+        }
+        let boxed = BoundVariableExpression(nil, LocalVariableSymbol("boxed", false, TypeSymbol.Object), outer)
+        let receiver BoundExpression = if nested {
+            BoundTupleElementAccessExpression(nil, boxed, outer, 0)
+        } else {
+            boxed
+        }
+        let element = BoundTupleElementAccessExpression(nil, receiver, pair, 0)
+        let buffer = BoundFieldAccessExpression(nil, element, bone, field)
+        Assert.False(StatementBinder.IsFixedVariable(buffer))
+    }
+
+    @Theory
+    @InlineData("boxed.Item1.Name")
+    @InlineData("boxed.Item2.Item1.Name")
+    @InlineData("&boxed.Item2.Item1.Name[0]")
+    func BoxedTupleStorage_ReportsGS0638(expression string) {
+        let source = Prelude + `unsafe func f(boxed object) *int8 {
+    if boxed is ValueTuple[Bone, ValueTuple[Bone, int32]] {
+        return ` + expression + `
+    }
+    return nil
+}`
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
     @Theory
     @InlineData(`unsafe func f() {
     var b = Bone{}
