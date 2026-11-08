@@ -40,6 +40,9 @@ class FunctionTypeSymbol : TypeSymbol {
     }
 
     internal func WithParameters(parameters ImmutableArray[ParameterSymbol]) FunctionTypeSymbol {
+        if parameters.IsDefaultOrEmpty {
+            return this
+        }
         for parameter in parameters {
             if parameter.HasExplicitDefaultValue {
                 return FunctionTypeSymbol(Name, ParameterTypes, IsVariadic, ReturnType, parameters)
@@ -356,6 +359,10 @@ class FunctionTypeSymbol : TypeSymbol {
                 case SliceTypeSymbol,
                 ArrayTypeSymbol,
                 RectangularArrayTypeSymbol,
+                MapTypeSymbol,
+                SequenceTypeSymbol,
+                AsyncSequenceTypeSymbol,
+                ChannelTypeSymbol,
                 PinnedTypeSymbol,
                 NullabilityAnnotatedTypeSymbol,
                 TupleTypeSymbol,

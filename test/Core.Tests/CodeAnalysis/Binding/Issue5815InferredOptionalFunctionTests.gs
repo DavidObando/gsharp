@@ -6,11 +6,143 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
 import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
+    @Fact
+    func Review6MixedDelegatesCompareInvokeContracts() {
+        let parameter = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter.SetExplicitDefaultValue(7)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let optional = plain.WithParameters(ImmutableArray.Create(parameter))
+        let requiresOptional = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](optional), TypeSymbol.Int32)
+        let consumer = DelegateTypeSymbol(
+            "Consumer5815",
+            "Contracts",
+            Accessibility.Public,
+            ImmutableArray.Create(ParameterSymbol("callback", plain)),
+            TypeSymbol.Int32,
+            nil
+        )
+        Assert.False(Conversion.Classify(requiresOptional, consumer).Exists)
+        let t = TypeParameterSymbol("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        let definition = DelegateTypeSymbol(
+            "GenericConsumer5815",
+            "Contracts",
+            Accessibility.Public,
+            ImmutableArray.Create(ParameterSymbol("callback", t), ParameterSymbol("tag", TypeSymbol.Int32)),
+            TypeSymbol.Int32,
+            nil
+        )
+        definition.SetTypeParameters(ImmutableArray.Create(t))
+        let generic = DelegateTypeSymbol.Construct(definition, ImmutableArray.Create[TypeSymbol](optional))
+        let matching = FunctionTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](optional, TypeSymbol.Int32),
+            TypeSymbol.Int32
+        )
+        Assert.True(Conversion.Classify(matching, generic).IsImplicit)
+    }
+
+    @Fact
+    func Review6NullableStructPositionsRemainInvariant() {
+        let parameter = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter.SetExplicitDefaultValue(7)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let optional = plain.WithParameters(ImmutableArray.Create(parameter))
+        let closed = typeof(Issue5815ContractCell[Func[int32, int32]])
+        let definition = closed.GetGenericTypeDefinition()
+        let source = ImportedTypeSymbol.GetConstructed(closed, definition, ImmutableArray.Create[TypeSymbol](optional))
+        let target = ImportedTypeSymbol.GetConstructed(closed, definition, ImmutableArray.Create[TypeSymbol](plain))
+        Assert.False(
+            Conversion.Classify(
+                SequenceTypeSymbol.Get(NullableTypeSymbol.Get(source)),
+                SequenceTypeSymbol.Get(NullableTypeSymbol.Get(target))
+            )
+                .Exists
+        )
+    }
+
+    @Fact
+    func Review6SourceDelegateArgumentsUseDeclaredVariance() {
+        let parameter = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter.SetExplicitDefaultValue(7)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let optional = plain.WithParameters(ImmutableArray.Create(parameter))
+        let t = TypeParameterSymbol("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        let definition = DelegateTypeSymbol(
+            "InvariantConsumer5815",
+            "Contracts",
+            Accessibility.Public,
+            ImmutableArray.Create(ParameterSymbol("callback", t)),
+            TypeSymbol.Int32,
+            nil
+        )
+        definition.SetTypeParameters(ImmutableArray.Create(t))
+        let source = DelegateTypeSymbol.Construct(definition, ImmutableArray.Create[TypeSymbol](optional))
+        let target = DelegateTypeSymbol.Construct(definition, ImmutableArray.Create[TypeSymbol](plain))
+        Assert.False(Conversion.Classify(SequenceTypeSymbol.Get(source), SequenceTypeSymbol.Get(target)).Exists)
+    }
+
+    @Fact
+    func Review6CheckedInterfaceCastsCannotEraseWritableContracts() {
+        let result = EmittedOracle.Evaluate(`import System.Collections.Generic
+func One[T](value T) List[T] -> List[T]{value}
+let f = (x int32 = 7) -> x
+let values = One(f)
+let alias = cast[IList[(int32) -> int32]](values)`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 4)
+    }
+
+    @Theory
+    @InlineData("map")
+    @InlineData("sequence")
+    @InlineData("async")
+    @InlineData("channel")
+    func Review6WrappedFunctionCacheKeysRetainContracts(kind string) {
+        let parameter7 = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter7.SetExplicitDefaultValue(7)
+        let parameter9 = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter9.SetExplicitDefaultValue(9)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let first = plain.WithParameters(ImmutableArray.Create(parameter7))
+        let second = plain.WithParameters(ImmutableArray.Create(parameter9))
+        let Wrap = func (element TypeSymbol) TypeSymbol {
+            return switch kind {
+                case "map": MapTypeSymbol.Get(TypeSymbol.Int32, element)
+                case "sequence": SequenceTypeSymbol.Get(element)
+                case "async": AsyncSequenceTypeSymbol.Get(element)
+                default: ChannelTypeSymbol.Get(element)
+            }
+        }
+        let factory7 = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, Wrap(first))
+        let factory9 = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, Wrap(second))
+        Assert.False(Conversion.Classify(factory9, factory7).Exists)
+    }
+
+    @Fact
+    func Review6MapFactoriesKeepDistinctDefaultsAtInvocation() {
+        let result = EmittedOracle.Evaluate(`func Wrap[T](value T) map[int32, T] -> map[int32, T]{0: value}
+let first = () -> Wrap((x int32 = 7) -> x)
+let second = () -> Wrap((x int32 = 9) -> x)
+first()[0]() * 100 + second()[0]()`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(709, result.Value)
+    }
+
+    @Fact
+    func Review6ValueDiscardingAdaptersRetainMatchingParameters() {
+        let result = EmittedOracle.Evaluate(`var trace = 0
+var f = func(x int32 = 7) void {}
+f = func(x int32 = 7) int32 { return trace += x }
+f()
+trace`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(7, result.Value)
+    }
+
     @Fact
     func Review4WrittenGenericFunctionCastsEraseOptionalDefaults() {
         let prefix = "func Run[T](value T) T { return cast[(int32) -> T](func(x int32 = 7) T { return value })"
@@ -47,15 +179,25 @@ result`)
 var Value T
 init(value T) { Value = value }
 func operator implicit(value Box[T]) T -> value.Value
+func operator implicit(value T) Box[T] -> Box[T](value)
 }
 func MakeBox[T](value T) Box[T] -> Box[T](value)
 var f = (x int32 = 7) -> x
 `
-        let valid = EmittedOracle.Evaluate(declarations + "f = MakeBox(f)\nf()")
+        let valid = EmittedOracle.Evaluate(declarations + `f = MakeBox(f)
+var box = MakeBox(f)
+box = (x int32 = 7) -> x + 1
+f = box
+f()`)
         Assert.Empty(valid.Diagnostics)
-        Assert.Equal(7, valid.Value)
-        let invalid = EmittedOracle.Evaluate(declarations + "let g = (x int32 = 9) -> x\nf = MakeBox(g)")
-        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 8)
+        Assert.Equal(8, valid.Value)
+        for suffix in[]string{
+            "let g = (x int32 = 9) -> x\nf = MakeBox(g)",
+            "var box = MakeBox(f)\nbox = (x int32 = 9) -> x"
+        } {
+            let invalid = EmittedOracle.Evaluate(declarations + suffix)
+            Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 9)
+        }
     }
 
     @Fact
@@ -338,6 +480,10 @@ factory = () -> g`} {
             Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 3)
         }
     }
+}
+
+struct Issue5815ContractCell[T] {
+    var Values List[T]
 }
 
 class Issue5864HeaderInitializerParsingTests {

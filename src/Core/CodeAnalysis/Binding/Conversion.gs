@@ -360,6 +360,18 @@ class Conversion {
             if sourceShape is ByRefTypeSymbol sourceRef && targetShape is ByRefTypeSymbol targetRef {
                 return HaveCompatibleOptionalContracts(sourceRef.PointeeType, targetRef.PointeeType, invariant: true)
             }
+            if (sourceShape is FunctionTypeSymbol || targetShape is FunctionTypeSymbol) &&
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(source, out var sourceSignature) &&
+                MemberLookup
+                .TryGetDelegateFunctionTypeFromSymbol(target, out var targetSignature) {
+                return HaveCompatibleCallableContracts(
+                    sourceShape,
+                    targetShape,
+                    sourceSignature!!,
+                    targetSignature!!,
+                    invariant
+                )
+            }
             let sourceFunction = sourceShape as FunctionTypeSymbol
             let targetFunction = targetShape as FunctionTypeSymbol
             if targetFunction != nil &&
@@ -418,7 +430,101 @@ class Conversion {
             return true
         }
 
+        private func HaveCompatibleCallableContracts(
+            source TypeSymbol,
+            target TypeSymbol,
+            sourceSignature FunctionTypeSymbol,
+            targetSignature FunctionTypeSymbol,
+            invariant bool
+        ) bool {
+            if sourceSignature.Arity != targetSignature.Arity {
+                return false
+            }
+            let sourceParameters = if source is DelegateTypeSymbol sourceDelegate {
+                sourceDelegate.Parameters
+            } else {
+                sourceSignature.Parameters
+            }
+            let targetParameters = if target is DelegateTypeSymbol targetDelegate {
+                targetDelegate.Parameters
+            } else {
+                targetSignature.Parameters
+            }
+            let sourceContract = if source is FunctionTypeSymbol {
+                sourceSignature
+            } else {
+                sourceSignature.WithParameters(sourceParameters)
+            }
+            let targetContract = if target is FunctionTypeSymbol {
+                targetSignature
+            } else {
+                targetSignature.WithParameters(targetParameters)
+            }
+            if target is FunctionTypeSymbol && !targetSignature.AcceptsOptionalContract(sourceContract) {
+                return false
+            }
+            if invariant && source is FunctionTypeSymbol && !sourceSignature.AcceptsOptionalContract(targetContract) {
+                return false
+            }
+            var sourceReturnRefKind = RefKind.None
+            var targetReturnRefKind = RefKind.None
+            let sourceRefKinds = if source is FunctionTypeSymbol {
+                if sourceParameters.IsDefaultOrEmpty {
+                    ImmutableArray[RefKind].Empty
+                } else {
+                    sourceParameters.Select((p ParameterSymbol) -> p.RefKind).ToImmutableArray()
+                }
+            } else {
+                ConversionClassifier.GetMethodGroupTargetRefKinds(
+                    source,
+                    sourceSignature.Arity,
+                    out sourceReturnRefKind
+                )
+            }
+            let targetRefKinds = if target is FunctionTypeSymbol {
+                if targetParameters.IsDefaultOrEmpty {
+                    ImmutableArray[RefKind].Empty
+                } else {
+                    targetParameters.Select((p ParameterSymbol) -> p.RefKind).ToImmutableArray()
+                }
+            } else {
+                ConversionClassifier.GetMethodGroupTargetRefKinds(
+                    target,
+                    targetSignature.Arity,
+                    out targetReturnRefKind
+                )
+            }
+            for var i = 0; i < sourceSignature.Arity; i++ {
+                let byRef = (i < sourceRefKinds.Length && sourceRefKinds[i] != RefKind.None) ||
+                    (i < targetRefKinds.Length && targetRefKinds[i] != RefKind.None)
+                let compatible = if invariant || byRef {
+                    HaveCompatibleOptionalContracts(
+                        sourceSignature.ParameterTypes[i],
+                        targetSignature.ParameterTypes[i],
+                        invariant: true
+                    )
+                } else {
+                    HaveCompatibleOptionalContracts(
+                        targetSignature.ParameterTypes[i],
+                        sourceSignature.ParameterTypes[i]
+                    )
+                }
+                if !compatible {
+                    return false
+                }
+            }
+            if !invariant && targetSignature.ReturnType == TypeSymbol.Void {
+                return true
+            }
+            return HaveCompatibleOptionalContracts(
+                sourceSignature.ReturnType,
+                targetSignature.ReturnType,
+                invariant || sourceReturnRefKind != RefKind.None || targetReturnRefKind != RefKind.None
+            )
+        }
+
         private func OptionalContractPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
+            let target = UnwrapNullableForVariance(target) ?? target
             if target is FunctionTypeSymbol function {
                 if index < function
                     .ParameterTypes
@@ -461,6 +567,14 @@ class Conversion {
                     TypeParameterVariance.None
                 } else {
                     parameters[ownIndex].Variance
+                }
+            }
+            if target is DelegateTypeSymbol targetDelegate {
+                let parameters = (targetDelegate.Definition ?? targetDelegate).TypeParameters
+                return if index < parameters.Length {
+                    parameters[index].Variance
+                } else {
+                    TypeParameterVariance.None
                 }
             }
             if TryGetConstructedGenericShape(target, out var definition, out _) {
@@ -2978,6 +3092,9 @@ class Conversion {
         internal func HasCheckedReferenceConversion(from TypeSymbol?, to TypeSymbol?) bool {
             var from = from
             var to = to
+            if from != nil && to != nil && !HaveCompatibleOptionalContracts(from, to) {
+                return false
+            }
             let removesReferenceNullability = from is NullableTypeSymbol nullableFrom &&
                 IsReferenceLikeTarget(nullableFrom.UnderlyingType) &&
                 !(to is NullableTypeSymbol)

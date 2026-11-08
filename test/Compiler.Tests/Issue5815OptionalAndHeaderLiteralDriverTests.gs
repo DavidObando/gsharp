@@ -6,6 +6,50 @@ import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
     @Fact
+    func Review6CheckedWritableAliasReportsTheCastLocation() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`import System.Collections.Generic
+func One[T](value T) List[T] -> List[T]{value}
+let f = (x int32 = 7) -> x
+let values = One(f)
+let alias = cast[IList[(int32) -> int32]](values)
+`, "checked-alias", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0155", output, StringComparison.Ordinal)
+        Assert.Contains(".gs(5,", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Review6NestedMapDefaultsVerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package MapDefaults5815
+import System
+func Wrap[T](value T) map[int32, T] -> map[int32, T]{0: value}
+let first = () -> Wrap((x int32 = 7) -> x)
+let second = () -> Wrap((x int32 = 9) -> x)
+Console.Write("${first()[0]()}:" )
+Console.Write(second()[0]())
+`, "map-defaults", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("7:9"), fixture.RunBytes(dll))
+    }
+
+    @Fact
+    func Review6DiscardedValuesStillInvokeTheDefaultOnce() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package DiscardDefaults5815
+import System
+var trace = 0
+var f = func(x int32 = 7) void {}
+f = func(x int32 = 7) int32 { return trace += x }
+f()
+Console.Write(trace)
+`, "discard-defaults", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(dll))
+    }
+
+    @Fact
     func Review4WrittenGenericFunctionCastsVerifyAndRequireAllArguments() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = `package ErasedGeneric5815
@@ -35,17 +79,21 @@ class Box[T] {
 var Value T
 init(value T) { Value = value }
 func operator implicit(value Box[T]) T -> value.Value
+func operator implicit(value T) Box[T] -> Box[T](value)
 }
 func MakeBox[T](value T) Box[T] -> Box[T](value)
 func Choose[T](left T, right T) T -> left
 func Choose(left int32, right int32) int32 -> left
 var f = (x int32 = 7) -> x
 f = MakeBox(f)
+var box = MakeBox(f)
+box = (x int32 = 7) -> x + 1
+f = box
 try { Choose(f, throw InvalidOperationException()) } catch { Console.Write("caught:") }
 Console.Write(f())
 `, "contract-controls", true)
         IlVerifier.Verify(dll)
-        Assert.Equal(Encoding.UTF8.GetBytes("caught:7"), fixture.RunBytes(dll))
+        Assert.Equal(Encoding.UTF8.GetBytes("caught:8"), fixture.RunBytes(dll))
     }
 
     @Theory

@@ -1221,6 +1221,7 @@ internal class ConversionClassifier {
         if expression is BoundFunctionLiteralExpression &&
             expression.Type != nil &&
             type != nil &&
+            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
             !Conversion
             .HaveCompatibleOptionalContracts(expression.Type, type) {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)

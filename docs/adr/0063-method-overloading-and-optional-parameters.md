@@ -302,7 +302,10 @@ Widen the variable to a written function type to permit those replacements; supp
 Writable container positions keep optional contracts invariant; a widening conversion must not create an unchecked writable alias.
 Callable parameter contracts are contravariant; callable result contracts are covariant.
 Bottom-type expressions produce no callable value.
-A user-defined conversion checks the optional contract of its substituted result.
+A user-defined conversion checks the optional contracts of its substituted parameter and result.
+Mixed delegate conversions compare their `Invoke` signatures.
+Named delegate type arguments retain declaration-site variance.
+Discarded results do not carry a returned callable contract.
 
 ## References
 
