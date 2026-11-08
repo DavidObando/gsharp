@@ -5,8 +5,10 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.Tests
 import GSharp.Tests
 import System.Collections.Immutable
+import System.Linq
 import Xunit
 
 /// Issue #4354: a compound member assignment (`recv.Member op= value`)
@@ -34,6 +36,7 @@ class Issue4354StatedNullableCompoundReceiverTests {
         let diagnostics = Compile(declarations, body)
         let report = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
         Assert.Equal("GS0158", report.Id)
+        Assert.Contains("may be nil", report.Message)
     }
 
     /// The plain write through the same receiver reports the same code, so the
@@ -41,7 +44,132 @@ class Issue4354StatedNullableCompoundReceiverTests {
     @Fact
     func The_Plain_Write_Reports_The_Same_Diagnostic() {
         let diagnostics = Compile("func use(xs List[int32]?) { xs.Capacity = 1 }", string.Empty)
-        Assert.Equal("GS0158", Assert.Single(diagnostics, (d Diagnostic) -> d.IsError).Id)
+        let report = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", report.Id)
+        Assert.Contains("may be nil", report.Message)
+    }
+
+    /// Issue #4366: a member read or write on a stated-nullable (`T?`)
+    /// receiver whose underlying type has the member reports the
+    /// receiver-may-be-nil GS0158 naming the remedies (`?.`, `!!`, `if let`,
+    /// or a nil check), while a missing member on `T?` keeps `Cannot find member`.
+    @Theory
+    @InlineData(`class Node {
+    var Next Node?
+    var Name string = ""
+}
+func f(n Node) string { return n.Next.Name }`, "", "Cannot access member Name because receiver 'n.Next' may be nil. Use '?.' for null-safe access, '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(`class Node {
+    var Next Node?
+    var Name string = ""
+}
+func f(n Node) { n.Next.Name = "x" }`, "", "Cannot access member Name because receiver 'n.Next' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(`class Node {
+    var Name string = ""
+}
+func f(n Node?) { n.Name = "x" }`, "", "Cannot access member Name because receiver 'n' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(
+        "",
+        "    let e = Exception(\"m\")\n    Console.WriteLine(e.InnerException.Message)",
+        "Cannot access member Message because receiver 'e.InnerException' may be nil. Use '?.' for null-safe access, '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
+    )
+    @InlineData(
+        "",
+        "    let e = Exception(\"m\")\n    e.InnerException.Source = \"s\"",
+        "Cannot access member Source because receiver 'e.InnerException' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
+    )
+    @InlineData("", "    let e = Exception(\"m\")\n    e.InnerException.Message = \"s\"", "Cannot find member Message.")
+    @InlineData(`class Node {
+    var Next Node?
+}
+func f(n Node) int32 { return n.Next.Missing }`, "", "Cannot find member Missing.")
+    @InlineData(`import System.Linq
+class Node {}
+func f(n Node?) { n.Count = 1 }`, "", "Cannot find member Count.")
+    @InlineData(`class Node {
+    private var secret int32 = 1
+}
+func f(n Node?) int32 { return n.secret }`, "", "Cannot find member secret.")
+    @InlineData(`class Node {
+    private var secret int32 = 1
+}
+func f(n Node?) { n.secret = 2 }`, "", "Cannot find member secret.")
+    @InlineData(`class Node {
+    private func Secret() int32 -> 1
+}
+func f(n Node?) { let _ = n.Secret }`, "", "Cannot find member Secret.")
+    @InlineData(`open class Base {
+    protected func Secret() int32 -> 1
+}
+class Derived : Base {
+    func Use(b Base?) { let _ = b.Secret }
+}`, "", "Cannot find member Secret.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+}
+func f(n Node?) { n.Value = 3 }`, "", "Cannot find member Value.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+}
+func f(n Node?) { n.Value += 1 }`, "", "Cannot find member Value.")
+    @InlineData(`class Holder {
+    var _v int32
+    prop Value ref int32 { get { return ref _v } }
+}
+func f(h Holder?) { h.Value = 3 }`, "", "Cannot access member Value because receiver 'h' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(`class Node {
+    prop Value int32 { get; private set }
+    init(other Node?) { other.Value = 3 }
+}`, "", "Cannot access member Value because receiver 'other' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(`class Bag {
+    var total int32
+    public func operator +=(amount int32) { total = total + amount }
+}
+class Holder {
+    public var Inner Bag
+    public prop Only Bag { get { return Inner } }
+}
+func f(h Holder?) { h.Only += 4 }`, "", "Cannot access member Only because receiver 'h' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check.")
+    @InlineData(
+        "func use(p Process?) { p.Exited += (s, e) -> { } }",
+        "",
+        "Cannot access member Exited because receiver 'p' may be nil. Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
+    )
+    func Issue4366_NilableReceiver_MemberAccess_ExplainsNilableReceiver_And_MissingMember_StaysCannotFind(
+        declarations string,
+        body string,
+        expectedSubstring string
+    ) {
+        let diagnostics = Compile(declarations, body)
+        let report = Assert.Single(diagnostics, (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0158", report.Id)
+        Assert.Equal(expectedSubstring, report.Message)
+    }
+
+    @Fact
+    func ImportedByRefProperty_OnNullableReceiver_WriteReportsCannotFindMember() {
+        using let fixture = CSharpFixture(`namespace Issue4366Fixture
+{
+    public class RefHolder
+    {
+        private int _v = 7;
+        public ref readonly int Value => ref _v;
+        public ref int Slot => ref _v;
+    }
+}`)
+        let result = EmittedOracle.Evaluate(`package P4354Ref
+import Issue4366Fixture
+
+func f(h RefHolder?) {
+    h.Value = 1
+    h.Slot = 2
+}
+0
+`, []string{fixture.AssemblyPath})
+        Assert.Equal(
+            []string{"Cannot find member Value.", "Cannot find member Slot."},
+            result.Diagnostics.Where((d Diagnostic) -> d.IsError).Select((d Diagnostic) -> d.Message)
+        )
     }
 
     /// The remedies the diagnostic points at, and every receiver that never

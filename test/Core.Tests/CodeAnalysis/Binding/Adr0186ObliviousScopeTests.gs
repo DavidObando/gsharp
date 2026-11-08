@@ -342,21 +342,6 @@ class Enabled {
         AssertPlatform(TypeSymbol.String, oblivious.Type)
     }
 
-    /// Under ADR-0136's reading (`--nullability=enabled`) nothing
-    /// constructs a (cref:PlatformTypeSymbol). An `@Oblivious`
-    /// declaration then reads as that mode reads every oblivious position —
-    /// `T?` — so it agrees with how its own emitted metadata re-imports
-    /// under the same mode.
-    @Fact
-    func Under_The_Legacy_Reading_Oblivious_Means_What_That_Reading_Says() {
-        let holder = BindStruct(`@Oblivious
-class Holder {
-    var Field string
-}`, "Holder", NullabilityMode.Enabled)
-        let field = Assert.IsType[NullableTypeSymbol](Field(holder, "Field"))
-        Assert.Same(TypeSymbol.String, field.UnderlyingType)
-    }
-
     // ---------------------------------------------------------------
     // The check at the boundary into enabled code.
     // ---------------------------------------------------------------

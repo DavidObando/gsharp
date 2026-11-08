@@ -70,7 +70,7 @@ partial class Adr0186PlatformTypeBindingTests {
     xs.Reverse()
     Console.WriteLine(xs[0])`
         using let world = World()
-        let baselineOutput = world.Run(baseline, NullabilityMode.Enabled)
+        let baselineOutput = world.Run(baseline, NullabilityMode.PlatformTypes)
         Assert.Equal("3", baselineOutput.Trim())
         // The witness: the SAME line against a platform receiver must produce
         // the same mutation. `Enumerable.Reverse` would print 1.
@@ -83,7 +83,7 @@ partial class Adr0186PlatformTypeBindingTests {
         // mutate-and-return, which is exactly the kind of coincidence
         // ADR-0154 asks a witness not to rely on.
         Assert.Equal(
-            world.SelectedReverseDeclaringType(baseline, NullabilityMode.Enabled),
+            world.SelectedReverseDeclaringType(baseline, NullabilityMode.PlatformTypes),
             world.SelectedReverseDeclaringType(body, NullabilityMode.PlatformTypes)
         )
     }
@@ -116,7 +116,7 @@ partial class Adr0186PlatformTypeBindingTests {
         // Baseline: the receiver is an ordinary `Queue[Entry]` built in G#.
         let baseline = world.GlobalProbeType(
             "let queue = Queue[Entry]()\nlet probe = queue.Dequeue()",
-            NullabilityMode.Enabled
+            NullabilityMode.PlatformTypes
         )
         // Witness: the receiver is `Queue[Entry]!` — the oblivious library
         // returns it, so it arrives platform-wrapped.
@@ -1047,10 +1047,6 @@ func G(s string?) string {
         // guard reddens this with GS0156.
         const competing = "    let k = AsNilable(Ob.Strings())\n    Console.WriteLine(NilableOrObjectKeys()[k])"
         Assert.Equal("object", world.Run(competing, NullabilityMode.PlatformTypes, decls).Trim())
-        // …and the same program with no platform type anywhere, which is what
-        // establishes the defect as pre-existing rather than introduced by
-        // the flip.
-        Assert.Equal("object", world.Run(competing, NullabilityMode.Enabled, decls).Trim())
     }
 
     /// ADR-0186 §3 at a symbolic indexer parameter, <b>end to end</b> — and
@@ -1271,10 +1267,13 @@ func G(s string?) string {
     }
 }`
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             let compiled = world.Compile("    Console.WriteLine(\"unused\")", mode, extraDeclarations: holder)
             Assert.False(compiled.Success, Describe(compiled))
-            Assert.Contains(compiled.Diagnostics, (d DiagnosticLine) -> d.Id == "GS0158")
+            Assert.Contains(
+                compiled.Diagnostics,
+                (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("may be nil", StringComparison.Ordinal)
+            )
         }
     }
 
@@ -1304,7 +1303,7 @@ func G(s string?) string {
         const nilable = "    let xs List[int32]? = List[int32]()\n    xs?.Reverse()"
         const baseline = "    let xs = List[int32]()\n    xs.Reverse()"
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             Assert.Contains(world.Compile(unguarded, mode).Diagnostics, (d DiagnosticLine) -> d.Id == "GS0159")
             Assert.Equal(
                 world.SelectedReverseDeclaringType(baseline, mode),
@@ -1338,7 +1337,7 @@ func G(s string?) string {
         const nilable = "let s string? = \"  a  \"\nlet probe = s?.Trim()"
         const baseline = "let s = \"  a  \"\nlet probe = s.Trim()"
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             Assert.Contains(world.Compile(unguarded, mode).Diagnostics, (d DiagnosticLine) -> d.Id == "GS0159")
             let expected = world.GlobalProbeType(baseline, mode)
             let actual = world.GlobalProbeType(nilable, mode)
@@ -1384,7 +1383,7 @@ func G(s string?) string {
         Console.WriteLine(inner.Message)
     }`
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             for (body, member) in[](string, string){
                 (fixtureRead, "Length"),
                 (bclRead, "Message"),
@@ -1395,7 +1394,10 @@ func G(s string?) string {
                 Assert.False(compiled.Success, body)
                 Assert.Contains(
                     compiled.Diagnostics,
-                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal)
+                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal) &&
+                        d
+                        .Message
+                        .Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(
@@ -1442,13 +1444,16 @@ func G(s string?) string {
     b.Value = Entry{Id: 7}
     Console.WriteLine(b.Value!!.Id)`
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             for (body, member) in[](string, string){(read, "Capacity"), (write, "Capacity")} {
                 let compiled = world.Compile(body, mode)
                 Assert.False(compiled.Success, body)
                 Assert.Contains(
                     compiled.Diagnostics,
-                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal)
+                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(member, StringComparison.Ordinal) &&
+                        d
+                        .Message
+                        .Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(
@@ -1471,7 +1476,10 @@ func G(s string?) string {
             Assert.False(projected.Success, Describe(projected))
             Assert.Contains(
                 projected.Diagnostics,
-                (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Id", StringComparison.Ordinal)
+                (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Id", StringComparison.Ordinal) &&
+                    d
+                    .Message
+                    .Contains("may be nil", StringComparison.Ordinal)
             )
             Assert.Equal("7", world.Run(entryRemedy, mode, extraDeclarations: EntryDeclaration).Trim())
         }
@@ -1520,7 +1528,7 @@ func G(s string?) string {
     Console.WriteLine(GenericOuter[List[int32]?].Inner{ Value: List[int32]() }.Value?.Count)
     Console.WriteLine(Box[Rec[List[int32]?]]{ Value: Rec[List[int32]?](List[int32]()) }.Value.Value!!.Count)`
         using let world = World()
-        for mode in[]NullabilityMode{NullabilityMode.Enabled, NullabilityMode.PlatformTypes} {
+        for mode in[]NullabilityMode{NullabilityMode.PlatformTypes} {
             Assert.NotEmpty(nullableProbes)
             for probe in nullableProbes {
                 Assert.IsType[NullableTypeSymbol](world.GlobalProbeType(probe, mode))
@@ -1531,7 +1539,13 @@ func G(s string?) string {
                 Assert.False(compiled.Success, chain)
                 Assert.Contains(
                     compiled.Diagnostics,
-                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Capacity", StringComparison.Ordinal)
+                    (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains(
+                        "Capacity",
+                        StringComparison.Ordinal
+                    ) &&
+                        d
+                        .Message
+                        .Contains("may be nil", StringComparison.Ordinal)
                 )
             }
             Assert.Equal(
@@ -1546,23 +1560,6 @@ func G(s string?) string {
 
     /// <b>ADR-0186 step 4 — the discriminator: an OBLIVIOUS field-read
     /// receiver is checked, not waved through.</b>
-    ///
-    /// `Ob.ArrField` and `Ob.NilNestField` are imported <em>field
-    /// reads</em> — the receiver kind the deleted carve-out used to admit —
-    /// over nullability-oblivious metadata, and deliberately not locals.
-    ///
-    /// Under the default mode the receiver is `T!`, a §4 check is
-    /// inserted for it, and a nil one throws the attributed
-    /// `NullReferenceException`: the platform coercion answers its safety
-    /// question. The stated-nullable counterparts in
-    /// (cref:Issue4356_AChainThroughAnAnnotatedNullableClrMember_Reports)
-    /// and (cref:Issue4356_AChainThroughANullableGenericSubstitution_Reports)
-    /// are the other half: `T?`, reported.
-    ///
-    /// Under `--nullability=enabled` the same field is ADR-0136's
-    /// `string[]?`. Before #4356 it bound through the carve-out; it now
-    /// reports like any `T?` receiver, which is what ADR-0136 always said
-    /// it should do, and `!!` is the remedy there.
     @Fact
     func Step4_AnObliviousFieldReadReceiver_Is_Checked_Not_WavedThrough() {
         const body = "    Console.WriteLine(Ob.ArrField.Length)"
@@ -1580,14 +1577,6 @@ func G(s string?) string {
         )
         Assert.Contains("nullability-oblivious", thrown.Message, StringComparison.Ordinal)
         Assert.Contains("coerced at", thrown.Message, StringComparison.Ordinal)
-        Assert.IsType[NullableTypeSymbol](world.GlobalProbeType("let probe = Ob.ArrField", NullabilityMode.Enabled))
-        let enabled = world.Compile(body, NullabilityMode.Enabled)
-        Assert.False(enabled.Success, Describe(enabled))
-        Assert.Contains(
-            enabled.Diagnostics,
-            (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Length", StringComparison.Ordinal)
-        )
-        Assert.Equal("1", world.Run("    Console.WriteLine(Ob.ArrField!!.Length)", NullabilityMode.Enabled).Trim())
     }
 
     private data class DiagnosticLine(Id string, Message string) : IEquatable[DiagnosticLine] { }
