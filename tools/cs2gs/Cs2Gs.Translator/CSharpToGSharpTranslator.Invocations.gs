@@ -1874,7 +1874,8 @@ partial class CSharpToGSharpTranslator {
                         default: AddressOf(this.TranslateExpression(argument.Expression))
                     }
                 }
-                if (argument.Expression is IdentifierNameSyntax and {Identifier: {ValueText: "_"}}) {
+                if argument.Expression is IdentifierNameSyntax{Identifier: {ValueText: "_"}} discard &&
+                    this.IsTrueDiscard(discard) {
                     return OutArgumentExpression("out", "_")
                 }
                 let translatedExisting GExpression? = WithoutNonNullAssertion(

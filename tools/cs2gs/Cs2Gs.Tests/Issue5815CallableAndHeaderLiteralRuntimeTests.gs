@@ -24,7 +24,7 @@ class P {
         var f = (int x = 7) => x;
         Console.WriteLine(f());
     }
-}`, (printed string) -> printed.Replace("f(7)", "f()"), verifyIL: true)
+}`, transform: (printed string) -> printed.Replace("f(7)", "f()"), verifyIL: true)
     }
 
     @Fact
