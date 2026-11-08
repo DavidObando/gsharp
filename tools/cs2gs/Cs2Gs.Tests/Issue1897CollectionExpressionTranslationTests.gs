@@ -209,6 +209,434 @@ namespace Corpus.Issue4525
     }
 
     @Fact
+    func ConstructibleTarget_NullableEnumerableWithNonNullableAddParameter_ForgivesNullableElements() {
+        let rendered = Render(`
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4573
+{
+    public class Base {}
+    public class Derived : Base {}
+
+    public class Bag : IEnumerable<string?>
+    {
+        public void Add(string item) { }
+        public IEnumerator<string?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class BaseBag : IEnumerable<Base?>
+    {
+        public void Add(Base item) { }
+        public IEnumerator<Base?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class MultiBag : IEnumerable<string?>
+    {
+        public void Add(string item) { }
+        public void Add(int item) { }
+        public IEnumerator<string?> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public Bag Make(string? value, string[] items)
+        {
+            Bag bag = [value, ..items];
+            return bag;
+        }
+
+        public BaseBag MakeDerived(Derived? derived)
+        {
+            BaseBag bag = [derived];
+            return bag;
+        }
+
+        public MultiBag MakeMulti(string? value)
+        {
+            MultiBag bag = [value];
+            return bag;
+        }
+
+        public Bag MakeFromWidenedArray()
+        {
+            var array = new string[2];
+            array[0] = null!;
+            Bag bag = [array[0]];
+            return bag;
+        }
+    }
+}
+`)
+        Assert.Contains("value!!, ...items", rendered, StringComparison.Ordinal)
+        Assert.Contains("derived!!", rendered, StringComparison.Ordinal)
+        Assert.Contains("MultiBag(){ value!! }", rendered, StringComparison.Ordinal)
+        Assert.Contains("array[0]!!", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
+    }
+
+    @Fact
+    func ConstructibleTarget_AllowNullWidenedAddConversionAndOverloads_PreserveNullSemantics() {
+        let rendered = Render(`
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+
+namespace Corpus.Issue4573
+{
+    public sealed class Target
+    {
+        public readonly string Value;
+        public Target(string value) => Value = value;
+        public static implicit operator Target(string? value) => new Target(value ?? "from-null");
+    }
+
+    public class AllowNullBag : IEnumerable<string?>
+    {
+        public readonly List<string> Items = new();
+        public void Add([AllowNull] string item) => Items.Add(item ?? "allow-null");
+        public IEnumerator<string?> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class TargetBag : IEnumerable<Target?>
+    {
+        public readonly List<Target?> Items = new();
+        public void Add(Target item) => Items.Add(item);
+        public IEnumerator<Target?> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class ByteBag : IEnumerable<byte>
+    {
+        public readonly List<byte> Items = new();
+        public void Add(byte item) => Items.Add(item);
+        public IEnumerator<byte> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class IntOrNullableStringBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(int item) => Items.Add(item.ToString());
+        public void Add(string? item) => Items.Add(item ?? "null-string");
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class IntOrNonNullStringBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(int item) => Items.Add(item.ToString());
+        public void Add(string item) => Items.Add(item);
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public sealed class ConvertibleString
+    {
+        public readonly string Value;
+        public ConvertibleString(string value) => Value = value;
+        public static implicit operator int(ConvertibleString value) => 0;
+    }
+
+    public class IntEnumerableWithConvertibleStringAddBag : IEnumerable<int>
+    {
+        public readonly List<string> Items = new();
+        public void Add(int item) => Items.Add(item.ToString());
+        public void Add(ConvertibleString? item) => Items.Add(item?.Value ?? "null-convertible");
+        public IEnumerator<int> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class BaseNonNullStringBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(string item) => Items.Add(item);
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class DerivedNullableObjectBag : BaseNonNullStringBag
+    {
+        public void Add(object? item) => Items.Add(item?.ToString() ?? "derived-null-object");
+    }
+
+    public class DerivedOptionalNullableObjectBag : BaseNonNullStringBag
+    {
+        public void Add(object? item, bool trace = false) => Items.Add((item?.ToString() ?? "derived-optional-null") + (trace ? "!" : ""));
+    }
+
+    public class RefStringOrNullableObjectBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(ref string item) => Items.Add(item);
+        public void Add(object? item) => Items.Add(item?.ToString() ?? "ref-skipped-null-object");
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class GenericAddSpreadBag : IEnumerable<int>
+    {
+        public readonly List<string> Items = new();
+        public void Add<T>(T item) => Items.Add(item?.ToString() ?? "null");
+        public void Add(string item) => Items.Add("str:" + item);
+        public IEnumerator<int> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class ByteOrObjectBag : IEnumerable<byte>
+    {
+        public readonly List<byte> Items = new();
+        public void Add(byte item) => Items.Add(item);
+        public void Add(object? item) => Items.Add(99);
+        public IEnumerator<byte> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Probe
+    {
+        public static AllowNullBag MakeAllowNullFromWidenedArray()
+        {
+            var array = new string[1];
+            array[0] = null!;
+            AllowNullBag bag = [array[0]];
+            return bag;
+        }
+
+        public static TargetBag MakeTarget(string? convertedInput)
+        {
+            TargetBag bag = [convertedInput];
+            return bag;
+        }
+
+        public static ByteBag MakeByteBag()
+        {
+            ByteBag bag = [default(int)];
+            return bag;
+        }
+
+        public static ByteOrObjectBag MakeByteOrObjectBag()
+        {
+            ByteOrObjectBag bag = [default(int)];
+            return bag;
+        }
+
+        public static IntOrNullableStringBag MakeIntOrNullableString(string? nullableStringInput)
+        {
+            IntOrNullableStringBag bag = [nullableStringInput];
+            return bag;
+        }
+
+        public static IntOrNonNullStringBag MakeIntOrNonNullString(string? nonNullStringInput)
+        {
+            IntOrNonNullStringBag bag = [nonNullStringInput];
+            return bag;
+        }
+
+        public static IntEnumerableWithConvertibleStringAddBag MakeIntEnumerableWithConvertibleString(ConvertibleString? convertibleInput)
+        {
+            IntEnumerableWithConvertibleStringAddBag bag = [convertibleInput];
+            return bag;
+        }
+
+        public static DerivedNullableObjectBag MakeDerivedNullableObject(string? derivedObjectInput)
+        {
+            DerivedNullableObjectBag bag = [derivedObjectInput];
+            return bag;
+        }
+
+        public static DerivedOptionalNullableObjectBag MakeDerivedOptionalNullableObject(string? derivedOptionalInput)
+        {
+            DerivedOptionalNullableObjectBag bag = [derivedOptionalInput];
+            return bag;
+        }
+
+        public static RefStringOrNullableObjectBag MakeRefStringOrNullableObject(string? refSkippedInput)
+        {
+            RefStringOrNullableObjectBag bag = [refSkippedInput];
+            return bag;
+        }
+
+        public static GenericAddSpreadBag MakeGenericAddSpread(int[] spreadInts)
+        {
+            GenericAddSpreadBag bag = [..spreadInts];
+            return bag;
+        }
+
+        public static string Run()
+        {
+            var allowNullBag = MakeAllowNullFromWidenedArray();
+            var targetBag = MakeTarget(null);
+            var byteBag = MakeByteBag();
+            var byteOrObjectBag = MakeByteOrObjectBag();
+            var intOrNullableStringBag = MakeIntOrNullableString(null);
+            var intOrNonNullStringBag = MakeIntOrNonNullString("present");
+            var convertibleBag = MakeIntEnumerableWithConvertibleString(null);
+            var derivedObjectBag = MakeDerivedNullableObject(null);
+            var derivedOptionalBag = MakeDerivedOptionalNullableObject(null);
+            var refSkippedBag = MakeRefStringOrNullableObject(null);
+            var genericSpreadBag = MakeGenericAddSpread(new[] { 7 });
+            return string.Join(
+                ",",
+                allowNullBag.Items[0],
+                targetBag.Items[0]!.Value,
+                byteBag.Items[0].ToString(),
+                byteOrObjectBag.Items[0].ToString(),
+                intOrNullableStringBag.Items[0],
+                intOrNonNullStringBag.Items[0],
+                convertibleBag.Items[0],
+                derivedObjectBag.Items[0],
+                derivedOptionalBag.Items[0],
+                refSkippedBag.Items[0],
+                genericSpreadBag.Items[0]
+            );
+        }
+    }
+}
+`)
+        Assert.DoesNotContain("array[0]!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("convertedInput!!", rendered, StringComparison.Ordinal)
+        Assert.Contains("uint8(default(int32))", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("nullableStringInput!!", rendered, StringComparison.Ordinal)
+        Assert.Contains("nonNullStringInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("convertibleInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("derivedObjectInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("derivedOptionalInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("refSkippedInput!!", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
+        let runtimeResult = EmittedOracle.Evaluate(rendered + "\nProbe.Run()")
+        Assert.Empty(runtimeResult.Diagnostics)
+        Assert.Null(runtimeResult.UnhandledException)
+        Assert.Equal(
+            "allow-null,from-null,0,0,null-string,present,null-convertible,derived-null-object,derived-optional-null,ref-skipped-null-object,7",
+            runtimeResult.Value
+        )
+
+        let nullableResultConversionRendered = Render(`
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4573.NullableResultConversion
+{
+    public sealed class NullableResultTarget
+    {
+        public readonly string Value;
+        public NullableResultTarget(string value) => Value = value;
+        public static implicit operator NullableResultTarget?(string? value) => new NullableResultTarget(value ?? "converted-non-null");
+    }
+
+    public class NullableResultTargetBag : IEnumerable<NullableResultTarget?>
+    {
+        public readonly List<NullableResultTarget?> Items = new();
+        public void Add(NullableResultTarget item) => Items.Add(item);
+        public void Add(object? item) { }
+        public IEnumerator<NullableResultTarget?> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Probe
+    {
+        public static NullableResultTargetBag MakeNullableResultTarget(string? convertedResultInput)
+        {
+            NullableResultTargetBag bag = [convertedResultInput];
+            return bag;
+        }
+    }
+}
+`)
+        Assert.DoesNotContain("convertedResultInput!!", nullableResultConversionRendered, StringComparison.Ordinal)
+        Assert.Contains(
+            "NullableResultTarget?(convertedResultInput)!!",
+            nullableResultConversionRendered,
+            StringComparison.Ordinal
+        )
+
+        let obliviousRendered = Render(`
+#nullable disable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4573.ObliviousWidenedAdd
+{
+    public class WidenedAddBag : IEnumerable<string>
+    {
+        public readonly List<string> Items = new List<string>();
+        public void Add(string item) => Items.Add(item ?? "widened");
+        public IEnumerator<string> GetEnumerator() => Items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Probe
+    {
+        public static string Run()
+        {
+            var seed = new WidenedAddBag();
+            seed.Add(null);
+            var array = new string[1];
+            array[0] = null;
+            WidenedAddBag bag = [array[0]];
+            return bag.Items[0];
+        }
+    }
+}
+`)
+        Assert.DoesNotContain("array[0]!!", obliviousRendered, StringComparison.Ordinal)
+        let obliviousRuntime = EmittedOracle.Evaluate(obliviousRendered + "\nProbe.Run()")
+        Assert.Empty(obliviousRuntime.Diagnostics)
+        Assert.Null(obliviousRuntime.UnhandledException)
+        Assert.Equal("widened", obliviousRuntime.Value)
+
+        let ambiguousDefaultProject = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", `
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4573.AmbiguousDefault
+{
+    public class SByteOrByteBag : IEnumerable<byte>
+    {
+        public void Add(sbyte item) { }
+        public void Add(byte item) { }
+        public IEnumerator<byte> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public SByteOrByteBag Make()
+        {
+            SByteOrByteBag b = [default(int)];
+            return b;
+        }
+    }
+}
+`)})
+        Assert.True(
+            ambiguousDefaultProject.BoundWithoutErrors,
+            string.Join(Environment.NewLine, ambiguousDefaultProject.ErrorDiagnostics)
+        )
+        let ambiguousDefaultDoc = Assert.Single(ambiguousDefaultProject.Documents)
+        let ambiguousDefaultCtx = TranslationContext(
+            ambiguousDefaultProject.Compilation,
+            ambiguousDefaultDoc.SemanticModel,
+            ambiguousDefaultDoc.FilePath
+        )
+        CSharpToGSharpTranslator().TranslateDocument(ambiguousDefaultDoc, ambiguousDefaultCtx)
+        Assert.Contains(
+            ambiguousDefaultCtx.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported &&
+                diagnostic.Message!!.Contains("Add overload set", StringComparison.Ordinal)
+        )
+    }
+
+    @Fact
     func ConstructibleTarget_PrivateBaseAddDoesNotHidePublicNullableAdd() {
         let rendered = Render(`
 #nullable enable

@@ -2198,6 +2198,68 @@ internal partial class ExpressionBinder {
             leftLocation,
             rightLocation
         )
+        if boundOperator != nil &&
+            boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
+            coalesceTargetType != nil {
+            if boundLeft.Type == TypeSymbol.Null &&
+                ConversionClassifier
+                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundRight, coalesceTargetType) {
+                boundOperator = BoundBinaryOperator.MakeNullCoalesce(
+                    boundLeft.Type,
+                    boundRight.Type,
+                    coalesceTargetType
+                )
+            } else if boundRight.Type == TypeSymbol.Null &&
+                ConversionClassifier
+                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, coalesceTargetType) {
+                let leftTarget = if coalesceTargetType is NullableTypeSymbol {
+                    coalesceTargetType
+                } else {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(coalesceTargetType))
+                }
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, leftTarget)
+                boundOperator = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, leftTarget)
+            }
+        }
+        if boundOperator == nil && operatorKind == SyntaxKind.QuestionQuestionToken {
+            let leftUnderlying TypeSymbol? = if boundLeft.Type is NullableTypeSymbol leftNullable {
+                leftNullable.UnderlyingType
+            } else {
+                boundLeft.Type
+            }
+            let rightUnderlying TypeSymbol? = if boundRight.Type is NullableTypeSymbol rightNullable {
+                rightNullable.UnderlyingType
+            } else {
+                boundRight.Type
+            }
+            if leftUnderlying != nil &&
+                leftUnderlying != TypeSymbol.Null &&
+                ConversionClassifier
+                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundRight, leftUnderlying) {
+                let common = if boundRight.Type is NullableTypeSymbol {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(leftUnderlying))
+                } else {
+                    leftUnderlying
+                }
+                boundOperator = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, common)
+            } else if rightUnderlying != nil &&
+                rightUnderlying != TypeSymbol.Null &&
+                ConversionClassifier
+                .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, rightUnderlying) {
+                let leftTarget = if boundLeft.Type is NullableTypeSymbol {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(rightUnderlying))
+                } else {
+                    rightUnderlying
+                }
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, leftTarget)
+                let common = if boundRight.Type is NullableTypeSymbol {
+                    cast[TypeSymbol](NullableTypeSymbol.Get(rightUnderlying))
+                } else {
+                    rightUnderlying
+                }
+                boundOperator = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, common)
+            }
+        }
         // Issue #1480: target-typed null-coalescing. When `a ?? b` has no natural
         // common operand type (so the standard bind produced no operator) but the
         // consuming context supplies a target type both operands implicitly
@@ -2341,6 +2403,16 @@ internal partial class ExpressionBinder {
         // result widened the left's underlying numeric type (e.g.
         // `int32? ?? int64` → `int64`); reference upcasts need no IL conversion
         // because they are representation-preserving.
+        if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
+            ConversionClassifier
+            .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, boundOperator.Type) {
+            let leftTarget = if boundLeft.Type is NullableTypeSymbol && boundOperator.Type is not NullableTypeSymbol {
+                cast[TypeSymbol](NullableTypeSymbol.Get(boundOperator.Type))
+            } else {
+                boundOperator.Type
+            }
+            boundLeft = conversions.BindConversion(leftLocation, boundLeft, leftTarget)
+        }
         if boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce &&
             (boundRight is BoundMethodGroupExpression || boundRight is BoundClrMethodGroupExpression) {
             // Issue #4065: even when the natural method-group type is already
@@ -2863,8 +2935,12 @@ internal partial class ExpressionBinder {
             return false
         }
         let leftConv = Conversion.Classify(leftUnderlying, target)
+        let leftOk = (leftConv.Exists && leftConv.IsImplicit) ||
+            ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundLeft, target)
         let rightConv = Conversion.Classify(boundRight.Type, target)
-        if leftConv.Exists && leftConv.IsImplicit && rightConv.Exists && rightConv.IsImplicit {
+        let rightOk = (rightConv.Exists && rightConv.IsImplicit) ||
+            ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(boundRight, target)
+        if leftOk && rightOk {
             op = BoundBinaryOperator.MakeNullCoalesce(boundLeft.Type, boundRight.Type, target)
             return true
         }
@@ -4459,6 +4535,12 @@ internal partial class ExpressionBinder {
                         ClrOverloadResolution.ImplicitConversionKind.None
                     }
                 }
+                if ConversionClassifier.CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                    boundArguments[argIndex],
+                    nativeTarget
+                ) {
+                    return ClrOverloadResolution.ImplicitConversionKind.Reference
+                }
                 if sourceType.ClrType != nil || !TypeSymbol.ContainsSameCompilationUserType(sourceType) ||
                     !DeclaresImplicitOperator(sourceType) {
                     return nil
@@ -4688,6 +4770,11 @@ internal partial class ExpressionBinder {
                 }
                 return Conversion.ClassifyNonStructural(sourceType, targetType)
                     .IsImplicit ||
+                    ConversionClassifier
+                    .CanConvertFunctionLiteralReturnWithUserDefinedImplicitConversion(
+                    boundArguments[argIndex],
+                    targetType
+                ) ||
                     (
                     sourceType is StructSymbol{IsClass: false} userStruct &&
                         clrParameterType.IsInterface &&

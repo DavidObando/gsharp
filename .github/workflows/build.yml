@@ -840,8 +840,10 @@ jobs:
         # ADR-0218: a prerelease tag packages a pre-release extension; the marker is inside the VSIX.
         # The kind comes from the one tag-kind definition. Pull requests and main are kind none.
         run: |
+          tag_kind="$(python3 ../../build/release-publish.py tag-kind "$GITHUB_REF_NAME")"
           flags=()
-          if [ "$(python3 ../../build/release-publish.py tag-kind "$GITHUB_REF_NAME")" = prerelease ]; then flags+=(--pre-release); fi
+          if [ "$tag_kind" = prerelease ]; then flags+=(--pre-release); fi
+          echo "Tag kind: $tag_kind; vsce package flags: ${flags[*]:-(none)}"
           npx vsce package --no-dependencies "${flags[@]}" -o vscode-gsharp.vsix
 
       - name: Upload VSIX
