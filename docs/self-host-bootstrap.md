@@ -50,6 +50,11 @@ trees, runs graph discovery, restore, build, pack, test, and output acceptance
 inside restricted command boundaries, and writes evidence outside both build
 trees. The work path must not exist before the run.
 
+Use `--migrated-tree` instead of `--tree` to certify a pre-migrated directory without Git metadata.
+`--freeze-migrated-tree TREE SNAPSHOT` creates a read-only snapshot for inspection.
+The caller and snapshot roots must be disjoint, including through symbolic-link aliases.
+The controller rejects overlapping roots before it changes either tree.
+
 ```sh
 python3 build/selfhost-stage2.py \
   --tree <prepared-migrated-tree> \
@@ -78,10 +83,12 @@ layout fail identically under stage 1 and are excluded by name in
 `build/selfhost/stage2-env-bound-tests.json` until
 [#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
 
-The controller trusts only a pinned .NET layout and a run takes about eight
-hours, so it fits neither a hosted runner's toolchain nor its six-hour limit
+The controller accepts a pinned .NET layout or a verified SDK archive through
+`--dotnet-archive ARCHIVE --dotnet-archive-sha256 SHA256`.
+Migration and certification can use separate jobs through `--migrated-tree`.
+CI workflow wiring remains deferred
 ([#4885](https://github.com/DavidObando/gsharp/issues/4885)); no CI workflow runs
-it. `python3 build/selfhost-stage2.py --probe-toolchain` reports in seconds
+the controller. `python3 build/selfhost-stage2.py --probe-toolchain` reports in seconds
 whether a machine qualifies. `build/verify-stage2-report.py` rejects a report
 unless it is a real `certified: true` with equal `GSharp.Core.dll` and `gsc.dll`
 and positive passing tests. Recorded runs on the 0.4.13xx line certified with

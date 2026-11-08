@@ -959,6 +959,7 @@ def migrated_tree_manifest(caller: Path) -> list[FileIdentity]:
 def freeze_migrated_tree(
     caller: Path, snapshot: Path,
 ) -> tuple[list[FileIdentity], dict[str, str]]:
+    reject_root_collisions({"caller tree": caller, "source snapshot": snapshot})
     manifest = migrated_tree_manifest(caller)
     snapshot.mkdir()
     for row in manifest:
@@ -4091,7 +4092,7 @@ def main(argv: list[str]) -> int:
         help="materialize one immutable source snapshot from Git")
     parser.add_argument(
         "--freeze-migrated-tree", nargs=2, metavar=("TREE", "SNAPSHOT"), type=Path,
-        help="materialize one immutable source snapshot from a pre-migrated directory")
+        help="freeze a pre-migrated directory into a new, disjoint snapshot")
     parser.add_argument(
         "--verify-dotnet-archive", nargs=3,
         metavar=("ARCHIVE", "EXPECTED_SHA256", "DESTINATION"),

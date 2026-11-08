@@ -2220,6 +2220,21 @@ class ToolchainManifestTests(unittest.TestCase):
         with self.assertRaises(stage2.CertificationError):
             stage2.verify_migrated_caller_unchanged(migrated, manifest)
 
+    def test_freeze_migrated_tree_rejects_overlapping_roots_without_changing_caller(self) -> None:
+        migrated = self.root / "migrated"
+        migrated.mkdir()
+        (migrated / "App.gs").write_text("package app\n", encoding="utf-8")
+        alias = self.root / "caller-alias"
+        alias.symlink_to(migrated, target_is_directory=True)
+        original = stage2.migrated_tree_manifest(migrated)
+        for snapshot in (migrated / "snapshot", migrated, self.root, alias / "snapshot"):
+            with self.subTest(snapshot=snapshot):
+                result = run_driver("--freeze-migrated-tree", migrated, snapshot)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("caller tree and source snapshot are not disjoint", result.stderr)
+                self.assertEqual(original, stage2.migrated_tree_manifest(migrated))
+                self.assertFalse((migrated / "snapshot").exists())
+
 
 class PostSetupMutationTests(unittest.TestCase):
     def setUp(self) -> None:

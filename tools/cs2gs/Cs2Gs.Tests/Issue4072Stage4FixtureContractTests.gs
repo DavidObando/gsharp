@@ -184,7 +184,7 @@ open class Issue4072Stage4FixtureContractTests {
         Assert.NotNull(assemblyRoot)
         let assemblySdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(assemblyRoot, "Release")
         if assemblySdk == nil {
-            return
+            throw InvalidOperationException("Build the G# SDK packages before this fallback regression test.")
         }
         let sourceRoot = Path.Combine(
             AppContext.BaseDirectory,
