@@ -78,10 +78,13 @@ for items in [][]Item{[]Item{Item{Value: 3}}} { Console.Write(items[0].Value) }
         let dll = fixture.Compile(`package Boundary5872
 import System
 func Minimum() int64 -> -9223372036854775808L
-Console.Write("${Minimum()}:${-9_223_372_036_854_775_808l}")
+Console.Write("${Minimum()}:${-9_223_372_036_854_775_808l}:${-9223372036854775808}")
 `, "boundary", true)
         IlVerifier.Verify(dll)
-        Assert.Equal(Encoding.UTF8.GetBytes("-9223372036854775808:-9223372036854775808"), fixture.RunBytes(dll))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("-9223372036854775808:-9223372036854775808:-9223372036854775808"),
+            fixture.RunBytes(dll)
+        )
         for expression in[]string{"9223372036854775808L", "+9223372036854775808L"} {
             let (code, output) = fixture.TryCompile("func Positive() int64 -> " + expression, "positive", false)
             Assert.NotEqual(0, code)

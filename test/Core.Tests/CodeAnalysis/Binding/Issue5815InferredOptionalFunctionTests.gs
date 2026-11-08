@@ -127,6 +127,18 @@ class Issue5864HeaderInitializerParsingTests {
 
 class Issue5872SignedInt64BoundaryTests {
     @Theory
+    @InlineData("9223372036854775808")
+    @InlineData("9_223_372_036_854_775_808")
+    func UnsuffixedDecimalBoundaryUsesTheSameUnaryMinusRule(magnitude string) {
+        let negative = EmittedOracle.Evaluate("-" + magnitude)
+        Assert.Empty(negative.Diagnostics)
+        Assert.Equal(int64.MinValue, negative.Value)
+        let positive = EmittedOracle.Evaluate(magnitude)
+        Assert.Empty(positive.Diagnostics)
+        Assert.Equal(uint64(int64.MaxValue) + 1UL, positive.Value)
+    }
+
+    @Theory
     @InlineData("9223372036854775808UL")
     @InlineData("9223372036854775808uL")
     @InlineData("9223372036854775808LU")
