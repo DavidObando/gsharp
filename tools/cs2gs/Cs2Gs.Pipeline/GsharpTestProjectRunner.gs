@@ -211,7 +211,7 @@ open class GsharpTestProjectRunner {
         /// Finds a local nupkg of exactly [`version`](paramref) for
         /// [`packageId`](paramref): under `out/bin/<Config>/nupkgs/`
         /// (the probed config first, then Release, then Debug), then in the repo's
-        /// `.nugs` feed. Unlike (cref:ResolveLocalPackage) it never
+        /// `.nugs` and writable staging feeds. Unlike (cref:ResolveLocalPackage) it never
         /// substitutes a different version.
         /// @param repoRoot The repository root.
         /// @param packageId The NuGet package id.
@@ -237,10 +237,33 @@ open class GsharpTestProjectRunner {
                 }
                 directories.Add(Path.Combine(root, ".nugs"))
             }
+            directories.AddRange(CandidatePackageFeeds(repoRoot))
             for directory in directories.Distinct(StringComparer.Ordinal) {
                 let candidate = Path.Combine(directory, fileName)
                 if File.Exists(candidate) {
                     return candidate
+                }
+            }
+            return nil
+        }
+
+        private func CandidatePackageFeeds(repoRoot string) sequence[string] {
+            yield Path.Combine(repoRoot, ".nugs")
+            let stagedFeed = LocalPackageFeed(repoRoot)
+            if stagedFeed != nil {
+                yield stagedFeed
+            }
+        }
+
+        /// Resolves from the source feed, then the writable staging feed.
+        internal func ResolveLocalFeedPackage(repoRoot string?, packageId string)(NupkgPath string, Version string)? {
+            if string.IsNullOrEmpty(repoRoot) {
+                return nil
+            }
+            for feed in CandidatePackageFeeds(repoRoot).Distinct(StringComparer.Ordinal) {
+                let package_ = ResolveNewestPackage(feed, packageId)
+                if package_ != nil {
+                    return package_
                 }
             }
             return nil
@@ -488,7 +511,12 @@ open class GsharpTestProjectRunner {
 
         private func ResolveDefaultSdkPackage(repoRoot string?)(NupkgPath string?, Version string)? {
             if !string.IsNullOrEmpty(repoRoot) {
-                return nil
+                let package_ = ResolveLocalFeedPackage(repoRoot, SdkPackageId)
+                return if package_ == nil {
+                    nil
+                } else {
+                    (package_.NupkgPath, package_.Version)
+                }
             }
             let version string? = SdkCompileRunner.ResolveExternalPackageVersion(SdkPackageId)
             return if string.IsNullOrEmpty(version) {

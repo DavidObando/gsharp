@@ -101,6 +101,8 @@ layout fail identically under stage 1 and are excluded by name in
 When `CS2GS_TEST_SOURCE_ROOT` selects a source tree, cs2gs stages local SDK and RID compiler packages in
 `AppContext.BaseDirectory/.cs2gs-local-feed`. Compilation and test projects read that feed through generated NuGet configuration.
 This directory is in the writable test workspace. The immutable source tree stays unchanged.
+Newest-version and exact-version discovery also search this staging feed.
+Existing source `.nugs` lookup and build-output precedence remain unchanged.
 
 The controller accepts a pinned .NET layout or a verified SDK archive through
 `--dotnet-archive ARCHIVE --dotnet-archive-sha256 SHA256`.

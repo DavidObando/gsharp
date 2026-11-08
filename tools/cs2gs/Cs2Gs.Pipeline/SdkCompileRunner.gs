@@ -1681,13 +1681,7 @@ class SdkCompileRunner {
         private func ResolveFallbackPackageFromLocalFeed(repoRoot string?, packageId string)(
             NupkgPath string,
             Version string
-        )? {
-            if string.IsNullOrEmpty(repoRoot) {
-                return nil
-            }
-            let feed = Path.Combine(repoRoot, ".nugs")
-            return GsharpTestProjectRunner.ResolveNewestPackage(feed, packageId)
-        }
+        )? -> GsharpTestProjectRunner.ResolveLocalFeedPackage(repoRoot, packageId)
 
         private func SynthesizeFallbackDiagnostic(
             result ProcessRunResult,

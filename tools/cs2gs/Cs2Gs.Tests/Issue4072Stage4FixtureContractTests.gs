@@ -223,6 +223,17 @@ open class Issue4072Stage4FixtureContractTests {
     @InlineData(false)
     @InlineData(true)
     func ReadOnlyConfiguredSourceRoot_SdkCompileAndTestUseWritableFeeds(runTests bool) {
+        RunReadOnlyConfiguredSourceRoot(runTests, stagedOnly: false)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func StagedOnlyConfiguredSourceRoot_SdkCompileAndTestDiscoverWritableFeed(runTests bool) {
+        RunReadOnlyConfiguredSourceRoot(runTests, stagedOnly: true)
+    }
+
+    private func RunReadOnlyConfiguredSourceRoot(runTests bool, stagedOnly bool) {
         let assemblyRoot = GsharpTestProjectRunner.FindAssemblyRepoRoot()
         let builtSdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(assemblyRoot, "Release") ??
             throw InvalidOperationException("Build the G# SDK packages before this fallback regression test.")
@@ -242,6 +253,13 @@ open class Issue4072Stage4FixtureContractTests {
         let originalSourceRoot = Environment.GetEnvironmentVariable(
             GsharpTestProjectRunner.SourceRootEnvironmentVariable
         )
+        let solutionMarker = Path.Combine(AppContext.BaseDirectory, "GSharp.slnx")
+        let configMarker = Path.Combine(AppContext.BaseDirectory, "nuget.config")
+        let feedBackup = Path.Combine(root, "original-feed")
+        var stagedFeed string? = nil
+        var movedFeed = false
+        var createdSolutionMarker = false
+        var createdConfigMarker = false
         try {
             File.SetAttributes(fixture, FileAttributes.ReadOnly)
             File.SetAttributes(sourceConfig, FileAttributes.ReadOnly)
@@ -255,6 +273,49 @@ open class Issue4072Stage4FixtureContractTests {
                 )
             }
             Environment.SetEnvironmentVariable(GsharpTestProjectRunner.SourceRootEnvironmentVariable, sourceRoot)
+            if stagedOnly {
+                // Bound assembly-root discovery to the test output, without changing its package build outputs.
+                if !File.Exists(solutionMarker) {
+                    File.WriteAllText(solutionMarker, "<Solution />")
+                    createdSolutionMarker = true
+                }
+                if !File.Exists(configMarker) {
+                    File.WriteAllText(configMarker, "<configuration />")
+                    createdConfigMarker = true
+                }
+                Assert.Equal(
+                    CanonicalRootPath.Resolve(AppContext.BaseDirectory),
+                    CanonicalRootPath.Resolve(GsharpTestProjectRunner.FindAssemblyRepoRoot()!!)
+                )
+                stagedFeed = GsharpTestProjectRunner.LocalPackageFeed(sourceRoot)!!
+                if Directory.Exists(stagedFeed) {
+                    Directory.Move(stagedFeed, feedBackup)
+                    movedFeed = true
+                }
+                GsharpTestProjectRunner.EnsureInLocalFeed(sourceRoot, builtSdk.NupkgPath)
+                Assert.Null(GsharpTestProjectRunner.ResolveLocalSdkPackage(sourceRoot, "Release"))
+                Assert.False(Directory.Exists(Path.Combine(sourceRoot, ".nugs")))
+                Assert.Equal(
+                    Path.Combine(stagedFeed, Path.GetFileName(builtSdk.NupkgPath)),
+                    GsharpTestProjectRunner.FindLocalPackageVersion(
+                        sourceRoot,
+                        "Gsharp.NET.Sdk",
+                        builtSdk.Version,
+                        "Release"
+                    )
+                )
+                const verifierId = "GSharp.CodeAnalysis.Analyzers.Testing"
+                const verifierVersion = "1.2.3-stage-only"
+                let verifier = Path.Combine(stagedFeed, verifierId + "." + verifierVersion + ".nupkg")
+                File.WriteAllText(verifier, "version-discovery fixture")
+                Assert.Equal(
+                    verifier,
+                    GsharpTestProjectRunner.FindLocalPackageVersion(sourceRoot, verifierId, verifierVersion, "Release")
+                )
+                Assert.Equal(verifierVersion, SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion("Release"))
+            }
+            Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", explicitVersion: nil))
+            Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", builtSdk.Version))
             if runTests {
                 let project = GsharpTestProject{
                     LibraryName: "ReadOnlyLib",
@@ -282,8 +343,6 @@ open class Issue4072Stage4FixtureContractTests {
                 Assert.Equal("ReadOnlyLib.Tests.ValueTests.Returns42", outcome.Name)
                 Assert.Equal("Passed", outcome.Outcome)
             } else {
-                Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", explicitVersion: nil))
-                Assert.Equal(builtSdk.Version, SdkCompileRunner.ResolveSdkVersion("Release", builtSdk.Version))
                 let source = Path.Combine(workDir, "Program.gs")
                 File.WriteAllText(
                     source,
@@ -327,6 +386,20 @@ open class Issue4072Stage4FixtureContractTests {
                 GsharpTestProjectRunner.SourceRootEnvironmentVariable,
                 originalSourceRoot
             )
+            if stagedFeed != nil {
+                if Directory.Exists(stagedFeed) {
+                    Directory.Delete(stagedFeed, recursive: true)
+                }
+                if movedFeed {
+                    Directory.Move(feedBackup, stagedFeed)
+                }
+            }
+            if createdSolutionMarker {
+                File.Delete(solutionMarker)
+            }
+            if createdConfigMarker {
+                File.Delete(configMarker)
+            }
             if !OperatingSystem.IsWindows() {
                 File.SetUnixFileMode(
                     sourceRoot,
