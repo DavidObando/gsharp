@@ -436,6 +436,213 @@ public static class Obj {
         AssertParity(source, Translate(source), "null")
     }
 
+    @Fact
+    func FixedRefArgument_ConstrainsTheForwardedStorage() {
+        const source = `public static class Obj {
+#nullable enable
+    private static string fixedText = "x";
+#nullable disable
+    public static ref string Borrow(ref string value) => ref value;
+    public static string Run() {
+        ref string alias = ref Borrow(ref fixedText);
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "x")
+        Assert.DoesNotContain("string?", printed)
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func GenericRefArgument_PreservesTheSubstitutedContract(constrained bool, nullable bool) {
+        let constraint = if constrained {
+            " where T : class"
+        } else {
+            ""
+        }
+        let suffix = if nullable && !constrained {
+            "?"
+        } else {
+            ""
+        }
+        let fieldSuffix = if nullable {
+            "?"
+        } else {
+            ""
+        }
+        let value = if nullable {
+            "null"
+        } else {
+            "\"x\""
+        }
+        let source = `public static class Obj {
+#nullable enable
+    private static string` + fieldSuffix + ` text = ` + value + `;
+#nullable disable
+    public static ref T Borrow<T>(ref T value)` + constraint + ` => ref value;
+    public static string Run() {
+        ref string alias = ref Borrow<string` + suffix + `>(ref text);
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(
+            source,
+            printed,
+            if nullable {
+                "fallback"
+            } else {
+                "x"
+            }
+        )
+        if !nullable {
+            Assert.DoesNotContain("string?", printed)
+        }
+    }
+
+    @Theory
+    @InlineData(false, false)
+    @InlineData(false, true)
+    @InlineData(true, false)
+    @InlineData(true, true)
+    func GenericFieldAlias_PreservesTheSubstitutedContract(constrained bool, nullable bool) {
+        let constraint = if constrained {
+            " where T : class"
+        } else {
+            ""
+        }
+        let suffix = if nullable && !constrained {
+            "?"
+        } else {
+            ""
+        }
+        let value = if nullable && !constrained {
+            "null"
+        } else {
+            "\"x\""
+        }
+        let source = `public class Box<T>` + constraint + ` {
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+public static class Obj {
+    public static string Run() {
+        var box = new Box<string` + suffix + `>(` + value + `);
+        ref string alias = ref box.Value;
+        ` + (
+            if nullable && constrained {
+                "alias = null;"
+            } else {
+                ""
+            }
+        ) + `
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(
+            source,
+            printed,
+            if nullable {
+                "fallback"
+            } else {
+                "x"
+            }
+        )
+        if !nullable && !constrained {
+            Assert.DoesNotContain("string?", printed)
+        }
+        if constrained {
+            Assert.Contains("var Value T?", printed)
+        }
+    }
+
+    @Fact
+    func FixedArrayElement_ConstrainsItsRefAliasAndArgument() {
+        const source = `public static class Obj {
+#nullable enable
+    private static string[] xs = new[] { "x" };
+    private static void Keep(ref string value) { }
+#nullable disable
+    public static string Run() {
+        ref string alias = ref xs[0];
+        Keep(ref xs[0]);
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "x")
+        Assert.DoesNotContain("string?", printed)
+    }
+
+    @Fact
+    func GenericFieldSubstitutions_KeepIndependentAliasContracts() {
+        const source = `public class Box<T> {
+    public T Value;
+    public Box(T value) { Value = value; }
+}
+public static class Obj {
+    public static string Run() {
+        var plain = new Box<string>("x");
+        var nullable = new Box<string?>(null);
+        ref string first = ref plain.Value;
+        ref string second = ref nullable.Value;
+        return (first ?? "unexpected") + ":" + (second ?? "fallback");
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "x:fallback")
+        Assert.Contains("ref first string = plain.Value", printed)
+        Assert.Contains("ref second string? = nullable.Value", printed)
+    }
+
+    @Theory
+    @InlineData("local")
+    @InlineData("generated-initializer")
+    @InlineData("generated-element")
+    func AnnotatedArrayStorage_NullWritesStillPromoteTheElement(shape string) {
+        let source = if shape == "generated-element" {
+            `// <auto-generated/>
+#nullable enable
+public static class Obj {
+    private static string[] xs = new[] { "x" };
+#nullable disable
+    public static string Run() {
+        xs[0] = null;
+        ref string alias = ref xs[0];
+        return alias ?? "fallback";
+    }
+}`
+        } else if shape == "generated-initializer" {
+            `// <auto-generated/>
+#nullable enable
+public static class Obj {
+    private static string[] xs = new string[] { null };
+#nullable disable
+    public static string Run() {
+        ref string alias = ref xs[0];
+        return alias ?? "fallback";
+    }
+}`
+        } else {
+            `public static class Obj {
+    public static string Run() {
+#nullable enable
+        var xs = new string[1];
+        xs[0] = null;
+#nullable disable
+        ref string alias = ref xs[0];
+        return alias ?? "fallback";
+    }
+}`
+        }
+        AssertParity(source, Translate(source), "fallback")
+    }
+
     @Theory
     @InlineData("(string)null")
     @InlineData("null as string")
@@ -485,7 +692,8 @@ public static class Obj {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})
             Assert.True(loaded.BoundWithoutErrors, string.Join(Environment.NewLine, loaded.ErrorDiagnostics))
             Assert.Equal(NullableContextOptions.Disable, loaded.Compilation.Options.NullableContextOptions)
-            let document = Assert.Single(loaded.Documents)
+            let tree = Assert.Single(loaded.Compilation.SyntaxTrees)
+            let document = LoadedDocument(tree.FilePath, tree, loaded.Compilation.GetSemanticModel(tree))
             let context = TranslationContext(loaded.Compilation, document.SemanticModel, document.FilePath)
             let unit = CSharpToGSharpTranslator().TranslateDocument(document, context)
             Assert.DoesNotContain(

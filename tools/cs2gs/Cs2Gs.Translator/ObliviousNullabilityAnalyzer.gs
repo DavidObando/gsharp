@@ -4515,7 +4515,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    private func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
+    internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
         var receiver = Unwrap(expression, unwrapSuppressions: true)
         var depth = 0
         while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
@@ -4571,7 +4571,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    internal func GetArrayStorageOwner(symbol ISymbol?, model SemanticModel, visited HashSet[ISymbol]) ISymbol? {
+    internal func GetArrayStorageOwner(
+        symbol ISymbol?,
+        model SemanticModel,
+        visited HashSet[ISymbol],
+        preserveSubstitution bool = false
+    ) ISymbol? {
         if symbol == nil ||
             SymbolValueType(symbol) is not IArrayTypeSymbol arrayType ||
             !arrayType
@@ -4582,7 +4587,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if symbol is not ILocalSymbol local {
             return if symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or IMethodSymbol {
-                symbol.OriginalDefinition
+                if preserveSubstitution {
+                    symbol
+                } else {
+                    symbol.OriginalDefinition
+                }
             } else {
                 default(ISymbol?)
             }
@@ -4594,7 +4603,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 GetDeconstructionAliasValue(designation) is {} value &&
                 declarationModel
                 .GetSymbolInfo(value).Symbol is {} deconstructedSource {
-                return GetArrayStorageOwner(deconstructedSource, declarationModel, visited) ?? local
+                return GetArrayStorageOwner(deconstructedSource, declarationModel, visited, preserveSubstitution) ??
+                    local
             }
             if declaration is VariableDeclaratorSyntax{
                 Initializer: {Value: {} initializer},
@@ -4607,7 +4617,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 IFieldSymbol or
                 IPropertySymbol or
                 IParameterSymbol {
-                return GetArrayStorageOwner(source, declarationModel, visited) ?? local
+                return GetArrayStorageOwner(source, declarationModel, visited, preserveSubstitution) ?? local
             }
         }
         return local
