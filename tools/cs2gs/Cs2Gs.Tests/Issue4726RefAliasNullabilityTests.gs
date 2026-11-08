@@ -16,6 +16,92 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Theory
+    @InlineData("ref")
+    @InlineData("out")
+    @InlineData("in")
+    func TupleLeafRefArgument_SharesTheParameterContract(kind string) {
+        let body = if kind == "in" {
+            ""
+        } else {
+            "text = null;"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Apply(` + kind + ` string? text) { ` + body + ` }
+#nullable disable
+    private static string Read() {
+        Apply(` + kind + ` row.Text);
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(
+            source,
+            printed,
+            if kind == "in" {
+                "x"
+            } else {
+                "null"
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func FixedTupleRefReturn_ConstrainsItsObliviousLeaf(readOnly bool) {
+        let modifier = if readOnly {
+            "ref readonly"
+        } else {
+            "ref"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    public static ` + modifier + ` string Borrow() => ref row.Text;
+#nullable disable
+    public static string Run() {
+        ` + modifier + ` string alias = ref Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ArrayTupleLeafRefAlias_PromotesTheOwningStorage(nested bool) {
+        let declaration = if nested {
+            "((string Text, int Code) Inner, int Flag)[][] rows = new[] { new[] { ((\"x\", 1), 2) } };"
+        } else {
+            "(string Text, int Code)[] rows = new[] { (\"x\", 1) };"
+        }
+        let storage = if nested {
+            "rows[0][0].Inner.Text"
+        } else {
+            "rows[0].Text"
+        }
+        let source = `public static class Obj {
+    private static ` + declaration + `
+    private static string Read() {
+        ref string alias = ref ` + storage + `;
+        alias = null;
+        return ` + storage + `;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
     @Fact
     func SuppressedNestedTupleReceiver_ForwardsItsNullableLeafToTheAlias() {
         const source = `public static class Obj {

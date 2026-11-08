@@ -4390,7 +4390,17 @@ internal shared class ObliviousNullabilityAnalyzer {
             // records a transitive edge from the return symbol to the returned
             // value's source.
             SeedReturnTaint(root, model, tainted, edges, scalarTupleEdges)
-            CollectTupleFlows(root, model, tainted, edges, tupleTainted, tupleEdges, tupleScalarEdges, scalarTupleEdges)
+            CollectTupleFlows(
+                root,
+                model,
+                tainted,
+                edges,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges,
+                tupleContractEdges
+            )
             CollectDelegateReturnContractEdges(
                 compilation,
                 root,
@@ -5218,73 +5228,34 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
-        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
         for node in root.DescendantNodes() {
             switch node {
                 case reference is RefExpressionSyntax when RefStorageTarget(reference, model) is {} target {
-                    var sourceSymbol ISymbol?
-                    var sourceType ITypeSymbol?
-                    var sourcePath string
-                    if TryResolveTupleElementSource(
+                    CollectRefTupleStorage(
+                        target,
                         reference.Expression,
                         model,
-                        out var source,
-                        unwrapSuppressions: true
-                    ) {
-                        sourceSymbol = source.ContractSymbol
-                        sourcePath = source.ContractPath
-                        sourceType = TuplePositionType(sourceSymbol, sourcePath)
-                    } else if TryResolveTupleSource(
-                        Unwrap(reference.Expression, unwrapSuppressions: true),
+                        tupleTainted,
+                        tupleContractEdges,
+                        tupleScalarEdges,
+                        scalarTupleEdges
+                    )
+                }
+                case argument is ArgumentSyntax when argument.RefKindKeyword.RawKind != 0 && model.GetOperation(
+                    argument
+                ) is IArgumentOperation{Parameter: {RefKind: not RefKind.None} parameter} {
+                    CollectRefTupleStorage(
+                        Canonical(parameter),
+                        argument.Expression,
                         model,
-                        out sourceSymbol,
-                        out var rootTuple
-                    ) {
-                        sourcePath = string.Empty
-                        sourceType = rootTuple
-                    } else {
-                        break
-                    }
-                    let targetType = SymbolValueType(target)
-                    if targetType is INamedTypeSymbol{IsTupleType: true} targetTuple &&
-                        sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
-                        targetTuple
-                        .TupleElements
-                        .Length == sourceTuple
-                        .TupleElements
-                        .Length {
-                        AddTupleShapeEdges(
-                            target,
-                            targetTuple,
-                            string.Empty,
-                            sourceSymbol,
-                            sourceTuple,
-                            sourcePath,
-                            tupleTainted,
-                            tupleEdges
-                        )
-                        AddTupleShapeEdges(
-                            sourceSymbol,
-                            sourceTuple,
-                            sourcePath,
-                            target,
-                            targetTuple,
-                            string.Empty,
-                            tupleTainted,
-                            tupleEdges
-                        )
-                        break
-                    }
-                    if sourcePath.Length == 0 {
-                        break
-                    }
-                    source = TupleElementKey(sourceSymbol, sourcePath)
-                    scalarTupleEdges.Add((target, source))
-                    tupleScalarEdges.Add((source, target))
-                    if IsDeclaredNullablePosition(targetType) {
-                        tupleTainted.Add(source)
-                    }
+                        tupleTainted,
+                        tupleContractEdges,
+                        tupleScalarEdges,
+                        scalarTupleEdges
+                    )
                 }
                 case method is MethodDeclarationSyntax {
                     CollectTupleReturnFlows(
@@ -6191,6 +6162,116 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
+    private func CollectRefTupleStorage(
+        target ISymbol?,
+        expression ExpressionSyntax,
+        model SemanticModel,
+        tupleTainted HashSet[TupleElementKey],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+    ) {
+        if target == nil {
+            return
+        }
+        let storage = Unwrap(expression, unwrapSuppressions: true)
+        let targetType = SymbolValueType(target)
+        var sourceSymbol ISymbol?
+        var sourceType ITypeSymbol?
+        var sourcePath string
+        if TryResolveTupleElementSource(storage, model, out var source, unwrapSuppressions: true) {
+            sourceSymbol = source.ContractSymbol
+            sourcePath = source.ContractPath
+            sourceType = TuplePositionType(sourceSymbol, sourcePath)
+        } else if TryResolveTupleStorageSource(storage, model, out sourceSymbol, out var rootTuple, out sourcePath) {
+            sourceType = rootTuple
+        } else {
+            if targetType?.IsReferenceType == true {
+                for scalar in ResolveSources(storage, model) {
+                    if SymbolValueType(scalar)?.IsReferenceType != true {
+                        continue
+                    }
+                    let first = TupleElementKey(target, string.Empty)
+                    let second = TupleElementKey(Canonical(scalar), string.Empty)
+                    tupleContractEdges.Add((first, second))
+                    tupleContractEdges.Add((second, first))
+                }
+            }
+            return
+        }
+        if targetType is INamedTypeSymbol{IsTupleType: true} targetTuple &&
+            sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
+            targetTuple
+            .TupleElements
+            .Length == sourceTuple
+            .TupleElements
+            .Length {
+            AddTupleShapeEdges(
+                target,
+                targetTuple,
+                string.Empty,
+                sourceSymbol,
+                sourceTuple,
+                sourcePath,
+                tupleTainted,
+                tupleContractEdges
+            )
+            AddTupleShapeEdges(
+                sourceSymbol,
+                sourceTuple,
+                sourcePath,
+                target,
+                targetTuple,
+                string.Empty,
+                tupleTainted,
+                tupleContractEdges
+            )
+            return
+        }
+        if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
+            return
+        }
+        source = TupleElementKey(sourceSymbol, sourcePath)
+        let targetKey = TupleElementKey(target, string.Empty)
+        scalarTupleEdges.Add((target, source))
+        tupleScalarEdges.Add((source, target))
+        tupleContractEdges.Add((source, targetKey))
+        tupleContractEdges.Add((targetKey, source))
+        if IsDeclaredNullablePosition(targetType) {
+            tupleTainted.Add(source)
+        }
+    }
+
+    private func TryResolveTupleStorageSource(
+        expression ExpressionSyntax?,
+        model SemanticModel?,
+        out symbol ISymbol?,
+        out tupleType INamedTypeSymbol?,
+        out prefix string
+    ) bool {
+        prefix = string.Empty
+        if model == nil {
+            symbol = nil
+            tupleType = nil
+            return false
+        }
+        if expression is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+            .Type is IArrayTypeSymbol {
+            let (owner, depth) = RefArrayStorage(access, model)
+            var type = SymbolValueType(owner)
+            for var i = 0; i < depth && type is IArrayTypeSymbol array; i++ {
+                type = array.ElementType
+            }
+            if owner != nil && type is INamedTypeSymbol{IsTupleType: true} tuple {
+                symbol = owner
+                tupleType = tuple
+                prefix = string.Join(".", Enumerable.Repeat("0", depth))
+                return true
+            }
+        }
+        return TryResolveTupleSource(expression, model, out symbol, out tupleType)
+    }
+
     private func TryResolveTupleElementSource(
         expression ExpressionSyntax?,
         model SemanticModel?,
@@ -6219,8 +6300,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     source = TupleElementKey(parent.ContractSymbol, AppendTuplePath(parent.ContractPath, index))
                     return true
                 }
-                if TryResolveTupleSource(receiver, model, out var symbol, out _) {
-                    source = TupleElementKey(symbol, index.ToString(CultureInfo.InvariantCulture))
+                if TryResolveTupleStorageSource(receiver, model, out var symbol, out _, out var prefix) {
+                    source = TupleElementKey(symbol, AppendTuplePath(prefix, index))
                     return true
                 }
             }
@@ -6344,7 +6425,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     /// @returns The nested tuple slots, outermost type argument first.
     private func NestedTupleSlots(type ITypeSymbol?) List[(Path string, Tuple INamedTypeSymbol)] {
         let slots = List[(Path string, Tuple INamedTypeSymbol)]()
-        if type is INamedTypeSymbol named && !named.IsTupleType {
+        if type is IArrayTypeSymbol || type is INamedTypeSymbol named && !named.IsTupleType {
             CollectNestedTupleSlots(type, string.Empty, slots)
         }
         return slots
@@ -6355,6 +6436,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         prefix string,
         slots List[(Path string, Tuple INamedTypeSymbol)]
     ) {
+        if type is IArrayTypeSymbol array {
+            CollectNestedTupleSlots(array.ElementType, AppendTuplePath(prefix, 0), slots)
+            return
+        }
         if type is not INamedTypeSymbol named {
             return
         }
@@ -6478,6 +6563,18 @@ internal shared class ObliviousNullabilityAnalyzer {
             symbol = property
         }
         symbol = OwningMember(symbol)
+        if path.Length == 0 {
+            // Scalar endpoints share the tuple ref-storage contract graph.
+            let type = SymbolValueType(symbol)
+            return IsSourceAssembly(compilation, symbol?.ContainingAssembly) &&
+                type?.IsReferenceType == true &&
+                (
+                IsEligibleTupleLeaf(type) ||
+                    HasAllowNullWriteContract(symbol) ||
+                    HasNullDataRowArgument(symbol) ||
+                    IsNullArgumentTarget(compilation as CSharpCompilation, symbol, nil)
+            )
+        }
         let contractSymbol ISymbol? = symbol
         let contractPath = path
         let declaredPosition ITypeSymbol? = TuplePositionType(Canonical(symbol), path)
@@ -6527,8 +6624,19 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
         var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol
+        if path.Length == 0 {
+            return if requireTuple {
+                default(ITypeSymbol?)
+            } else {
+                type
+            }
+        }
         var crossesTuple = false
         for component in path.Split('.') {
+            if type is IArrayTypeSymbol array && component == "0" {
+                type = array.ElementType
+                continue
+            }
             if type is not INamedTypeSymbol named || !int32.TryParse(component, out var index) || index < 0 {
                 return nil
             }
