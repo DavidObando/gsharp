@@ -5,12 +5,28 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Tests
 import System.Collections.Generic
 import System.Linq
 import Xunit
 
 class Issue5879RegionNullAndSwitchGuardTests {
+    @Fact
+    func NullPreservation_DistinguishesEnumStructAndReferenceConstraints() {
+        let parameter = TypeParameterSymbol("T", 0, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        parameter.ClassConstraint = TypeSymbol.FromClrTypeWithoutNullability(
+            typeof(System.Enum),
+            NullabilityFreeReason.ResolvedTypeName
+        )
+        parameter.HasValueTypeConstraint = true
+        Assert.False(Conversion.PreservesNull(TypeSymbol.Null, parameter))
+        let reference = TypeParameterSymbol("R", 0, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        reference.HasReferenceTypeConstraint = true
+        Assert.True(Conversion.PreservesNull(TypeSymbol.Null, reference))
+    }
+
     @Theory
     @MemberData("Rows")
     func RegionEffects_PreserveOnlySafeNarrowings(name string, source string, rejected bool) {

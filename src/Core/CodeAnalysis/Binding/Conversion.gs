@@ -2351,7 +2351,7 @@ class Conversion {
             let sourceReference = source.StripToBareShape()
             let targetReference = target.StripToBareShape()
             if source == TypeSymbol.Null {
-                return targetNullable || IsReferenceLikeTarget(targetReference)
+                return targetNullable || IsNullDefault(targetReference)
             }
             if IsRepresentationPreservingImplicit(sourceReference, targetReference) ||
                 HasCheckedReferenceConversion(sourceReference, targetReference) {
@@ -2365,6 +2365,22 @@ class Conversion {
                 return sourceNullable || HasExplicitUnboxingConversion(source, target)
             }
             return sourceNullable && conversion.IsImplicit && IsReferenceLikeTarget(targetReference)
+        }
+
+        // The default is null in every instantiation only for nullable values or reference types.
+        // A type parameter needs an explicit `class` constraint. An `Enum` base constraint can admit value types.
+        internal func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
+            NullableLifting.IsAnyValueTypeNullable(nullable) || IsNullDefaultReference(nullable.UnderlyingType)
+        } else {
+            IsNullDefaultReference(type)
+        }
+
+        private func IsNullDefaultReference(type TypeSymbol) bool -> if PlatformTypeSymbol.StripTopLevel(
+            type
+        ) is TypeParameterSymbol parameter {
+            parameter.HasReferenceTypeConstraint && !parameter.HasValueTypeConstraint
+        } else {
+            Binder.IsReferenceTypeForConstraint(type)
         }
 
         /// Issue #5536: decides whether a function value converts to a function or delegate target without a new body.
