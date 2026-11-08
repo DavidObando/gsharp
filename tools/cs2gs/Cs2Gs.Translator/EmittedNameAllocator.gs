@@ -841,30 +841,35 @@ internal class EmittedNameAllocator {
             default: false
         }
 
-        private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
-            case parameter is IParameterSymbol when parameter.ContainingSymbol is IMethodSymbol{
-                AssociatedSymbol: IPropertySymbol property
-            } &&
-                parameter.Ordinal < property
-                .Parameters
-                .Length:
-            cast[ISymbol](property.OriginalDefinition.Parameters[parameter.Ordinal])
-            case parameter is IParameterSymbol when parameter.ContainingSymbol is IMethodSymbol method:
-            cast[ISymbol](
-                (
-                    (method.PartialDefinitionPart ?? method).PartialImplementationPart ??
-                        method.PartialDefinitionPart ??
-                        method
+        private func Canonical(symbol ISymbol?) ISymbol? {
+            if symbol is IParameterSymbol parameter && parameter.ContainingSymbol is IMethodSymbol method {
+                if method.AssociatedSymbol is IPropertySymbol property &&
+                    parameter.Ordinal < property
+                    .Parameters
+                    .Length {
+                    return property.OriginalDefinition.Parameters[parameter.Ordinal]
+                }
+                let source = method.ReducedFrom ?? method
+                let definition = source.PartialDefinitionPart ?? source
+                let implementation = definition.PartialImplementationPart ?? definition
+                let ordinal = parameter.Ordinal +
+                    (
+                    if method.ReducedFrom != nil {
+                        1
+                    } else {
+                        0
+                    }
                 )
-                    .OriginalDefinition
-                    .Parameters[parameter.Ordinal]
-            )
-            case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
-            case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
-            case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
-            case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)
-            case type is INamedTypeSymbol: cast[ISymbol](type.OriginalDefinition)
-            default: symbol
+                return implementation.OriginalDefinition.Parameters[ordinal]
+            }
+            return switch symbol {
+                case parameter is IParameterSymbol: cast[ISymbol](parameter.OriginalDefinition)
+                case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
+                case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
+                case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)
+                case type is INamedTypeSymbol: cast[ISymbol](type.OriginalDefinition)
+                default: symbol
+            }
         }
 
         private func SourceName(symbol ISymbol?) string {

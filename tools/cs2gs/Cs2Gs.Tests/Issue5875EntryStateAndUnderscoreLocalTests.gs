@@ -56,6 +56,20 @@ open class Issue5875EntryStateTranslationTests {
 }
 
 open class Issue5877UnderscoreLocalTranslationTests {
+    @Fact
+    func ReducedExtensionUnderscoreParameter_UsesTheSourceIdentity() {
+        LiteralConstructionRuntimeParity.AssertMatches(`using System;
+public static class Extensions {
+    public static string Echo<T>(this string source, string _) {
+        string underscore = "suffix";
+        return source + _ + underscore;
+    }
+}
+public class P {
+    public static void Main() { Console.WriteLine("prefix".Echo<int>(_: "x")); }
+}`, Issue5875ReadabilityCounters.AssertNoSynthetics)
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)
