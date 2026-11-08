@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import base64
+import contextlib
 import functools
 import hashlib
 import hmac
@@ -38,7 +39,7 @@ import zipfile
 import zlib
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 HERE = Path(__file__).resolve().parent
 _PACKER_SPEC = importlib.util.spec_from_file_location(
@@ -277,7 +278,22 @@ class CertificationError(Exception):
     pass
 
 
-ARCHIVE_READ_ERRORS = (tarfile.TarError, zipfile.BadZipFile, EOFError, zlib.error)
+ARCHIVE_READ_ERRORS = (
+    OSError, ValueError, RuntimeError, tarfile.TarError, zipfile.BadZipFile,
+    EOFError, zlib.error,
+    *(getattr(codec, name) for codec, name in (
+        (getattr(zipfile, "lzma", None), "LZMAError"),
+        (getattr(zipfile, "zstd", None), "ZstdError"),
+    ) if codec is not None),
+)
+
+
+@contextlib.contextmanager
+def archive_read_errors(path: Path, label: str = "package archive") -> Iterator[None]:
+    try:
+        yield
+    except ARCHIVE_READ_ERRORS as error:
+        raise CertificationError(f"invalid {label} {path}: {error}") from error
 
 
 @dataclass(frozen=True)
@@ -1171,9 +1187,10 @@ def extract_verified_package(
             f"package cache entry must contain one nupkg and hash: {source}")
     package_hash = base64.b64encode(
         hashlib.sha512(nupkgs[0].read_bytes()).digest()).decode()
-    if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
-        raise CertificationError(f"package archive hash is invalid: {source}")
-    with zipfile.ZipFile(nupkgs[0]) as archive:
+    with archive_read_errors(hash_files[0]):
+        if hash_files[0].read_text(encoding="utf-8").strip() != package_hash:
+            raise CertificationError(f"package archive hash is invalid: {source}")
+    with archive_read_errors(nupkgs[0]), zipfile.ZipFile(nupkgs[0]) as archive:
         members = validated_archive_members(archive)
         if destination.exists():
             shutil.rmtree(destination)
@@ -1259,7 +1276,7 @@ def probe_sandbox(tree: Path, writable: Path, denied: list[Path]) -> None:
 
 def package_payload_hash(path: Path) -> str:
     digest = hashlib.sha256()
-    with zipfile.ZipFile(path) as archive:
+    with archive_read_errors(path), zipfile.ZipFile(path) as archive:
         members = sorted(validated_archive_members(archive), key=lambda row: row[1].filename)
         for _, info, directory in members:
             if directory:
@@ -1275,7 +1292,7 @@ def package_payload_hash(path: Path) -> str:
 
 def verify_resolved_sdk_payload(package: Path, resolved: Path) -> str:
     expected: dict[str, str] = {}
-    with zipfile.ZipFile(package) as archive:
+    with archive_read_errors(package), zipfile.ZipFile(package) as archive:
         for relative, info, directory in validated_archive_members(archive):
             name = relative.as_posix()
             if directory or not name.startswith(("Sdk/", "tools/", "build/")):
@@ -1614,7 +1631,7 @@ def extract_verified_dotnet_archive(
         raise CertificationError(
             f"dotnet archive hash is not in the approved set: {archive_path}")
     allowed_roots = {relative.parts[0] for relative in TRUSTED_DOTNET_COMPONENTS}
-    try:
+    with archive_read_errors(archive_path, "dotnet archive"):
         with tarfile.open(frozen_archive, "r:*") as archive:
             members = validated_archive_members(archive)
             destination.mkdir(parents=True, mode=0o700)
@@ -1631,8 +1648,6 @@ def extract_verified_dotnet_archive(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(extracted.read())
                 os.chmod(target, 0o755 if (member.mode & 0o111) else 0o644)
-    except ARCHIVE_READ_ERRORS as error:
-        raise CertificationError(f"invalid dotnet archive {archive_path}: {error}") from error
     dotnet_manifest_sha256(destination)
     executable = destination / "dotnet"
     if not executable.is_file():
@@ -2426,7 +2441,7 @@ class Controller:
     def seed_sdk_cache(self, stage: str, package: Path) -> dict[str, Any]:
         version = package_version(package)
         destination = self.writable(stage, "packages") / SDK_ID.casefold() / version.casefold()
-        with zipfile.ZipFile(package) as archive:
+        with archive_read_errors(package), zipfile.ZipFile(package) as archive:
             members = validated_archive_members(archive)
             if destination.exists():
                 shutil.rmtree(destination)
@@ -2512,7 +2527,7 @@ class Controller:
         if not resolution.is_dir():
             raise CertificationError(f"copied MSBuild SDK root not found: {resolution}")
         package_root = resolution / SDK_ID
-        with zipfile.ZipFile(package) as archive:
+        with archive_read_errors(package), zipfile.ZipFile(package) as archive:
             members = validated_archive_members(archive)
             package_root.mkdir()
             for name, info, directory in members:
@@ -3713,7 +3728,8 @@ class Controller:
             "Sdk/", "build/",
         )
         temporary = produced.with_suffix(".new")
-        with zipfile.ZipFile(self.bootstrap) as source, zipfile.ZipFile(
+        with archive_read_errors(self.bootstrap), zipfile.ZipFile(
+                self.bootstrap) as source, zipfile.ZipFile(
                 temporary, "w", zipfile.ZIP_DEFLATED) as sink:
             for relative, info, directory in validated_archive_members(source):
                 normalized = relative.as_posix()
@@ -3735,7 +3751,8 @@ class Controller:
                 sink.writestr(name, data)
         os.replace(temporary, produced)
         try:
-            packer.verify(produced, self.bootstrap)
+            with archive_read_errors(produced):
+                packer.verify(produced, self.bootstrap)
         except packer.SelfHostError as error:
             raise CertificationError(str(error)) from error
         return produced

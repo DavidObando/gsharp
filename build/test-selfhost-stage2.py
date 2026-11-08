@@ -2557,6 +2557,38 @@ class ArchiveFailureTests(unittest.TestCase):
         truncated_zip.write_bytes(data[:-30])
         self.archives = [("gzip-eof", tar_path), ("zip-deflate", zip_path),
                          ("zip-truncated", truncated_zip)]
+        malformed = ["zip-encrypted", "zip-compression", "zip-utf8", "zip-lzma"]
+        if getattr(zipfile, "zstd", None) is not None:
+            malformed.append("zip-zstd")
+        for name in malformed:
+            package = self.root / f"{name}.nupkg"
+            compression = (zipfile.ZIP_LZMA if name == "zip-lzma"
+                           else zipfile.ZIP_ZSTANDARD if name == "zip-zstd"
+                           else zipfile.ZIP_STORED)
+            with zipfile.ZipFile(package, "w", compression=compression) as archive:
+                archive.writestr("Sdk/Sdk.props", payload)
+            data = bytearray(package.read_bytes())
+            central = data.rindex(b"PK\x01\x02")
+            if name == "zip-encrypted":
+                for offset in (6, central + 8):
+                    struct.pack_into("<H", data, offset,
+                                     struct.unpack_from("<H", data, offset)[0] | 1)
+            elif name == "zip-compression":
+                for offset in (8, central + 10):
+                    struct.pack_into("<H", data, offset, 99)
+            elif name == "zip-utf8":
+                for offset in (6, central + 8):
+                    struct.pack_into("<H", data, offset,
+                                     struct.unpack_from("<H", data, offset)[0] | 0x800)
+                data[30] = data[central + 46] = 0xff
+            elif name == "zip-lzma":
+                name_length, extra_length = struct.unpack_from("<HH", data, 26)
+                data[30 + name_length + extra_length + 4] = 0xff
+            else:
+                name_length, extra_length = struct.unpack_from("<HH", data, 26)
+                data[30 + name_length + extra_length] = 0xff
+            package.write_bytes(data)
+            self.archives.append((name, package))
         if os.name != "nt" and os.geteuid() != 0:
             denied = self.root / "denied.tar.gz"
             denied.write_bytes(b"cannot read")
@@ -2618,6 +2650,61 @@ class ArchiveFailureTests(unittest.TestCase):
                     (controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
                 self.assertFalse(report["certified"])
                 self.assertTrue(report["error"])
+
+    def test_package_readers_convert_archive_errors_to_certification_errors(self) -> None:
+        for name, package in self.archives:
+            if package.suffix != ".nupkg":
+                continue
+            for consumer in ("digest", "resolved", "cache"):
+                with self.subTest(archive=name, consumer=consumer):
+                    destination = self.root / f"direct-{name}-{consumer}"
+                    with self.assertRaises(stage2.CertificationError):
+                        if consumer == "digest":
+                            stage2.package_payload_hash(package)
+                        elif consumer == "resolved":
+                            stage2.verify_resolved_sdk_payload(package, destination)
+                        else:
+                            source = self.root / f"source-{name}"
+                            source.mkdir()
+                            staged = source / "example.1.0.0.nupkg"
+                            shutil.copy2(package, staged)
+                            (source / "example.1.0.0.nupkg.sha512").write_text(
+                                base64.b64encode(hashlib.sha512(staged.read_bytes()).digest()).decode(),
+                                encoding="utf-8")
+                            stage2.extract_verified_package(source, destination)
+
+    def test_invalid_package_hash_encoding_is_controlled_and_reported(self) -> None:
+        import argparse
+
+        source = self.root / "invalid-hash-cache"
+        source.mkdir()
+        package = source / "example.1.0.0.nupkg"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("Sdk/Sdk.props", b"accepted")
+        (source / "example.1.0.0.nupkg.sha512").write_bytes(b"\xff")
+        result = run_driver("--verify-package-cache", source, self.root / "invalid-hash-cli")
+        with self.subTest(consumer="driver"):
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+            self.assertIn("selfhost-stage2:", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        caller = self.root / "invalid-hash-caller"
+        caller.mkdir()
+        controller = stage2.Controller(argparse.Namespace(
+            tree=caller, migrated_tree=None, bootstrap=package, package_cache=source,
+            work=self.root / "invalid-hash-work", dotnet_archive=None,
+            dotnet_archive_sha256=[], config="Release", project=None, assembly=None,
+            test=[], test_adapter_sha256=[]))
+
+        def preflight() -> None:
+            controller.reports.mkdir(parents=True)
+            stage2.extract_verified_package(source, self.root / "invalid-hash-direct")
+
+        controller.preflight = preflight
+        with self.subTest(consumer="controller"):
+            self.assertEqual(2, controller.certify())
+            report = json.loads((controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+            self.assertFalse(report["certified"])
+            self.assertTrue(report["error"])
 
 
 class PostSetupMutationTests(unittest.TestCase):

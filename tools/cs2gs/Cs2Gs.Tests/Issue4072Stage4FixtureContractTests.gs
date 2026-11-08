@@ -253,7 +253,7 @@ open class Issue4072Stage4FixtureContractTests {
         let originalSourceRoot = Environment.GetEnvironmentVariable(
             GsharpTestProjectRunner.SourceRootEnvironmentVariable
         )
-        let solutionMarker = Path.Combine(AppContext.BaseDirectory, "GSharp.slnx")
+        let solutionMarker = Path.Combine(AppContext.BaseDirectory, RepositoryRootMarker.SolutionFileNames[0])
         let configMarker = Path.Combine(AppContext.BaseDirectory, "nuget.config")
         let feedBackup = Path.Combine(root, "original-feed")
         var stagedFeed string? = nil
