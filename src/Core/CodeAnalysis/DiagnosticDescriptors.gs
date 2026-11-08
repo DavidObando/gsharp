@@ -364,7 +364,7 @@ internal shared class DiagnosticDescriptors {
     internal let UnableToFindMember DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0158",
         DiagnosticSeverity.Error,
-        "Cannot find member {0}."
+        "{0}"
     )
     internal let UnableToFindFunction DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0159",

@@ -494,40 +494,18 @@ public static class Sample
 
     @Fact
     func Oblivious_Reference_NoAnnotation_SurfacesAsNullable() {
-        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
-        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
-        // the default — relying on an ambient default to assert what a
-        // non-default mode does was the weaker form of the test anyway. The
-        // platform-types answer for these same five readers is asserted
-        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
-        using let nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled)
-        // Issue #1354: a genuinely oblivious (pre-nullable, `#nullable disable`)
-        // imported reference type carries no [Nullable]/[NullableContext] anywhere.
-        // Post-#1354 the Kotlin "unannotated/platform type is nullable" rule makes
-        // the binder surface it as NullableTypeSymbol (was: flat non-null pre-#1354).
         using let fixture = ObliviousFixture()
         let sym = ClrNullability.GetReturnTypeSymbol(ObliviousMethod(fixture, "GetString"))
-        let nullable = Assert.IsType[NullableTypeSymbol](sym)
-        Assert.Same(TypeSymbol.String, nullable.UnderlyingType)
+        let platform = Assert.IsType[PlatformTypeSymbol](sym)
+        Assert.Same(TypeSymbol.String, platform.UnderlyingType)
     }
 
     @Fact
     func Oblivious_List_NoInnerFlags_SurfacesAsNullable() {
-        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
-        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
-        // the default — relying on an ambient default to assert what a
-        // non-default mode does was the weaker form of the test anyway. The
-        // platform-types answer for these same five readers is asserted
-        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
-        using let nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled)
-        // A method with no nullable annotation and no NullableContext at all.
-        // Post-#1354 the outer List<string> reference position is nullable.
-        // There are no inner per-position bytes, so the symbol is a plain
-        // NullableTypeSymbol (not a NullabilityAnnotatedTypeSymbol).
         using let fixture = ObliviousFixture()
         let sym = ClrNullability.GetReturnTypeSymbol(ObliviousMethod(fixture, "GetList"))
         Assert.IsNotType[NullabilityAnnotatedTypeSymbol](sym)
-        Assert.IsType[NullableTypeSymbol](sym)
+        Assert.IsType[PlatformTypeSymbol](sym)
     }
 
     // -----------------------------------------------------------------------
@@ -614,38 +592,32 @@ public static class Sample
 
     @Fact
     func SymbolFromFlagsOffset_EmptyFlags_RefType_IsNullable() {
-        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
-        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
-        // the default — relying on an ambient default to assert what a
-        // non-default mode does was the weaker form of the test anyway. The
-        // platform-types answer for these same five readers is asserted
-        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
-        using let nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled)
         let sym = ClrNullability.SymbolFromFlagsOffset(typeof(string), ImmutableArray[uint8].Empty, 0)
-        let nullable = Assert.IsType[NullableTypeSymbol](sym)
-        Assert.Same(TypeSymbol.String, nullable.UnderlyingType)
+        let platform = Assert.IsType[PlatformTypeSymbol](sym)
+        Assert.Same(TypeSymbol.String, platform.UnderlyingType)
     }
 
     @Theory
     @InlineData(nil)
     @InlineData(uint8(2))
     func SzArray_NullableScalarOrAbsentFlags_PropagateToElement(scalar uint8?) {
-        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
-        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
-        // the default — relying on an ambient default to assert what a
-        // non-default mode does was the weaker form of the test anyway. The
-        // platform-types answer for these same five readers is asserted
-        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
-        using let nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled)
         let flags = if (scalar != nil) {
             ImmutableArray.Create(scalar)
         } else {
             ImmutableArray[uint8].Empty
         }
-        let symbol = Assert.IsType[NullableTypeSymbol](ClrNullability.SymbolFromFlagsOffset(typeof([]string), flags, 0))
-        let array = Assert.IsType[NullabilityAnnotatedTypeSymbol](symbol.UnderlyingType)
-        let element = Assert.IsType[NullableTypeSymbol](array.GetTypeArgumentSymbolForClrType(typeof(string)))
-        Assert.Same(TypeSymbol.String, element.UnderlyingType)
+        let decoded = ClrNullability.SymbolFromFlagsOffset(typeof([]string), flags, 0)
+        if scalar != nil {
+            let symbol = Assert.IsType[NullableTypeSymbol](decoded)
+            let array = Assert.IsType[NullabilityAnnotatedTypeSymbol](symbol.UnderlyingType)
+            let element = Assert.IsType[NullableTypeSymbol](array.GetTypeArgumentSymbolForClrType(typeof(string)))
+            Assert.Same(TypeSymbol.String, element.UnderlyingType)
+        } else {
+            let symbol = Assert.IsType[PlatformTypeSymbol](decoded)
+            let array = Assert.IsType[NullabilityAnnotatedTypeSymbol](symbol.UnderlyingType)
+            let element = Assert.IsType[PlatformTypeSymbol](array.GetTypeArgumentSymbolForClrType(typeof(string)))
+            Assert.Same(TypeSymbol.String, element.UnderlyingType)
+        }
     }
 
     @Fact
@@ -667,13 +639,6 @@ public static class Sample
             let annotated = NullabilityAnnotatedTypeSymbol(TypeSymbol.FromClrType(clrType), flags)
             return NullableFlagsBuilder.Build(NullableTypeSymbol.Get(annotated))
         }
-        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
-        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
-        // the default — relying on an ambient default to assert what a
-        // non-default mode does was the weaker form of the test anyway. The
-        // platform-types answer for these same five readers is asserted
-        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
-        using let nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled)
         Assert.Equal(
             []uint8{2, 1},
             ReemitNullableOuter(typeof([]string), ImmutableArray.Create[uint8](uint8(1), uint8(1))).ToArray()
@@ -686,7 +651,7 @@ public static class Sample
             []uint8{2},
             ReemitNullableOuter(typeof([]string), ImmutableArray.Create[uint8](uint8(2))).ToArray()
         )
-        Assert.Equal([]uint8{2}, ReemitNullableOuter(typeof(List[string]), ImmutableArray[uint8].Empty).ToArray())
+        Assert.Equal([]uint8{2, 0}, ReemitNullableOuter(typeof(List[string]), ImmutableArray[uint8].Empty).ToArray())
         Assert.Equal(
             []uint8{2, 0, 2, 2},
             ReemitNullableOuter(

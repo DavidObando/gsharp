@@ -195,7 +195,7 @@ declaration.
 | GS0155 | Error | Cannot convert type. | Outside call-argument matching, no built-in or user-defined conversion exists; use a compatible value or an API that performs the transformation (for example, `Parse`/`TryParse` for text). |
 | GS0156 | Error | Cannot convert implicitly; explicit conversion exists. | `var x int32 = 3.14` — write `var x int32 = int32(3.14)` to apply the available explicit conversion. |
 | GS0157 | Error | Cannot find type (possibly missing import). | A package-qualified type name that resolves to nothing. |
-| GS0158 | Error | Cannot find member. | A field or property access that does not resolve. |
+| GS0158 | Error | Cannot resolve member access. | A field, property, or event access does not resolve, or its nullable receiver lacks valid non-null narrowing. |
 | GS0159 | Error | Cannot resolve function call. | A function name does not resolve, or its nullable receiver lacks valid non-null narrowing. |
 | GS0160 | Error | Ambiguous overload. | A call that matches more than one overload equally well. Generic candidates are filtered against their `where`-constraints; the constraint-disjoint case usually resolves to one candidate, but two candidates with mutually-incomparable constraint specificity remain ambiguous and report this code. |
 | GS0161 | Error | `copy`/`with` receiver is not a `data struct`. | `.copy(…)` used on a plain `struct`. |

@@ -126,23 +126,11 @@ import Lib4044
 func Run() {
     let found = Extensions.AnyEqual((nil, false), ("x", false))
 }`
-        // Pinned: this row is the behaviour ADR-0186's platform-types mode
-        // changes. Under `--nullability=enabled` ADR-0136's widening still
-        // applies and the call compiles — the control below.
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
-            AssertRejectsOnlyTheNilElement(
-                CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
-                "(string, bool)"
-            )
-        }
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.DoesNotContain(
-                CompileWithReferences(source, NullabilityMode.Enabled, ImportedLibraryPath),
-                (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
-            )
-        }
+        using let _ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
+        AssertRejectsOnlyTheNilElement(
+            CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
+            "(string, bool)"
+        )
     }
 
     /// The G#-declared control for the imported row above.
@@ -171,20 +159,11 @@ import Lib4044
 func Run() {
     let found = Extensions.AnyPair("x", (nil, 1))
 }`
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
-            AssertRejectsOnlyTheNilElement(
-                CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
-                "(string, int32)"
-            )
-        }
-        {
-            using let _ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.DoesNotContain(
-                CompileWithReferences(source, NullabilityMode.Enabled, ImportedLibraryPath),
-                (diagnostic GSharp.Core.CodeAnalysis.Diagnostic) -> diagnostic.IsError
-            )
-        }
+        using let _ = NullabilityOptions.Enter(NullabilityMode.PlatformTypes)
+        AssertRejectsOnlyTheNilElement(
+            CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
+            "(string, int32)"
+        )
     }
 
     /// The nil element may be carried through a nilable sibling, which is the

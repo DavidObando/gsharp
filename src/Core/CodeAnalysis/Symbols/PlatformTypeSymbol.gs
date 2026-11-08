@@ -42,12 +42,9 @@ import System.Collections.Concurrent
 /// Like (cref:NullableTypeSymbol) the wrapper is purely a binder-level
 /// annotation: (cref:TypeSymbol.ClrType) is the underlying type's, and
 /// emit erases the wrapper to `T`.
-/// @remarks ADR-0186 step 1 built the symbol and its read path behind
-/// `--nullability=platform-types`; step 3 made that mode the <b>default</b>
-/// ((cref:NullabilityOptions)), so an ordinary compilation constructs
-/// these wrappers for every oblivious imported reference position.
-/// `--nullability=enabled` restores ADR-0136's reading, and under it
-/// nothing constructs one.
+/// @remarks ADR-0186 constructs these wrappers for every oblivious imported
+/// reference position; #4372 retired the legacy `--nullability=enabled`
+/// mode.
 class PlatformTypeSymbol : TypeSymbol {
     private init(underlyingType TypeSymbol) : base(ComputeDisplayName(underlyingType), underlyingType.ClrType) {
         UnderlyingType = underlyingType
