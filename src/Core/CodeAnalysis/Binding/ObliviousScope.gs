@@ -66,13 +66,11 @@ import System.Runtime.CompilerServices
 /// function (`@DllImport` / `@LibraryImport`).
 ///
 /// The mapping goes through (cref:ClrNullability.SymbolForState), the
-/// single cell of ADR-0136's table that ADR-0186 changes: `T!` in every
-/// platform-types mode, and ADR-0136's `T?` under
-/// `--nullability=enabled`, where nothing constructs a
-/// (cref:PlatformTypeSymbol). An oblivious G# declaration therefore
-/// reads, inside its own compilation, exactly as its emitted metadata reads
-/// back from another one (ADR-0186 §8) — the "two readers disagreeing about
-/// one declaration" defect (#3705 family 2) cannot open between them.
+/// single cell of ADR-0136's table that ADR-0186 changes (`T!`). An
+/// oblivious G# declaration therefore reads, inside its own compilation,
+/// exactly as its emitted metadata reads back from another one (ADR-0186 §8) —
+/// the "two readers disagreeing about one declaration" defect (#3705 family 2)
+/// cannot open between them.
 internal shared class ObliviousScope {
     /// The §9 scope annotations of one syntax tree, as spans. Built once per
     /// tree. Spans rather than a walk up (cref:SyntaxNode.Parent)

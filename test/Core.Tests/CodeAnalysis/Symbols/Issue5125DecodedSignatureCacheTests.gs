@@ -88,18 +88,12 @@ namespace Sig5125 {
 
         let platform = ClrNullability.GetReturnTypeSymbol(method)
         Assert.IsType[PlatformTypeSymbol](platform)
-        var legacy TypeSymbol? = nil
-        {
-            using let scope_ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            legacy = ClrNullability.GetReturnTypeSymbol(method)
-        }
-        Assert.IsType[NullableTypeSymbol](legacy!!)
         for var i = 0; i < 3; i++ {
             Assert.Same(platform, ClrNullability.GetReturnTypeSymbol(method))
-            using let scope_ = NullabilityOptions.Enter(NullabilityMode.Enabled)
-            Assert.Same(legacy!!, ClrNullability.GetReturnTypeSymbol(method))
+            using let scope_ = NullabilityOptions.Enter(NullabilityMode.Oblivious)
+            Assert.Same(platform, ClrNullability.GetReturnTypeSymbol(method))
         }
-        Assert.Equal(2L, measurements.GetCounter("metadata.signature-decodes"))
+        Assert.Equal(1L, measurements.GetCounter("metadata.signature-decodes"))
         Assert.Equal(6L, measurements.GetCounter("metadata.signature-cache-hits"))
     }
 

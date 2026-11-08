@@ -36,11 +36,9 @@ open class Adr0186NullabilitySwitchTests {
     /// true without anyone noticing, so it is pinned rather than assumed.
     /// @param argument The switch as a user would type it.
     @Theory
-    @InlineData("/nullability:enabled")
     @InlineData("/nullability:platform-types")
     @InlineData("/nullability:platformtypes")
     @InlineData("--nullability=platform-types")
-    @InlineData("--nullability=enabled")
     @InlineData("/nullability:oblivious")
     @InlineData("--nullability=oblivious")
     func ValidModes_Are_Accepted(argument string) {
@@ -50,16 +48,19 @@ open class Adr0186NullabilitySwitchTests {
         Assert.DoesNotContain("nullability", error, StringComparison.OrdinalIgnoreCase)
     }
 
-    /// An unknown mode must be rejected by name, not silently ignored — a
-    /// switch that quietly accepts a typo is a switch whose value nobody can
-    /// trust, and this one selects between two different readings of every
-    /// imported reference position.
-    @Fact
-    func An_Unknown_Mode_Is_Rejected_By_Name() {
-        let (exit, _, error) = RunGsc("/nullability:bogus")
+    /// An unknown or retired mode must be rejected by name, not silently
+    /// ignored (#4372 retired the legacy `enabled` mode).
+    /// @param argument The rejected switch.
+    /// @param mode The rejected mode name.
+    @Theory
+    @InlineData("/nullability:bogus", "bogus")
+    @InlineData("/nullability:enabled", "enabled")
+    @InlineData("--nullability=enabled", "enabled")
+    func An_Unknown_Mode_Is_Rejected_By_Name(argument string, mode string) {
+        let (exit, _, error) = RunGsc(argument)
         Assert.NotEqual(0, exit)
-        Assert.Contains("unknown mode 'bogus'", error)
-        Assert.Contains("expected enabled, platform-types or oblivious", error)
+        Assert.Contains("unknown mode '$mode'", error)
+        Assert.Contains("expected platform-types or oblivious", error)
     }
 
     /// An empty value is a typo too (`/nullability:` or bare
@@ -71,7 +72,7 @@ open class Adr0186NullabilitySwitchTests {
     func An_Empty_Mode_Is_Rejected(argument string) {
         let (exit, _, error) = RunGsc(argument)
         Assert.NotEqual(0, exit)
-        Assert.Contains("expected enabled, platform-types or oblivious", error)
+        Assert.Contains("expected platform-types or oblivious", error)
     }
 
     /// The switch is discoverable: `/help` lists it and names its default.
@@ -89,8 +90,7 @@ open class Adr0186NullabilitySwitchTests {
             // help text that still names the old default is a documentation
             // bug that no other test can see.
             Assert.Contains("platform-types (default", help)
-            Assert.Contains("enabled", help)
-            // ADR-0186 step 5: the §9 oblivious compilation is a third value
+            // ADR-0186 step 5: the §9 oblivious compilation is a second value
             // of the same switch, and `/help` has to name it.
             Assert.Contains("oblivious also makes this compilation's own declarations oblivious", help)
             Assert.Contains("/platform-nil-checks:", help)
@@ -159,7 +159,7 @@ open class Adr0186NullabilitySwitchTests {
     @Theory
     @InlineData([0]string, true)
     @InlineData([]string{"/nullability:platform-types"}, true)
-    @InlineData([]string{"/nullability:enabled"}, false)
+    @InlineData([]string{"/nullability:oblivious"}, true)
     func TheCliDefault_Reads_AnObliviousPosition_As_APlatformType(extraArguments[]string, expectSuccess bool) {
         let directory = Directory.CreateTempSubdirectory("gsc_adr0186_default_").FullName
         try {

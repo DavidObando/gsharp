@@ -83,11 +83,17 @@ default { var len = s.Length }
 `)
         Assert.Contains(
             discard.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 's' may be nil.",
+                StringComparison.Ordinal
+            )
         )
         Assert.Contains(
             defaultArm.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 's' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -173,7 +179,10 @@ if Probe(v) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'v' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -196,7 +205,10 @@ if TryGet(v) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'v' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -237,7 +249,10 @@ if IsEmpty(v) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'v' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -260,7 +275,10 @@ if !TryGet(v) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'v' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -300,7 +318,10 @@ if dict.TryGetValue("key", &value) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'value' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -320,7 +341,10 @@ if !dict.TryGetValue("key", &value) {
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver 'value' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -400,7 +424,10 @@ b.Run()
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver '_name' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -431,7 +458,10 @@ b.Run()
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver '_name' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
@@ -495,7 +525,10 @@ b.Run()
 `)
         Assert.Contains(
             result.Diagnostics,
-            (d Diagnostic) -> d.Message.Contains("Cannot find member Length.", StringComparison.Ordinal)
+            (d Diagnostic) -> d.Id == "GS0158" && d.Message.Contains(
+                "Cannot access member Length because receiver '_name' may be nil.",
+                StringComparison.Ordinal
+            )
         )
     }
 
