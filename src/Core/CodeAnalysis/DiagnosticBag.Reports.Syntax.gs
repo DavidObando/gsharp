@@ -65,7 +65,12 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
         location,
         DiagnosticDescriptors.UnexpectedToken,
         actualKind,
-        expectedKind
+        expectedKind,
+        if actualKind == SyntaxKind.YieldKeyword && expectedKind == SyntaxKind.IdentifierToken {
+            " 'yield' is a reserved keyword; use '$$yield' to use it as an identifier."
+        } else {
+            ""
+        }
     )
 
     /// Reports that the `inline` modifier was combined with `data` or `record`.

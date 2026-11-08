@@ -67,7 +67,7 @@ internal shared class DiagnosticDescriptors {
     internal let UnexpectedToken DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0005",
         DiagnosticSeverity.Error,
-        "Unexpected token <{0}>, expected <{1}>."
+        "Unexpected token <{0}>, expected <{1}>.{2}"
     )
     internal let AllPathsMustReturn DiagnosticDescriptor = DiagnosticDescriptor(
         "GS0100",

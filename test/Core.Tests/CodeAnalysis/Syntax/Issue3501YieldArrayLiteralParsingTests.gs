@@ -7,6 +7,7 @@ package GSharp.Core.Tests.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
+import System
 import System.Linq
 import Xunit
 
@@ -42,6 +43,11 @@ let yield = []int32{7, 8}
 yield[1]
 `)
         Assert.NotEmpty(unescaped.Diagnostics)
+        let diagnostic = unescaped.Diagnostics[0]
+        Assert.Equal("GS0005", diagnostic.Id)
+        Assert.Equal(1, diagnostic.Location.StartLine)
+        Assert.Equal(4, diagnostic.Location.StartCharacter)
+        Assert.Contains("'$$yield'", diagnostic.Message, StringComparison.Ordinal)
 
         let escaped = `
 let $yield = []int32{7, 8}
