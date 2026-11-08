@@ -9,8 +9,10 @@ import dataclasses
 import hashlib
 import hmac
 import json
+import io
 import os
 import shutil
+import tarfile
 import tempfile
 import struct
 import subprocess
@@ -125,16 +127,19 @@ static class Program
         cls.fixture = project / "bin" / "Release" / "net10.0" / "Fixture.dll"
         cls.mutants = ARTIFACTS / "mutants"
         cls.mutants.mkdir()
+        helper_script = ARTIFACTS / "PeBodyMutations.cs"
+        shutil.copy2(REPO / "build" / "selfhost" / "PeBodyMutations.cs", helper_script)
+        helper_env = {**os.environ, "NuGetAudit": "false", "TreatWarningsAsErrors": "false"}
         helper = subprocess.run(
-            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+            ["dotnet", "run", str(helper_script),
              "--", str(cls.fixture), str(cls.mutants)],
-            cwd=REPO, text=True, capture_output=True)
+            cwd=REPO, text=True, capture_output=True, env=helper_env)
         if helper.returncode != 0:
             raise RuntimeError(helper.stdout + helper.stderr)
         helper = subprocess.run(
-            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+            ["dotnet", "run", str(helper_script),
              "--", str(cls.fixture), str(cls.mutants), "--runtime-header"],
-            cwd=REPO, text=True, capture_output=True)
+            cwd=REPO, text=True, capture_output=True, env=helper_env)
         if helper.returncode != 0:
             raise RuntimeError(helper.stdout + helper.stderr)
 
@@ -1480,6 +1485,8 @@ class ControllerBoundaryTests(unittest.TestCase):
                 remove_tree(self.root / "work")
 
     def test_sandbox_hides_secrets_caller_siblings_controller_and_network(self) -> None:
+        if shutil.which("bwrap", path=os.defpath) is None:
+            self.skipTest("bubblewrap is not installed")
         tree = self.tree()
         writable = self.root / "allowed"
         caller = self.root / "caller-tree" / "secret"
@@ -2016,6 +2023,745 @@ class ToolchainManifestTests(unittest.TestCase):
         rejected = run_driver("--verify-directory-manifest", self.root, manifest)
         self.assertEqual(2, rejected.returncode)
         self.assertIn("directory manifest changed", rejected.stderr)
+
+    def test_verify_dotnet_archive_extracts_verified_toolchain_and_rejects_tampering(self) -> None:
+        staging = self.root / "sdk-staging"
+        (staging / "host").mkdir(parents=True)
+        (staging / "shared").mkdir(parents=True)
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir(parents=True)
+        (staging / "packs").mkdir(parents=True)
+        (staging / "metadata").mkdir(parents=True)
+        (staging / "dotnet").write_bytes(b"#!/bin/sh\nexit 0\n")
+        (staging / "dotnet").chmod(0o755)
+        (staging / "host" / "fxr.dll").write_bytes(b"fxr")
+        (staging / "shared" / "core.dll").write_bytes(b"core")
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / "marker.txt").write_bytes(b"sdk")
+        (staging / "packs" / "ref.dll").write_bytes(b"packs")
+        (staging / "metadata" / "ignored.txt").write_bytes(b"ignored")
+        archive_path = self.root / "dotnet-sdk.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as archive:
+            for item in sorted(staging.rglob("*")):
+                archive.add(item, arcname=item.relative_to(staging).as_posix(), recursive=False)
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        extracted = self.root / "extracted"
+        valid = run_driver("--verify-dotnet-archive", archive_path, digest, extracted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        payload = json.loads(valid.stdout)
+        self.assertEqual(str(extracted.resolve() / "dotnet"), payload["dotnet"])
+        self.assertEqual(0o755, (extracted / "dotnet").stat().st_mode & 0o777)
+        self.assertFalse((extracted / "metadata").exists())
+
+        wrong_hash = "0" * 64
+        rejected = run_driver("--verify-dotnet-archive", archive_path, wrong_hash, self.root / "bad-extract")
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("dotnet archive hash is not in the approved set", rejected.stderr)
+        self.assertFalse((self.root / "bad-extract").exists())
+
+        existing_dest = run_driver("--verify-dotnet-archive", archive_path, wrong_hash, extracted)
+        self.assertEqual(2, existing_dest.returncode)
+        self.assertIn("dotnet archive extraction root must not already exist", existing_dest.stderr)
+        self.assertTrue((extracted / "dotnet").is_file())
+
+    def write_dotnet_archive(self, path: Path) -> None:
+        with tarfile.open(path, "w:gz") as archive:
+            for relative in stage2.TRUSTED_DOTNET_COMPONENTS:
+                name = relative if relative == Path("dotnet") else relative / "marker.txt"
+                data = b"approved-" + relative.as_posix().encode()
+                member = tarfile.TarInfo(name.as_posix())
+                member.size = len(data)
+                member.mode = 0o755 if relative == Path("dotnet") else 0o644
+                archive.addfile(member, io.BytesIO(data))
+
+    def test_dotnet_archive_default_snapshot_cannot_reuse_caller_archive(self) -> None:
+        archive_path = self.root / ".sdk.archive"
+        self.write_dotnet_archive(archive_path)
+        original = archive_path.read_bytes()
+        digest = hashlib.sha256(original).hexdigest()
+        destination = self.root / "sdk"
+        for mode in (0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                remove_tree(destination)
+                archive_path.chmod(mode)
+                result = run_driver("--verify-dotnet-archive", archive_path, digest, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("dotnet archive and default dotnet archive snapshot are not disjoint",
+                              result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(destination.exists())
+                self.assertEqual(original, archive_path.read_bytes())
+                self.assertEqual(mode, archive_path.stat().st_mode & 0o777)
+
+    def test_dotnet_archive_explicit_snapshot_must_be_frozen_and_approved(self) -> None:
+        archive_path = self.root / "controller.archive"
+        self.write_dotnet_archive(archive_path)
+        original = archive_path.read_bytes()
+        digest = hashlib.sha256(original).hexdigest()
+        destination = self.root / "sdk"
+        with self.subTest(snapshot="writable"):
+            archive_path.chmod(0o600)
+            with self.assertRaisesRegex(stage2.CertificationError, "snapshot must be read-only"):
+                stage2.extract_verified_dotnet_archive(
+                    archive_path, destination, {digest}, snapshot_path=archive_path)
+            self.assertFalse(destination.exists())
+        remove_tree(destination)
+        archive_path.chmod(0o400)
+        with self.subTest(snapshot="unapproved"):
+            with self.assertRaisesRegex(stage2.CertificationError, "hash is not in the approved set"):
+                stage2.extract_verified_dotnet_archive(
+                    archive_path, destination, {"0" * 64}, snapshot_path=archive_path)
+            self.assertFalse(destination.exists())
+            self.assertEqual(original, archive_path.read_bytes())
+            self.assertEqual(0o400, archive_path.stat().st_mode & 0o777)
+        with self.subTest(snapshot="frozen-approved"):
+            executable = stage2.extract_verified_dotnet_archive(
+                archive_path, destination, {digest}, snapshot_path=archive_path)
+            self.assertEqual(b"approved-dotnet", executable.read_bytes())
+            self.assertEqual(original, archive_path.read_bytes())
+            self.assertEqual(0o400, archive_path.stat().st_mode & 0o777)
+
+    def test_system_owned_tree_components_only_validates_intermediate_ancestors(self) -> None:
+        dotnet_root = self.root / "dotnet-root"
+        (dotnet_root / "host").mkdir(parents=True)
+        (dotnet_root / "shared").mkdir(parents=True)
+        (dotnet_root / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION).mkdir(parents=True)
+        (dotnet_root / "sdk" / "9.0.100").mkdir(parents=True)
+        (dotnet_root / "packs").mkdir(parents=True)
+        (dotnet_root / "dotnet").write_bytes(b"#!/bin/sh\n")
+        (dotnet_root / "dotnet").chmod(0o755)
+        for path in [dotnet_root, *dotnet_root.rglob("*")]:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        unrelated = dotnet_root / "sdk" / "9.0.100" / "unrelated.txt"
+        unrelated.write_bytes(b"sibling")
+        unrelated.chmod(0o666)
+
+        real_lstat = Path.lstat
+
+        class _RootStat:
+            def __init__(self, inner: os.stat_result) -> None:
+                self._inner = inner
+                self.st_mode = inner.st_mode
+                self.st_uid = 0
+
+        from unittest import mock
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=lambda p: _RootStat(real_lstat(p))
+        ):
+            self.assertTrue(stage2.system_owned_tree(dotnet_root, components_only=True))
+            (dotnet_root / "sdk").chmod(0o775)
+            self.assertFalse(stage2.system_owned_tree(dotnet_root, components_only=True))
+            (dotnet_root / "sdk").chmod(0o755)
+
+            real_sdk = self.root / "real-sdk"
+            shutil.move(str(dotnet_root / "sdk"), str(real_sdk))
+            (dotnet_root / "sdk").symlink_to(real_sdk)
+            self.assertFalse(stage2.system_owned_tree(dotnet_root, components_only=True))
+
+    def test_dotnet_archive_snapshot_freezing_and_read_only_sdk_seeding(self) -> None:
+        staging = self.root / "sdk-staging"
+        (staging / "host").mkdir(parents=True)
+        (staging / "shared").mkdir(parents=True)
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir(parents=True)
+        (staging / "packs").mkdir(parents=True)
+        (staging / "dotnet").write_bytes(b"#!/bin/sh\nexit 0\n")
+        (staging / "dotnet").chmod(0o755)
+        (staging / "host" / "fxr.dll").write_bytes(b"fxr")
+        (staging / "shared" / "core.dll").write_bytes(b"core")
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / "marker.txt").write_bytes(b"sdk")
+        (staging / "packs" / "ref.dll").write_bytes(b"packs")
+        archive_path = self.root / "dotnet-sdk.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as archive:
+            for item in sorted(staging.rglob("*")):
+                archive.add(item, arcname=item.relative_to(staging).as_posix(), recursive=False)
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+
+        bootstrap = self.root / f"{stage2.SDK_ID}.0.5.600.nupkg"
+        with zipfile.ZipFile(bootstrap, "w") as zf:
+            zf.writestr(
+                f"{stage2.SDK_ID}.nuspec",
+                f'<package><metadata><id>{stage2.SDK_ID}</id><version>0.5.600</version></metadata></package>',
+            )
+            zf.writestr("Sdk/Sdk.props", "<Project />")
+            zf.writestr("Sdk/Sdk.targets", "<Project />")
+            zf.writestr("tools/net10.0/any/gsc.dll", "compiler")
+
+        caller = self.root / "caller"
+        caller.mkdir()
+        cache = self.root / "cache"
+        cache.mkdir()
+        work = self.root / "work"
+        import argparse
+
+        args = argparse.Namespace(
+            tree=caller,
+            migrated_tree=None,
+            bootstrap=bootstrap,
+            package_cache=cache,
+            work=work,
+            dotnet_archive=archive_path,
+            dotnet_archive_sha256=[digest],
+            dotnet_host_sha256=[],
+            dotnet_root_manifest_sha256=[],
+            allow_system_dotnet_manifest=False,
+            config="Release",
+            project=None,
+            assembly=None,
+            test=["test/Sample.Tests/Sample.Tests.gsproj"],
+            test_adapter_sha256=[],
+            test_env=[],
+            stage1_version=None,
+            min_tests=[],
+            command_timeout=900,
+        )
+        controller = stage2.Controller(args)
+        controller.work.mkdir(mode=0o700)
+        for path in (
+            controller.evidence, controller.reports, controller.logs,
+            controller.mutable, controller.toolchains,
+        ):
+            path.mkdir(mode=0o700)
+        controller.freeze_controller_inputs()
+        # Mutating the caller's archive file after freeze must not affect extraction or reporting
+        archive_path.write_bytes(b"tampered-after-freeze")
+        seeded = controller.seed_sdk_resolution("stage-1", controller.bootstrap)
+        self.assertEqual("0.5.600", seeded["version"])
+        self.assertEqual(digest, controller.report["dotnetArchive"]["sha256"])
+        injected_props = (
+            controller.stage_dotnet("stage-1")
+            / "sdk"
+            / stage2.TRUSTED_DOTNET_SDK_VERSION
+            / "Sdks"
+            / stage2.SDK_ID
+            / "Sdk"
+            / "Sdk.props"
+        )
+        self.assertTrue(injected_props.is_file())
+
+        malformed_archive = self.root / "malformed.tar.gz"
+        malformed_archive.write_bytes(b"not-a-valid-tar-archive")
+        malformed_digest = hashlib.sha256(malformed_archive.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(stage2.CertificationError, "invalid dotnet archive"):
+            stage2.extract_verified_dotnet_archive(
+                malformed_archive, self.root / "malformed-extract", {malformed_digest})
+        malformed_work = self.root / "malformed-work"
+        malformed_args = argparse.Namespace(**{
+            **vars(args),
+            "work": malformed_work,
+            "dotnet_archive": malformed_archive,
+            "dotnet_archive_sha256": [malformed_digest],
+        })
+        malformed_controller = stage2.Controller(malformed_args)
+        malformed_controller.preflight = lambda: (  # type: ignore[method-assign]
+            malformed_controller.reports.mkdir(parents=True, exist_ok=True),
+            malformed_controller.toolchains.mkdir(parents=True, exist_ok=True),
+            malformed_controller.resolve_installed_dotnet(),
+        )
+        self.assertEqual(2, malformed_controller.certify())
+        report = json.loads((malformed_controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["certified"])
+        self.assertIn("invalid dotnet archive", report["error"])
+
+    def test_freeze_migrated_tree_preserves_empty_directory_build_conditions(self) -> None:
+        migrated = self.root / "migrated"
+        (migrated / "gate" / "empty").mkdir(parents=True)
+        (migrated / "Probe.proj").write_text(
+            """<Project>
+  <Target Name="Build">
+    <WriteLinesToFile File="$(ProbeOutput)" Lines="present" Overwrite="true"
+                      Condition="Exists('gate/empty')" />
+    <WriteLinesToFile File="$(ProbeOutput)" Lines="absent" Overwrite="true"
+                      Condition="!Exists('gate/empty')" />
+  </Target>
+</Project>
+""", encoding="utf-8")
+
+        def build(tree: Path, output: Path) -> bytes:
+            result = subprocess.run(
+                ["dotnet", "msbuild", "Probe.proj", "-target:Build",
+                 f"-p:ProbeOutput={output}", "-nologo", "-verbosity:quiet", "-nr:false"],
+                cwd=tree, text=True, capture_output=True,
+                env={**os.environ, "MSBUILDDISABLENODEREUSE": "1",
+                     "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER": "1"})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            return output.read_bytes()
+
+        expected = b"present" + os.linesep.encode()
+        self.assertEqual(expected, build(migrated, self.root / "caller-output.txt"))
+        snapshot = self.root / "snapshot"
+        frozen = run_driver("--freeze-migrated-tree", migrated, snapshot)
+        self.assertEqual(0, frozen.returncode, frozen.stdout + frozen.stderr)
+        self.assertEqual(1, json.loads(frozen.stdout)["files"])
+        for stage in ("stage-1", "stage-2"):
+            with self.subTest(stage=stage):
+                tree = self.root / stage
+                stage2.clone_snapshot(snapshot, tree)
+                self.assertEqual(expected, build(tree, self.root / f"{stage}-output.txt"))
+
+    def test_empty_directory_changes_are_detected_in_caller_and_snapshot(self) -> None:
+        for boundary in ("caller", "snapshot"):
+            for mutation in ("add", "remove", "rename"):
+                with self.subTest(boundary=boundary, mutation=mutation):
+                    suffix = f"{boundary}-{mutation}"
+                    migrated = self.root / f"migrated-{suffix}"
+                    (migrated / "empty").mkdir(parents=True)
+                    (migrated / "App.gs").write_bytes(b"package app\n")
+                    snapshot = self.root / f"snapshot-{suffix}"
+                    manifest, original_identity = stage2.freeze_migrated_tree(migrated, snapshot)
+                    plan = self.root / f"manifest-{suffix}.json"
+                    plan.write_text(json.dumps(
+                        [dataclasses.asdict(row) for row in manifest]), encoding="utf-8")
+                    tree = migrated if boundary == "caller" else snapshot
+                    self.assertTrue((tree / "empty").is_dir())
+                    if boundary == "caller":
+                        stage2.verify_migrated_caller_unchanged(tree, original_identity)
+                    else:
+                        valid = run_driver("--verify-manifest", tree, plan)
+                        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+                    mode = tree.stat().st_mode & 0o777
+                    tree.chmod(mode | 0o200)
+                    try:
+                        if mutation == "add":
+                            (tree / "extra").mkdir()
+                        elif mutation == "remove":
+                            (tree / "empty").rmdir()
+                        else:
+                            (tree / "empty").rename(tree / "renamed")
+                    finally:
+                        tree.chmod(mode)
+                    if boundary == "caller":
+                        with self.assertRaisesRegex(
+                            stage2.CertificationError, "caller migrated tree changed",
+                        ):
+                            stage2.verify_migrated_caller_unchanged(tree, original_identity)
+                        changed = run_driver(
+                            "--freeze-migrated-tree", tree, self.root / f"changed-{suffix}")
+                        self.assertEqual(0, changed.returncode, changed.stdout + changed.stderr)
+                        self.assertNotEqual(
+                            original_identity["migratedTreeSha256"],
+                            json.loads(changed.stdout)["git"]["migratedTreeSha256"])
+                    else:
+                        rejected = run_driver("--verify-manifest", tree, plan)
+                        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
+                        self.assertIn("manifest", rejected.stderr)
+
+    def test_freeze_migrated_tree_preserves_modes_and_detects_post_freeze_mutations(self) -> None:
+        migrated = self.root / "migrated"
+        (migrated / "src").mkdir(parents=True)
+        (migrated / "src" / "App.gs").write_text("package app\n", encoding="utf-8")
+        script = migrated / "build.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+        snapshot = self.root / "snapshot"
+        manifest, identity = stage2.freeze_migrated_tree(migrated, snapshot)
+        self.assertEqual(
+            ["build.sh", "src/App.gs"],
+            [row.path for row in manifest if not isinstance(row, stage2.DirectoryIdentity)])
+        self.assertIn("migratedTreeSha256", identity)
+        self.assertEqual(0o555, (snapshot / "build.sh").stat().st_mode & 0o777)
+        stage2.verify_migrated_caller_unchanged(migrated, identity)
+        (migrated / "src" / "App.gs").write_text("package tampered\n", encoding="utf-8")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_migrated_caller_unchanged(migrated, identity)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are required")
+    def test_migrated_caller_chmod_is_not_hidden_by_snapshot_normalization(self) -> None:
+        for name, mode in (("App.gs", 0o640), ("build.sh", 0o750),
+                           ("empty", 0o750), (".", 0o775), ("empty", 0o1755)):
+            with self.subTest(path=name, mode=oct(mode)):
+                suffix = f"{name.replace('.', '_')}-{mode:o}"
+                migrated = self.root / f"migrated-{suffix}"
+                (migrated / "empty").mkdir(parents=True)
+                migrated.chmod(0o700)
+                (migrated / "empty").chmod(0o700)
+                source = migrated / "App.gs"
+                source.write_bytes(b"package app\n")
+                source.chmod(0o600)
+                script = migrated / "build.sh"
+                script.write_bytes(b"#!/bin/sh\n")
+                script.chmod(0o700)
+                original_bytes = (source.read_bytes(), script.read_bytes())
+                snapshot = self.root / f"snapshot-{suffix}"
+                manifest, identity = stage2.freeze_migrated_tree(migrated, snapshot)
+                stage2.verify_migrated_caller_unchanged(migrated, identity)
+                (migrated / name).chmod(mode)
+                self.assertEqual(original_bytes, (source.read_bytes(), script.read_bytes()))
+                with self.assertRaisesRegex(
+                    stage2.CertificationError, "caller migrated tree changed",
+                ):
+                    stage2.verify_migrated_caller_unchanged(migrated, identity)
+                stage2.verify_manifest(snapshot, manifest)
+                if name == ".":
+                    snapshot.chmod(0o755)
+                    with self.assertRaisesRegex(stage2.CertificationError, "manifest changed"):
+                        stage2.verify_manifest(snapshot, manifest)
+
+    def test_freeze_migrated_tree_rejects_overlapping_roots_without_changing_caller(self) -> None:
+        migrated = self.root / "migrated"
+        migrated.mkdir()
+        (migrated / "App.gs").write_text("package app\n", encoding="utf-8")
+        alias = self.root / "caller-alias"
+        alias.symlink_to(migrated, target_is_directory=True)
+        original = stage2.migrated_tree_manifest(migrated)
+        for snapshot in (migrated / "snapshot", migrated, self.root, alias / "snapshot"):
+            with self.subTest(snapshot=snapshot):
+                result = run_driver("--freeze-migrated-tree", migrated, snapshot)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("caller tree and source snapshot are not disjoint", result.stderr)
+                self.assertEqual(original, stage2.migrated_tree_manifest(migrated))
+                self.assertFalse((migrated / "snapshot").exists())
+
+
+class ArchiveCollisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = REPO / "build" / f".stage2-collision-test-{self.id().rsplit('.', 1)[-1]}"
+        remove_tree(self.root)
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def collisions(self, prefix: str) -> list[tuple[str, list[tuple[str, bytes]]]]:
+        leaf = f"{prefix}/a.dll"
+        return [
+            ("duplicate", [(leaf, b"first"), (leaf, b"last")]),
+            ("dot-alias", [(leaf, b"first"), (f"./{leaf}", b"last")]),
+            ("separator-alias", [(leaf, b"first"), (leaf.replace("/", "//"), b"last")]),
+            ("backslash-alias", [(leaf, b"first"), (leaf.replace("/", "\\"), b"last")]),
+            ("case-alias", [(leaf, b"first"), (f"{prefix}/A.dll", b"last")]),
+            ("parent-case-alias", [(leaf, b"first"), (f"{prefix.upper()}/b.dll", b"last")]),
+            ("unicode-alias", [(f"{prefix}/é.dll", b"first"),
+                               (f"{prefix}/e\u0301.dll", b"last")]),
+            ("parent-first", [(prefix, b"parent"), (leaf, b"child")]),
+            ("child-first", [(leaf, b"child"), (prefix, b"parent")]),
+            ("file-directory", [(leaf, b"file"), (leaf + "/", b"")]),
+            ("directory-file", [(leaf + "/", b""), (leaf, b"file")]),
+            ("duplicate-directory", [(prefix + "/", b""), (prefix + "/", b"")]),
+        ]
+
+    def write_zip(self, path: Path, rows: list[tuple[str, bytes]]) -> None:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(path, "w") as archive:
+                for name, data in rows:
+                    archive.writestr(name, data)
+
+    def test_zip_collisions_cannot_receive_payload_hash_or_resolution_approval(self) -> None:
+        resolved = self.root / "resolved"
+        for case, rows in self.collisions("Sdk/probe"):
+            with self.subTest(case=case):
+                package = self.root / f"{case}.nupkg"
+                self.write_zip(package, rows)
+                remove_tree(resolved)
+                resolved.mkdir()
+                # Match the old verifier's last-write-wins dictionary for aliases.
+                if case in ("duplicate", "dot-alias", "separator-alias", "case-alias",
+                            "unicode-alias", "backslash-alias"):
+                    for name, data in rows:
+                        target = resolved / Path(stage2.packer.entry_name(name))
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                for consumer, verify in (
+                    ("payload-hash", lambda: stage2.package_payload_hash(package)),
+                    ("resolved-payload", lambda: stage2.verify_resolved_sdk_payload(package, resolved)),
+                ):
+                    with self.subTest(consumer=consumer):
+                        with self.assertRaisesRegex(stage2.CertificationError, "colliding archive"):
+                            verify()
+
+    def test_package_driver_rejects_collisions_without_replacing_existing_cache(self) -> None:
+        for case, rows in self.collisions("lib/probe"):
+            with self.subTest(case=case):
+                source = self.root / case
+                source.mkdir()
+                package = source / "example.1.0.0.nupkg"
+                self.write_zip(package, rows)
+                (source / "example.1.0.0.nupkg.sha512").write_text(
+                    base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+                    encoding="utf-8")
+                destination = self.root / f"extracted-{case}"
+                destination.mkdir()
+                marker = destination / "keep.txt"
+                marker.write_bytes(b"existing cache")
+                result = run_driver("--verify-package-cache", source, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("colliding archive", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual([marker], list(destination.rglob("*")))
+                self.assertEqual(b"existing cache", marker.read_bytes())
+
+    def test_sdk_cache_and_resolution_reject_collisions(self) -> None:
+        installed = self.root / "installed"
+        for relative in stage2.TRUSTED_DOTNET_COMPONENTS:
+            path = installed / relative
+            if relative == Path("dotnet"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"dotnet")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "marker.txt").write_bytes(b"trusted")
+        (installed / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir()
+        for case, rows in self.collisions("Sdk/probe"):
+            for consumer in ("cache", "resolution"):
+                with self.subTest(case=case, consumer=consumer):
+                    workspace = self.root / f"{case}-{consumer}"
+                    workspace.mkdir()
+                    package = workspace / f"{stage2.SDK_ID}.0.5.600.nupkg"
+                    nuspec = (
+                        f"{stage2.SDK_ID}.nuspec",
+                        f"<package><metadata><version>0.5.600</version></metadata></package>".encode(),
+                    )
+                    self.write_zip(package, [nuspec, *rows])
+                    controller = object.__new__(stage2.Controller)
+                    controller.stage1 = workspace
+                    controller.writable = lambda *_: workspace / "packages"
+                    controller.offline_feed = lambda *_: workspace / "feed"
+                    controller.write_offline_config = lambda *_: None
+                    controller.resolve_installed_dotnet = lambda: installed / "dotnet"
+                    controller.stage_dotnet = lambda *_: workspace / "toolchain" / "dotnet"
+                    controller.stage_toolchain = lambda *_: workspace / "toolchain"
+                    controller.toolchain_manifests = {}
+                    controller.evidence = workspace / "evidence"
+                    controller.evidence.mkdir()
+                    seed = (controller.seed_sdk_cache if consumer == "cache"
+                            else controller.seed_sdk_resolution)
+                    with self.assertRaisesRegex(stage2.CertificationError, "colliding archive"):
+                        seed("stage-1", package)
+                    if consumer == "cache":
+                        self.assertFalse((workspace / "packages").exists())
+                    else:
+                        self.assertFalse(
+                            (workspace / "toolchain" / "dotnet" / "sdk"
+                             / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / stage2.SDK_ID).exists())
+
+    def test_dotnet_driver_rejects_collisions_before_extracting_any_member(self) -> None:
+        prefix = f"sdk/{stage2.TRUSTED_DOTNET_SDK_VERSION}/Sdks/probe"
+        ordinary = [
+            ("dotnet", b"#!/bin/sh\nexit 0\n"), ("host/fxr.dll", b"host"),
+            ("shared/core.dll", b"shared"), ("packs/ref.dll", b"packs"),
+            (f"sdk/{stage2.TRUSTED_DOTNET_SDK_VERSION}/Sdks/marker.txt", b"sdk"),
+        ]
+        for case, rows in self.collisions(prefix):
+            with self.subTest(case=case):
+                package = self.root / f"{case}.tar.gz"
+                with tarfile.open(package, "w:gz") as archive:
+                    for name, data in ordinary + rows:
+                        member = tarfile.TarInfo(name)
+                        member.mode = 0o755 if name == "dotnet" else 0o644
+                        if name.endswith("/"):
+                            member.type = tarfile.DIRTYPE
+                        else:
+                            member.size = len(data)
+                        archive.addfile(member, io.BytesIO(data))
+                destination = self.root / f"extracted-{case}"
+                digest = hashlib.sha256(package.read_bytes()).hexdigest()
+                result = run_driver("--verify-dotnet-archive", package, digest, destination)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("colliding archive", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse(destination.exists())
+
+    def test_valid_zip_parent_markers_and_single_normalized_paths_preserve_bytes(self) -> None:
+        source = self.root / "source"
+        source.mkdir()
+        package = source / "example.1.0.0.nupkg"
+        rows = [
+            ("./lib//probe/a.dll", b"accepted"),
+            ("lib/probe/", b""), ("lib/", b""), ("./", b""),
+        ]
+        self.write_zip(package, rows)
+        (source / "example.1.0.0.nupkg.sha512").write_text(
+            base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+            encoding="utf-8")
+        destination = self.root / "extracted"
+        result = run_driver("--verify-package-cache", source, destination)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b"accepted", (destination / "lib/probe/a.dll").read_bytes())
+        digest = hashlib.sha256()
+        name, data = rows[0]
+        encoded = name.encode()
+        digest.update(len(encoded).to_bytes(4, "little"))
+        digest.update(encoded)
+        digest.update(len(data).to_bytes(8, "little"))
+        digest.update(hashlib.sha256(data).digest())
+        self.assertEqual(digest.hexdigest(), stage2.package_payload_hash(package))
+
+
+class ArchiveFailureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = REPO / "build" / f".stage2-archive-test-{self.id().rsplit('.', 1)[-1]}"
+        remove_tree(self.root)
+        self.root.mkdir()
+        payload = b"".join(hashlib.sha256(index.to_bytes(4, "little")).digest()
+                           for index in range(4096))
+        tar_path = self.root / "truncated.tar.gz"
+        with tarfile.open(tar_path, "w:gz") as archive:
+            member = tarfile.TarInfo("dotnet")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        data = tar_path.read_bytes()
+        tar_path.write_bytes(data[:len(data) // 2])
+        zip_path = self.root / "corrupt.nupkg"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("Sdk/Sdk.props", payload)
+        data = bytearray(zip_path.read_bytes())
+        name_length, extra_length = struct.unpack_from("<HH", data, 26)
+        offset = 30 + name_length + extra_length
+        data[offset] = (data[offset] & ~0x06) | 0x06
+        zip_path.write_bytes(data)
+        truncated_zip = self.root / "truncated.nupkg"
+        truncated_zip.write_bytes(data[:-30])
+        self.archives = [("gzip-eof", tar_path), ("zip-deflate", zip_path),
+                         ("zip-truncated", truncated_zip)]
+        malformed = ["zip-encrypted", "zip-compression", "zip-utf8", "zip-lzma"]
+        if getattr(zipfile, "zstd", None) is not None:
+            malformed.append("zip-zstd")
+        for name in malformed:
+            package = self.root / f"{name}.nupkg"
+            compression = (zipfile.ZIP_LZMA if name == "zip-lzma"
+                           else zipfile.ZIP_ZSTANDARD if name == "zip-zstd"
+                           else zipfile.ZIP_STORED)
+            with zipfile.ZipFile(package, "w", compression=compression) as archive:
+                archive.writestr("Sdk/Sdk.props", payload)
+            data = bytearray(package.read_bytes())
+            central = data.rindex(b"PK\x01\x02")
+            if name == "zip-encrypted":
+                for offset in (6, central + 8):
+                    struct.pack_into("<H", data, offset,
+                                     struct.unpack_from("<H", data, offset)[0] | 1)
+            elif name == "zip-compression":
+                for offset in (8, central + 10):
+                    struct.pack_into("<H", data, offset, 99)
+            elif name == "zip-utf8":
+                for offset in (6, central + 8):
+                    struct.pack_into("<H", data, offset,
+                                     struct.unpack_from("<H", data, offset)[0] | 0x800)
+                data[30] = data[central + 46] = 0xff
+            elif name == "zip-lzma":
+                name_length, extra_length = struct.unpack_from("<HH", data, 26)
+                data[30 + name_length + extra_length + 4] = 0xff
+            else:
+                name_length, extra_length = struct.unpack_from("<HH", data, 26)
+                data[30 + name_length + extra_length] = 0xff
+            package.write_bytes(data)
+            self.archives.append((name, package))
+        if os.name != "nt" and os.geteuid() != 0:
+            denied = self.root / "denied.tar.gz"
+            denied.write_bytes(b"cannot read")
+            denied.chmod(0)
+            self.archives.append(("io-denied", denied))
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_archive_driver_errors_are_controlled(self) -> None:
+        for name, archive in self.archives:
+            with self.subTest(archive=name):
+                if archive.suffix == ".gz":
+                    digest = (hashlib.sha256(archive.read_bytes()).hexdigest()
+                              if name != "io-denied" else "0" * 64)
+                    result = run_driver(
+                        "--verify-dotnet-archive", archive, digest, self.root / f"extract-{name}")
+                else:
+                    cache = self.root / f"cache-{name}"
+                    cache.mkdir()
+                    package = cache / "example.1.0.0.nupkg"
+                    shutil.copy2(archive, package)
+                    (cache / "example.1.0.0.nupkg.sha512").write_text(
+                        base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+                        encoding="utf-8")
+                    result = run_driver(
+                        "--verify-package-cache", cache, self.root / f"extract-{name}")
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("selfhost-stage2:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_archive_errors_write_certification_failure_reports(self) -> None:
+        import argparse
+
+        for name, archive in self.archives:
+            with self.subTest(archive=name):
+                caller = self.root / f"caller-{name}"
+                caller.mkdir()
+                args = argparse.Namespace(
+                    tree=caller, migrated_tree=None, bootstrap=archive,
+                    package_cache=self.root / "cache", work=self.root / f"work-{name}",
+                    dotnet_archive=archive if archive.suffix == ".gz" else None,
+                    dotnet_archive_sha256=[hashlib.sha256(archive.read_bytes()).hexdigest()]
+                    if name != "io-denied" else ["0" * 64],
+                    config="Release", project=None, assembly=None, test=[],
+                    test_adapter_sha256=[])
+                controller = stage2.Controller(args)
+
+                def preflight() -> None:
+                    controller.reports.mkdir(parents=True)
+                    if archive.suffix == ".gz":
+                        controller.resolve_installed_dotnet()
+                    else:
+                        stage2.package_payload_hash(archive)
+
+                controller.preflight = preflight
+                self.assertEqual(2, controller.certify())
+                report = json.loads(
+                    (controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+                self.assertFalse(report["certified"])
+                self.assertTrue(report["error"])
+
+    def test_package_readers_convert_archive_errors_to_certification_errors(self) -> None:
+        for name, package in self.archives:
+            if package.suffix != ".nupkg":
+                continue
+            for consumer in ("digest", "resolved", "cache"):
+                with self.subTest(archive=name, consumer=consumer):
+                    destination = self.root / f"direct-{name}-{consumer}"
+                    with self.assertRaises(stage2.CertificationError):
+                        if consumer == "digest":
+                            stage2.package_payload_hash(package)
+                        elif consumer == "resolved":
+                            stage2.verify_resolved_sdk_payload(package, destination)
+                        else:
+                            source = self.root / f"source-{name}"
+                            source.mkdir()
+                            staged = source / "example.1.0.0.nupkg"
+                            shutil.copy2(package, staged)
+                            (source / "example.1.0.0.nupkg.sha512").write_text(
+                                base64.b64encode(hashlib.sha512(staged.read_bytes()).digest()).decode(),
+                                encoding="utf-8")
+                            stage2.extract_verified_package(source, destination)
+
+    def test_invalid_package_hash_encoding_is_controlled_and_reported(self) -> None:
+        import argparse
+
+        source = self.root / "invalid-hash-cache"
+        source.mkdir()
+        package = source / "example.1.0.0.nupkg"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("Sdk/Sdk.props", b"accepted")
+        (source / "example.1.0.0.nupkg.sha512").write_bytes(b"\xff")
+        result = run_driver("--verify-package-cache", source, self.root / "invalid-hash-cli")
+        with self.subTest(consumer="driver"):
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+            self.assertIn("selfhost-stage2:", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        caller = self.root / "invalid-hash-caller"
+        caller.mkdir()
+        controller = stage2.Controller(argparse.Namespace(
+            tree=caller, migrated_tree=None, bootstrap=package, package_cache=source,
+            work=self.root / "invalid-hash-work", dotnet_archive=None,
+            dotnet_archive_sha256=[], config="Release", project=None, assembly=None,
+            test=[], test_adapter_sha256=[]))
+
+        def preflight() -> None:
+            controller.reports.mkdir(parents=True)
+            stage2.extract_verified_package(source, self.root / "invalid-hash-direct")
+
+        controller.preflight = preflight
+        with self.subTest(consumer="controller"):
+            self.assertEqual(2, controller.certify())
+            report = json.loads((controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+            self.assertFalse(report["certified"])
+            self.assertTrue(report["error"])
 
 
 class PostSetupMutationTests(unittest.TestCase):

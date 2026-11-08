@@ -119,7 +119,8 @@ class Issue5402SourceVersionTests : IDisposable {
         let mirror = Path.Combine(host, "mirror")
         let artifacts = Path.Combine(this.root, "runs")
         let repo = GsharpTestProjectRunner.FindRepoRoot()!!
-        let compiler = Path.Combine(repo, "out", "bin", "Release", "Compiler", "gsc.dll")
+        let buildRoot = GsharpTestProjectRunner.FindAssemblyRepoRoot() ?? repo
+        let compiler = Path.Combine(buildRoot, "out", "bin", "Release", "Compiler", "gsc.dll")
         Assert.True(File.Exists(compiler), "Build the compiler before this driver test.")
         Assert.NotNull(GsharpTestProjectRunner.ResolveLocalSdkPackage(repo))
         let sourceIndex = Path.Combine(checkout, ".git", "index")

@@ -41,14 +41,6 @@ internal shared class ReaderAgreementAllowlist {
             Reason: "MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs maps the open return with " +
                 "MapOpenClrTypeToSymbolic and applies no declaration-nullability merge (PR #4362 round 3, " +
                 "b0c76053d, deferred it). ADR-0193 Phase 4 closes it."
-        ),
-        ReaderAgreementAllowlist.Entry(
-            Readers: ImmutableArray.Create("direct", "projection"),
-            Tag: "system-tuple",
-            Issue: "https://github.com/DavidObando/gsharp/issues/4401",
-            Reason: "FromClrType maps the reference type System.Tuple<...> onto a (value) TupleTypeSymbol " +
-                "(#1922); the symbolic projection keeps it an ImportedTypeSymbol reference. Only the CLR " +
-                "readers' side of the split is excused, so the symbolic readers must still agree."
         )
     )
 
