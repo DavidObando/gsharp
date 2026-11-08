@@ -2216,7 +2216,11 @@ internal partial class MethodBodyEmitter {
             node.FixedBufferEscapeSyntax != nil &&
             node.Operand is BoundFieldAccessExpression{Field: {IsFixedBuffer: true}} buffer &&
             !StatementBinder
-            .IsFixedVariable(buffer, this.IsHeapPromotedFixedBufferVariable) {
+            .IsFixedVariable(
+            buffer,
+            this.IsHeapPromotedFixedBufferVariable,
+            allowTemporaryValues: this.asyncFieldMap == nil && this.iteratorEmitCtx == nil
+        ) {
             EmitDiagnosticException.ThrowDiagnostic(
                 node.FixedBufferEscapeSyntax,
                 DiagnosticDescriptors.MovableFixedBufferRequiresFixed,

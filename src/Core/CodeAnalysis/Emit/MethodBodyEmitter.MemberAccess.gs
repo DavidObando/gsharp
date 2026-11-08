@@ -26,13 +26,8 @@ import System.Reflection.Metadata.Ecma335
 /// See `MethodBodyEmitter.cs` for the root partial (fields, constructor,
 /// statement/expression dispatch, and small shared helpers).
 internal partial class MethodBodyEmitter {
-    private func IsHeapPromotedFixedBufferVariable(variable VariableSymbol) bool -> (
-        this.asyncFieldMap != nil && this.asyncFieldMap.TryGetHoistedField(variable, out _)
-    ) ||
-        this
-        .iteratorEmitCtx
-        ?.FieldMap
-        .ContainsKey(variable) == true ||
+    private func IsHeapPromotedFixedBufferVariable(variable VariableSymbol) bool -> this.asyncFieldMap != nil ||
+        this.iteratorEmitCtx != nil ||
         this
         .enclosingClosure
         ?.CaptureFields

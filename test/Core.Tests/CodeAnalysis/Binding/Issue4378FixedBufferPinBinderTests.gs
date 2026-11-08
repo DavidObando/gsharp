@@ -31,12 +31,16 @@ open class Issue4378FixedBufferPinBinderTests {
     @InlineData("return int32((h.B.Name)[await NextIndex()])")
     @InlineData("return int32(h.B.Name[await NextIndex()])")
     @InlineData("return int32((b.Name)[await NextIndex()])")
+    @InlineData("return int32((MakeBone().Name)[await NextIndex()])")
+    @InlineData("return int32(((b, 0).Item1.Name)[await NextIndex()])")
+    @InlineData("let p *int8 = MakeBone().Name\n    await System.Threading.Tasks.Task.Yield()\n    return int32(p[0])")
     @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
     @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
     @InlineData("h.B.Name[await NextIndex()] += int8(1)\n    return 0")
     @InlineData("h.B.Name[0] += await NextByte()\n    return 0")
     func AwaitingIndexBufferPointer_ReportsGS0638(statement string) {
-        let source = Prelude + `async func NextIndex() int32 {
+        let source = Prelude + `func MakeBone() Bone -> Bone{}
+async func NextIndex() int32 {
     await System.Threading.Tasks.Task.Yield()
     return 0
 }

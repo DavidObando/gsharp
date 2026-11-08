@@ -3393,7 +3393,8 @@ internal partial class StatementBinder {
         // not recognised is treated as movable. Emission supplies the actual promoted-variable storage map.
         internal func IsFixedVariable(
             expression BoundExpression?,
-            isHeapPromoted((VariableSymbol) -> bool)? = nil
+            isHeapPromoted((VariableSymbol) -> bool)? = nil,
+            allowTemporaryValues bool = true
         ) bool -> switch expression {
             case boundVariableExpression is BoundVariableExpression when boundVariableExpression.Variable is ParameterSymbol &&
                 boundVariableExpression
@@ -3406,19 +3407,25 @@ internal partial class StatementBinder {
                 isHeapPromoted?.Invoke(local) != true && HasUnboxedValueStorage(variable)
             case BoundFieldAccessExpression{Receiver: {} receiver} when HasUnboxedValueStorage(
                 receiver
-            ): IsFixedVariable(receiver, isHeapPromoted)
+            ): IsFixedVariable(receiver, isHeapPromoted, allowTemporaryValues)
             case BoundClrPropertyAccessExpression{
                 Member: FieldInfo field,
                 Receiver: {} receiver
             } when !field.IsStatic &&
-                HasUnboxedValueStorage(receiver): IsFixedVariable(receiver, isHeapPromoted)
+                HasUnboxedValueStorage(receiver): IsFixedVariable(receiver, isHeapPromoted, allowTemporaryValues)
             case tuple is BoundTupleElementAccessExpression: HasUnboxedValueStorage(tuple.Receiver) &&
-                IsFixedVariable(tuple.Receiver, isHeapPromoted)
-            case block is BoundBlockExpression: IsFixedVariable(block.Expression, isHeapPromoted)
-            case conditional is BoundConditionalExpression: IsFixedVariable(conditional.WhenTrue, isHeapPromoted) &&
-                IsFixedVariable(conditional.WhenFalse, isHeapPromoted)
+                IsFixedVariable(tuple.Receiver, isHeapPromoted, allowTemporaryValues)
+            case block is BoundBlockExpression: IsFixedVariable(block.Expression, isHeapPromoted, allowTemporaryValues)
+            case conditional is BoundConditionalExpression: IsFixedVariable(
+                conditional.WhenTrue,
+                isHeapPromoted,
+                allowTemporaryValues
+            ) &&
+                IsFixedVariable(conditional.WhenFalse, isHeapPromoted, allowTemporaryValues)
             case dereference is BoundDereferenceExpression: dereference.Operand.Type is PointerTypeSymbol
-            case {} value when HasUnboxedValueStorage(value) && !ExpressionBinder.IsLvalue(value): true
+            case {} value when allowTemporaryValues && HasUnboxedValueStorage(value) && !ExpressionBinder.IsLvalue(
+                value
+            ): true
             default: false
         }
 
