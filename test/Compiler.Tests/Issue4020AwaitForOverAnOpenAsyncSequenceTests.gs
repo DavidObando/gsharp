@@ -179,7 +179,7 @@ main2()`
         func AcceptedCases() sequence[[]object] {
             // The issue's own repro, with the closed spelling beside the open one
             // so a disagreement between them is visible in the output.
-            yield[]object{"an-open-async-sequence-parameter-iterates-like-the-closed-one", `package P
+            yield []object{"an-open-async-sequence-parameter-iterates-like-the-closed-one", `package P
 import System
 
 async func numbers() async sequence[int32] {
@@ -215,7 +215,7 @@ run().Wait()`, []string{"6", "123"}}
             // A same-compilation class element: the OTHER way an async sequence
             // loses its ClrType, and the one that proves the loop variable keeps
             // the member-bearing symbol rather than the erased `object`.
-            yield[]object{"an-async-sequence-over-a-same-compilation-class-reads-its-members", `package P
+            yield []object{"an-async-sequence-over-a-same-compilation-class-reads-its-members", `package P
 import System
 
 class Item {
@@ -247,7 +247,7 @@ async func run() {
 run().Wait()`, []string{"one;two;"}}
             // `break` and `continue` inside the loop (issue #937's labels) must
             // resolve against the newly-reachable lowering too.
-            yield[]object{"break-and-continue-inside-an-open-async-sequence-loop", `package P
+            yield []object{"break-and-continue-inside-an-open-async-sequence-loop", `package P
 import System
 
 async func numbers() async sequence[int32] {
@@ -294,7 +294,7 @@ run().Wait()`, []string{"13"}}
             // boxed), an imported CLASS element, and a constructed imported
             // GENERIC element — each reading a member off the loop variable so an
             // `object`-typed element would not compile.
-            yield[]object{"an-async-sequence-over-an-imported-struct-element", `package P
+            yield []object{"an-async-sequence-over-an-imported-struct-element", `package P
 import System
 
 async func stamps() async sequence[DateTime] {
@@ -316,7 +316,7 @@ async func run() {
 }
 
 run().Wait()`, []string{"3940"}}
-            yield[]object{"an-async-sequence-over-a-constructed-imported-generic-element", `package P
+            yield []object{"an-async-sequence-over-a-constructed-imported-generic-element", `package P
 import System
 import System.Collections.Generic
 
@@ -339,7 +339,7 @@ async func run() {
 }
 
 run().Wait()`, []string{"2"}}
-            yield[]object{"an-async-sequence-over-an-imported-class-element", `package P
+            yield []object{"an-async-sequence-over-an-imported-class-element", `package P
 import System
 import System.Text
 
@@ -370,7 +370,7 @@ run().Wait()`, []string{"3"}}
         /// the synchronous sibling the issue measured as unaffected.
         /// @returns Name, G# source, expected stdout lines.
         func ControlCases() sequence[[]object] {
-            yield[]object{"control-the-open-iasyncenumerable-workaround-and-the-sync-sibling", `package P
+            yield []object{"control-the-open-iasyncenumerable-workaround-and-the-sync-sibling", `package P
 import System
 import System.Collections.Generic
 
@@ -411,7 +411,7 @@ async func run() {
 run().Wait()`, []string{"3", "78"}}
             // The issue's "otherwise well-formed" rows: an open async sequence
             // still passes as an argument to both spellings of the parameter.
-            yield[]object{"control-an-async-sequence-still-crosses-both-parameter-spellings", `package P
+            yield []object{"control-an-async-sequence-still-crosses-both-parameter-spellings", `package P
 import System
 import System.Collections.Generic
 
@@ -436,7 +436,7 @@ main2()`, []string{"1", "3"}}
         /// not an async enumerable — a synchronous `sequence[T]` above all.
         /// @returns Name, G# source, the diagnostic id and a substring of its text.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"await-for-over-a-non-enumerable-is-still-refused", `package P
+            yield []object{"await-for-over-a-non-enumerable-is-still-refused", `package P
 import System
 
 async func run() {
@@ -446,7 +446,7 @@ async func run() {
 }
 
 run().Wait()`, "GS0134", "'int32'"}
-            yield[]object{"await-for-over-a-synchronous-open-sequence-is-still-refused", `package P
+            yield []object{"await-for-over-a-synchronous-open-sequence-is-still-refused", `package P
 import System
 
 func numbers() sequence[int32] {

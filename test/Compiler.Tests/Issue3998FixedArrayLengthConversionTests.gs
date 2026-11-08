@@ -194,7 +194,7 @@ public static class ArrayProbes
         func RejectedCases() sequence[[]object] {
             // Sub-case 1, the core of the issue: two declared lengths are two
             // types. Nothing here involves reflection, erasure, or a generic.
-            yield[]object{"a-shorter-fixed-array-does-not-fill-a-longer-slot", `package P
+            yield []object{"a-shorter-fixed-array-does-not-fill-a-longer-slot", `package P
 import System
 
 func main2() {
@@ -207,7 +207,7 @@ main2()`, "Cannot convert type '[3]int32' to '[4]int32'"}
             // The same rule at a G#-DECLARED parameter. This is the row #4002's
             // hand-off named: it owes nothing to reflection, so it is the honest
             // statement of the bare rule.
-            yield[]object{"a-declared-fixed-array-parameter-rejects-another-length", `package P
+            yield []object{"a-declared-fixed-array-parameter-rejects-another-length", `package P
 import System
 
 func take3(a [3]int32) int32 {
@@ -220,7 +220,7 @@ func main2() {
 
 main2()`, "requires a value of type '[3]int32' but was given a value of type '[4]int32'"}
             // The return position takes the same rule as assignment.
-            yield[]object{"a-fixed-array-return-rejects-another-length", `package P
+            yield []object{"a-fixed-array-return-rejects-another-length", `package P
 import System
 
 func returns3() [3]int32 {
@@ -234,7 +234,7 @@ func main2() {
 main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
             // Sub-case 2 (bare half): a slice's length is unknown, so it cannot
             // silently satisfy a slot that declares one.
-            yield[]object{"a-slice-does-not-implicitly-narrow-to-a-fixed-length", `package P
+            yield []object{"a-slice-does-not-implicitly-narrow-to-a-fixed-length", `package P
 import System
 
 func main2() {
@@ -250,7 +250,7 @@ main2()`, "Cannot convert type '[]int32' to '[3]int32'"}
             // length)` from the WRITTEN length, never from the target) and then
             // takes sub-case 1's conversion. It was accepted with `lit.Length`
             // reporting 2 under a type that said 3.
-            yield[]object{"a-literal-of-the-wrong-length-does-not-fill-a-declared-slot", `package P
+            yield []object{"a-literal-of-the-wrong-length-does-not-fill-a-declared-slot", `package P
 import System
 
 func main2() {
@@ -261,7 +261,7 @@ func main2() {
 main2()`, "Cannot convert type '[2]int32' to '[3]int32'"}
             // The same literal mismatch through a struct field initializer, so
             // the rule is a property of the conversion and not of `var`.
-            yield[]object{"a-fixed-array-field-rejects-a-literal-of-another-length", `package P
+            yield []object{"a-fixed-array-field-rejects-a-literal-of-another-length", `package P
 import System
 
 struct Holder {
@@ -276,7 +276,7 @@ func main2() {
 main2()`, "Cannot convert type '[2]int32' to '[3]int32'"}
             // A same-compilation element type reaches the symbolic arm (#1162)
             // rather than the CLR-backed one, and takes the same rule.
-            yield[]object{"a-slice-of-a-same-compilation-element-does-not-narrow", `package P
+            yield []object{"a-slice-of-a-same-compilation-element-does-not-narrow", `package P
 import System
 
 struct Foo {
@@ -301,7 +301,7 @@ main2()`, "Cannot convert type '[]Foo' to '[2]Foo'"}
             // `the-explicit-cast-covers-symbolic-and-covariant-elements-too`
             // case below is the other half of this pair; both were red before
             // the fix, for opposite reasons.
-            yield[]object{"a-covariant-element-is-explicit-only-not-implicit", `package P
+            yield []object{"a-covariant-element-is-explicit-only-not-implicit", `package P
 import System
 
 open class Base {
@@ -317,7 +317,7 @@ func main2() {
 }
 
 main2()`, "Cannot convert type '[2]Derived' to '[]Base'. An explicit conversion exists"}
-            yield[]object{"a-covariant-element-is-explicit-only-at-a-matching-length", `package P
+            yield []object{"a-covariant-element-is-explicit-only-at-a-matching-length", `package P
 import System
 
 open class Base {
@@ -337,7 +337,7 @@ main2()`, "Cannot convert type '[2]Derived' to '[2]Base'. An explicit conversion
             // back in: `[3]?int32` is a nullable REFERENCE to a length-3 array,
             // and nullable lifting peels the annotation before classification, so
             // the slice still meets the same rule.
-            yield[]object{"a-nullable-fixed-array-target-does-not-accept-a-slice", `package P
+            yield []object{"a-nullable-fixed-array-target-does-not-accept-a-slice", `package P
 import System
 
 func main2() {
@@ -359,7 +359,7 @@ main2()`, "Cannot convert type '[]int32' to '[3]?int32'"}
             // and it is the same class of bug the PR exists to remove, one level
             // down. The gate now uses `IsCrossContextIdenticalElement`, which
             // compares user types by `Definition`.
-            yield[]object{"a-homonym-element-is-not-the-same-element-at-a-matching-length", `package P
+            yield []object{"a-homonym-element-is-not-the-same-element-at-a-matching-length", `package P
 import System
 
 struct A {
@@ -381,7 +381,7 @@ func main2() {
 }
 
 main2()`, "Cannot convert type '[1]A.Item' to '[1]B.Item'"}
-            yield[]object{"a-homonym-element-does-not-widen-to-another-containers-slice", `package P
+            yield []object{"a-homonym-element-does-not-widen-to-another-containers-slice", `package P
 import System
 
 struct A {
@@ -403,7 +403,7 @@ func main2() {
 }
 
 main2()`, "Cannot convert type '[1]A.Item' to '[]B.Item'"}
-            yield[]object{"a-homonym-element-does-not-satisfy-a-declared-parameter", `package P
+            yield []object{"a-homonym-element-does-not-satisfy-a-declared-parameter", `package P
 import System
 
 struct A {
@@ -440,7 +440,7 @@ main2()`, "requires a value of type '[1]B.Item' but was given a value of type '[
             // the rule is stated as widening rather than as "the shapes must
             // match": rejecting it would strand every fixed array in front of
             // every `[]T` parameter with no escape but a cast.
-            yield[]object{"a-fixed-array-still-widens-to-a-slice", `package P
+            yield []object{"a-fixed-array-still-widens-to-a-slice", `package P
 import System
 
 func takesSlice(s []int32) int32 {
@@ -466,7 +466,7 @@ main2()`, []string{"3", "3", "3"}}
             // existed only for an element with a CLR type, so `[2]Foo -> []Foo`
             // reported GS0154/GS0156 while `[2]int32 -> []int32` was implicit.
             // The new arm compares elements symbolically and closes that too.
-            yield[]object{"a-fixed-array-of-a-same-compilation-element-still-widens", `package P
+            yield []object{"a-fixed-array-of-a-same-compilation-element-still-widens", `package P
 import System
 
 struct Foo {
@@ -488,7 +488,7 @@ main2()`, []string{"2", "2"}}
             // The rest of a fixed array's conversion surface is element-based,
             // not shape-based, and the new guard must not intercept any of it:
             // `System.Array`, the array interfaces, `object`, and `for … in`.
-            yield[]object{"the-surrounding-array-surface-is-untouched", `package P
+            yield []object{"the-surrounding-array-surface-is-untouched", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -521,7 +521,7 @@ func main2() {
 main2()`, []string{"3", "3", "Int32[]", "6"}}
             // A matching length is still one type, in both spellings, and a
             // generic over a fixed array still round-trips through its members.
-            yield[]object{"a-matching-length-is-still-one-type", `package P
+            yield []object{"a-matching-length-is-still-one-type", `package P
 import System
 import System.Collections.Generic
 
@@ -544,7 +544,7 @@ main2()`, []string{"3", "9", "3"}}
             // GS0156 promises a cast, so the cast has to exist and verify. It
             // reinterprets rather than converts: the value keeps its own length,
             // which is exactly why the IMPLICIT conversion is the thing withdrawn.
-            yield[]object{"the-explicit-cast-escape-hatch-still-works-both-ways", `package P
+            yield []object{"the-explicit-cast-escape-hatch-still-works-both-ways", `package P
 import System
 
 func main2() {
@@ -561,7 +561,7 @@ main2()`, []string{"3", "3"}}
             // The cast promise has to hold for the symbolic (null-`ClrType`)
             // element and for the covariant element too, or the spec sentence
             // overclaims for exactly the cases the new arm added.
-            yield[]object{"the-explicit-cast-covers-symbolic-and-covariant-elements-too", `package P
+            yield []object{"the-explicit-cast-covers-symbolic-and-covariant-elements-too", `package P
 import System
 
 open class Base {
@@ -593,7 +593,7 @@ main2()`, []string{"2", "2", "2"}}
             // the emitter had no arm either and raised `GS9998`. Both halves are
             // fixed, and the row asserts the point of the cast — it reinterprets
             // and does not change the value, so `.Length` is still 3.
-            yield[]object{"the-explicit-cast-works-for-a-same-compilation-element-across-lengths", `package P
+            yield []object{"the-explicit-cast-works-for-a-same-compilation-element-across-lengths", `package P
 import System
 
 struct Foo {
@@ -613,7 +613,7 @@ func main2() {
 main2()`, []string{"3", "3", "9"}}
             // Slices are not collateral damage: slice-to-slice, slice literals,
             // and the growable `List[T]` shape are all unaffected.
-            yield[]object{"ordinary-slice-conversions-are-unaffected", `package P
+            yield []object{"ordinary-slice-conversions-are-unaffected", `package P
 import System
 import System.Collections.Generic
 
@@ -666,7 +666,7 @@ main2()`, []string{"2", "2", "2", "2"}}
         /// side.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue4024Cases() sequence[[]object] {
-            yield[]object{"a-slice-type-argument-no-longer-reaches-a-fixed-array-generic", `package P
+            yield []object{"a-slice-type-argument-no-longer-reaches-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 
@@ -694,7 +694,7 @@ main2()`, "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'Sy
         /// correct; the deciding gate is a different one.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue4012Cases() sequence[[]object] {
-            yield[]object{"a-generic-members-parameter-follows-the-projected-array", `package P
+            yield []object{"a-generic-members-parameter-follows-the-projected-array", `package P
 import System
 import System.Collections.Generic
 
@@ -710,7 +710,7 @@ main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
             // would accept anything at all, so the row above is not proof on its
             // own. `Stack[T].Push(T)` has no such sibling: this is the member
             // projection by itself.
-            yield[]object{"a-member-with-no-object-overload-rejects-another-length", `package P
+            yield []object{"a-member-with-no-object-overload-rejects-another-length", `package P
 import System
 import System.Collections.Generic
 
@@ -728,7 +728,7 @@ main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
         /// keeps converting in both directions.
         /// @returns Name, G# source, expected stdout lines.
         func InteropCases() sequence[[]object] {
-            yield[]object{"interop-a-fixed-array-still-reaches-a-clr-array-parameter", `package P
+            yield []object{"interop-a-fixed-array-still-reaches-a-clr-array-parameter", `package P
 import System
 import Interop
 
@@ -738,7 +738,7 @@ func main2() {
 }
 
 main2()`, []string{"3", "5"}}
-            yield[]object{"interop-a-clr-array-return-still-fills-a-fixed-array-slot", `package P
+            yield []object{"interop-a-clr-array-return-still-fills-a-fixed-array-slot", `package P
 import System
 import Interop
 

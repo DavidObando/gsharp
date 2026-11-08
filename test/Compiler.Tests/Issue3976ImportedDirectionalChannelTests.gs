@@ -213,7 +213,7 @@ public func sendStr(w out chan[string], v string) int32 {
             // whose static type is the runtime class (errata 3), so before the fix
             // NEITHER operand was a type clause and overload resolution found no
             // candidate at all.
-            yield[]object{"directional-methods-on-an-imported-class", `package P
+            yield []object{"directional-methods-on-an-imported-class", `package P
 import System
 import Lib
 
@@ -233,7 +233,7 @@ Console.WriteLine(run())`, []string{"3"}}
             // Free functions, and the round trip a library exposing a channel needs:
             // a `chan[T]` RETURN comes back as `Channel<T>`, and passing it to a
             // directional parameter is the conversion that was missing.
-            yield[]object{"a-channel-returned-by-a-library-flows-into-its-directional-functions", `package P
+            yield []object{"a-channel-returned-by-a-library-flows-into-its-directional-functions", `package P
 import System
 import Lib
 
@@ -255,7 +255,7 @@ Console.WriteLine(run())`, []string{"6"}}
             // source `?`: `TryGetChannelShape` looks through both wrapper kinds,
             // which is why the emitter arm now asks IT rather than pattern-matching
             // a `NullableTypeSymbol` over a `ChannelTypeSymbol`.
-            yield[]object{"nullable-directional-fields-on-an-imported-struct", `package P
+            yield []object{"nullable-directional-fields-on-an-imported-struct", `package P
 import System
 import Lib
 
@@ -278,7 +278,7 @@ Console.WriteLine(run())`, []string{"42"}}
             // A directional handle the LIBRARY produced, narrowed no further: the
             // same-direction arm over two imported spellings, which used to reach
             // the emitter's unsupported-conversion throw rather than a no-op.
-            yield[]object{"an-imported-directional-handle-passes-straight-through", `package P
+            yield []object{"an-imported-directional-handle-passes-straight-through", `package P
 import System
 import Lib
 
@@ -299,7 +299,7 @@ Console.WriteLine(run())`, []string{"5"}}
             // BIDIRECTIONAL imported parameter is `Channel<T>`, and the runtime's
             // `Chan<T>` derives from it, so an ordinary implicit reference
             // conversion always covered this row without the lattice's help.
-            yield[]object{"an-imported-bidirectional-parameter-was-never-broken", `package P
+            yield []object{"an-imported-bidirectional-parameter-was-never-broken", `package P
 import System
 import Lib
 
@@ -314,7 +314,7 @@ func run() int32 {
 }
 
 Console.WriteLine(run())`, []string{"100"}}
-            yield[]object{"an-explicit-downcast-from-channel-to-chan-emits-castclass", `package P
+            yield []object{"an-explicit-downcast-from-channel-to-chan-emits-castclass", `package P
 import System
 import System.Threading.Channels
 import Gsharp.Concurrency
@@ -331,7 +331,7 @@ Console.WriteLine(concrete.IsClosed)`, []string{"False"}}
             // `out` -> bidirectional. A `ChannelWriter<T>` cannot widen back, and
             // now that both operands are imported this is the lattice's answer
             // rather than an accident of the guard.
-            yield[]object{"imported-out-does-not-widen-to-bidirectional", `package P
+            yield []object{"imported-out-does-not-widen-to-bidirectional", `package P
 import System
 import Lib
 
@@ -340,7 +340,7 @@ let w = writerOf(ch)
 Console.WriteLine(both(w))`, "both"}
             // `in` -> `out`. This is what makes channel ownership checkable
             // (ADR-0174 pattern 9), so it has to survive the widening.
-            yield[]object{"receive-only-does-not-become-send-only", `package P
+            yield []object{"receive-only-does-not-become-send-only", `package P
 import System
 import Lib
 
@@ -348,7 +348,7 @@ var r in chan[int32] = produce()
 Reader().Fill(r, 2)`, "Fill"}
             // A mismatched element. `Channel<T>` is invariant, and the element
             // check runs before the direction lattice.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import Lib
 
@@ -356,7 +356,7 @@ let ch = produce()
 Console.WriteLine(sendStr(ch, "x"))`, "sendStr"}
             // Nullability is not part of the lattice: looking through a wrapper to
             // emit the view must not become looking past nil safety.
-            yield[]object{"a-nullable-imported-field-does-not-convert-to-a-non-nullable-slot", `package P
+            yield []object{"a-nullable-imported-field-does-not-convert-to-a-non-nullable-slot", `package P
 import System
 import Lib
 

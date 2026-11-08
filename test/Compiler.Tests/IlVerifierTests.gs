@@ -5,6 +5,7 @@
 package GSharp.Compiler.Tests
 
 import GSharp.Compiler
+import GSharp.Core.Tests
 import Gsharp.Values
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
@@ -1006,6 +1007,33 @@ unsafe func Visible(p *int32) int32 { return *p }`)
                 Directory.Delete(tempDir, recursive: true)
             } catch { }
         }
+    }
+
+    @Fact
+    func CSharpFixture_BlockRefReturn_VerifiesAndAliasesByDefault_WhileDebugRemainsSelectable() {
+        const contract = `public sealed class Node { public int Value = 4; }
+public static class Holder
+{
+    public static ref int Slot(this Node node) => ref node.Value;
+    public static ref int BlockSlot(this Node node) { return ref node.Value; }
+    public static int MutateViaBlockSlot()
+    {
+        var node = new Node();
+        ref int alias = ref node.BlockSlot();
+        alias = 27;
+        return node.Value;
+    }
+}`
+        using let releaseFixture = CSharpFixture(contract)
+        IlVerifier.Verify(releaseFixture.AssemblyPath)
+        let holder = releaseFixture.Load().GetType("Holder") ?? throw XunitException("Holder not emitted")
+        let mutate = holder.GetMethod("MutateViaBlockSlot") ?? throw XunitException("MutateViaBlockSlot not emitted")
+        Assert.Equal(27, mutate.Invoke(nil, nil))
+
+        using let debugFixture = CSharpFixture(contract, optimizationLevel: OptimizationLevel.Debug)
+        let exception = Assert.Throws[XunitException](() -> IlVerifier.Verify(debugFixture.AssemblyPath))
+        Assert.Contains("[ReturnPtrToStack]", exception.Message, StringComparison.Ordinal)
+        Assert.Contains("Holder::BlockSlot(", exception.Message, StringComparison.Ordinal)
     }
 
     @Fact

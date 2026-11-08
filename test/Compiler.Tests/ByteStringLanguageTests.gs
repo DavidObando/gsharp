@@ -375,7 +375,7 @@ default: 0
         }
 
         func Programs() sequence[[]object] {
-            yield[]object{`package ByteDefaultConstruction
+            yield []object{`package ByteDefaultConstruction
 import System
 func Main() {
     let empty = bytestring()
@@ -383,13 +383,13 @@ func Main() {
     Console.WriteLine(empty.Length)
     Console.WriteLine(empty == Gsharp.Values.ByteString())
 }`, "True\n0\nTrue\n"}
-            yield[]object{`package ByteNul
+            yield []object{`package ByteNul
 import System
 func Main() {
     Console.WriteLine("${b"` + "\u0000" + `"[0]}")
     Console.WriteLine("${b"\0"[0]}")
 }`, "0\n0\n"}
-            yield[]object{`package ByteArrayConversion
+            yield []object{`package ByteArrayConversion
 import System
 func Main() {
     let inferred = []bytestring{b"x", b"\xFF"}
@@ -400,7 +400,7 @@ func Main() {
     Console.WriteLine(inferred[0] == b"x")
     Console.WriteLine(fixed[1] == b"")
 }`, "True\nTrue\nTrue\nTrue\n"}
-            yield[]object{`package ByteCallable
+            yield []object{`package ByteCallable
 import System
 func bytestring(value object) int32 -> 42
 func bytestring() int32 -> 17
@@ -411,7 +411,7 @@ func Main() {
     Console.WriteLine(bytestring())
     Console.WriteLine($bytestring())
 }`, "42\n42\n17\n17\n"}
-            yield[]object{`package ByteProtocol
+            yield []object{`package ByteProtocol
 import System
 func ReadPayload(packet bytestring) bytestring {
     if packet.Length < 4 || !packet.StartsWith(b"\xCA\xFE") {
@@ -434,7 +434,7 @@ func Main() {
     for value in payload { sum += int32(value) }
     Console.WriteLine(sum)
 }`, "61FF003A\n3\nTrue\nTrue\nFalse\n410\n"}
-            yield[]object{`package ByteEscapes
+            yield []object{`package ByteEscapes
 import System
 func Main() {
     let value = b"\u00E9\U0001F600\u0000\xFF$name${notInterpolation}"
@@ -444,7 +444,7 @@ func Main() {
     Console.WriteLine(b"\xFF" > b"\x7F")
     Console.WriteLine("${b"${".Length}")
 }`, "C3A9F09F988000FF\nTrue\nTrue\nTrue\n2\n"}
-            yield[]object{`package ByteShadow
+            yield []object{`package ByteShadow
 import System
 class bytestring { var Value int32 }
 func Main() {
@@ -456,7 +456,7 @@ func Main() {
     Console.WriteLine(nominal.Length)
     Console.WriteLine(literal == b"\xFF")
 }`, "7\n1\nTrue\n"}
-            yield[]object{`package ByteAlias
+            yield []object{`package ByteAlias
 import System
 type bytestring = int32
 func Main() {
@@ -465,14 +465,14 @@ func Main() {
     Console.WriteLine(plain + escaped)
     Console.WriteLine(b"still bytes".Length)
 }`, "16\n11\n"}
-            yield[]object{`package ByteTypeParameter
+            yield []object{`package ByteTypeParameter
 import System
 func Echo[bytestring any](value bytestring) bytestring -> value
 func Main() {
     Console.WriteLine(Echo[int32](17))
     Console.WriteLine(b"native".Length)
 }`, "17\n6\n"}
-            yield[]object{`package ByteEvaluation
+            yield []object{`package ByteEvaluation
 import System
 var trace string = ""
 func Receiver() bytestring {

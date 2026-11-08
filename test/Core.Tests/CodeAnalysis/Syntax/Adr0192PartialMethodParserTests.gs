@@ -498,12 +498,12 @@ partial class A {
         /// to name.
         /// @returns The permutation data.
         func ModifierRunPermutations() sequence[[]object] {
-            yield[]object{"partial async unsafe"}
-            yield[]object{"partial unsafe async"}
-            yield[]object{"async partial unsafe"}
-            yield[]object{"async unsafe partial"}
-            yield[]object{"unsafe partial async"}
-            yield[]object{"unsafe async partial"}
+            yield []object{"partial async unsafe"}
+            yield []object{"partial unsafe async"}
+            yield []object{"async partial unsafe"}
+            yield []object{"async unsafe partial"}
+            yield []object{"unsafe partial async"}
+            yield []object{"unsafe async partial"}
         }
 
         private func Parse(source string) SyntaxTree -> SyntaxTree.Parse(SourceText.From(source, "Test.gs"))

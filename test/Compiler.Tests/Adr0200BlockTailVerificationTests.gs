@@ -52,19 +52,19 @@ open class Adr0200BlockTailVerificationTests {
 
     shared {
         func Cases() sequence[[]object] {
-            yield[]object{"return-branch-in-binary-operand", `
+            yield []object{"return-branch-in-binary-operand", `
 package P
 func F(c bool) int32 {
     let x = 1 + if c { 2 } else { return 0 }
     return x
 }`}
-            yield[]object{"both-branches-exit", `
+            yield []object{"both-branches-exit", `
 package P
 func F(c bool) int32 {
     let f = (b bool) -> { if b { return 1 } else { return 2 } }
     return f(c)
 }`}
-            yield[]object{"throw-tail-under-defer-and-using", `
+            yield []object{"throw-tail-under-defer-and-using", `
 package P
 import System
 import System.IO
@@ -76,7 +76,7 @@ func F(c bool) int32 {
     }
     return v
 }`}
-            yield[]object{"continue-and-break-tails", `
+            yield []object{"continue-and-break-tails", `
 package P
 func F() int32 {
     var total = 0
@@ -86,7 +86,7 @@ func F() int32 {
     }
     return total
 }`}
-            yield[]object{"never-switch-statement-tail", `
+            yield []object{"never-switch-statement-tail", `
 package P
 func F(k int32) int32 {
     let v int32 = {
@@ -97,7 +97,7 @@ func F(k int32) int32 {
     }
     return v
 }`}
-            yield[]object{"never-arms-in-statement-switch-expression", `
+            yield []object{"never-arms-in-statement-switch-expression", `
 package P
 func F(k int32) string {
     switch k {
@@ -105,7 +105,7 @@ func F(k int32) string {
     default: { return "other" }
     }
 }`}
-            yield[]object{"never-arm-in-async-body", `
+            yield []object{"never-arm-in-async-body", `
 package P
 import System.Threading.Tasks
 async func F(c bool) Task[int32] {
@@ -115,7 +115,7 @@ async func F(c bool) Task[int32] {
     } else { return 0 }
     return a + 1
 }`}
-            yield[]object{"void-switch-with-await-and-no-default", `
+            yield []object{"void-switch-with-await-and-no-default", `
 package P
 import System
 import System.Threading.Tasks
@@ -123,7 +123,7 @@ async func F(x int32) -> switch x {
 case 1: await Task.Delay(1)
 case 2: Console.WriteLine("two")
 }`}
-            yield[]object{"never-tail-under-cleanup-in-lambda", `
+            yield []object{"never-tail-under-cleanup-in-lambda", `
 package P
 import System
 func F(c bool) int32 {
@@ -140,21 +140,21 @@ func F(c bool) int32 {
     }
     return f(c)
 }`}
-            yield[]object{"never-only-lambda", `
+            yield []object{"never-only-lambda", `
 package P
 import System
 func F() {
     let f = () -> { { throw Exception("x") } }
     f()
 }`}
-            yield[]object{"return-inside-return-operand", `
+            yield []object{"return-inside-return-operand", `
 package P
 func F(c bool) int64 {
     let f = (b bool) -> { return if b { return int64(2) } else { 1 } }
     let g = (b bool) -> { return if b { 1 } else { return int64(3) } }
     return f(c) + g(c)
 }`}
-            yield[]object{"exiting-call-arguments", `
+            yield []object{"exiting-call-arguments", `
 package P
 func Sink(a int32, b int32) int32 {
     return a + b
@@ -162,7 +162,7 @@ func Sink(a int32, b int32) int32 {
 func F(c bool) int32 {
     return Sink(if c { return 1 } else { return 2 }, if c { 3 } else { return 4 })
 }`}
-            yield[]object{"exiting-operand-before-await", `
+            yield []object{"exiting-operand-before-await", `
 package P
 import System
 import System.Threading.Tasks
@@ -175,7 +175,7 @@ async func F(c bool) Task[int32] {
 async func G() Task[int32] {
     return Sink(throw Exception("x"), await Task.FromResult(3))
 }`}
-            yield[]object{"void-if-and-void-switch", `
+            yield []object{"void-if-and-void-switch", `
 package P
 import System
 import System.Collections.Generic

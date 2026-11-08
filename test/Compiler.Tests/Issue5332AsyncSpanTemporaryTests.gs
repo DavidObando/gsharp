@@ -400,21 +400,21 @@ async func Read(ch chan[int32]) int32 {
 
     shared {
         func InitializerHosts() IEnumerable[[]object] {
-            yield[]object{"class Holder { public var Read (Task[int32]) -> Task[int32] = LAMBDA }", "Holder().Read"}
-            yield[]object{
+            yield []object{"class Holder { public var Read (Task[int32]) -> Task[int32] = LAMBDA }", "Holder().Read"}
+            yield []object{
                 "class Holder { shared { public var Read (Task[int32]) -> Task[int32] = LAMBDA } }",
                 "Holder.Read"
             }
-            yield[]object{
+            yield []object{
                 "interface Holder { shared { var Read (Task[int32]) -> Task[int32] = LAMBDA } }",
                 "Holder.Read"
             }
-            yield[]object{
+            yield []object{
                 "class Holder { shared { public var Read (Task[int32]) -> Task[int32]\ninit { Read = LAMBDA } } }",
                 "Holder.Read"
             }
-            yield[]object{"class Holder() : Parent(LAMBDA) {}", "Holder().Read"}
-            yield[]object{"class Holder : Parent { init() : base(LAMBDA) {} }", "Holder().Read"}
+            yield []object{"class Holder() : Parent(LAMBDA) {}", "Holder().Read"}
+            yield []object{"class Holder : Parent { init() : base(LAMBDA) {} }", "Holder().Read"}
         }
 
         private func InitializerProgram(declaration string, access string, body string) string -> `package InitializerSpanTemporary

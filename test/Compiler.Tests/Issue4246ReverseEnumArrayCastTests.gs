@@ -95,14 +95,14 @@ stderr:
     shared {
         func Cases() sequence[[]object] {
             // (case name, enum-array source, expected first-element stdout)
-            yield[]object{"same-compilation-as-bang-bang", `import System
+            yield []object{"same-compilation-as-bang-bang", `import System
 enum Kind { First = 7 }
 let values = []Kind{Kind.First}
 var boxed object = values
 let back = (boxed as []Kind)!!
 Console.WriteLine(int32(back[0]))
 Console.WriteLine(back.GetType().Name)`, []string{"7", "Kind[]"}}
-            yield[]object{"same-compilation-is-pattern", `import System
+            yield []object{"same-compilation-is-pattern", `import System
 enum Kind { First = 7, Second = 9 }
 let values = []Kind{Kind.First, Kind.Second}
 var boxed object = values
@@ -112,27 +112,27 @@ if boxed is []Kind arr {
 } else {
     Console.WriteLine("no match")
 }`, []string{"7", "9"}}
-            yield[]object{"same-compilation-explicit-conversion-call", `import System
+            yield []object{"same-compilation-explicit-conversion-call", `import System
 enum Kind { First = 7 }
 let values = []Kind{Kind.First}
 var boxed object = values
 let back = []Kind(boxed)
 Console.WriteLine(int32(back[0]))
 Console.WriteLine(back.GetType().Name)`, []string{"7", "Kind[]"}}
-            yield[]object{"same-compilation-empty-array", `import System
+            yield []object{"same-compilation-empty-array", `import System
 enum Kind { First = 7 }
 let values = []Kind{}
 var boxed object = values
 let back = (boxed as []Kind)!!
 Console.WriteLine(back.Length)
 Console.WriteLine(back.GetType().Name)`, []string{"0", "Kind[]"}}
-            yield[]object{"imported-as-bang-bang", `import System
+            yield []object{"imported-as-bang-bang", `import System
 let values = []DayOfWeek{DayOfWeek.Monday}
 var boxed object = values
 let back = (boxed as []DayOfWeek)!!
 Console.WriteLine(back[0])
 Console.WriteLine(back.GetType().Name)`, []string{"Monday", "DayOfWeek[]"}}
-            yield[]object{"imported-explicit-conversion-call", `import System
+            yield []object{"imported-explicit-conversion-call", `import System
 let values = []DayOfWeek{DayOfWeek.Monday}
 var boxed object = values
 let back = []DayOfWeek(boxed)
@@ -140,7 +140,7 @@ Console.WriteLine(back[0])
 Console.WriteLine(back.GetType().Name)`, []string{"Monday", "DayOfWeek[]"}}
             // Primitive-array parity control: the reverse cast must behave the
             // same for a non-enum element type (no enum-specific regression).
-            yield[]object{"primitive-explicit-conversion-call", `import System
+            yield []object{"primitive-explicit-conversion-call", `import System
 let values = []int32{7}
 var boxed object = values
 let back = []int32(boxed)

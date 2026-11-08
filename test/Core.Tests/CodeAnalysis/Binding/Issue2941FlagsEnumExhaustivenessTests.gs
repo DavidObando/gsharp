@@ -112,7 +112,7 @@ open class Issue2941FlagsEnumExhaustivenessTests {
             for origin in Enum.GetValues[EnumOrigin]() {
                 for form in Enum.GetValues[SwitchForm]() {
                     for shape in Enum.GetValues[SwitchShape]() {
-                        yield[]object{origin, form, shape}
+                        yield []object{origin, form, shape}
                     }
                 }
             }

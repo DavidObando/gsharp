@@ -80,7 +80,7 @@ open class Issue5239And5654NarrowingTests {
         private const RunTimeout int32 = 30000
 
         func Rows() IEnumerable[[]object] {
-            yield[]object{"r5239_shadowed_let_in_try_keeps_narrowing_in_inner_catch", `import System
+            yield []object{"r5239_shadowed_let_in_try_keeps_narrowing_in_inner_catch", `import System
 
 func Get() string? { return "abc" }
 func Clear(ref s string?) bool {
@@ -102,7 +102,7 @@ func Run() int32 {
     }
 }
 Console.WriteLine(Run())`, "", "run", "3"}
-            yield[]object{"r5239_shadowed_var_in_loop_inside_try_keeps_narrowing_W8", `import System
+            yield []object{"r5239_shadowed_var_in_loop_inside_try_keeps_narrowing_W8", `import System
 
 func Get() string? { return "abcd" }
 func Clear(ref s string?) bool {
@@ -127,7 +127,7 @@ func Run() int32 {
     }
 }
 Console.WriteLine(Run())`, "", "run", "4"}
-            yield[]object{"r5239_control_outer_var_read_in_inner_catch_is_rejected", `import System
+            yield []object{"r5239_control_outer_var_read_in_inner_catch_is_rejected", `import System
 
 func Get() string? { return "abc" }
 func Clear(ref s string?) bool {
@@ -148,7 +148,7 @@ func Run() int32 {
     }
 }
 Console.WriteLine(Run())`, "GS0158@15:22", "reject", ""}
-            yield[]object{"r5654_then_branch_assignment_does_not_remove_fact_for_else_branch", `import System
+            yield []object{"r5654_then_branch_assignment_does_not_remove_fact_for_else_branch", `import System
 
 func Run(s string?, c bool) int32 {
     var t = s
@@ -161,7 +161,7 @@ func Run(s string?, c bool) int32 {
     return 0
 }
 Console.WriteLine(Run("abc", false))`, "", "run", "3"}
-            yield[]object{"r5654_if_let_then_branch_assignment_does_not_remove_fact_for_else_branch", `import System
+            yield []object{"r5654_if_let_then_branch_assignment_does_not_remove_fact_for_else_branch", `import System
 
 func Run(s string?, maybe string?) int32 {
     var t = s
@@ -174,7 +174,7 @@ func Run(s string?, maybe string?) int32 {
     return 0
 }
 Console.WriteLine(Run("abcd", nil))`, "", "run", "4"}
-            yield[]object{"r5654_control_read_after_if_else_when_then_assigns_nil_is_rejected", `import System
+            yield []object{"r5654_control_read_after_if_else_when_then_assigns_nil_is_rejected", `import System
 
 func Run(s string?, c bool) int32 {
     var t = s
@@ -186,7 +186,7 @@ func Run(s string?, c bool) int32 {
     return t.Length
 }
 Console.WriteLine(Run("abc", true))`, "GS0158@10:14", "reject", ""}
-            yield[]object{"r5654_short_circuit_condition_block_in_then_branch_does_not_remove_fact_for_else_branch", `import System
+            yield []object{"r5654_short_circuit_condition_block_in_then_branch_does_not_remove_fact_for_else_branch", `import System
 
 func Run(s string?, c bool, k int32) int32 {
     var t = s
@@ -203,7 +203,7 @@ func Run(s string?, c bool, k int32) int32 {
     return 0
 }
 Console.WriteLine(Run("abcde", false, 0))`, "", "run", "5"}
-            yield[]object{"r5654_control_condition_block_before_else_branch_is_rejected", `import System
+            yield []object{"r5654_control_condition_block_before_else_branch_is_rejected", `import System
 
 func Run(s string?, k int32) int32 {
     var t = s

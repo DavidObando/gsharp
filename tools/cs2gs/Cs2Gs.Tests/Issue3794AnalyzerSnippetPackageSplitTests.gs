@@ -348,15 +348,15 @@ namespace GSharp.Core.CodeAnalysis.Binding
         /// Gets the GSA0004 positive and negative cases.
         /// @returns The theory data.
         func Gsa0004Cases() sequence[[]object] {
-            yield[]object{Gsa0004Positive, []string{"GSA0004", "GSA0004", "GSA0004", "GSA0004"}}
-            yield[]object{Gsa0004Negative, Array.Empty[string]()}
+            yield []object{Gsa0004Positive, []string{"GSA0004", "GSA0004", "GSA0004", "GSA0004"}}
+            yield []object{Gsa0004Negative, Array.Empty[string]()}
         }
 
         /// Gets the GSA0003 positive and negative cases.
         /// @returns The theory data.
         func Gsa0003Cases() sequence[[]object] {
-            yield[]object{Gsa0003Positive, []string{"GSA0003", "GSA0003", "GSA0003"}}
-            yield[]object{Gsa0003Negative, Array.Empty[string]()}
+            yield []object{Gsa0003Positive, []string{"GSA0003", "GSA0003", "GSA0003"}}
+            yield []object{Gsa0003Negative, Array.Empty[string]()}
         }
 
         private func SplitUnits(source string?)[]string -> source!!.Split(

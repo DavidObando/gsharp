@@ -101,6 +101,23 @@ internal class EmittedNameAllocator {
             // neighbor. Locals and other body-scoped names without a CLR
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
+            // Issue #4307: a referenced C# parameter literally spelled `_` renames to
+            // `underscore`, disambiguating to `underscore_2`, `underscore_3`, etc. when
+            // `underscore` is already occupied in the enclosing method/member scope.
+            if symbol is IParameterSymbol{Name: "_"} underscoreParameter {
+                let taken = HashSet[string](
+                    this.GetUnderscoreParameterScopeNames(underscoreParameter),
+                    StringComparer.Ordinal
+                )
+                var renamed = "underscore"
+                for var suffix = 2; taken.Contains(renamed); suffix++ {
+                    renamed = "underscore_" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }
+                for member in contract {
+                    this.emittedNames[member] = renamed
+                }
+                return renamed
+            }
             // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
             if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) &&
                 !contract
@@ -381,6 +398,56 @@ internal class EmittedNameAllocator {
         let result = names.ToArray()
         this.methodScopeNames[method] = result
         return result
+    }
+
+    private func GetUnderscoreParameterScopeNames(parameter IParameterSymbol) IReadOnlyCollection[string] {
+        let names = HashSet[string](StringComparer.Ordinal)
+        if parameter.ContainingType is {} containingType {
+            names.UnionWith(this.GetVisibleTypeMemberNames(containingType))
+        }
+        for var current ISymbol? = parameter.ContainingSymbol;
+            current is IMethodSymbol currentMethod;
+            current = current!!
+            .ContainingSymbol {
+            for candidate in currentMethod.Parameters {
+                if !SymbolEqualityComparer.Default.Equals(candidate, parameter) {
+                    names.Add(candidate.Name)
+                    if this.emittedNames.TryGetValue(candidate, out var emittedCandidate) {
+                        names.Add(emittedCandidate)
+                    }
+                }
+            }
+            let references = currentMethod
+                .DeclaringSyntaxReferences
+                .AsEnumerable()
+                .Concat(
+                currentMethod
+                    .PartialImplementationPart
+                    ?.DeclaringSyntaxReferences
+                    .AsEnumerable() ??
+                    Enumerable.Empty[SyntaxReference]()
+            )
+            for reference in references {
+                let root = reference.GetSyntax()
+                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                for node in root.DescendantNodesAndSelf() {
+                    let declared ISymbol? = model.GetDeclaredSymbol(node)
+                    if declared == nil || SymbolEqualityComparer.Default.Equals(declared, parameter) {
+                        continue
+                    }
+                    if declared is ILocalSymbol ||
+                        declared is IParameterSymbol ||
+                        declared is IRangeVariableSymbol ||
+                        declared is ILabelSymbol {
+                        names.Add(declared.Name)
+                        if this.emittedNames.TryGetValue(declared, out var emittedDeclared) {
+                            names.Add(emittedDeclared)
+                        }
+                    }
+                }
+            }
+        }
+        return names.ToArray()
     }
 
     private func GetContractGroup(symbol ISymbol?) IReadOnlyCollection[ISymbol] -> if this.contractGroups.TryGetValue(

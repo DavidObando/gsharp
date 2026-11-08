@@ -92,7 +92,7 @@ open class Issue5460LoopBreakExitJoinTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"while_header_false_and_break_join", `import System
+            yield []object{"while_header_false_and_break_join", `import System
 func Get() string? { return nil }
 func Fix() string { return "fix" }
 func Run(c bool) int32 {
@@ -110,7 +110,7 @@ func Main() {
     Console.WriteLine(Run(true))
     Console.WriteLine(Run(false))
 }`, "", "run", "3|2"}
-            yield[]object{"while_true_breaks_join", `import System
+            yield []object{"while_true_breaks_join", `import System
 func Get() string? { return nil }
 func Run(c bool) int32 {
     var s string? = Get()
@@ -128,7 +128,7 @@ func Main() {
     Console.WriteLine(Run(true))
     Console.WriteLine(Run(false))
 }`, "", "run", "2|5"}
-            yield[]object{"for_infinite_and_clause_breaks_join", `import System
+            yield []object{"for_infinite_and_clause_breaks_join", `import System
 func Get() string? { return nil }
 func RunInfinite(c bool) int32 {
     var s string? = Get()
@@ -158,7 +158,7 @@ func Main() {
     Console.WriteLine(RunInfinite(true))
     Console.WriteLine(RunClause(false))
 }`, "", "run", "2|5"}
-            yield[]object{"do_while_header_false_and_break_join", `import System
+            yield []object{"do_while_header_false_and_break_join", `import System
 func Get() string? { return nil }
 func Fix() string { return "fix" }
 func Run(c bool) int32 {
@@ -176,7 +176,7 @@ func Main() {
     Console.WriteLine(Run(true))
     Console.WriteLine(Run(false))
 }`, "", "run", "3|2"}
-            yield[]object{"g1_with_break_three_predecessor_n_ary_join", `import System
+            yield []object{"g1_with_break_three_predecessor_n_ary_join", `import System
 open class Animal {
     var Name string = "animal"
 }
@@ -223,7 +223,7 @@ func Main() {
     Console.WriteLine(RunHeaderFalse(nil, 1))
     Console.WriteLine(RunHeaderFalse(Animal{}, 2))
 }`, "", "run", "dog|cat|animal|dog|cat|animal"}
-            yield[]object{"control1_break_without_fact_drops_header_false_gain", `import System
+            yield []object{"control1_break_without_fact_drops_header_false_gain", `import System
 func Get() string? { return nil }
 func Run(c bool) int32 {
     var s string? = Get()
@@ -236,7 +236,7 @@ func Run(c bool) int32 {
     return s.Length
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0158@11:14", "reject", ""}
-            yield[]object{"control2a_switch_break_does_not_exit_loop", `import System
+            yield []object{"control2a_switch_break_does_not_exit_loop", `import System
 func Get() string? { return nil }
 func RunCond(k int32) int32 {
     var k = k
@@ -273,7 +273,7 @@ func Main() {
     Console.WriteLine(RunCond(1))
     Console.WriteLine(RunWhileTrue(1))
 }`, "", "run", "2|2"}
-            yield[]object{"control2b_switch_break_with_non_null_does_not_prove_loop_break", `import System
+            yield []object{"control2b_switch_break_with_non_null_does_not_prove_loop_break", `import System
 func Get() string? { return nil }
 func Run(k int32) int32 {
     var s string? = Get()
@@ -291,7 +291,7 @@ func Run(k int32) int32 {
     return s.Length
 }
 func Main() { Console.WriteLine(Run(2)) }`, "GS0158@16:14", "reject", ""}
-            yield[]object{"control3a_nested_loop_break_and_labeled_break_outer", `import System
+            yield []object{"control3a_nested_loop_break_and_labeled_break_outer", `import System
 func Get() string? { return nil }
 func Fix() string { return "fix" }
 func RunInnerBreak(flag bool) int32 {
@@ -323,7 +323,7 @@ func Main() {
     Console.WriteLine(RunLabeledBreakOuter(true, true))
     Console.WriteLine(RunLabeledBreakOuter(true, false))
 }`, "", "run", "2|3|2"}
-            yield[]object{"control3b_nested_loop_break_does_not_prove_outer_loop_exit", `import System
+            yield []object{"control3b_nested_loop_break_does_not_prove_outer_loop_exit", `import System
 func Get() string? { return nil }
 func RunInnerBreakOnly(flag bool) int32 {
     var s string? = Get()
@@ -352,7 +352,7 @@ func RunLabeledBreakOuterNil(flag bool, c bool) int32 {
 func Main() {
     Console.WriteLine(RunInnerBreakOnly(false) + RunLabeledBreakOuterNil(true, true))
 }`, "GS0158@12:14 GS0158@25:14", "reject", ""}
-            yield[]object{"control4a_finally_clears_fact_on_break", `import System
+            yield []object{"control4a_finally_clears_fact_on_break", `import System
 func Get() string? { return nil }
 func Run(c bool) int32 {
     var s string? = Get()
@@ -370,7 +370,7 @@ func Run(c bool) int32 {
     return s.Length
 }
 func Main() { Console.WriteLine(Run(true)) }`, "GS0158@16:14", "reject", ""}
-            yield[]object{"control4b_finally_restores_fact_on_break", `import System
+            yield []object{"control4b_finally_restores_fact_on_break", `import System
 func Get() string? { return nil }
 func Run(c bool) int32 {
     var s string? = Get()
@@ -390,7 +390,7 @@ func Main() {
     Console.WriteLine(Run(true))
     Console.WriteLine(Run(false))
 }`, "", "run", "4|2"}
-            yield[]object{"control5_break_after_mutating_operand_in_expression", `import System
+            yield []object{"control5_break_after_mutating_operand_in_expression", `import System
 func Clear() int32 {
     g = nil
     return 1
@@ -535,7 +535,7 @@ func RunCollectionAdd() int32 {
 }
 var g string? = "ok"
 Console.WriteLine(RunAdd() + RunAnd() + RunLabeledOr() + RunChainedCall(Box()) + RunNestedLambdaLoop() + RunImplicitConversion(Token{}) + RunClassLiteralInit() + RunCollectionAdd())`, "GS0158@27:14 GS0158@39:14 GS0158@53:14 GS0158@65:14 GS0158@89:14 GS0158@101:14 GS0158@127:14 GS0158@142:14", "reject", ""}
-            yield[]object{"control8_interpolation_and_reassigned_callable_before_break", `import System
+            yield []object{"control8_interpolation_and_reassigned_callable_before_break", `import System
 class C {
     var Value int32 = 1
 }
@@ -603,7 +603,7 @@ func RunCallableReassignedInSiblingArgument(cb () -> int32) int32 {
 }
 var cleaner () -> void = func() { }
 Console.WriteLine(RunInterpolation() + RunCallableReassignedAfterCall(() -> 1) + RunCallableReassignedInSiblingArgument(() -> 1))`, "GS0158@26:14 GS0158@45:14 GS0158@65:14", "reject", ""}
-            yield[]object{"control9_identity_overload_selected_over_mutating_conversion_preserves_fact", `import System
+            yield []object{"control9_identity_overload_selected_over_mutating_conversion_preserves_fact", `import System
 struct Token {
     var Value int32
     shared {
@@ -647,7 +647,7 @@ func RunForInitBreakSkipsHeaderMutatingCall() int32 {
 }
 var g string? = "ok"
 Console.WriteLine("${RunIdentityOverload(Token{Value: 1})}|${RunForInitBreakSkipsHeaderMutatingCall()}")`, "", "run", "2|2"}
-            yield[]object{"control10_variadic_named_indirect_base_and_member_collection_breaks", `import System
+            yield []object{"control10_variadic_named_indirect_base_and_member_collection_breaks", `import System
 import System.Collections.Generic
 struct Token {
     shared {
@@ -764,7 +764,7 @@ func RunMemberCollectionInitializer() int32 {
 }
 var g string? = "ok"
 Console.WriteLine(DerivedCallHost().RunBaseCall(Token{}) + RunVariadicCall() + RunPackedVariadicConversion(Token{}) + RunReorderedNamed() + RunIndirectCall((a int32, b int32) -> a + b, Token{}) + RunMemberCollectionInitializer())`, "GS0158@41:18 GS0158@62:14 GS0158@74:14 GS0158@86:14 GS0158@98:14 GS0158@114:14", "reject", ""}
-            yield[]object{"control11_deferred_return_for_post_and_custom_handler_breaks", `import System
+            yield []object{"control11_deferred_return_for_post_and_custom_handler_breaks", `import System
 import System.Globalization
 func Clear() int32 {
     g = nil
@@ -832,7 +832,7 @@ func RunCustomHandlerFirstHole() int32 {
 var g string? = "ok"
 var cleaner () -> void = func() { }
 Console.WriteLine(RunDeferredReturnLambda() + RunForPostBreak() + RunForPostCallableReassigned(() -> 1) + RunCustomHandlerFirstHole())`, "GS0158@27:18 GS0158@35:14 GS0158@48:14 GS0158@64:14", "reject", ""}
-            yield[]object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
+            yield []object{"control7_killed_branch_and_loop_condition_facts_not_replayed_on_break", `import System
 func Get() string? { return "ok" }
 func RunShortCircuitKilled() int32 {
     var s string? = Get()
@@ -857,7 +857,7 @@ func RunLoopConditionKilled() int32 {
 func Main() {
     Console.WriteLine(RunShortCircuitKilled() + RunLoopConditionKilled())
 }`, "GS0158@13:14 GS0158@21:14", "reject", ""}
-            yield[]object{"control6a_labeled_break_crossing_for_in_runs_enumerator_disposal", `import System
+            yield []object{"control6a_labeled_break_crossing_for_in_runs_enumerator_disposal", `import System
 func Gen() sequence[int32] {
     try {
         yield 1
@@ -886,7 +886,7 @@ func RunUnlabeledBreak() int32 {
 }
 var s string? = "ok"
 Console.WriteLine(RunLabeledBreak() + RunUnlabeledBreak())`, "GS0158@18:14 GS0158@26:14", "reject", ""}
-            yield[]object{"control6b_labeled_break_crossing_indexed_for_in_preserves_fact", `import System
+            yield []object{"control6b_labeled_break_crossing_indexed_for_in_preserves_fact", `import System
 func RunIndexed() int32 {
     let items = []int32{1, 2}
     outer: while true {
@@ -901,7 +901,7 @@ func RunIndexed() int32 {
 }
 var s string? = "ok"
 Console.WriteLine(RunIndexed())`, "", "run", "2"}
-            yield[]object{"control12_pattern_getter_struct_ctor_for_init_and_map_breaks", `import System
+            yield []object{"control12_pattern_getter_struct_ctor_for_init_and_map_breaks", `import System
 func Clear() int32 {
     g = nil
     return 0

@@ -548,13 +548,14 @@ public class C
 {
     public int Run(Func<int, int> _)
     {
-        return _(0) + __underscore(0);
-        static int __underscore(int n) =>
+        return _(0) + underscore(0);
+        static int underscore(int n) =>
             n == 0 ? 7 : Other<int>(n - 1);
-        static int Other<T>(int n) => __underscore(n);
+        static int Other<T>(int n) => underscore(n);
     }
 }`)
-        Assert.Contains("func __underscore_2(", printed, StringComparison.Ordinal)
+        Assert.Contains("func underscore_2(", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "Console.WriteLine(C().Run((value int32) -> 100))",
@@ -998,7 +999,7 @@ public class C
     public static int Run() => Apply(_ => 7);
 }`)
         Assert.Contains("(_ string)", printed, StringComparison.Ordinal)
-        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("underscore", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 
@@ -1012,7 +1013,31 @@ public class C
 
     public static int Run() => Apply(_ => _ + 1);
 }`)
-        Assert.Contains("__underscore", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Fact
+    func ReferencedUnderscoreParameter_DisambiguatesAgainstExistingUnderscoreInScope() {
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int WithParameter(int _, int underscore) => _ + underscore;
+
+    public int WithLocal(int _)
+    {
+        int underscore = 10;
+        int underscore_2 = 20;
+        return _ + underscore + underscore_2;
+    }
+}`)
+        Assert.Contains("func WithParameter(underscore_2 int32, underscore int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("underscore_2 + underscore", printed, StringComparison.Ordinal)
+        Assert.Contains("func WithLocal(underscore_3 int32)", printed, StringComparison.Ordinal)
+        Assert.Contains("return underscore_3 + underscore + underscore_2", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(printed)
     }
 

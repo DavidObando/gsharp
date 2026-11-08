@@ -305,6 +305,9 @@ shared class SyntaxFacts {
             case "while" {
                 return SyntaxKind.WhileKeyword
             }
+            case "yield" {
+                return SyntaxKind.YieldKeyword
+            }
             case "lock" {
                 return SyntaxKind.LockKeyword
             }
@@ -767,6 +770,9 @@ shared class SyntaxFacts {
             }
             case SyntaxKind.WhileKeyword {
                 return "while"
+            }
+            case SyntaxKind.YieldKeyword {
+                return "yield"
             }
             case SyntaxKind.LockKeyword {
                 return "lock"

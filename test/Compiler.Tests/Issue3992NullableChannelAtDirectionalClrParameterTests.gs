@@ -167,7 +167,7 @@ public sealed class PlainSink
         func Cases() sequence[[]object] {
             // The corrected repro. `Plain.W` is non-generic on a non-generic type;
             // the non-nullable form already bound, the nullable form did not.
-            yield[]object{"the-corrected-repro-a-nullable-channel-reaches-a-non-generic-writer-parameter", `package P
+            yield []object{"the-corrected-repro-a-nullable-channel-reaches-a-non-generic-writer-parameter", `package P
 import System
 import OvlLib
 
@@ -186,7 +186,7 @@ Console.WriteLine(<-ch)
 Console.WriteLine(<-ch)`, []string{"11", "11", "11", "11"}}
             // The READER direction of the same view, and it must genuinely take
             // the value the writer put in — so `get_Reader` really was emitted.
-            yield[]object{"a-nullable-channel-reaches-a-non-generic-reader-parameter", `package P
+            yield []object{"a-nullable-channel-reaches-a-non-generic-reader-parameter", `package P
 import System
 import OvlLib
 
@@ -207,7 +207,7 @@ Console.WriteLine(take(ch))`, []string{"11", "11"}}
             // `ChannelWriter<int>` parameter can only ever take a closed `int`
             // element — which is itself the reason this issue is a different axis
             // from #3985 rather than the same one.
-            yield[]object{"the-same-call-binds-from-inside-a-generic-function", `package P
+            yield []object{"the-same-call-binds-from-inside-a-generic-function", `package P
 import System
 import OvlLib
 
@@ -225,7 +225,7 @@ Console.WriteLine(openish[int32](ch, ch))`, []string{"33", "33"}}
             // Direction still selects: a reader-only member and a writer-only
             // member are both reachable from the SAME nullable bidirectional
             // handle, and they answer differently.
-            yield[]object{"direction-still-selects-from-one-nullable-bidirectional-handle", `package P
+            yield []object{"direction-still-selects-from-one-nullable-bidirectional-handle", `package P
 import System
 import OvlLib
 
@@ -235,7 +235,7 @@ func both(c chan[int32]?) int32 {
 
 Console.WriteLine(both(chan[int32](1)))`, []string{"55"}}
             // A non-generic CONSTRUCTOR on a non-generic type takes the view too.
-            yield[]object{"a-non-generic-constructor-takes-a-directional-view-from-a-nullable-channel", `package P
+            yield []object{"a-non-generic-constructor-takes-a-directional-view-from-a-nullable-channel", `package P
 import System
 import OvlLib
 
@@ -248,7 +248,7 @@ Console.WriteLine(make(ch))
 Console.WriteLine(<-ch)`, []string{"6", "6"}}
             // Control 1 (from the issue): the WHOLE-channel parameter was never
             // broken — it binds by ordinary CLR assignability.
-            yield[]object{"control-the-whole-channel-parameter-was-never-broken", `package P
+            yield []object{"control-the-whole-channel-parameter-was-never-broken", `package P
 import System
 import OvlLib
 
@@ -258,7 +258,7 @@ func toWhole(c chan[int32]?) int32 {
 
 Console.WriteLine(toWhole(chan[int32](1)))`, []string{"7"}}
             // Control 2 (from the issue): `!!` was and remains the remedy.
-            yield[]object{"control-the-bang-bang-remedy-still-works", `package P
+            yield []object{"control-the-bang-bang-remedy-still-works", `package P
 import System
 import OvlLib
 
@@ -271,7 +271,7 @@ Console.WriteLine(bang(ch))
 Console.WriteLine(<-ch)`, []string{"11", "11"}}
             // Control 3: the non-nullable form, which always bound. Carried so a
             // regression that broke it cannot hide behind the new rows.
-            yield[]object{"control-the-non-nullable-channel-still-reaches-both-directions", `package P
+            yield []object{"control-the-non-nullable-channel-still-reaches-both-directions", `package P
 import System
 import OvlLib
 
@@ -288,7 +288,7 @@ Console.WriteLine(w(ch))
 Console.WriteLine(r(ch))`, []string{"33", "22"}}
             // Control 4: a DECLARED directional nullable reaches its own view by
             // identity, with no annotation-dropping needed.
-            yield[]object{"control-a-declared-directional-nullable-reaches-its-own-parameter", `package P
+            yield []object{"control-a-declared-directional-nullable-reaches-its-own-parameter", `package P
 import System
 import OvlLib
 
@@ -312,7 +312,7 @@ Console.WriteLine(r(ch))`, []string{"33", "22"}}
         func RejectedCases() sequence[[]object] {
             // Direction is not dropped: a send-only nullable handle cannot become
             // a reader.
-            yield[]object{"a-send-only-nullable-cannot-reach-a-reader-parameter", `package P
+            yield []object{"a-send-only-nullable-cannot-reach-a-reader-parameter", `package P
 import System
 import OvlLib
 
@@ -322,7 +322,7 @@ func bad(c out chan[int32]?) int32 {
 
 Console.WriteLine(bad(chan[int32](1)))`, "OnlyReader"}
             // ...nor a receive-only handle a writer.
-            yield[]object{"a-receive-only-nullable-cannot-reach-a-writer-parameter", `package P
+            yield []object{"a-receive-only-nullable-cannot-reach-a-writer-parameter", `package P
 import System
 import OvlLib
 
@@ -332,7 +332,7 @@ func bad(c in chan[int32]?) int32 {
 
 Console.WriteLine(bad(chan[int32](1)))`, "OnlyWriter"}
             // The element is not dropped either. `ChannelWriter<T>` is invariant.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import OvlLib
 
@@ -343,7 +343,7 @@ func bad(c chan[string]?) int32 {
 Console.WriteLine(bad(chan[string](1)))`, "OnlyWriter"}
             // The split #3985 settled on is preserved: the leniency is a CLR
             // boundary rule, and a G#-DECLARED parameter still reports GS0154.
-            yield[]object{"a-gsharp-declared-directional-parameter-still-enforces-nullability", `package P
+            yield []object{"a-gsharp-declared-directional-parameter-still-enforces-nullability", `package P
 import System
 import OvlLib
 
@@ -358,7 +358,7 @@ func bad(c chan[int32]?) int32 {
 Console.WriteLine(bad(chan[int32](1)))`, "GS0154"}
             // An unrelated non-channel parameter is not made applicable by the
             // peel: only a pair whose NON-NULLABLE form was already applicable is.
-            yield[]object{"a-nullable-string-does-not-become-applicable-to-a-writer-parameter", `package P
+            yield []object{"a-nullable-string-does-not-become-applicable-to-a-writer-parameter", `package P
 import System
 import OvlLib
 

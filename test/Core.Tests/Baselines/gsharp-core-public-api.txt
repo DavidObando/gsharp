@@ -1172,6 +1172,7 @@ type enum GSharp.Core.CodeAnalysis.Syntax.SyntaxKind : Int32
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WhileStatement = 175
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WhitespaceToken = 1
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind WithExpression = 229
+  field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind YieldKeyword = 284
   field public const GSharp.Core.CodeAnalysis.Syntax.SyntaxKind YieldStatement = 244
 type interface GSharp.Core.CodeAnalysis.Diagnostics.ILogger
   method public abstract Boolean IsEnabled(GSharp.Core.CodeAnalysis.Diagnostics.LogLevel level)

@@ -1103,7 +1103,7 @@ public static class Probe
         /// Shapes that failed to load or bound the wrong member before the fix.
         /// @returns Case name, G# source, expected stdout lines.
         func UnboundSlotCases() sequence[[]object] {
-            yield[]object{"direct-struct", `package P
+            yield []object{"direct-struct", `package P
 import System
 import Clib
 
@@ -1114,7 +1114,7 @@ struct SD : IS {
 }
 
 Console.WriteLine(Probe.Z[SD]())`, []string{"7"}}
-            yield[]object{"direct-class", `package P
+            yield []object{"direct-class", `package P
 import System
 import Clib
 
@@ -1127,7 +1127,7 @@ class CD : IS {
 Console.WriteLine(Probe.Z[CD]())`, []string{"8"}}
             // The issue's TypeLoadException shape: the slot is inherited through
             // the declared interface's base.
-            yield[]object{"inherited-through-a-base-interface", `package P
+            yield []object{"inherited-through-a-base-interface", `package P
 import System
 import Clib
 
@@ -1140,7 +1140,7 @@ struct SZ : IS2 {
 Console.WriteLine(Probe.Z[SZ]())`, []string{"7"}}
             // The issue's silent shape: the imported base already implements the
             // slot, and the base's member ran instead of the derived one.
-            yield[]object{"derived-over-an-imported-base", `package P
+            yield []object{"derived-over-an-imported-base", `package P
 import System
 import Clib
 
@@ -1153,7 +1153,7 @@ class DZ : BaseS, IS2 {
 Console.WriteLine(Probe.Z[DZ]())`, []string{"6"}}
             // A defaulted static virtual the type overrides silently kept the
             // interface's default.
-            yield[]object{"static-virtual-default-overridden", `package P
+            yield []object{"static-virtual-default-overridden", `package P
 import System
 import Clib
 
@@ -1166,7 +1166,7 @@ struct VD : ISV {
 Console.WriteLine(Probe.V[VD]())`, []string{"5"}}
             // A static abstract get/set property: both accessors bind (the setter
             // through its own MethodImpl).
-            yield[]object{"static-abstract-get-set-property", `package P
+            yield []object{"static-abstract-get-set-property", `package P
 import System
 import Clib
 
@@ -1183,7 +1183,7 @@ struct QS : IPS {
 Console.WriteLine(Probe.SetThenGet[QS](21))`, []string{"42"}}
             // A get-only property overrides just the getter of a defaulted get/set
             // static virtual property; csc binds the getter independently too.
-            yield[]object{"get-only-override-of-a-defaulted-get-set-property", `package P
+            yield []object{"get-only-override-of-a-defaulted-get-set-property", `package P
 import System
 import Clib
 
@@ -1194,7 +1194,7 @@ struct PG : IPV {
 }
 
 Console.WriteLine(Probe.PV[PG]())`, []string{"5"}}
-            yield[]object{"generic-static-method-slot", `package P
+            yield []object{"generic-static-method-slot", `package P
 import System
 import Clib
 
@@ -1205,7 +1205,7 @@ struct GC : IGen {
 }
 
 Console.WriteLine(Probe.Count[GC]())`, []string{"42"}}
-            yield[]object{"static-abstract-property", `package P
+            yield []object{"static-abstract-property", `package P
 import System
 import Clib
 
@@ -1226,7 +1226,7 @@ Console.WriteLine(Probe.P[PP2]())`, []string{"9", "10"}}
             // type: the method-owned `U` is matched against the candidate's own
             // type parameter, never against the interface's `Shape`. The instance
             // counterpart shares the matcher (it reported GS0187 before).
-            yield[]object{"symbolic-interface-with-a-generic-method", (`package P
+            yield []object{"symbolic-interface-with-a-generic-method", (`package P
 import System
 import System.Linq
 import Clib
@@ -1248,7 +1248,7 @@ Console.WriteLine(Probe.N[Shape, string](GI(), Shape(), "s"))`), []string{"77", 
             // Array positions that mention a generic parameter, at the interface
             // level (`T[]`) and the method level (`U[]`), over a G# type: matched
             // element-wise (both reported GS0187 before for the instance shape).
-            yield[]object{"symbolic-array-positions", (`package P
+            yield []object{"symbolic-array-positions", (`package P
 import System
 import System.Linq
 import Clib
@@ -1271,7 +1271,7 @@ let target = typeof(MA).GetInterfaceMap(iface).TargetMethods[0].MakeGenericMetho
 Console.WriteLine(target.Invoke(nil, []object?{[]string{"a"}, Shape()}))`), []string{"2", "30", "100"}}
             // A static abstract event binds through its accessors: custom accessors
             // through a base interface, and a field-like event directly.
-            yield[]object{"static-abstract-event", `package P
+            yield []object{"static-abstract-event", `package P
 import System
 import Clib
 
@@ -1297,7 +1297,7 @@ Console.WriteLine("hooked")`, []string{"1", "hooked"}}
             // A generic interface closed over a G# type: the slot's declaration is
             // a MemberRef on the symbolic `IH<Shape>` TypeSpec. Read through the
             // runtime's interface map, which only loads when the slot is bound.
-            yield[]object{"symbolic-generic-interface", (`package P
+            yield []object{"symbolic-generic-interface", (`package P
 import System
 import System.Linq
 import Clib
@@ -1331,7 +1331,7 @@ Console.WriteLine(Invoke(typeof(HS2)))`), []string{"40", "11"}}
         /// order. The G#-declared-interface path had the same hole.
         /// @returns Case name, G# source, expected stdout lines.
         func ExplicitClauseCases() sequence[[]object] {
-            yield[]object{"explicit-member-of-another-interface-is-not-the-imported-slot", `package P
+            yield []object{"explicit-member-of-another-interface-is-not-the-imported-slot", `package P
 import System
 import Clib
 
@@ -1348,7 +1348,7 @@ struct EX : IS, IMine {
 }
 
 Console.WriteLine(Probe.Z[EX]())`, []string{"5"}}
-            yield[]object{"explicit-property-of-another-interface-is-not-the-imported-slot", `package P
+            yield []object{"explicit-property-of-another-interface-is-not-the-imported-slot", `package P
 import System
 import Clib
 
@@ -1367,7 +1367,7 @@ struct EP : IP, IMineP {
 Console.WriteLine(Probe.P[EP]())`, []string{"5"}}
             // The same rule for two G#-declared interfaces, read through the
             // runtime's interface map.
-            yield[]object{"explicit-member-of-another-gsharp-interface", `package P
+            yield []object{"explicit-member-of-another-gsharp-interface", `package P
 import System
 
 interface IA {
@@ -1392,7 +1392,7 @@ Console.WriteLine(typeof(W).GetInterfaceMap(typeof(IB)).TargetMethods[0].Invoke(
             // Issue #4625: an explicit-interface clause on a static method,
             // property or event targeting an imported CLR interface binds to
             // that slot and takes precedence over an implicit same-name member.
-            yield[]object{"explicit-clause-targets-imported-static-virtual-slots", (`package P
+            yield []object{"explicit-clause-targets-imported-static-virtual-slots", (`package P
 import System
 import System.Linq
 import Clib
@@ -1443,7 +1443,7 @@ Console.WriteLine(typeof(W).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, 
                     "1",
                     "42"
                 }}
-            yield[]object{"explicit-static-auto-properties-on-distinct-symbolic-imported-interfaces", (`package P
+            yield []object{"explicit-static-auto-properties-on-distinct-symbolic-imported-interfaces", (`package P
 import System
 import System.Linq
 import System.Reflection
@@ -1469,7 +1469,7 @@ mapA.TargetMethods[1].Invoke(nil, []object?{10})
 mapB.TargetMethods[1].Invoke(nil, []object?{20})
 Console.WriteLine(mapA.TargetMethods[0].Invoke(nil, []object?{}))
 Console.WriteLine(mapB.TargetMethods[0].Invoke(nil, []object?{}))`), []string{"2", "10", "20"}}
-            yield[]object{"generic-owner-explicit-static-auto-property-and-field-like-event", `package P
+            yield []object{"generic-owner-explicit-static-auto-property-and-field-like-event", `package P
 import System
 import Clib
 
@@ -1490,7 +1490,7 @@ Console.WriteLine("ok")`, []string{"33", "ok"}}
         func GreenNeighbours() sequence[[]object] {
             // The negative control: no static member, so no row, and the imported
             // base's implementation still applies.
-            yield[]object{"no-member-keeps-the-base-implementation", `package P
+            yield []object{"no-member-keeps-the-base-implementation", `package P
 import System
 import Clib
 
@@ -1499,7 +1499,7 @@ class NoZ : BaseS, IS2 {
 
 Console.WriteLine(Probe.Z[NoZ]())`, []string{"1"}}
             // No member for a defaulted static virtual: the default still applies.
-            yield[]object{"no-member-keeps-the-default", `package P
+            yield []object{"no-member-keeps-the-default", `package P
 import System
 import Clib
 
@@ -1510,7 +1510,7 @@ Console.WriteLine(Probe.V[VN]())`, []string{"100"}}
             // A derived CLR interface that supplies an explicit default for an
             // abstract base slot (`static int IS.Z() => 100;`) leaves the slot
             // defaulted for implementers of the derived interface.
-            yield[]object{"defaulted-in-derived-clr-interface", `package P
+            yield []object{"defaulted-in-derived-clr-interface", `package P
 import System
 import Clib
 
@@ -1518,7 +1518,7 @@ struct SDefault : IDefaultedByDerived {
 }
 
 Console.WriteLine(Probe.Z[SDefault]())`, []string{"100"}}
-            yield[]object{"defaulted-in-symbolic-derived-clr-interface", (`package P
+            yield []object{"defaulted-in-symbolic-derived-clr-interface", (`package P
 import System
 import System.Linq
 import Clib
@@ -1531,7 +1531,7 @@ let iface = typeof(SDefaultSym).GetInterfaces().Where((i Type) -> i.Name == "IH`
 Console.WriteLine(typeof(SDefaultSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))`), []string{
                     "200"
                 }}
-            yield[]object{"defaulted-function-pointer-overloads-in-derived-clr-interface", `package P
+            yield []object{"defaulted-function-pointer-overloads-in-derived-clr-interface", `package P
 import System
 import Clib
 
@@ -1547,7 +1547,7 @@ Console.WriteLine(Probe.CallFnPtrDefault[int32, SFnPtr](0))`, []string{"153"}}
         /// bridges on the implementing derived class.
         /// @returns Case name, G# source, expected stdout lines.
         func InheritedFromGSharpBaseCases() sequence[[]object] {
-            yield[]object{"inherited-static-method-from-gs-base", `package P
+            yield []object{"inherited-static-method-from-gs-base", `package P
 import System
 import Clib
 
@@ -1563,7 +1563,7 @@ class D2 : B, IS2 {
 
 Console.WriteLine(Probe.Z[D]())
 Console.WriteLine(Probe.Z[D2]())`, []string{"21", "21"}}
-            yield[]object{"inherited-from-generic-gs-base-and-symbolic-interface", (`package P
+            yield []object{"inherited-from-generic-gs-base-and-symbolic-interface", (`package P
 import System
 import System.Linq
 import Clib
@@ -1583,7 +1583,7 @@ class DGen : BGen[Shape], IH2[Shape], IGen {
 let iface = typeof(DGen).GetInterfaces().Where((i Type) -> i.Name == "IH` + "`" + `1").First()
 Console.WriteLine(typeof(DGen).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape()}))
 Console.WriteLine(Probe.Count[DGen]())`), []string{"33", "44"}}
-            yield[]object{"inherited-static-property-and-event-from-gs-base", `package P
+            yield []object{"inherited-static-property-and-event-from-gs-base", `package P
 import System
 import Clib
 
@@ -1609,7 +1609,7 @@ Console.WriteLine(Probe.P[DProp]())
 Console.WriteLine(Probe.SetThenGet[DProp](7))
 Probe.Hook[DProp](() -> {})
 Console.WriteLine(BProp.hooked)`, []string{"19", "21", "10"}}
-            yield[]object{"derived-and-mid-level-static-member-precedence", `package P
+            yield []object{"derived-and-mid-level-static-member-precedence", `package P
 import System
 import Clib
 
@@ -1633,7 +1633,7 @@ class Leaf : Mid, IS2 {
 
 Console.WriteLine(Probe.Z[DOverride]())
 Console.WriteLine(Probe.Z[Leaf]())`, []string{"99", "55"}}
-            yield[]object{"inherited-static-member-for-gsharp-declared-interface", `package P
+            yield []object{"inherited-static-member-for-gsharp-declared-interface", `package P
 import System
 import Clib
 
@@ -1657,7 +1657,7 @@ Console.WriteLine(typeof(DGs).GetInterfaceMap(typeof(IGs)).TargetMethods[1].Invo
                     "71",
                     "72"
                 }}
-            yield[]object{"inherited-async-static-method-from-generic-gs-base", (`package P
+            yield []object{"inherited-async-static-method-from-generic-gs-base", (`package P
 import System
 import System.Linq
 import System.Threading.Tasks
@@ -1680,7 +1680,7 @@ Console.WriteLine(Probe.Load[int32, DAsync](77))
 let iface = typeof(DAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IAsync` + "`" + `1").First()
 let task = cast[Task[Shape]](typeof(DAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 88}})!!)
 Console.WriteLine(task.GetAwaiter().GetResult().Tag)`), []string{"77", "88"}}
-            yield[]object{"inherited-valuetask-async-static-method-from-generic-gs-base", (`package P
+            yield []object{"inherited-valuetask-async-static-method-from-generic-gs-base", (`package P
 import System
 import System.Linq
 import System.Threading.Tasks
@@ -1700,7 +1700,7 @@ class DValueAsyncSym : BValueAsync[Shape], IValueAsync[Shape] {
 let iface = typeof(DValueAsyncSym).GetInterfaces().Where((i Type) -> i.Name == "IValueAsync` + "`" + `1").First()
 let vt = cast[ValueTask[Shape]](typeof(DValueAsyncSym).GetInterfaceMap(iface).TargetMethods[0].Invoke(nil, []object?{Shape{Tag: 95}})!!)
 Console.WriteLine(vt.GetAwaiter().GetResult().Tag)`), []string{"95"}}
-            yield[]object{"private-static-on-gs-base-with-unrelated-derived-instance-method", `package P
+            yield []object{"private-static-on-gs-base-with-unrelated-derived-instance-method", `package P
 import System
 import Clib
 
@@ -1721,7 +1721,7 @@ class DGsPriv : BGsPriv, IGsPriv {
 Console.WriteLine(typeof(DGsPriv).GetInterfaceMap(typeof(IGsPriv)).TargetMethods[0].Invoke(nil, []object?{}))`, []string{
                     "73"
                 }}
-            yield[]object{"direct-and-inherited-static-abstract-operator", `package P
+            yield []object{"direct-and-inherited-static-abstract-operator", `package P
 import System
 import Clib
 
@@ -1745,7 +1745,7 @@ Console.WriteLine(typeof(DOp).GetInterfaceMap(typeof(IOp)).TargetMethods[0].Invo
                     "17",
                     "27"
                 }}
-            yield[]object{"private-static-on-gs-base-that-already-implements-interface", `package P
+            yield []object{"private-static-on-gs-base-that-already-implements-interface", `package P
 import System
 import Clib
 
@@ -1761,7 +1761,7 @@ class DPriv2 : BPriv, IS2 {
 
 Console.WriteLine(Probe.Z[DPriv]())
 Console.WriteLine(Probe.Z[DPriv2]())`, []string{"31", "31"}}
-            yield[]object{"generic-static-method-with-renamed-type-parameter-in-slice", `package P
+            yield []object{"generic-static-method-with-renamed-type-parameter-in-slice", `package P
 import System
 import Clib
 
@@ -1786,21 +1786,21 @@ Console.WriteLine(m.Invoke(nil, []object?{[]string{"a", "b", "c"}}))`, []string{
         /// static-abstract members are diagnosed at compile time.
         /// @returns Case name, G# source, expected diagnostic ID, expected message fragment.
         func MissingOrMismatchedClrStaticCases() sequence[[]object] {
-            yield[]object{"missing-static-abstract-method", `package P
+            yield []object{"missing-static-abstract-method", `package P
 import System
 import Clib
 
 struct SM : IS {
 }
 Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
-            yield[]object{"missing-inherited-static-abstract-method", `package P
+            yield []object{"missing-inherited-static-abstract-method", `package P
 import System
 import Clib
 
 struct SM : IS2 {
 }
 Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
-            yield[]object{"mismatched-return-type-on-static-abstract-method", `package P
+            yield []object{"mismatched-return-type-on-static-abstract-method", `package P
 import System
 import Clib
 
@@ -1810,7 +1810,7 @@ struct SM : IS {
     }
 }
 Console.WriteLine(Probe.Z[SM]())`, "GS0331", "'Clib.IS.Z'"}
-            yield[]object{"instance-method-instead-of-static-abstract-method", `package P
+            yield []object{"instance-method-instead-of-static-abstract-method", `package P
 import System
 import Clib
 
@@ -1818,7 +1818,7 @@ struct SM : IS {
     func Z() int32 { return 1 }
 }
 Console.WriteLine(Probe.Z[SM]())`, "GS0332", "'Clib.IS.Z'"}
-            yield[]object{"private-base-static-method-does-not-satisfy-slot", `package P
+            yield []object{"private-base-static-method-does-not-satisfy-slot", `package P
 import System
 import Clib
 
@@ -1830,7 +1830,7 @@ open class B {
 class D : B, IS {
 }
 Console.WriteLine(Probe.Z[D]())`, "GS0331", "'Clib.IS.Z'"}
-            yield[]object{"missing-symbolic-generic-static-abstract-method", `package P
+            yield []object{"missing-symbolic-generic-static-abstract-method", `package P
 import System
 import Clib
 
@@ -1838,14 +1838,14 @@ class Shape { }
 struct SM : IH2[Shape] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IH[Shape].H(T)'"}
-            yield[]object{"missing-static-abstract-property", `package P
+            yield []object{"missing-static-abstract-property", `package P
 import System
 import Clib
 
 struct SM : IP2 {
 }
 Console.WriteLine(Probe.P[SM]())`, "GS0397", "'Clib.IP.P' (missing static property)"}
-            yield[]object{"getter-only-for-get-set-static-abstract-property", `package P
+            yield []object{"getter-only-for-get-set-static-abstract-property", `package P
 import System
 import Clib
 
@@ -1857,7 +1857,7 @@ struct SM : IPS {
     }
 }
 Console.WriteLine(Probe.SetThenGet[SM](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
-            yield[]object{"private-base-setter-for-get-set-static-abstract-property", `package P
+            yield []object{"private-base-setter-for-get-set-static-abstract-property", `package P
 import System
 import Clib
 
@@ -1872,14 +1872,14 @@ open class B {
 class D : B, IPS {
 }
 Console.WriteLine(Probe.SetThenGet[D](1))`, "GS0397", "'Clib.IPS.Q' (setter)"}
-            yield[]object{"missing-static-abstract-event", `package P
+            yield []object{"missing-static-abstract-event", `package P
 import System
 import Clib
 
 struct SM : IEv2 {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IEv.Changed'"}
-            yield[]object{"mismatched-ref-kind-on-gsharp-interface-static-method", `package P
+            yield []object{"mismatched-ref-kind-on-gsharp-interface-static-method", `package P
 import System
 import Clib
 
@@ -1896,7 +1896,7 @@ open class BRef {
 class DRef : BRef, IGsRef {
 }
 Console.WriteLine("x")`, "GS0331", "'IGsRef.Z'"}
-            yield[]object{"mismatched-return-ref-kind-on-gsharp-interface-static-property", `package P
+            yield []object{"mismatched-return-ref-kind-on-gsharp-interface-static-property", `package P
 import System
 import Clib
 
@@ -1914,7 +1914,7 @@ open class BPropRef {
 class DPropRef : BPropRef, IGsPropRef {
 }
 Console.WriteLine("x")`, "GS0397", "'IGsPropRef.P' (missing static property)"}
-            yield[]object{"symbolic-derived-default-does-not-satisfy-distinct-instantiation", `package P
+            yield []object{"symbolic-derived-default-does-not-satisfy-distinct-instantiation", `package P
 import System
 import Clib
 
@@ -1923,7 +1923,7 @@ class Other { }
 struct S : IDefaultedGeneric[Shape], IH[Other] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IH[Other].H(T)'"}
-            yield[]object{"multi-parameter-derived-default-leaves-second-parameter-abstract", `package P
+            yield []object{"multi-parameter-derived-default-leaves-second-parameter-abstract", `package P
 import System
 import Clib
 
@@ -1931,21 +1931,21 @@ struct S : IDefaultedFirstOverload {
 }
 let _ = MultiConstraint[int32, int32].Touch(0)
 Console.WriteLine("x")`, "GS0331", "'Clib.IGenOverload.Pick(U)'"}
-            yield[]object{"missing-static-abstract-operator", `package P
+            yield []object{"missing-static-abstract-operator", `package P
 import System
 import Clib
 
 struct SM : IOp {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IOp.op_Addition(Clib.IOp, int32)'"}
-            yield[]object{"conflicting-sibling-derived-interface-defaults", `package P
+            yield []object{"conflicting-sibling-derived-interface-defaults", `package P
 import System
 import Clib
 
 struct SDiamond : ILeft, IRight {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IS.Z'"}
-            yield[]object{"task-async-does-not-satisfy-valuetask-symbolic-slot", `package P
+            yield []object{"task-async-does-not-satisfy-valuetask-symbolic-slot", `package P
 import System
 import Clib
 
@@ -1958,7 +1958,7 @@ open class BTaskAsync[T] {
 class DWrongAsync : BTaskAsync[Shape], IValueAsync[Shape] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IValueAsync[Shape].Load(T)'"}
-            yield[]object{"async-void-does-not-satisfy-task-slot", `package P
+            yield []object{"async-void-does-not-satisfy-task-slot", `package P
 import System
 import Clib
 
@@ -1968,14 +1968,14 @@ struct SAsyncVoid : IAsyncTask {
     }
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IAsyncTask.Run"}
-            yield[]object{"partial-function-pointer-default-leaves-cdecl-overload-abstract", `package P
+            yield []object{"partial-function-pointer-default-leaves-cdecl-overload-abstract", `package P
 import System
 import Clib
 
 struct SFnPtrMissing : IFnPtrOverloadDefaultedManagedOnly[int32] {
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IFnPtrOverload[int32].Call"}
-            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-instance-slot", `package P
+            yield []object{"value-nullable-mismatch-in-symbolic-tuple-instance-slot", `package P
 import System
 import Clib
 
@@ -1986,7 +1986,7 @@ class BadTup : ITup[Shape] {
     func Pair[U](x Shape, y (U, int32)) (Shape, U) { return (x, y.Item1) }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.ITup[Shape].M"}
-            yield[]object{"value-nullable-mismatch-in-symbolic-tuple-static-slot", `package P
+            yield []object{"value-nullable-mismatch-in-symbolic-tuple-static-slot", `package P
 import System
 import Clib
 
@@ -1998,7 +1998,7 @@ struct BadSTup : ISTup[Shape] {
     }
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.ISTup[Shape].Take"}
-            yield[]object{"fixed-array-does-not-satisfy-symbolic-slice-slot", `package P
+            yield []object{"fixed-array-does-not-satisfy-symbolic-slice-slot", `package P
 import System
 import Clib
 
@@ -2008,7 +2008,7 @@ class BadArr : IArr[Shape] {
     func B[U](us []U, x Shape) int32 { return 0 }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IArr[Shape].A"}
-            yield[]object{"erased-list-object-does-not-satisfy-symbolic-list-slot", `package P
+            yield []object{"erased-list-object-does-not-satisfy-symbolic-list-slot", `package P
 import System
 import System.Collections.Generic
 import Clib
@@ -2018,7 +2018,7 @@ class BadList : IListConsumer[Shape] {
     func Consume(items List[object]) int32 { return items.Count }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IListConsumer[Shape].Consume"}
-            yield[]object{"structural-function-type-does-not-satisfy-nominal-delegate-slot", `package P
+            yield []object{"structural-function-type-does-not-satisfy-nominal-delegate-slot", `package P
 import System
 import Clib
 
@@ -2027,7 +2027,7 @@ class BadNominal : INominalDel[Shape] {
     func Apply(f (Shape) -> int32) int32 { return f(Shape()) }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.INominalDel[Shape].Apply"}
-            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-instance-slot", `package P
+            yield []object{"value-tuple-does-not-satisfy-reference-tuple-instance-slot", `package P
 import System
 import Clib
 
@@ -2040,7 +2040,7 @@ class BadRefTup : IRefTup[Shape] {
     }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].M"}
-            yield[]object{"value-tuple-does-not-satisfy-concrete-reference-tuple-slot", `package P
+            yield []object{"value-tuple-does-not-satisfy-concrete-reference-tuple-slot", `package P
 import System
 import Clib
 
@@ -2053,7 +2053,7 @@ class BadConcreteRefTup : IRefTup[Shape] {
     }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IRefTup[Shape].Concrete"}
-            yield[]object{"value-tuple-does-not-satisfy-reference-tuple-static-slot", `package P
+            yield []object{"value-tuple-does-not-satisfy-reference-tuple-static-slot", `package P
 import System
 import Clib
 
@@ -2066,7 +2066,7 @@ class BadStaticRefTup : IRefTup[Shape] {
     }
 }
 Console.WriteLine("x")`, "GS0331", "'Clib.IRefTup[Shape].MakeS"}
-            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-slot", `package P
+            yield []object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-slot", `package P
 import System
 import System.Collections.Generic
 import Clib
@@ -2081,7 +2081,7 @@ class BadRefTupMap : IMapAndSeq[Tuple[int32, int32]] {
     }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountMap"}
-            yield[]object{"value-tuple-sequence-does-not-satisfy-reference-tuple-enumerable-slot", `package P
+            yield []object{"value-tuple-sequence-does-not-satisfy-reference-tuple-enumerable-slot", `package P
 import System
 import System.Collections.Generic
 import Clib
@@ -2096,7 +2096,7 @@ class BadRefTupSeq : IMapAndSeq[Tuple[int32, int32]] {
     }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IMapAndSeq[System.Tuple[int32, int32]].CountSeq"}
-            yield[]object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-property", `package P
+            yield []object{"value-tuple-map-does-not-satisfy-reference-tuple-dictionary-property", `package P
 import System
 import System.Collections.Generic
 
@@ -2107,21 +2107,21 @@ class BadRefTupDictProp : IRefTupDictProp {
     prop Items map[(int32, int32), int32] { get { return map[(int32, int32), int32]{} } }
 }
 Console.WriteLine("x")`, "GS0504", "'IRefTupDictProp.Items'"}
-            yield[]object{"slice-does-not-satisfy-fixed-array-equatable-slot", `package P
+            yield []object{"slice-does-not-satisfy-fixed-array-equatable-slot", `package P
 import System
 
 class BadFixedEq : IEquatable[[3]int32] {
     func Equals(other []int32) bool { return true }
 }
 Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
-            yield[]object{"wrong-length-fixed-array-does-not-satisfy-fixed-array-equatable-slot", `package P
+            yield []object{"wrong-length-fixed-array-does-not-satisfy-fixed-array-equatable-slot", `package P
 import System
 
 class BadFixedLenEq : IEquatable[[3]int32] {
     func Equals(other [4]int32) bool { return true }
 }
 Console.WriteLine("x")`, "GS0187", "'System.IEquatable[[3]int32].Equals"}
-            yield[]object{"nested-slice-does-not-satisfy-nested-fixed-array-equatable-slot", `package P
+            yield []object{"nested-slice-does-not-satisfy-nested-fixed-array-equatable-slot", `package P
 import System
 import System.Collections.Generic
 
@@ -2129,7 +2129,7 @@ class BadNestedFixedEq : IEquatable[List[[3]int32]] {
     func Equals(other List[[]int32]) bool { return true }
 }
 Console.WriteLine("x")`, "GS0187", "'System.IEquatable[System.Collections.Generic.List[[3]int32]].Equals"}
-            yield[]object{"inherited-reference-tuple-slot-rejects-value-tuple", `package P
+            yield []object{"inherited-reference-tuple-slot-rejects-value-tuple", `package P
 import System
 import Clib
 
@@ -2138,7 +2138,7 @@ class BadInheritedRefTup : IRefTupDerived[Shape] {
     func M(v (Shape, (int32, int32))) int32 { return 1 }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IRefTupBase"}
-            yield[]object{"nullable-task-factory-slot-rejects-erased-object-async-return", `package P
+            yield []object{"nullable-task-factory-slot-rejects-erased-object-async-return", `package P
 import System
 import System.Threading.Tasks
 import Clib
@@ -2148,7 +2148,7 @@ class BadNullableTaskFactory : IFactory[Task[Shape]?] {
     async func Create() object { return Shape() }
 }
 Console.WriteLine("x")`, "GS0187", "'Clib.IFactory[System.Threading.Tasks.Task[Shape]?].Create"}
-            yield[]object{"select-await-task-of-nullable-reference-tuple-preserves-nested-nullability", `package P
+            yield []object{"select-await-task-of-nullable-reference-tuple-preserves-nested-nullability", `package P
 import System
 import Clib
 
@@ -2166,7 +2166,7 @@ Console.WriteLine("x")`, "GS0155", "Cannot convert type 'string?' to 'string'"}
         /// Issue #4626: symbolic CLR interface signature matcher end-to-end cases.
         /// @returns Case name, G# source, expected stdout lines.
         func SymbolicSignatureMatcherCases() sequence[[]object] {
-            yield[]object{"symbolic-async-task-valuetask-and-async-sequence", (`package P
+            yield []object{"symbolic-async-task-valuetask-and-async-sequence", (`package P
 import System
 import System.Linq
 import System.Threading.Tasks
@@ -2234,7 +2234,7 @@ let streamEnum = StreamImpl().Stream(Shape{Tag: 16}).GetAsyncEnumerator()
 if streamEnum.MoveNextAsync().AsTask().GetAwaiter().GetResult() {
     Console.WriteLine(streamEnum.Current.Tag)
 }`), []string{"10", "11", "12", "13", "17", "18", "14", "15", "16"}}
-            yield[]object{"symbolic-tuples-long-tuples-and-open-generic-rows", (`package P
+            yield []object{"symbolic-tuples-long-tuples-and-open-generic-rows", (`package P
 import System
 import System.Linq
 import Clib
@@ -2324,7 +2324,7 @@ Console.WriteLine(Probe.CallRefTupDerived[Shape](InheritedRefTupImpl(), Shape{Ta
                     "77",
                     "79"
                 }}
-            yield[]object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
+            yield []object{"symbolic-function-delegate-pointer-nullable-map-and-sequence", (`package P
 import System
 import System.Collections.Generic
 import System.Linq

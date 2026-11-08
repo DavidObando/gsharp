@@ -1069,13 +1069,13 @@ partial class CSharpToGSharpTranslator {
             if symbol.Name != "_" || underscoreParameter == nil {
                 return this.EmittedName(symbol, symbol.Name)
             }
-            // Issue #3467: gsc accepts `_` as a (repeatable) discard parameter
+            // Issue #3467 / #4307: gsc accepts `_` as a (repeatable) discard parameter
             // name, so an unreferenced C# `_` parameter keeps its spelling. A
             // single `_` parameter that the body actually READS (legal C#: `_`
             // is only a discard when it cannot bind) still needs a real
             // identifier, since G# `_` is a true blank; only that case renames
-            // to `__underscore` (paired with the identifier-reference rewrite
-            // in TranslateIdentifierName).
+            // to `underscore` via EmittedNameAllocator (paired with the
+            // identifier-reference rewrite in TranslateIdentifierName).
             let underscoreCount = if underscoreParameter.Parent is ParameterListSyntax parameterList {
                 parameterList.Parameters.Count(
                     (p Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax) -> p.Identifier.ValueText == "_"
@@ -1109,7 +1109,7 @@ partial class CSharpToGSharpTranslator {
                     .Equals(model.GetSymbolInfo(identifier).Symbol, symbol)
             )
             return if referenced {
-                "__underscore"
+                this.EmittedName(symbol, "underscore")
             } else {
                 "_"
             }

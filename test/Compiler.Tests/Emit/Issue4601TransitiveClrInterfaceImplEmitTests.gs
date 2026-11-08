@@ -277,7 +277,7 @@ public static class Probe
         /// @returns Case name, G# source, expected stdout lines.
         func MisdispatchedCases() sequence[[]object] {
             // The issue's repro: an implicit property for `IBaseI.Value`.
-            yield[]object{"implicit-property-over-imported-base", `package P
+            yield []object{"implicit-property-over-imported-base", `package P
 import System
 import Clib
 
@@ -288,7 +288,7 @@ class Derived : Base, IDerivedI {
 Console.WriteLine(Probe.Read(Derived()))
 Console.WriteLine(Derived().Value)`, []string{"2", "2"}}
             // A diamond: `ID : IB, IC`, both over `IA`.
-            yield[]object{"diamond-base-interfaces", `package P
+            yield []object{"diamond-base-interfaces", `package P
 import System
 import Clib
 
@@ -298,7 +298,7 @@ class DD : BaseD, ID {
 
 Console.WriteLine(Probe.A(DD()))`, []string{"4"}}
             // A generic interface closed over a CLR type.
-            yield[]object{"generic-interface-over-imported-generic-base", `package P
+            yield []object{"generic-interface-over-imported-generic-base", `package P
 import System
 import Clib
 
@@ -309,7 +309,7 @@ class GG : BaseG[string], IG2[string] {
 Console.WriteLine(Probe.G(GG()))`, []string{"gg"}}
             // The BCL shape from the issue: `IList[int32]` re-listed over
             // `Collection[int32]`, member for the `ICollection[int32]` slot.
-            yield[]object{"bcl-ilist-over-collection", `package P
+            yield []object{"bcl-ilist-over-collection", `package P
 import System
 import System.Collections.Generic
 import System.Collections.ObjectModel
@@ -321,7 +321,7 @@ class Coll : Collection[int32], IList[int32] {
 Console.WriteLine((Coll() as ICollection[int32])!!.IsReadOnly)`, []string{"True"}}
             // Issue #4615: explicit implementation of a base-interface slot
             // closed over a G# type must not emit an erased `IF<object>` row.
-            yield[]object{"explicit-base-interface-slot-closed-over-gs-type", `package P
+            yield []object{"explicit-base-interface-slot-closed-over-gs-type", `package P
 import System
 import Clib
 
@@ -393,7 +393,7 @@ Console.WriteLine(extra + extra2 + pairVal.Tag + pairCount)`, []string{"5", "9",
             // The negative control: re-listing `IDerivedI` without declaring a
             // member keeps the imported base's EXPLICIT implementation. The added
             // `IBaseI` row must not steal that mapping.
-            yield[]object{"no-member-keeps-the-base-explicit-implementation", `package P
+            yield []object{"no-member-keeps-the-base-explicit-implementation", `package P
 import System
 import Clib
 
@@ -403,7 +403,7 @@ class NoMember : ExplicitBase, IDerivedI {
 Console.WriteLine(Probe.Read(NoMember()))`, []string{"10"}}
             // An explicit implementation of a base-interface slot. The #985
             // bridge already emitted the explicit target's row before the fix.
-            yield[]object{"explicit-implementation-of-a-base-interface-slot", `package P
+            yield []object{"explicit-implementation-of-a-base-interface-slot", `package P
 import System
 import Clib
 
@@ -415,7 +415,7 @@ Console.WriteLine(Probe.M(DX()))`, []string{"3"}}
             // Two same-named G# types (`Shape`, `Outer.Shape`) as arguments of one
             // generic interface: the rows de-duplicate on the TypeSpec signature,
             // never on a display name that would conflate them and drop a row.
-            yield[]object{"same-named-type-arguments-keep-their-rows", `package P
+            yield []object{"same-named-type-arguments-keep-their-rows", `package P
 import System
 import Clib
 
@@ -431,7 +431,7 @@ Console.WriteLine(Probe.Is[Outer.Shape](X()))
 Console.WriteLine(Probe.Is[Outer.Shape](Y()))`, []string{"True", "True", "True"}}
             // Two closed instantiations of one generic interface: neither row may
             // be lost to de-duplication.
-            yield[]object{"two-instantiations-of-one-interface", `package P
+            yield []object{"two-instantiations-of-one-interface", `package P
 import System
 
 class Two : IComparable[int32], IComparable[string] {
@@ -447,7 +447,7 @@ Console.WriteLine((Two() as IComparable[string])!!.CompareTo("x"))`, []string{"1
         /// `GetInterfaces` computes the closure itself and cannot tell).
         /// @returns Case name, G# source, type name, expected rows.
         func RowCases() sequence[[]object] {
-            yield[]object{"concrete-bcl-interface", `package P
+            yield []object{"concrete-bcl-interface", `package P
 import System
 import System.Collections.Generic
 import System.Collections.ObjectModel
@@ -458,7 +458,7 @@ class Coll : Collection[int32], IList[int32] {
             // A symbolic argument (a same-compilation class), with the #985
             // non-generic bridge: the bridge's `IEnumerable` and the closure's
             // must collapse to one row.
-            yield[]object{"symbolic-argument-with-bridge", `package P
+            yield []object{"symbolic-argument-with-bridge", `package P
 import System
 import System.Collections
 import System.Collections.Generic
@@ -473,7 +473,7 @@ class RC : IReadOnlyCollection[Shape] {
     private func GetEnumerator() IEnumerator { return GetEnumerator() }
 }`, "RC", []string{"IReadOnlyCollection`1<Shape>", "IEnumerable`1<Shape>", "IEnumerable"}}
             // A class type parameter as the argument.
-            yield[]object{"type-parameter-argument", `package P
+            yield []object{"type-parameter-argument", `package P
 import System
 import Clib
 
@@ -481,7 +481,7 @@ class Box[T] : IG2[T] {
     func Get() T { return default(T) }
 }`, "Box`1", []string{"IG2`1<!0>", "IG`1<!0>"}}
             // Same-named argument types stay distinct rows.
-            yield[]object{"same-named-type-arguments", `package P
+            yield []object{"same-named-type-arguments", `package P
 import System
 import Clib
 
@@ -496,7 +496,7 @@ class X : IMark2[Shape], IMark2[Outer.Shape] { }`, "X", []string{
                     "IMark`1<Shape>"
                 }}
             // A diamond lists the shared base once.
-            yield[]object{"diamond", `package P
+            yield []object{"diamond", `package P
 import System
 import Clib
 
@@ -506,7 +506,7 @@ class DD : BaseD, ID {
             // Issue #4615: an explicit implementation on an inherited generic
             // interface closed over a G# type keeps only the symbolic rows,
             // never an erased `IF`1<Object>` row.
-            yield[]object{"explicit-symbolic-base-interface-slot", `package P
+            yield []object{"explicit-symbolic-base-interface-slot", `package P
 import System
 import Clib
 

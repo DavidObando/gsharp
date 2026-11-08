@@ -165,7 +165,7 @@ Console.WriteLine(Run())`)
         private const RunTimeout int32 = 30000
 
         func Rows() IEnumerable[[]object] {
-            yield[]object{"s01a_and_right_operand_sees_left_call_effect", `import System
+            yield []object{"s01a_and_right_operand_sees_left_call_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -182,7 +182,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@14:22", "reject", ""}
-            yield[]object{"s01b_or_right_operand_sees_left_call_effect", `import System
+            yield []object{"s01b_or_right_operand_sees_left_call_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -199,7 +199,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@14:27", "reject", ""}
-            yield[]object{"s01c_and_in_then_branch_restores_fact_for_else_branch", `import System
+            yield []object{"s01c_and_in_then_branch_restores_fact_for_else_branch", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -220,7 +220,7 @@ func Run(flag bool) int32 {
     return 2
 }
 Console.WriteLine(Run(false))`, "", "run", "1"}
-            yield[]object{"s02a_if_expression_then_branch_sees_condition_effect", `import System
+            yield []object{"s02a_if_expression_then_branch_sees_condition_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -237,7 +237,7 @@ func Run() int32 {
     return v
 }
 Console.WriteLine(Run())`, "GS0158@14:29", "reject", ""}
-            yield[]object{"s02b_if_expression_else_branch_sees_condition_effect", `import System
+            yield []object{"s02b_if_expression_else_branch_sees_condition_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -254,7 +254,7 @@ func Run() int32 {
     return v
 }
 Console.WriteLine(Run())`, "GS0158@14:45", "reject", ""}
-            yield[]object{"s02c_conditional_expression_arms_see_condition_effect", `import System
+            yield []object{"s02c_conditional_expression_arms_see_condition_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -271,7 +271,7 @@ func Run() int32 {
     return v
 }
 Console.WriteLine(Run())`, "GS0158@14:26", "reject", ""}
-            yield[]object{"s02d_if_expression_then_kill_restored_for_else_branch", `import System
+            yield []object{"s02d_if_expression_then_kill_restored_for_else_branch", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -292,7 +292,7 @@ func Run(flag bool) int32 {
     }
 }
 Console.WriteLine(Run(false))`, "", "run", "1"}
-            yield[]object{"s03a_while_and_for_headers_and_body_see_condition_effect", `import System
+            yield []object{"s03a_while_and_for_headers_and_body_see_condition_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -322,7 +322,7 @@ func Run2() int32 {
     return 2
 }
 Console.WriteLine(Run1() + Run2())`, "GS0158@17:18 GS0158@25:46", "reject", ""}
-            yield[]object{"s03b_while_header_earlier_proof_killed_before_later_and_operand", `import System
+            yield []object{"s03b_while_header_earlier_proof_killed_before_later_and_operand", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -340,7 +340,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@13:37", "reject", ""}
-            yield[]object{"s03c_for_ellipsis_upper_bound_sees_lower_bound_effect", `import System
+            yield []object{"s03c_for_ellipsis_upper_bound_sees_lower_bound_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -359,7 +359,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@14:27", "reject", ""}
-            yield[]object{"s04a_if_let_statement_then_branch_sees_initializer_effect", `import System
+            yield []object{"s04a_if_let_statement_then_branch_sees_initializer_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -376,7 +376,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@14:34", "reject", ""}
-            yield[]object{"s04b_if_let_statement_second_binding_sees_first_initializer_effect", `import System
+            yield []object{"s04b_if_let_statement_second_binding_sees_first_initializer_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -396,7 +396,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@15:38", "reject", ""}
-            yield[]object{"s04c_if_let_statement_guard_and_branches_see_guard_effect", `import System
+            yield []object{"s04c_if_let_statement_guard_and_branches_see_guard_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -416,7 +416,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@16:18", "reject", ""}
-            yield[]object{"s04d_if_let_expression_arms_see_initializer_effect", `import System
+            yield []object{"s04d_if_let_expression_arms_see_initializer_effect", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -432,7 +432,7 @@ func Run() int32 {
     return if let c = Get(h) { x.Value + c.Value } else { 2 }
 }
 Console.WriteLine(Run())`, "GS0158@14:34", "reject", ""}
-            yield[]object{"s05a_nil_guard_killed_by_later_and_operand_in_if", `import System
+            yield []object{"s05a_nil_guard_killed_by_later_and_operand_in_if", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -448,7 +448,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@13:40", "reject", ""}
-            yield[]object{"s05b_type_test_killed_by_later_and_operand_in_if", `import System
+            yield []object{"s05b_type_test_killed_by_later_and_operand_in_if", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -464,7 +464,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@13:38", "reject", ""}
-            yield[]object{"s05c_or_else_narrowing_killed_by_later_or_operand", `import System
+            yield []object{"s05c_or_else_narrowing_killed_by_later_or_operand", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -483,7 +483,7 @@ func Run() int32 {
     }
 }
 Console.WriteLine(Run())`, "GS0158@16:18", "reject", ""}
-            yield[]object{"s05d_control_test_after_call_narrows_branch", `import System
+            yield []object{"s05d_control_test_after_call_narrows_branch", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -499,7 +499,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2"}
-            yield[]object{"s05e_control_plain_local_not_closure_assigned_keeps_narrowing_across_call", `import System
+            yield []object{"s05e_control_plain_local_not_closure_assigned_keeps_narrowing_across_call", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -516,7 +516,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "1"}
-            yield[]object{"s06_subtype_fact_removed_before_right_operand_type_test", `import System
+            yield []object{"s06_subtype_fact_removed_before_right_operand_type_test", `import System
 
 open class Pet {}
 class Dog : Pet {}
@@ -535,7 +535,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "1"}
-            yield[]object{"s07_nullable_value_fact_removed_before_right_operand_type_test", `import System
+            yield []object{"s07_nullable_value_fact_removed_before_right_operand_type_test", `import System
 
 class Holder { var Callback () -> void = func() { } }
 func Check(h Holder) bool {
@@ -551,7 +551,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "", "run", "2"}
-            yield[]object{"s08a_if_expression_property_pattern_getter_effect_does_not_narrow", `import System
+            yield []object{"s08a_if_expression_property_pattern_getter_effect_does_not_narrow", `import System
 
 open class Pet { var Value int32 = 1 }
 class Dog : Pet {
@@ -571,7 +571,7 @@ func Run() int32 {
     return r
 }
 Console.WriteLine(Run())`, "GS0158@17:38", "reject", ""}
-            yield[]object{"s08b_if_expression_constant_pattern_equals_effect_does_not_narrow", `import System
+            yield []object{"s08b_if_expression_constant_pattern_equals_effect_does_not_narrow", `import System
 
 class E {
     var Clear () -> void = func() { }
@@ -588,7 +588,7 @@ func Run() int32 {
     return if x is 1 { x.GetHashCode() } else { 2 }
 }
 Console.WriteLine(Run())`, "GS0159@15:26", "reject", ""}
-            yield[]object{"s08c_switch_statement_property_and_constant_pattern_effects_do_not_narrow", `import System
+            yield []object{"s08c_switch_statement_property_and_constant_pattern_effects_do_not_narrow", `import System
 
 open class Pet { var Value int32 = 1 }
 class Dog : Pet {
@@ -627,7 +627,7 @@ func Run2() int32 {
     }
 }
 Console.WriteLine(Run1() + Run2())`, "GS0158@26:38 GS0159@35:27", "reject", ""}
-            yield[]object{"s08d_and_right_operand_after_pattern_with_getter_effect_does_not_narrow", `import System
+            yield []object{"s08d_and_right_operand_after_pattern_with_getter_effect_does_not_narrow", `import System
 
 open class Pet { var Value int32 = 1 }
 class Dog : Pet {
@@ -647,7 +647,7 @@ func Run() int32 {
     return 2
 }
 Console.WriteLine(Run())`, "GS0158@17:33", "reject", ""}
-            yield[]object{"r01_conditional_address_mismatched_narrowed_storage_rejected", `import System
+            yield []object{"r01_conditional_address_mismatched_narrowed_storage_rejected", `import System
 
 open class Pet {}
 class Dog : Pet {}
@@ -658,7 +658,7 @@ func Run() int32 {
     return 1
 }
 Console.WriteLine(Run())`, "GS0260@8:15", "reject", ""}
-            yield[]object{"r02_deferred_argument_kills_fact_for_second_argument", `import System
+            yield []object{"r02_deferred_argument_kills_fact_for_second_argument", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -675,7 +675,7 @@ func Run() int32 {
     return Sink(if Check(h) { nil } else { "ok" }, x.Value)
 }
 Console.WriteLine(Run())`, "GS0158@15:54", "reject", ""}
-            yield[]object{"r03_contextual_rebind_preserves_entry_fact", `import System
+            yield []object{"r03_contextual_rebind_preserves_entry_fact", `import System
 
 class C { var Value int32 = 1 }
 class Holder { var Callback () -> void = func() { } }
@@ -696,7 +696,7 @@ func Run() int32 {
     return Consume(if x.Value > 0 && Check(h) { Dog() } else { Cat() })
 }
 Console.WriteLine(Run())`, "", "run", "1"}
-            yield[]object{"r04_nested_conditional_address_mismatched_storage_rejected", `import System
+            yield []object{"r04_nested_conditional_address_mismatched_storage_rejected", `import System
 
 open class Pet {}
 class Dog : Pet {}
@@ -707,7 +707,7 @@ func Run() int32 {
     return 1
 }
 Console.WriteLine(Run())`, "GS0260@8:15", "reject", ""}
-            yield[]object{"r05_block_argument_rebind_preserves_prefix_local_narrowing", `import System
+            yield []object{"r05_block_argument_rebind_preserves_prefix_local_narrowing", `import System
 
 class C { var Value int32 = 1 }
 interface IAnimal { func Speak() int32; }
@@ -723,7 +723,7 @@ func Run() int32 {
     })
 }
 Console.WriteLine(Run())`, "", "run", "1"}
-            yield[]object{"r06_conditional_true_default_uses_when_false_callable_aliases", `import System
+            yield []object{"r06_conditional_true_default_uses_when_false_callable_aliases", `import System
 
 class C { var Value int32 = 1 }
 func Run(flag bool, callback () -> bool) int32 {
@@ -736,7 +736,7 @@ func Run(flag bool, callback () -> bool) int32 {
     return (flag && (action = callback) is {}) ? default : (if action() { x.Value } else { 0 })
 }
 Console.WriteLine(Run(false, () -> true))`, "GS0158@11:77", "reject", ""}
-            yield[]object{"r07_trailing_condition_effects_use_entry_callable_aliases", `import System
+            yield []object{"r07_trailing_condition_effects_use_entry_callable_aliases", `import System
 
 class C { var Value int32 = 1 }
 func Run(flag bool, callback () -> bool) int32 {
@@ -758,7 +758,7 @@ func Run(flag bool, callback () -> bool) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> true))`, "GS0158@18:18", "reject", ""}
-            yield[]object{"r08_subtype_proof_preserved_across_nil_guard_both_orders", `import System
+            yield []object{"r08_subtype_proof_preserved_across_nil_guard_both_orders", `import System
 
 open class Pet {}
 class Dog : Pet { func Bark() int32 -> 1 }
@@ -780,7 +780,7 @@ func Check4(p Pet?) int32 {
 }
 let d Pet? = Dog()
 Console.WriteLine(Check1(d) + Check2(d) + Check3(d) + Check4(d))`, "", "run", "4"}
-            yield[]object{"r09_conditional_expression_in_left_operand_propagates_gained_callable_alias", `import System
+            yield []object{"r09_conditional_expression_in_left_operand_propagates_gained_callable_alias", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "hi"
@@ -794,7 +794,7 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "hi"))`, "", "run", "2"}
-            yield[]object{"r10_conditional_in_argument_after_nil_guard_matches_non_null_storage", `import System
+            yield []object{"r10_conditional_in_argument_after_nil_guard_matches_non_null_storage", `import System
 
 func Read(in v string) string -> v
 func Run(flag bool, s string?, t string) string {
@@ -802,7 +802,7 @@ func Run(flag bool, s string?, t string) string {
     return Read(in (flag ? s : t))
 }
 Console.WriteLine(Run(true, "ok", "alt"))`, "", "run", "ok"}
-            yield[]object{"r11_contextual_rebind_preserves_later_argument_callable_alias_write", `import System
+            yield []object{"r11_contextual_rebind_preserves_later_argument_callable_alias_write", `import System
 
 class C { var Value int32 = 7 }
 interface IAnimal { func Speak() int32; }
@@ -839,7 +839,7 @@ func Run(flag bool, callback () -> bool) int32 {
     )
 }
 Console.WriteLine(Run(true, () -> true))`, "", "run", "9"}
-            yield[]object{"r12_short_circuit_argument_propagates_joined_callable_alias_exit", `import System
+            yield []object{"r12_short_circuit_argument_propagates_joined_callable_alias_exit", `import System
 
 class C { var Value int32 = 7 }
 func Take(a bool, b int32) int32 -> b
@@ -863,7 +863,7 @@ func Run(flag bool, callback () -> bool) int32 {
     )
 }
 Console.WriteLine(Run(true, () -> true))`, "GS0158@21:25", "reject", ""}
-            yield[]object{"r13_if_join_non_null_keeps_bool_call_inside_logical_and", `import System
+            yield []object{"r13_if_join_non_null_keeps_bool_call_inside_logical_and", `import System
 
 func Run(input string?, flag bool) int32 {
     var s string? = input
@@ -874,7 +874,7 @@ func Run(input string?, flag bool) int32 {
     return s.Length
 }
 Console.WriteLine(Run(nil, true))`, "", "run", "8"}
-            yield[]object{"r14_conditional_byref_validates_both_arms_for_nested_and_out_nullability", `import System
+            yield []object{"r14_conditional_byref_validates_both_arms_for_nested_and_out_nullability", `import System
 import System.Collections.Generic
 
 func ReadList(in v List[string]) int32 -> v.Count
@@ -889,7 +889,7 @@ func Run(flag bool) int32 {
     return n
 }
 Console.WriteLine(Run(true))`, "GS0612@11:22 GS0612@12:14", "run", "0"}
-            yield[]object{"r15_conditional_address_preserves_platform_nullability_for_dereference", `import System
+            yield []object{"r15_conditional_address_preserves_platform_nullability_for_dereference", `import System
 
 @Oblivious
 class Legacy {
@@ -908,7 +908,7 @@ func Run(flag bool) int32 {
     }
 }
 Console.WriteLine(Run(true))`, "", "run", "42"}
-            yield[]object{"r16_standalone_conditional_address_mismatched_top_level_nullability_rejected", `import System
+            yield []object{"r16_standalone_conditional_address_mismatched_top_level_nullability_rejected", `import System
 
 func Run(flag bool) int32 {
     var a string = "ok"
@@ -917,7 +917,7 @@ func Run(flag bool) int32 {
     return a.Length
 }
 Console.WriteLine(Run(true))`, "GS0260@6:15", "reject", ""}
-            yield[]object{"r17_standalone_conditional_address_mismatched_nested_nullability_rejected", `import System
+            yield []object{"r17_standalone_conditional_address_mismatched_nested_nullability_rejected", `import System
 import System.Collections.Generic
 
 func Run(flag bool) int32 {
@@ -927,7 +927,7 @@ func Run(flag bool) int32 {
     return a[0].Length
 }
 Console.WriteLine(Run(false))`, "GS0260@7:15", "reject", ""}
-            yield[]object{"r18_legacy_conditional_ref_argument_applies_condition_effects", `import System
+            yield []object{"r18_legacy_conditional_ref_argument_applies_condition_effects", `import System
 
 class C { var Value string = "ok" }
 class Holder { var Callback () -> void = func() { } }
@@ -945,7 +945,7 @@ func Run() int32 {
     return Read(in (Check(h) ? in x.Value : in fallback))
 }
 Console.WriteLine(Run())`, "GS0158@16:37", "reject", ""}
-            yield[]object{"r19_for_post_alias_assignment_does_not_affect_condition_narrowing", `import System
+            yield []object{"r19_for_post_alias_assignment_does_not_affect_condition_narrowing", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "hi"
@@ -961,7 +961,7 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "hi"))`, "GS0158@12:18", "reject", ""}
-            yield[]object{"r20_while_let_and_for_ellipsis_propagate_gained_callable_aliases", `import System
+            yield []object{"r20_while_let_and_for_ellipsis_propagate_gained_callable_aliases", `import System
 
 class C { var Value int32 = 5 }
 func Run1(flag bool, callback () -> bool) int32 {
@@ -1004,7 +1004,7 @@ func Run2(flag bool, callback () -> bool) int32 {
     return 0
 }
 Console.WriteLine(Run1(true, () -> true) + Run2(true, () -> true))`, "", "run", "15"}
-            yield[]object{"r21_standalone_conditional_address_mismatched_nested_platform_nullability_rejected", `import System
+            yield []object{"r21_standalone_conditional_address_mismatched_nested_platform_nullability_rejected", `import System
 import System.Collections.Generic
 
 @Oblivious
@@ -1026,7 +1026,7 @@ func Run(flag bool) int32 {
     return a[0].Length
 }
 Console.WriteLine(Run(false))`, "GS0260@19:15", "reject", ""}
-            yield[]object{"r22_while_composed_condition_keeps_bool_call_postcondition", `import System
+            yield []object{"r22_while_composed_condition_keeps_bool_call_postcondition", `import System
 
 func Run(s string?, flag bool) int32 {
     while !string.IsNullOrEmpty(s) && flag {
@@ -1035,7 +1035,7 @@ func Run(s string?, flag bool) int32 {
     return 0
 }
 Console.WriteLine(Run("hello", true))`, "", "run", "5"}
-            yield[]object{"r23_implicit_static_self_call_rebind_restores_prebind_narrowing", `import System
+            yield []object{"r23_implicit_static_self_call_rebind_restores_prebind_narrowing", `import System
 import System.Reflection
 
 class Group {
@@ -1057,7 +1057,7 @@ shared class Helper {
 }
 let g = Group(Object(), typeof(string).GetMethod("IsNullOrEmpty"))
 Console.WriteLine(Helper.Check(g))`, "", "run", "2"}
-            yield[]object{"r24_standalone_conditional_address_mismatched_top_level_platform_nullability_rejected", `import System
+            yield []object{"r24_standalone_conditional_address_mismatched_top_level_platform_nullability_rejected", `import System
 
 @Oblivious
 class Legacy {
@@ -1072,7 +1072,7 @@ func Run(flag bool) int32 {
     return b.Length
 }
 Console.WriteLine(Run(false))`, "GS0260@12:15", "reject", ""}
-            yield[]object{"r25_statement_invalidation_uses_entry_callable_aliases_after_expression_export", `import System
+            yield []object{"r25_statement_invalidation_uses_entry_callable_aliases_after_expression_export", `import System
 
 class C { var Value int32 = 1 }
 func Run(flag bool, callback () -> bool) int32 {
@@ -1092,7 +1092,7 @@ func Run(flag bool, callback () -> bool) int32 {
     return x.Value
 }
 Console.WriteLine(Run(true, () -> true))`, "GS0158@18:14", "reject", ""}
-            yield[]object{"r26_while_bool_call_with_callback_effect_does_not_narrow_captured_local", `import System
+            yield []object{"r26_while_bool_call_with_callback_effect_does_not_narrow_captured_local", `import System
 import System.Diagnostics.CodeAnalysis
 
 class C { var Value int32 = 1 }
@@ -1129,7 +1129,7 @@ func Run3() int32 {
     return 0
 }
 Console.WriteLine(Run1(true) + Run2() + Run3())`, "GS0158@15:18 GS0158@24:18 GS0158@33:18", "reject", ""}
-            yield[]object{"r27_contextual_rebind_throwing_nested_branch_does_not_replay_restored_kill", `import System
+            yield []object{"r27_contextual_rebind_throwing_nested_branch_does_not_replay_restored_kill", `import System
 
 interface I { }
 class Dog : I { }
@@ -1149,7 +1149,7 @@ func Run(flag bool, other bool) int32 {
     return Consume(if flag { other ? throw Fail(h) : Dog{} } else { Cat{} }, x.Value)
 }
 Console.WriteLine(Run(true, false))`, "", "run", "7"}
-            yield[]object{"r28_pure_bool_call_postcondition_narrows_captured_local", `import System
+            yield []object{"r28_pure_bool_call_postcondition_narrows_captured_local", `import System
 
 func Run(input string?) int32 {
     var s string? = input

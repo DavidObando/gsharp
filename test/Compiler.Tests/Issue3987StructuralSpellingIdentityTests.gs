@@ -201,7 +201,7 @@ public static class Probes
             // The issue's own repro, in the ORDINARY imported-constructor probe
             // (ExpressionBinder), which is what makes it a `Conversion` gap rather
             // than anything specific to `: base(...)`.
-            yield[]object{"the-reported-repro-binds", `package P
+            yield []object{"the-reported-repro-binds", `package P
 import System
 import Interop
 
@@ -214,7 +214,7 @@ m["a"] = 1
 m["b"] = 2
 Console.WriteLine(makeMap[string, int32](m).Tag)`, []string{"map:2"}}
             // The tuple form of the same gap, against the same probe.
-            yield[]object{"a-tuple-over-an-open-element-reaches-a-valuetuple-parameter", `package P
+            yield []object{"a-tuple-over-an-open-element-reaches-a-valuetuple-parameter", `package P
 import System
 import Interop
 
@@ -228,7 +228,7 @@ Console.WriteLine(makeTuple[string]((7, "x")).Tag)`, []string{"tuple:7:x"}}
             // `ShouldCanonicalizeAgainst` guard precisely because rewriting the
             // target broke this direction; a rule in `Conversion` has no direction
             // to get wrong.
-            yield[]object{"the-imported-spelling-of-the-same-type-binds-too", `package P
+            yield []object{"the-imported-spelling-of-the-same-type-binds-too", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -244,7 +244,7 @@ Console.WriteLine(makeMap[string, int32](d).Tag)`, []string{"map:1"}}
             // this compilation. `Pair` has no CLR backing while binding, so
             // `map[string, Pair]`'s `ClrType` is null for exactly the same reason
             // an open `K` makes it null.
-            yield[]object{"a-map-over-a-same-compilation-element-binds", `package P
+            yield []object{"a-map-over-a-same-compilation-element-binds", `package P
 import System
 import Interop
 
@@ -263,7 +263,7 @@ Console.WriteLine(hold(m).Tag)`, []string{"map:1"}}
             // An 8-element tuple is `ValueTuple<T1..T7, TRest>` on the imported
             // side and a flat element list on G#'s, so the comparison has to unwind
             // the chain — otherwise exactly the long tuples keep failing.
-            yield[]object{"a-long-tuple-over-an-open-element-binds", `package P
+            yield []object{"a-long-tuple-over-an-open-element-binds", `package P
 import System
 import Interop
 
@@ -282,7 +282,7 @@ Console.WriteLine(makeBig[string]((1, 2, 3, 4, 5, 6, 7, "tail")).Tag)`, []string
             // symbolic tuple at an imported GENERIC METHOD's slot loses its
             // MethodSpec recovery. That is a different axis — issue #4000 — and
             // nothing here touches it.
-            yield[]object{"an-imported-static-method-takes-a-map-over-an-open-element", `package P
+            yield []object{"an-imported-static-method-takes-a-map-over-an-open-element", `package P
 import System
 import Interop
 
@@ -296,7 +296,7 @@ Console.WriteLine(countMap[string, int32](m))`, []string{"probe:1"}}
             // The issue's own control, kept as a row: the slice sibling in the same
             // file always bound, because `[]T -> IEnumerable[T]` has a rule of its
             // own. It must keep binding.
-            yield[]object{"control-the-slice-sibling-already-bound", `package P
+            yield []object{"control-the-slice-sibling-already-bound", `package P
 import System
 import Interop
 
@@ -307,7 +307,7 @@ func make[T](items []T) SeqHolder[T] {
 Console.WriteLine(make[int32]([]int32{1, 2, 3}).Tag)`, []string{"seq:3"}}
             // The issue's other control: the CLOSED map form bound all along,
             // because the `ClrType` comparison catches it before any of this runs.
-            yield[]object{"control-the-closed-map-and-tuple-were-never-broken", `package P
+            yield []object{"control-the-closed-map-and-tuple-were-never-broken", `package P
 import System
 import Interop
 
@@ -327,7 +327,7 @@ Console.WriteLine(closedMap(m).Tag)
 Console.WriteLine(closedTuple((4, "y")).Tag)`, []string{"map:3", "tuple:4:y"}}
             // A `: base(...)` row, so the position #3984 fixed locally is still
             // covered once its local canonicalization is gone.
-            yield[]object{"the-base-initializer-position-still-binds-without-its-workaround", `package P
+            yield []object{"the-base-initializer-position-still-binds-without-its-workaround", `package P
 import System
 import Interop
 
@@ -346,7 +346,7 @@ Console.WriteLine(Holder[string, int32](m).Tag)`, []string{"map:2"}}
         /// @returns Case name, G# source, expected diagnostic id.
         func RejectedCases() sequence[[]object] {
             // Key and value are positional; swapping them is a different type.
-            yield[]object{"the-key-and-value-still-have-to-match", `package P
+            yield []object{"the-key-and-value-still-have-to-match", `package P
 import System
 import Interop
 
@@ -359,7 +359,7 @@ Console.WriteLine(makeMap[string, int32](map[int32, string]{}).Tag)`, "GS0155"}
             // `Conversion` itself: `(int32, object)` is not `(int32, T)`, and the
             // erased `ValueTuple<int32, object>` both sides report is exactly the
             // trap.
-            yield[]object{"an-erased-tuple-spelling-does-not-satisfy-a-symbolic-element", `package P
+            yield []object{"an-erased-tuple-spelling-does-not-satisfy-a-symbolic-element", `package P
 import System
 import Interop
 
@@ -370,7 +370,7 @@ func makeTuple[T](pair (int32, object)) TupleHolder[T] {
 Console.WriteLine(makeTuple[string]((7, "x")).Tag)`, "GS0155"}
             // Same trap in the `: base(...)` position — the case that proves
             // deleting #3984's workaround did not re-open what it closed.
-            yield[]object{"an-erased-tuple-spelling-does-not-satisfy-a-base-initializer", `package P
+            yield []object{"an-erased-tuple-spelling-does-not-satisfy-a-base-initializer", `package P
 import System
 import Interop
 
@@ -381,7 +381,7 @@ class Pairish[T] : TupleHolder[T] {
 
 Console.WriteLine(Pairish[string]((7, "x")).Tag)`, "GS0155"}
             // Arity is part of the shape.
-            yield[]object{"the-tuple-arity-still-has-to-match", `package P
+            yield []object{"the-tuple-arity-still-has-to-match", `package P
 import System
 import Interop
 
@@ -391,7 +391,7 @@ func makeTuple[T](pair (int32, T, T)) TupleHolder[T] {
 
 Console.WriteLine(makeTuple[string]((7, "x", "y")).Tag)`, "GS0267"}
             // A map is not a tuple, however open either one is.
-            yield[]object{"a-map-is-not-a-tuple", `package P
+            yield []object{"a-map-is-not-a-tuple", `package P
 import System
 import Interop
 

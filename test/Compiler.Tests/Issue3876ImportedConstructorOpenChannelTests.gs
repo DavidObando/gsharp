@@ -187,7 +187,7 @@ public static class Relays
             // `Push` is what proves the choice, and the value is then received from
             // the ORIGINAL channel — a `ChannelReader<T>` constructor would push
             // nothing and the receive would block forever.
-            yield[]object{"an-open-element-channel-reaches-an-imported-constructor", `package P
+            yield []object{"an-open-element-channel-reaches-an-imported-constructor", `package P
 import System
 import Interop
 
@@ -207,7 +207,7 @@ Console.WriteLine(roundTrip[int32](ch, 41))`, []string{"1", "7", "1", "41"}}
             // (Kind 2) and takes what was pushed. Both were GS0267 before, and both
             // are IDENTITY conversions — which is what rules out the report's
             // "a missing conversion" reading.
-            yield[]object{"the-open-directional-spellings-pick-their-own-constructors", `package P
+            yield []object{"the-open-directional-spellings-pick-their-own-constructors", `package P
 import System
 import Interop
 
@@ -231,7 +231,7 @@ Console.WriteLine(takeOne[int32](ch))`, []string{"3", "1", "2", "9"}}
             // is one arm in the shared projection rather than a patch at the
             // constructor site: 11 is `Adopt(Channel<T>)` (not 22, the reader
             // overload) and 33 is the static, which never broke.
-            yield[]object{"an-open-channel-reaches-an-imported-instance-method", `package P
+            yield []object{"an-open-channel-reaches-an-imported-instance-method", `package P
 import System
 import Interop
 
@@ -245,7 +245,7 @@ Console.WriteLine(viaInstance[int32](chan[int32](1)))`, []string{"44"}}
             // `Gsharp.Concurrency.ChunkReader[T]` — and then actually read from,
             // so the constructed reader is not merely bound. Three elements are
             // sent and the first batch hands all three over at once.
-            yield[]object{"the-reported-chunkreader-repro-runs", `package P
+            yield []object{"the-reported-chunkreader-repro-runs", `package P
 import System
 import Gsharp.Concurrency
 
@@ -274,7 +274,7 @@ Console.WriteLine(firstBatchLength[int32](ch, 4))`, []string{"3"}}
             // is untouched by it (issue #3985) — before, both spellings were
             // hidden behind the blanket GS0267 — so what is pinned here is the
             // shape that works.
-            yield[]object{"a-nullable-open-channel-reaches-the-constructor-through-a-bang", `package P
+            yield []object{"a-nullable-open-channel-reaches-the-constructor-through-a-bang", `package P
 import System
 import Interop
 
@@ -289,7 +289,7 @@ Console.WriteLine(maybe[int32](chan[int32](2), 8))`, []string{"1", "1", "8"}}
             // Control, green on both sides: the identical constructor with a CLOSED
             // element. `chan[int32]` has a real `ClrType`, so the projection never
             // had to run and applicability always saw `Channel<int>`.
-            yield[]object{"a-closed-element-was-never-broken", `package P
+            yield []object{"a-closed-element-was-never-broken", `package P
 import System
 import Interop
 
@@ -307,7 +307,7 @@ Console.WriteLine(roundTripInt(ch, 41))`, []string{"1", "7", "1", "41"}}
             // forced on ADR-0174 D10. It binds through the one probe that already
             // consulted the shared erasure, and it must keep binding — the fix adds
             // an arm to the projection, it does not move the fallback.
-            yield[]object{"the-static-factory-workaround-still-binds", `package P
+            yield []object{"the-static-factory-workaround-still-binds", `package P
 import System
 import Interop
 
@@ -325,7 +325,7 @@ Console.WriteLine(viaFactory[int32](ch, 41))`, []string{"1", "1", "41"}}
             // G# symbols, never against CLR shapes, so it never needed the
             // projection — which is what rules out "open generics" and "the
             // constructor form" as the cause.
-            yield[]object{"a-user-declared-generic-class-was-never-broken", `package P
+            yield []object{"a-user-declared-generic-class-was-never-broken", `package P
 import System
 import Interop
 
@@ -353,7 +353,7 @@ Console.WriteLine(viaUserClass[int32](chan[int32](1)))`, []string{"5"}}
         func RejectedCases() sequence[[]object] {
             // Projecting an erased shape must not make everything applicable: a
             // second argument no constructor accepts is still no overload.
-            yield[]object{"a-wrong-argument-type-is-still-not-applicable", `package P
+            yield []object{"a-wrong-argument-type-is-still-not-applicable", `package P
 import System
 import Interop
 
@@ -368,7 +368,7 @@ Console.WriteLine(bad[int32](chan[int32](1)))`, "GS0267"}
             // an unrelated `T`. Red on both sides: `chan[string]` has a real
             // `ClrType`, so this pair always reached resolution and was always
             // declined.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import Interop
 
@@ -381,7 +381,7 @@ Console.WriteLine(mismatched[int32](chan[string](1)))`, "GS0267"}
             // The direction lattice is not widened by being projected: a
             // receive-only handle does not reach a class whose only constructor
             // takes a writer.
-            yield[]object{"receive-only-does-not-reach-a-send-only-constructor", `package P
+            yield []object{"receive-only-does-not-reach-a-send-only-constructor", `package P
 import System
 import Interop
 

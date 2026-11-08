@@ -5967,7 +5967,7 @@ internal shared class ObliviousNullabilityAnalyzer {
     ] {
         let original = receiverType!!.OriginalDefinition
         if receiverType!!.BaseType is INamedTypeSymbol baseType && original.BaseType is INamedTypeSymbol baseTemplate {
-            yield(baseType, baseTemplate)
+            yield (baseType, baseTemplate)
         }
         for iface in receiverType!!.Interfaces {
             let template INamedTypeSymbol? = original.Interfaces.FirstOrDefault(
@@ -5977,7 +5977,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 )
             )
             if template != nil {
-                yield(iface, template)
+                yield (iface, template)
             }
         }
     }

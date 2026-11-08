@@ -858,7 +858,7 @@ public static class Overloads
         /// @returns Case name, G# source, expected stdout lines.
         func NowBinding() sequence[[]object] {
             // THE ISSUE'S OWN REPRO, verbatim. GS0159 on the parent.
-            yield[]object{"the-issues-repro-a-class-bound-forwards-an-imported-interface", `package P
+            yield []object{"the-issues-repro-a-class-bound-forwards-an-imported-interface", `package P
 import System
 import HelperLib2
 
@@ -870,7 +870,7 @@ Console.WriteLine(callIt[DisposableBase]())`, []string{"method-ok"}}
             // The interface INHERITED from the bound's own base one level up. This
             // arm lands on `IsAssignableByName` over the bound's CLR type rather
             // than on the parameter's own interface list.
-            yield[]object{"an-interface-inherited-from-the-bounds-base", `package P
+            yield []object{"an-interface-inherited-from-the-bounds-base", `package P
 import System
 import HelperLib2
 
@@ -883,7 +883,7 @@ Console.WriteLine(callIt[DerivedDisposable]())`, []string{"method-ok"}}
             // binding, so the walk must fall through to
             // `ErasedSymbolSatisfiesInterfaceConstraint`'s StructSymbol arm and
             // read the symbol's own base chain.
-            yield[]object{"a-same-compilation-class-bound-forwards-through-its-imported-base", `package P
+            yield []object{"a-same-compilation-class-bound-forwards-through-its-imported-base", `package P
 import System
 import HelperLib2
 
@@ -898,7 +898,7 @@ Console.WriteLine(callIt[MyDisp]())`, []string{"method-ok"}}
             // A SAME-COMPILATION class implementing the imported interface
             // DIRECTLY — the `ImplementedClrInterfaces` loop rather than the
             // `ImportedBaseType` fallback.
-            yield[]object{"a-same-compilation-class-bound-implementing-the-interface-directly", `package P
+            yield []object{"a-same-compilation-class-bound-implementing-the-interface-directly", `package P
 import System
 import HelperLib2
 
@@ -912,7 +912,7 @@ func callIt[T MyMarker]() string {
 Console.WriteLine(callIt[MyMarker]())`, []string{"marker-ok"}}
             // A SECOND interface, so the rule is not `IDisposable`-shaped. An
             // imported user-defined interface rather than a BCL one.
-            yield[]object{"a-second-imported-interface-through-an-imported-class-bound", `package P
+            yield []object{"a-second-imported-interface-through-an-imported-class-bound", `package P
 import System
 import HelperLib2
 
@@ -924,7 +924,7 @@ Console.WriteLine(callIt[MarkerBase]())`, []string{"marker-ok"}}
             // Two DIFFERENT imported interfaces forwarded by two different class
             // bounds in one program, so the rule is not a single-shape accident
             // and one call site does not prime a cache the other reads.
-            yield[]object{"two-interfaces-forwarded-by-two-class-bounds-in-one-program", `package P
+            yield []object{"two-interfaces-forwarded-by-two-class-bounds-in-one-program", `package P
 import System
 import HelperLib2
 
@@ -949,7 +949,7 @@ Console.WriteLine(viaMarker[MarkerBase]())`, []string{"method-ok", "marker-ok"}}
             // set entirely, so there was no winner to flip — and it now picks
             // `Take[T](T)`, which is what `csc` picks for the same source
             // (measured by running it).
-            yield[]object{"a-newly-reachable-constrained-overload-binds-as-csc-picks-it", `package P
+            yield []object{"a-newly-reachable-constrained-overload-binds-as-csc-picks-it", `package P
 import System
 import HelperLib2
 
@@ -963,7 +963,7 @@ Console.WriteLine(callIt[DisposableBase](DisposableBase()))`, []string{"generic-
             // of an interface-constrained imported generic method. Unchanged by
             // this edit; pinned so a regression in the arm's original job is
             // caught here.
-            yield[]object{"control-the-2617-shape-a-same-compilation-class-argument", `package P
+            yield []object{"control-the-2617-shape-a-same-compilation-class-argument", `package P
 import System
 import HelperLib2
 
@@ -977,7 +977,7 @@ Console.WriteLine(Probes.NeedsMarker[MyMarker2]())`, []string{"marker-ok"}}
             // `[T StringBag]` over `StringBag : List<string>` proves
             // `where T : IEnumerable<string>`. The guard is narrow, and this row is
             // what says so.
-            yield[]object{"a-constructed-interface-bound-over-concrete-arguments-still-forwards", `package P
+            yield []object{"a-constructed-interface-bound-over-concrete-arguments-still-forwards", `package P
 import System
 import HelperLib2
 
@@ -991,7 +991,7 @@ Console.WriteLine(callIt[StringBag]())`, []string{"seq-ok"}}
             // which runs BEFORE the new one, so the guard cannot reach it. This is
             // the legitimate spelling of the shape the rejection rows refuse, and
             // it must stay green.
-            yield[]object{"control-a-self-referential-bound-on-the-parameter-itself-still-forwards", `package P
+            yield []object{"control-a-self-referential-bound-on-the-parameter-itself-still-forwards", `package P
 import System
 import HelperLib2
 
@@ -1003,7 +1003,7 @@ Console.WriteLine(callIt[MyEq]())`, []string{"eq-ok"}}
             // CONTROL — an UNCONSTRAINED imported generic method called with a
             // type parameter. The commonest shape in the corpus; it must not have
             // acquired an answer it did not have.
-            yield[]object{"control-an-unconstrained-imported-generic-method", `package P
+            yield []object{"control-an-unconstrained-imported-generic-method", `package P
 import System
 import HelperLib2
 
@@ -1017,7 +1017,7 @@ Console.WriteLine(callIt[string]())`, []string{"unconstrained-ok"}}
             // a per-position rewrite of this erasure gate has broken it TWICE.
             // Green here so any future edit to this checker trips over it in this
             // file too.
-            yield[]object{"control-task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
+            yield []object{"control-task-continuewith-keeps-its-one-concrete-and-one-open-position", `package P
 import System
 import System.Threading.Tasks
 
@@ -1028,7 +1028,7 @@ Console.WriteLine(c.Result)`, []string{"cw"}}
             // type parameter's own INTERFACE bound, which is the path that already
             // worked. It must keep working: the new arm runs only after the
             // existing one has declined.
-            yield[]object{"control-an-interface-bound-still-forwards-directly", `package P
+            yield []object{"control-an-interface-bound-still-forwards-directly", `package P
 import System
 import HelperLib2
 
@@ -1045,7 +1045,7 @@ Console.WriteLine(callIt[MarkerBase]())`, []string{"marker-ok"}}
         /// @returns Case name, G# source.
         func StillRefused() sequence[[]object] {
             // No bound at all. `T` can be `int32`, which is not `IDisposable`.
-            yield[]object{"an-unconstrained-type-parameter-forwards-nothing", `package P
+            yield []object{"an-unconstrained-type-parameter-forwards-nothing", `package P
 import System
 import HelperLib2
 
@@ -1055,7 +1055,7 @@ func callIt[T]() string {
 
 Console.WriteLine(callIt[DisposableBase]())`}
             // A class bound that implements a DIFFERENT interface.
-            yield[]object{"a-class-bound-implementing-a-different-interface", `package P
+            yield []object{"a-class-bound-implementing-a-different-interface", `package P
 import System
 import HelperLib2
 
@@ -1065,7 +1065,7 @@ func callIt[T MarkerBase]() string {
 
 Console.WriteLine(callIt[MarkerBase]())`}
             // A class bound implementing NO interface at all.
-            yield[]object{"a-class-bound-implementing-no-interface", `package P
+            yield []object{"a-class-bound-implementing-no-interface", `package P
 import System
 import HelperLib2
 
@@ -1076,7 +1076,7 @@ func callIt[T SchemeOptions]() string {
 Console.WriteLine(callIt[SchemeOptions]())`}
             // A SAME-COMPILATION class bound implementing nothing. The symbolic
             // arm of the walk must decline as firmly as the reflective one.
-            yield[]object{"a-same-compilation-class-bound-implementing-nothing", `package P
+            yield []object{"a-same-compilation-class-bound-implementing-nothing", `package P
 import System
 import HelperLib2
 
@@ -1093,7 +1093,7 @@ Console.WriteLine(callIt[Plain]())`}
             // every subtype of `MyEq` — `IEquatable<T>` is invariant. `csc` reports
             // `CS0311` on the C# equivalent (measured by compiling it), so this
             // must stay refused.
-            yield[]object{"a-self-referential-interface-bound-through-an-imported-class-bound", `package P
+            yield []object{"a-self-referential-interface-bound-through-an-imported-class-bound", `package P
 import System
 import HelperLib2
 
@@ -1113,7 +1113,7 @@ Console.WriteLine(callIt[MyEq]())`}
             // constraint of type parameter 'T'`. That is precisely #4031/#4041's
             // dependent-bound shape, which the generic-TYPE path already skips; the
             // new arm now skips it too.
-            yield[]object{"a-self-referential-interface-bound-through-a-same-compilation-class-bound", `package P
+            yield []object{"a-self-referential-interface-bound-through-a-same-compilation-class-bound", `package P
 import System
 import HelperLib2
 
@@ -1129,7 +1129,7 @@ func callIt[T GsEq]() string {
 
 Console.WriteLine(callIt[GsEq]())`}
             // The same skip one interface over, so it is not `IEquatable`-shaped.
-            yield[]object{"a-self-referential-comparable-bound-through-an-imported-class-bound", `package P
+            yield []object{"a-self-referential-comparable-bound-through-an-imported-class-bound", `package P
 import System
 import HelperLib2
 
@@ -1139,7 +1139,7 @@ func callIt[T MyCmp]() string {
 
 Console.WriteLine(callIt[MyCmp]())`}
             // An INTERFACE bound that is not the one the definition asks for.
-            yield[]object{"an-interface-bound-that-is-the-wrong-interface", `package P
+            yield []object{"an-interface-bound-that-is-the-wrong-interface", `package P
 import System
 import HelperLib2
 
@@ -1150,7 +1150,7 @@ func callIt[T IMarker]() string {
 Console.WriteLine(callIt[MarkerBase]())`}
             // Issue #4083's negatives. An UNBOUND parameter proves nothing, so the
             // new base-class arm must not admit it.
-            yield[]object{"an-unbound-parameter-does-not-forward-a-base-class-constraint", `package P
+            yield []object{"an-unbound-parameter-does-not-forward-a-base-class-constraint", `package P
 import System
 import HelperLib2
 
@@ -1160,7 +1160,7 @@ func callIt[T]() string {
 
 Console.WriteLine(callIt[SchemeOptions]())`}
             // A class bound that is not the base class the definition asks for.
-            yield[]object{"a-class-bound-that-is-the-wrong-base-class", `package P
+            yield []object{"a-class-bound-that-is-the-wrong-base-class", `package P
 import System
 import HelperLib2
 
@@ -1172,7 +1172,7 @@ Console.WriteLine(callIt[DisposableBase]())`}
             // Issue #4084's negative. A dependent bound forwards the bounding
             // parameter's constraints and NOTHING ELSE, so a chain that ends in a
             // class implementing the wrong interface is still refused.
-            yield[]object{"a-dependent-bound-whose-chain-does-not-reach-the-interface", `package P
+            yield []object{"a-dependent-bound-whose-chain-does-not-reach-the-interface", `package P
 import System
 import HelperLib2
 

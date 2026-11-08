@@ -317,7 +317,7 @@ Console.WriteLine("x")`
         func RejectedCases() sequence[[]object] {
             // The reported repro. `takesOpen[T](chan[T])` is reached with a
             // `chan[T]?`; the closed sibling below it already errored.
-            yield[]object{"the-reported-repro-a-nullable-open-channel-at-an-open-channel-parameter", `package P
+            yield []object{"the-reported-repro-a-nullable-open-channel-at-an-open-channel-parameter", `package P
 import System
 
 func takesOpen[T](c chan[T]) int32 {
@@ -331,7 +331,7 @@ func fOpen[T](source chan[T]?) int32 {
 Console.WriteLine("x")`, "GS0154", "chan[T]?"}
             // The same call with the type argument INFERRED rather than written,
             // so the fix cannot be an artefact of the explicit-type-argument path.
-            yield[]object{"an-inferred-type-argument-reaches-the-same-gate", `package P
+            yield []object{"an-inferred-type-argument-reaches-the-same-gate", `package P
 import System
 
 func takesOpen[T](c chan[T]) int32 {
@@ -345,7 +345,7 @@ func fInferred[T](source chan[T]?) int32 {
 Console.WriteLine("x")`, "GS0154", "chan[T]?"}
             // A SLICE over an open element — the second symbol kind the mirror
             // omitted. `([]int32)?` already errored; `([]T)?` did not.
-            yield[]object{"a-nullable-slice-over-an-open-element-is-rejected", `package P
+            yield []object{"a-nullable-slice-over-an-open-element-is-rejected", `package P
 import System
 
 func takesSlice[T](s []T) int32 {
@@ -360,7 +360,7 @@ Console.WriteLine("x")`, "GS0154", "[]T"}
             // A reference-CONSTRAINED type parameter is provably a reference type,
             // so `T?` at `T` is the same Kotlin-model violation. This is the row
             // most likely to appear in existing code — see the release note.
-            yield[]object{"a-nullable-reference-constrained-type-parameter-is-rejected", `package P
+            yield []object{"a-nullable-reference-constrained-type-parameter-is-rejected", `package P
 import System
 
 func takesRefT[T class](v T) int32 {
@@ -374,7 +374,7 @@ func fRefT[T class](v T?) int32 {
 Console.WriteLine("x")`, "GS0154", "T?"}
             // A fixed array and a rectangular array over an open element are the
             // same hole in the same predicate, and were silently accepted too.
-            yield[]object{"a-nullable-fixed-array-over-an-open-element-is-rejected", `package P
+            yield []object{"a-nullable-fixed-array-over-an-open-element-is-rejected", `package P
 import System
 
 func takesFixed[T](a [4]T) int32 {
@@ -389,7 +389,7 @@ Console.WriteLine("x")`, "GS0154", "[4]T"}
             // The parameter's openness is what the bypass keys on, so an
             // OVERLOADED generic callee must still attribute GS0154 rather than
             // degrading to a bare "no overload is applicable".
-            yield[]object{"an-overloaded-generic-callee-still-attributes-gs0154", `package P
+            yield []object{"an-overloaded-generic-callee-still-attributes-gs0154", `package P
 import System
 
 func over[T](c chan[T]) int32 {
@@ -409,7 +409,7 @@ Console.WriteLine("x")`, "GS0154", "chan[T]?"}
             // parameter, so the substituted parameter takes the bypass this fix
             // changes — this is the delegate arm of the unified predicate reached
             // where the `ClrType` fallback cannot answer.
-            yield[]object{"an-open-generic-delegate-is-rejected", `package P
+            yield []object{"an-open-generic-delegate-is-rejected", `package P
 import System
 
 delegate D[T](x T) T;
@@ -424,7 +424,7 @@ func fD[T](d D[T]?) int32 {
 
 Console.WriteLine("x")`, "GS0154", "D[T]?"}
             // An OPEN structural function type, likewise.
-            yield[]object{"an-open-structural-function-type-is-rejected", `package P
+            yield []object{"an-open-structural-function-type-is-rejected", `package P
 import System
 
 func takesFn[T](f (T) -> T) int32 {
@@ -442,7 +442,7 @@ Console.WriteLine("x")`, "GS0154", "((T) -> T)?"}
             // answered it. Carried as a rejection row precisely to record that the
             // delegate arm of the unified predicate is NOT what this fix turned
             // red, and must not regress.
-            yield[]object{"control-a-nullable-named-delegate-was-always-rejected", `package P
+            yield []object{"control-a-nullable-named-delegate-was-always-rejected", `package P
 import System
 
 delegate D(x int32) int32;
@@ -458,7 +458,7 @@ func fDelegate(d D?) int32 {
 Console.WriteLine("x")`, "GS0154", "D?"}
             // The DIRECTIONAL spellings are the same rule: an `out chan[T]?` is
             // still a nullable reference.
-            yield[]object{"a-nullable-directional-open-channel-is-rejected", `package P
+            yield []object{"a-nullable-directional-open-channel-is-rejected", `package P
 import System
 
 func takesWriter[T](c out chan[T]) int32 {
@@ -472,7 +472,7 @@ func fWriter[T](source out chan[T]?) int32 {
 Console.WriteLine("x")`, "GS0154", "out chan[T]?"}
             // The closed spelling, which ALREADY reported GS0154 — carried as a
             // rejection row so the fix cannot silently stop reporting it.
-            yield[]object{"control-the-closed-spelling-was-always-rejected", `package P
+            yield []object{"control-the-closed-spelling-was-always-rejected", `package P
 import System
 
 func takesClosed(c chan[int32]) int32 {
@@ -493,7 +493,7 @@ Console.WriteLine("x")`, "GS0154", "chan[int32]?"}
         /// @returns Name, source, and the expected stdout lines.
         func AcceptedCases() sequence[[]object] {
             // Remedy 1, the one the issue names: `!!`.
-            yield[]object{"control-the-bang-bang-remedy-works-and-moves-a-value", `package P
+            yield []object{"control-the-bang-bang-remedy-works-and-moves-a-value", `package P
 import System
 
 func takesOpen[T](c chan[T], v T) int32 {
@@ -510,7 +510,7 @@ Console.WriteLine(fBang[int32](ch, 9))
 Console.WriteLine(<-ch)`, []string{"41", "9"}}
             // Remedy 2: declare the parameter nullable. A nullable TARGET keeps
             // going through the lifted rules and is not gated.
-            yield[]object{"control-a-nullable-typed-parameter-accepts-the-nullable-argument", `package P
+            yield []object{"control-a-nullable-typed-parameter-accepts-the-nullable-argument", `package P
 import System
 
 func takesNullable[T](c chan[T]?) int32 {
@@ -525,7 +525,7 @@ Console.WriteLine(fNullable[int32](chan[int32](1)))`, []string{"42"}}
             // An UNCONSTRAINED `T?` must stay ungated: `Conversion.IsReferenceLikeTarget`
             // deliberately answers false for it (its `T?` erases to `Nullable<T>`
             // and it keeps the value-type rules), so the gate must not fire.
-            yield[]object{"control-an-unconstrained-nullable-type-parameter-is-not-gated", `package P
+            yield []object{"control-an-unconstrained-nullable-type-parameter-is-not-gated", `package P
 import System
 
 func takesAnyT[T](v T) int32 {
@@ -541,7 +541,7 @@ Console.WriteLine(fAnyT[int32](7))`, []string{"43"}}
             // writes, and is untouched. The value moves through, so a dropped or
             // mis-viewed handle would print the wrong number rather than merely
             // compile.
-            yield[]object{"control-a-non-nullable-open-channel-still-binds-and-moves-a-value", `package P
+            yield []object{"control-a-non-nullable-open-channel-still-binds-and-moves-a-value", `package P
 import System
 
 func takesOpen[T](c chan[T], v T) int32 {
@@ -563,7 +563,7 @@ Console.WriteLine(<-ch)`, []string{"44", "12"}}
             // this fix applied, this program reported GS0154 with no way to satisfy
             // it — the diagnostic named a remedy that did not work. Unifying that
             // copy too is what makes this row green.
-            yield[]object{"control-assignment-narrowing-lifts-an-open-channel-and-satisfies-the-parameter", `package P
+            yield []object{"control-assignment-narrowing-lifts-an-open-channel-and-satisfies-the-parameter", `package P
 import System
 
 func takesOpen[T](c chan[T], v T) int32 {
@@ -583,7 +583,7 @@ Console.WriteLine(<-ch)`, []string{"46", "14"}}
             // Smart-cast narrowing is the third remedy and is untouched by the
             // gate: inside the `!= nil` branch the local's type is no longer
             // nullable, so nothing is dropped.
-            yield[]object{"control-smart-cast-narrowing-still-satisfies-the-parameter", `package P
+            yield []object{"control-smart-cast-narrowing-still-satisfies-the-parameter", `package P
 import System
 
 func takesOpen[T](c chan[T], v T) int32 {

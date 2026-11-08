@@ -92,7 +92,7 @@ open class Issue5562And5606NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"r5562_default_ctor_call_keeps_out_parameter_narrowing", `import System
+            yield []object{"r5562_default_ctor_call_keeps_out_parameter_narrowing", `import System
 
 class Mixed {
     var Id int32
@@ -113,7 +113,7 @@ open class Demo {
 }
 var s string? = nil
 Console.WriteLine(Demo.Run(out s))`, "", "run", "5"}
-            yield[]object{"r5562_default_ctor_call_in_pattern_keeps_ref_parameter_narrowing", `import System
+            yield []object{"r5562_default_ctor_call_in_pattern_keeps_ref_parameter_narrowing", `import System
 
 class Mixed {
     var Id int32
@@ -126,7 +126,7 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abcd"
 Console.WriteLine(Run(ref s))`, "", "run", "4"}
-            yield[]object{"r5562_control_explicit_ctor_call_removes_ref_parameter_narrowing", `import System
+            yield []object{"r5562_control_explicit_ctor_call_removes_ref_parameter_narrowing", `import System
 
 class Box {
     shared {
@@ -148,7 +148,7 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@19:27", "reject", ""}
-            yield[]object{"r5562_control_field_initializer_ctor_call_removes_ref_parameter_narrowing", `import System
+            yield []object{"r5562_control_field_initializer_ctor_call_removes_ref_parameter_narrowing", `import System
 
 func Touch() int32 -> 1
 class WithFieldInit {
@@ -163,7 +163,7 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@12:27", "reject", ""}
-            yield[]object{"r5562_control_imported_base_ctor_call_removes_ref_parameter_narrowing", `import System
+            yield []object{"r5562_control_imported_base_ctor_call_removes_ref_parameter_narrowing", `import System
 
 open class Base : Exception {
 }
@@ -179,7 +179,7 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@13:27", "reject", ""}
-            yield[]object{"r5562_control_deep_ctor_hierarchy_removes_ref_parameter_narrowing", `import System
+            yield []object{"r5562_control_deep_ctor_hierarchy_removes_ref_parameter_narrowing", `import System
 
 class Box {
     shared {
@@ -262,7 +262,7 @@ func Run(ref text string?) int32 {
 }
 var s string? = "abc"
 Console.WriteLine(Run(ref s))`, "GS0158@80:27", "reject", ""}
-            yield[]object{"r5562_control_lambda_in_earlier_field_initializer_removes_ref_parameter_narrowing", `import System
+            yield []object{"r5562_control_lambda_in_earlier_field_initializer_removes_ref_parameter_narrowing", `import System
 
 class Box {
     shared {
@@ -282,7 +282,7 @@ class Box {
 }
 let b = Box()
 Console.WriteLine(b.Probe(ref Box.G))`, "GS0158@12:21", "reject", ""}
-            yield[]object{"r5606_if_condition_gained_alias_carried_into_then_branch", `import System
+            yield []object{"r5606_if_condition_gained_alias_carried_into_then_branch", `import System
 
 func Run(callback () -> string) int32 {
     var x string? = "abc"
@@ -302,7 +302,7 @@ func Run(callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(() -> "abc"))`, "", "run", "9"}
-            yield[]object{"r5606_if_condition_gained_alias_carried_into_else_branch_under_or", `import System
+            yield []object{"r5606_if_condition_gained_alias_carried_into_else_branch_under_or", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "abc"
@@ -324,7 +324,7 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(false, () -> "abc"))`, "", "run", "6"}
-            yield[]object{"r5606_if_init_condition_gained_alias_carried_into_branches", `import System
+            yield []object{"r5606_if_init_condition_gained_alias_carried_into_branches", `import System
 
 func Run(callback () -> string) int32 {
     var x string? = "abc"
@@ -347,7 +347,7 @@ func Run(callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(() -> "abc"))`, "", "run", "7"}
-            yield[]object{"r5606_if_let_initializer_and_guard_gained_alias_carried_into_branches", `import System
+            yield []object{"r5606_if_let_initializer_and_guard_gained_alias_carried_into_branches", `import System
 
 func Run(maybe int32?, callback () -> string) int32 {
     var x string? = "abc"
@@ -384,7 +384,7 @@ func Run(maybe int32?, callback () -> string) int32 {
     return total
 }
 Console.WriteLine(Run(4, () -> "abc"))`, "", "run", "16"}
-            yield[]object{"r5606_if_let_two_clauses_with_else_gained_alias_in_then_branch", `import System
+            yield []object{"r5606_if_let_two_clauses_with_else_gained_alias_in_then_branch", `import System
 
 func Run(first int32?, second int32?, callback () -> string) int32 {
     var x string? = "abc"
@@ -406,7 +406,7 @@ func Run(first int32?, second int32?, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(2, 5, () -> "abc"))`, "", "run", "13"}
-            yield[]object{"r5606_control_or_condition_unassigned_path_rejects_in_then_branch", `import System
+            yield []object{"r5606_control_or_condition_unassigned_path_rejects_in_then_branch", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "abc"
@@ -424,7 +424,7 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "abc"))`, "GS0158@14:18", "reject", ""}
-            yield[]object{"r5606_control_and_condition_unassigned_path_rejects_in_else_branch", `import System
+            yield []object{"r5606_control_and_condition_unassigned_path_rejects_in_else_branch", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "abc"
@@ -443,7 +443,7 @@ func Run(flag bool, callback () -> string) int32 {
     }
 }
 Console.WriteLine(Run(false, () -> "abc"))`, "GS0158@16:18", "reject", ""}
-            yield[]object{"r5606_control_if_let_guard_gained_alias_rejects_in_else_branch", `import System
+            yield []object{"r5606_control_if_let_guard_gained_alias_rejects_in_else_branch", `import System
 
 func Run(maybe int32?, callback () -> string) int32 {
     var x string? = "abc"
@@ -462,7 +462,7 @@ func Run(maybe int32?, callback () -> string) int32 {
     }
 }
 Console.WriteLine(Run(nil, () -> "abc"))`, "GS0158@16:18", "reject", ""}
-            yield[]object{"r5606_control_pattern_effect_removes_operand_fact", `import System
+            yield []object{"r5606_control_pattern_effect_removes_operand_fact", `import System
 
 func ClearAndFour() int32 {
     clear?()
@@ -478,7 +478,7 @@ func Run(seed object?) int32 {
 }
 var clear (() -> void)? = nil
 Console.WriteLine(Run("abcd"))`, "GS0158@11:18", "reject", ""}
-            yield[]object{"r5606_control_if_let_explicit_type_conversion_invalidates_gained_alias", `import System
+            yield []object{"r5606_control_if_let_explicit_type_conversion_invalidates_gained_alias", `import System
 
 class Holder {
     shared {
@@ -518,7 +518,7 @@ func Run(src Source?, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(Source{}, () -> "abc"))`, "GS0158@36:28", "reject", ""}
-            yield[]object{"r5606_control_or_skipped_block_expression_rejects_in_then_branch", `import System
+            yield []object{"r5606_control_or_skipped_block_expression_rejects_in_then_branch", `import System
 
 func Run(flag bool, callback () -> string) int32 {
     var x string? = "abc"
@@ -539,7 +539,7 @@ func Run(flag bool, callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(true, () -> "abc"))`, "GS0158@17:18", "reject", ""}
-            yield[]object{"r5606_control_enclosing_catch_filter_invalidates_condition_gained_alias", `import System
+            yield []object{"r5606_control_enclosing_catch_filter_invalidates_condition_gained_alias", `import System
 
 func Replace(ref a () -> string, replacement () -> string) bool {
     a = replacement
@@ -574,7 +574,7 @@ func Run(callback () -> string) int32 {
     return 0
 }
 Console.WriteLine(Run(() -> "abc"))`, "GS0158@27:26", "reject", ""}
-            yield[]object{"r5606_control_structural_equality_invalidates_callable_alias_before_copy", `import System
+            yield []object{"r5606_control_structural_equality_invalidates_callable_alias_before_copy", `import System
 
 class Hook {
     shared {
