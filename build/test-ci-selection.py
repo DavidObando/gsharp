@@ -557,7 +557,9 @@ class PublishJobTests(unittest.TestCase):
         block = job(self.text, "vsix")
         self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
         self.assertIn("--pre-release", block)
-        self.assertLess(block.index("tag-kind"), block.index("vsce package"))
+        self.assertIn('echo "Tag kind: $tag_kind; vsce package flags: ${flags[*]:-(none)}"', block)
+        self.assertLess(block.index("tag-kind"), block.index("vsce package flags:"))
+        self.assertLess(block.index("vsce package flags:"), block.index("npx vsce package"))
 
     def test_publish_verify_forwards_the_ci_output_and_the_script_outputs(self):
         block = job(self.text, "publish-verify")

@@ -1014,7 +1014,61 @@ partial class CSharpToGSharpTranslator {
                     add.OriginalDefinition.Parameters[index].Type
                 )
             }
+            if parent is ExpressionElementSyntax{Parent: CollectionExpressionSyntax collectionExpression} {
+                let targetType ITypeSymbol? = model.GetTypeInfo(collectionExpression)
+                    .ConvertedType ??
+                    model
+                    .GetTypeInfo(collectionExpression).Type
+                if targetType is INamedTypeSymbol namedTarget &&
+                    namedTarget.TypeKind == TypeKind.Class &&
+                    this
+                    .GetCollectionAddParameter(
+                    collectionExpression,
+                    namedTarget,
+                    model.GetTypeInfo(written).Type ?? GetCollectionTargetElementType(namedTarget),
+                    written
+                ) is {} addParameter &&
+                    this
+                    .CollectionAddParameterRejectsNull(addParameter, written) {
+                    return this.SlotTypeProvesNonNull(collectionExpression, addParameter.OriginalDefinition.Type)
+                }
+                return false
+            }
             return false
+        }
+
+        private func CollectionAddParameterRejectsNull(
+            addParameter IParameterSymbol,
+            writtenValue ExpressionSyntax
+        ) bool {
+            let parameterType = addParameter.Type
+            if !parameterType.IsReferenceType ||
+                parameterType.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                (this.InAnalyzerApiMode && RoslynAnalyzerApiMap.IsNamespaceSymbolType(parameterType)) ||
+                ObliviousNullabilityAnalyzer
+                .HasRunAllowNullWriteContract(
+                addParameter,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) ||
+                this.IsImportedObliviousNullableTarget(addParameter, parameterType, writtenValue) ||
+                this
+                .ObliviousContainerPositions(addParameter)?.Contains("") == true {
+                return false
+            }
+            let targetDeclaredInThisCompilation = addParameter.DeclaringSyntaxReferences.Any(
+                (reference SyntaxReference) -> this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)
+            )
+            if !targetDeclaredInThisCompilation && ObliviousNullabilityAnalyzer.IsNullArgumentTarget(
+                this.context.Compilation,
+                addParameter,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
+                return false
+            }
+            return !(targetDeclaredInThisCompilation && this.IsTranslatorWidenedDeclaration(addParameter))
         }
 
         // Whether a store into [`target`](paramref), the left of `target = value` or a

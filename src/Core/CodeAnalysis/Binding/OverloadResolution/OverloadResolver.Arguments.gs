@@ -289,6 +289,7 @@ internal partial class OverloadResolver {
         let lambda LambdaExpressionSyntax? = lambdaSyntax ??
             GetLambdaArgumentSyntax(argument.Syntax as ExpressionSyntax)
         if expectedType == nil || MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expectedType, out _) ||
+            (argument.Type != nil && MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(argument.Type, out _)) ||
             !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expectedType, out var targetFnType) ||
             TypeSymbol.ContainsTypeParameter(targetFnType!!) {
             return false

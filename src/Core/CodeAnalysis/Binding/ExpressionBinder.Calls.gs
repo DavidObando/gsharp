@@ -3092,26 +3092,68 @@ internal partial class ExpressionBinder {
                     )
                     return true
                 }
-                case user is StructSymbol when MemberLookup.TryGetUserPatternEnumerableElementType(
-                    user,
-                    out var userElement
-                ) {
-                    elementType = Invariant.Required(
-                        userElement,
-                        "a successful user enumerable-element lookup produces an element type",
-                        expression: "userElement"
-                    )
+            }
+            let singleArityAddMethods = TypeMemberModel
+                .GetMethods(collectionType, "Add", MemberQuery.Instance(MemberKinds.Method))
+                .Where(
+                (method FunctionSymbol) -> IsCallableWithSingleArgument(method) &&
+                    method
+                    .Parameters[0]
+                    .RefKind != RefKind.Ref &&
+                    method
+                    .Parameters[0]
+                    .RefKind != RefKind.Out
+            )
+                .ToArray()
+            if singleArityAddMethods.Length > 0 && !singleArityAddMethods.Any(
+                (method FunctionSymbol) -> method.TypeParameters.Length > 0 || method.Parameters[0].IsVariadic
+            ) {
+                let userParameterTypes = singleArityAddMethods
+                    .Select(
+                    (method FunctionSymbol) -> {
+                        let parameterType = method.Parameters[0].Type
+                        if collectionType is StructSymbol collectionStruct {
+                            let methodOwner = if method.ReceiverType is StructSymbol declaredReceiver {
+                                TypeMemberModel.ResolveStaticMemberOwner(collectionStruct, declaredReceiver)
+                            } else {
+                                collectionStruct
+                            }
+                            return methodOwner.SubstituteMemberType(parameterType) ?? parameterType
+                        }
+                        if collectionType is InterfaceSymbol collectionInterface {
+                            let interfaceOwner = if method.ReceiverType is InterfaceSymbol declaredInterface {
+                                let declaredDefinition = declaredInterface.Definition ?? declaredInterface
+                                collectionInterface.SelfAndAllBaseInterfaces().FirstOrDefault(
+                                    (candidate InterfaceSymbol) -> object.ReferenceEquals(
+                                        candidate.Definition ?? candidate,
+                                        declaredDefinition
+                                    )
+                                ) ??
+                                    collectionInterface
+                            } else {
+                                collectionInterface
+                            }
+                            return interfaceOwner.SubstituteMemberType(parameterType)
+                        }
+                        return parameterType
+                    }
+                )
+                    .Distinct()
+                    .ToArray()
+                if userParameterTypes.Length == 1 {
+                    elementType = userParameterTypes[0]
                     return true
                 }
             }
-            let userParameterTypes = TypeMemberModel
-                .GetMethods(collectionType, "Add", MemberQuery.Instance(MemberKinds.Method))
-                .Where((method FunctionSymbol) -> method.Parameters.Length == 1)
-                .Select((method FunctionSymbol) -> method.Parameters[0].Type)
-                .Distinct()
-                .ToArray()
-            if userParameterTypes.Length == 1 {
-                elementType = userParameterTypes[0]
+            if singleArityAddMethods.Length == 0 &&
+                collectionType is StructSymbol user &&
+                MemberLookup
+                .TryGetUserPatternEnumerableElementType(user, out var userElement) {
+                elementType = Invariant.Required(
+                    userElement,
+                    "a successful user enumerable-element lookup produces an element type",
+                    expression: "userElement"
+                )
                 return true
             }
             elementType = nil

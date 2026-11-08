@@ -1570,7 +1570,9 @@ internal partial class OverloadResolver {
         candSubstitution Dictionary[TypeParameterSymbol, TypeSymbol]?
     ) bool {
         if argType is not FunctionTypeSymbol argFn ||
-            paramType is not FunctionTypeSymbol paramFn ||
+            paramType == nil ||
+            !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var paramFn) ||
+            paramFn == nil ||
             argFn
             .ParameterTypes
             .Length != paramFn

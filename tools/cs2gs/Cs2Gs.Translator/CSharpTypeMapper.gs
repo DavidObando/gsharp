@@ -3962,7 +3962,13 @@ class CSharpTypeMapper {
                         .Select(
                         (argument ITypeSymbol, index int32) -> {
                             let normalized = NormalizeAnonymousProjectedStorage(argument, named.TypeArguments[index])
-                            return if argument.IsReferenceType {
+                            return if argument.IsReferenceType &&
+                                (
+                                index >= namedSymbol
+                                    .TypeParameters
+                                    .Length ||
+                                    !TypeParameterForbidsNullableReferenceArgument(namedSymbol.TypeParameters[index])
+                            ) {
                                 WithNullable(normalized, true)!!
                             } else {
                                 normalized
@@ -3991,6 +3997,25 @@ class CSharpTypeMapper {
             }
             return mapped
         }
+
+        private func TypeParameterForbidsNullableReferenceArgument(
+            parameter ITypeParameterSymbol
+        ) bool -> parameter.HasNotNullConstraint ||
+            (
+            parameter.HasReferenceTypeConstraint &&
+                parameter.ReferenceTypeConstraintNullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        ) ||
+            parameter
+            .ConstraintNullableAnnotations
+            .Any(
+            (annotation Microsoft.CodeAnalysis.NullableAnnotation) -> annotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
+        )
 
         private func AnonymousShapeKey(properties IReadOnlyList[IPropertySymbol]) string -> string.Join(
             "|",

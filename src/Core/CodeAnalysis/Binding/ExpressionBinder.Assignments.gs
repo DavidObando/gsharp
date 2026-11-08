@@ -250,7 +250,11 @@ internal partial class ExpressionBinder {
                 syntax is IfLetExpressionSyntax ||
                 syntax is ConditionalExpressionSyntax ||
                 syntax is SwitchExpressionSyntax ||
-                syntax is BlockExpressionSyntax
+                syntax is BlockExpressionSyntax ||
+                (
+                syntax is BinaryExpressionSyntax binary && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            ) ||
+                IsNestedLambdaExpression(syntax)
         ) {
             return BindExpression(syntax, nonNullTargetType)
         }
