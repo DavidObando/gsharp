@@ -266,7 +266,7 @@ shared class SemanticLookup {
                 // Token is clearly a member name; do not fall through to by-name lookups.
                 return nil
             }
-            if token.Parent is not AssignmentExpressionSyntax {
+            if IsStrictTypePosition(token) {
                 let enclosingTypeParam Symbol? = this.ResolveEnclosingTypeParameter(token)
                 if enclosingTypeParam != nil {
                     return enclosingTypeParam
@@ -279,9 +279,12 @@ shared class SemanticLookup {
             if named != nil {
                 return named
             }
-            let typeParamFallback Symbol? = this.ResolveEnclosingTypeParameter(token)
-            if typeParamFallback != nil {
-                return typeParamFallback
+            if BoundSemantics.GetImportedSymbol(this.compilation, token) == nil &&
+                IsPotentialTypeExpressionPosition(token) {
+                let typeParamFallback Symbol? = this.ResolveEnclosingTypeParameter(token)
+                if typeParamFallback != nil {
+                    return typeParamFallback
+                }
             }
             return if this.globals.TryGetValue(token.Text, out var global) {
                 global
@@ -643,6 +646,54 @@ shared class SemanticLookup {
         }
 
         shared {
+            internal func IsStrictTypePosition(token SyntaxToken) bool {
+                var current SyntaxNode? = token.Parent
+                while current != nil {
+                    if current is TypeClauseSyntax or TypeParameterSyntax or TypeArgumentListSyntax {
+                        return true
+                    }
+                    if current is StructDeclarationSyntax structDecl && structDecl.BaseTypeClauses.Any(
+                        (c TypeClauseSyntax) -> c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End
+                    ) {
+                        return true
+                    }
+                    if current is StatementSyntax or ExpressionSyntax or MemberSyntax {
+                        return false
+                    }
+                    current = current.Parent
+                }
+                return false
+            }
+
+            internal func IsTypeArgumentIndexToken(token SyntaxToken) bool {
+                if token.Parent is not NameExpressionSyntax ne || !TokenMatches(ne.IdentifierToken, token) {
+                    return false
+                }
+                if ne.Parent is IndexExpressionSyntax idx && idx.Indices.Contains(ne) {
+                    return (idx.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, idx)) ||
+                        (
+                        idx.Parent is MemberFieldAssignmentExpressionSyntax mfa && object.ReferenceEquals(
+                            mfa.Receiver,
+                            idx
+                        )
+                    )
+                }
+                return false
+            }
+
+            private func IsPotentialTypeExpressionPosition(token SyntaxToken) bool {
+                if IsTypeArgumentIndexToken(token) {
+                    return true
+                }
+                if token.Parent is NameExpressionSyntax ne && TokenMatches(ne.IdentifierToken, token) {
+                    return ne.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, ne)
+                }
+                if token.Parent is FieldAssignmentExpressionSyntax fa && TokenMatches(fa.Receiver, token) {
+                    return true
+                }
+                return false
+            }
+
             private func NormalizeForReferences(symbol Symbol?) Symbol? -> switch symbol {
                 case s is StructSymbol: cast[Symbol](s.Definition ?? s)
                 case e is EnumSymbol: cast[Symbol](e.Definition ?? e)
@@ -1110,13 +1161,25 @@ shared class SemanticLookup {
                     return nil
                 }
                 namespacePrefix = if string.IsNullOrEmpty(namespacePrefix) {
-                    segName
+                    ExpandImportAlias(tree, segName)
                 } else {
                     "$namespacePrefix.$segName"
                 }
             }
         }
         return currentType
+    }
+
+    private func ExpandImportAlias(tree SyntaxTree, name string) string {
+        for import_ in tree.Root.Members.OfType[ImportSyntax]() {
+            if import_.AliasIdentifier != nil && import_.AliasIdentifier!!.Text == name {
+                let aliased = string.Join(".", import_.Identifiers.Select((i SyntaxToken) -> i.Text))
+                if !string.IsNullOrEmpty(aliased) {
+                    return aliased
+                }
+            }
+        }
+        return name
     }
 
     private func ExtractQualifiedTypeSegments(token SyntaxToken) List[(Name string, Arity int32)] {

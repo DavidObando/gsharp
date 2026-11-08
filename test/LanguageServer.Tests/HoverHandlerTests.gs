@@ -1106,6 +1106,103 @@ func Run() string {
         )
     }
 
+    @Fact
+    func ComputeHover_TypeArgumentInDerivedExceptionClass_ResolvesClrType_NotInheritedProperty() {
+        const source = `package Repro
+
+import System
+import System.Collections.Generic
+import System.Diagnostics
+
+class CustomError : Exception {
+    func Capture() List[StackTrace] {
+        return List[StackTrace]()
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let ctorTypeArgHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StackTrace", 1)
+        )
+        Assert.NotNull(ctorTypeArgHover)
+        let value = ctorTypeArgHover!!.Contents.ToString()
+        Assert.Contains("class System.Diagnostics.StackTrace", value, StringComparison.Ordinal)
+        Assert.DoesNotContain("Exception.StackTrace", value, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_TypeParameterDoesNotShadowInheritedPropertyOrValueParameterReceiver() {
+        const source = `package Repro
+
+import System.Collections.Generic
+
+class Cell {
+    prop Value int32 { get; set; }
+}
+
+class Bucket[Count] : List[string] {
+    func Size() int32 {
+        return Count
+    }
+
+    func Set[T](T Cell) {
+        T.Value = 1
+    }
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let countReturnHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Count", 1)
+        )
+        Assert.NotNull(countReturnHover)
+        let countValue = countReturnHover!!.Contents.ToString()
+        Assert.Contains("prop Count int32", countValue, StringComparison.Ordinal)
+        Assert.DoesNotContain("type Count", countValue, StringComparison.Ordinal)
+
+        let paramReceiverHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "T.Value")
+        )
+        Assert.NotNull(paramReceiverHover)
+        let receiverValue = paramReceiverHover!!.Contents.ToString()
+        Assert.Contains("(parameter) T", receiverValue, StringComparison.Ordinal)
+        Assert.DoesNotContain("type T", receiverValue, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func ComputeHover_AliasQualifiedClrConstructor_ResolvesImportedType() {
+        const source = `package Repro
+
+import txt = System.Text
+
+func Build() string {
+    let sb = txt.StringBuilder("hi")
+    let list = txt.RegularExpressions.Regex("a+")
+    return sb.ToString() + list.ToString()
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let sbHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StringBuilder")
+        )
+        Assert.NotNull(sbHover)
+        Assert.Contains("class System.Text.StringBuilder", sbHover!!.Contents.ToString(), StringComparison.Ordinal)
+
+        let regexHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "Regex")
+        )
+        Assert.NotNull(regexHover)
+        Assert.Contains(
+            "class System.Text.RegularExpressions.Regex",
+            regexHover!!.Contents.ToString(),
+            StringComparison.Ordinal
+        )
+    }
+
     shared {
         private func CreateReferencePackResolver() ReferenceResolver {
             let TryParseVersion = func (s string) Version? {

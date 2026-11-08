@@ -443,6 +443,12 @@ internal shared class MemberTokenResolver {
     ) bool {
         member = nil
         overloadCount = 0
+        if SemanticLookup.SemanticModel.IsStrictTypePosition(token) ||
+            SemanticLookup
+            .SemanticModel
+            .IsTypeArgumentIndexToken(token) {
+            return false
+        }
         if token.Parent is NameExpressionSyntax ne && BoundSemantics.GetNodeSymbol(compilation, ne) is TypeSymbol {
             return false
         }
