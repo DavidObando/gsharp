@@ -37,7 +37,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "default(C)",
                 "default(string?)"
             } {
-                yield[]object{
+                yield []object{
                     pattern,
                     Loop(
                         "let matches = value is (" +
@@ -59,7 +59,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "const First C? = nil\n        const Local C? = cast[C?](First)",
                 "const Local C? = default"
             } {
-                yield[]object{
+                yield []object{
                     declaration,
                     Loop(
                         declaration +
@@ -68,7 +68,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
                     false
                 }
             }
-            yield[]object{
+            yield []object{
                 "nested_const",
                 Loop(
                     "const Local C? = nil\n        for var j = 0; j < 1; j++ {\n            let matches = value is (Local)\n            if value is (Local) { } else { return -1 }\n        }"
@@ -80,16 +80,16 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "const First C? = nil\n        var Local = First\n        Local = replacement",
                 "let Local C? = nil"
             } {
-                yield[]object{declaration, Loop(declaration + "\n        let matches = value is (Local)", true), true}
+                yield []object{declaration, Loop(declaration + "\n        let matches = value is (Local)", true), true}
             }
-            yield[]object{
+            yield []object{
                 "cast_operand_effect",
                 "func Pass(clear () -> void) object? { clear() return nil }\n" +
                     Loop("let converted = cast[object?](Pass(clear))", true),
                 true
             }
-            yield[]object{"boxed_zero_is_not_null", Loop("let matches = value is (cast[object?](0))", true), true}
-            yield[]object{
+            yield []object{"boxed_zero_is_not_null", Loop("let matches = value is (cast[object?](0))", true), true}
+            yield []object{
                 "user_defined_explicit_cast",
                 "class Source { var Callback () -> void }\nfunc operator explicit(src Source) int64 { src.Callback() return 1 }\n" +
                     Loop("let converted = cast[int64](src)", true).Replace(
@@ -103,15 +103,15 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "case _ when { action = mutate false } { action = noop noop() }\n        case _ when { action() false } { }",
                 "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }"
             } {
-                yield[]object{"finally_" + arms, Switch(arms, true), true}
-                yield[]object{"straight_" + arms, Switch(arms, false), true}
-                yield[]object{
+                yield []object{"finally_" + arms, Switch(arms, true), true}
+                yield []object{"straight_" + arms, Switch(arms, false), true}
+                yield []object{
                     "safe_finally_" + arms,
                     Switch(arms.Replace("action = mutate", "action = noop"), true, true).Replace("\"safe\"", "\"ok\""),
                     false
                 }
                 if !arms.Contains("\n") {
-                    yield[]object{
+                    yield []object{
                         "safe_straight_" + arms,
                         Switch(arms.Replace("action = mutate", "action = noop"), false).Replace("\"safe\"", "\"ok\""),
                         false

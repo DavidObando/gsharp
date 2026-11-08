@@ -54,9 +54,9 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "const First int32? = default(int32?)\n        const Local object? = cast[object?](First)\n        let matches = value is (Local)"
             } {
                 let test = body.Substring(body.LastIndexOf("let matches = ") + "let matches = ".Length)
-                yield[]object{"null_" + body, Loop(body + "\n        if " + test + " { } else { return -1 }"), false}
+                yield []object{"null_" + body, Loop(body + "\n        if " + test + " { } else { return -1 }"), false}
             }
-            yield[]object{
+            yield []object{
                 "nested_const",
                 Loop(
                     "const Local C? = nil\n        for var j = 0; j < 1; j++ {\n            let matches = value is (Local)\n            if value is (Local) { } else { return -1 }\n        }"
@@ -68,9 +68,9 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "const First C? = nil\n        var Local = First\n        Local = replacement\n        let matches = value is (Local)",
                 "let matches = value is (cast[object?](0))"
             } {
-                yield[]object{"effect_" + body, Loop(body, true), true}
+                yield []object{"effect_" + body, Loop(body, true), true}
             }
-            yield[]object{
+            yield []object{
                 "cast_operand_effect",
                 "import System\nfunc Pass(clear () -> void) object? { clear() return nil }\n" + Loop(
                     "let converted = cast[object?](Pass(clear))",
@@ -78,7 +78,7 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 ).Replace("import System\n", ""),
                 true
             }
-            yield[]object{
+            yield []object{
                 "user_conversion",
                 "import System\nclass Source { var Callback () -> void }\nfunc operator explicit(src Source) int64 { src.Callback() return 1 }\n" +
                     Loop("let converted = cast[int64](src)", true).Replace(
@@ -133,7 +133,7 @@ Console.WriteLine(Run(1ARGUMENT))
                             ", func() { }"
                         }
                     )
-                    yield[]object{"switch_${inFinally}_${arms}", source, true}
+                    yield []object{"switch_${inFinally}_${arms}", source, true}
                     var safe = source.Replace("action = mutate", "action = noop").Replace("\"safe\"", "\"ok\"")
                     if inFinally {
                         safe = safe
@@ -142,7 +142,7 @@ Console.WriteLine(Run(1ARGUMENT))
                             .Replace("Run(1)", "Run(1, func() { })")
                     }
                     if inFinally || !arms.Contains("\n") {
-                        yield[]object{"safe_switch_${inFinally}_${arms}", safe, false}
+                        yield []object{"safe_switch_${inFinally}_${arms}", safe, false}
                     }
                 }
             }
