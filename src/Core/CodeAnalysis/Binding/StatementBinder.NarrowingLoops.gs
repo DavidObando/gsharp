@@ -2390,18 +2390,36 @@ internal partial class StatementBinder {
         if constant.Path is {} path && !RegionConstantPathIsNull(path) {
             return false
         }
+        if constant.Targets.IsDefaultOrEmpty {
+            return true
+        }
+        let sourceTypes = if constant.Path is {} path {
+            ConversionTypes(path, effects)
+        } else {
+            List[TypeSymbol]{TypeSymbol.Null}
+        }
+        guard let initialSources = sourceTypes else {
+            return false
+        }
+        var sources = initialSources
+        if sources.Count == 0 {
+            return false
+        }
         for target in constant.Targets {
             guard let types = ConversionTypes(target, effects) else {
                 return false
             }
-            if types.Count == 0 || types.Any(
-                (type TypeSymbol) -> !Conversion.IsReferenceLikeTarget(type) && !NullableLifting.IsAnyValueTypeNullable(
-                    type as NullableTypeSymbol
-                ) &&
-                    !NullableLifting.IsValueTypeNullableClr(type.ClrType)
-            ) {
+            if types.Count == 0 {
                 return false
             }
+            for source in sources {
+                for type in types {
+                    if !Conversion.PreservesNull(source, type) {
+                        return false
+                    }
+                }
+            }
+            sources = types
         }
         return true
     }

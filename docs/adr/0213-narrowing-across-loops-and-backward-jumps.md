@@ -1342,7 +1342,8 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
 - *Intrinsic casts and null constants (#5879, #5881).* `cast[T](operand)` records a conversion site, not an invocation.
   The shared conversion classifier includes explicit operators at this site, and the walker visits the operand's effects.
   Null-pattern provenance follows defaults, null-preserving conversions, and `const` declarations inside the region.
-  The consumer checks each conversion target as a reference or nullable value type.
+  The consumer checks null preservation for each source-to-target conversion through `Conversion.PreservesNull`.
+  Reference casts, nullable lifts and boxing preserve null. Constructing a string from a null character array does not.
   Mutable `var` and non-`const` `let` origins do not prove constant null values.
   Nested-region composition preserves these value records without changing cached records.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function

@@ -89,6 +89,18 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 true
             }
             yield []object{"boxed_zero_is_not_null", Loop("let matches = value is (cast[object?](0))", true), true}
+            for inLoop in[]bool{false, true} {
+                for conversion in[]string{"cast[string](Chars)", "cast[object?](cast[string](Chars))"} {
+                    yield []object{"null_chars_${inLoop}_${conversion}", NullChars(conversion, inLoop), true}
+                }
+            }
+            yield []object{"null_chars_boxing", NullChars("cast[object?](Chars)", false, false), false}
+            yield []object{"local_null_chars_boxing", NullChars("cast[object?](Chars)", true, false), false}
+            yield []object{
+                "boxed_null_chars_cast",
+                NullChars("cast[string](cast[object?](Chars))", false, false),
+                false
+            }
             yield []object{
                 "user_defined_explicit_cast",
                 "class Source { var Callback () -> void }\nfunc operator explicit(src Source) int64 { src.Callback() return 1 }\n" +
@@ -118,6 +130,43 @@ class Issue5879RegionNullAndSwitchGuardTests {
                     }
                 }
             }
+        }
+
+        private func NullChars(conversion string, inLoop bool, rejected bool = true) string {
+            let declaration = if inLoop {
+                "const Chars = EntryChars\n        "
+            } else {
+                "const Chars []?char = nil\n        "
+            }
+            return Loop(
+                (
+                    if inLoop {
+                        declaration
+                    } else {
+                        ""
+                    }
+                ) +
+                    "let matches = target is (" +
+                    conversion +
+                    ")",
+                rejected
+            )
+                .Replace(
+                "class C {}",
+                "class C {}\nclass Matcher {\n    var Callback () -> void\n    override func Equals(other object?) bool { Callback() return false }\n    override func GetHashCode() int32 -> 0\n}"
+            )
+                .Replace(
+                "    if text == nil",
+                "    let target object = Matcher{Callback: clear}\n    " +
+                    (
+                    if inLoop {
+                        "const EntryChars []?char = nil\n        "
+                    } else {
+                        declaration
+                    }
+                ) +
+                    "if text == nil"
+            )
         }
 
         private func Loop(body string, rejected bool = false) string -> `class C {}
