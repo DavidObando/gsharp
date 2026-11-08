@@ -1,13 +1,125 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Tests
 import System
+import System.Collections.Immutable
 import System.Linq
 import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
+    @Fact
+    func Review3CallbackContractsFollowParameterAndReturnVariance() {
+        let parameter = ParameterSymbol("x", TypeSymbol.Int32)
+        parameter.SetExplicitDefaultValue(7)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let optional = plain.WithParameters(ImmutableArray.Create(parameter))
+        let acceptsPlain = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](plain), TypeSymbol.Int32)
+        let acceptsOptional = FunctionTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](optional), TypeSymbol.Int32)
+        Assert.False(Conversion.Classify(acceptsOptional, acceptsPlain).Exists)
+        Assert.True(Conversion.Classify(acceptsPlain, acceptsOptional).IsImplicit)
+        let returnsPlain = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, plain)
+        let returnsOptional = FunctionTypeSymbol.Get(ImmutableArray[TypeSymbol].Empty, optional)
+        Assert.True(Conversion.Classify(returnsOptional, returnsPlain).IsImplicit)
+        Assert.False(Conversion.Classify(returnsPlain, returnsOptional).Exists)
+        let plainRef = ByRefTypeSymbol.Get(plain)
+        let optionalRef = ByRefTypeSymbol.Get(optional)
+        Assert.False(Conversion.Classify(optionalRef, plainRef).Exists)
+        Assert.False(Conversion.Classify(plainRef, optionalRef).Exists)
+    }
+
+    @Fact
+    func Review3DeclaredByRefCallbackContractsAreInvariant() {
+        let value = ParameterSymbol("x", TypeSymbol.Int32)
+        value.SetExplicitDefaultValue(7)
+        let plain = FunctionTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.Int32), TypeSymbol.Int32)
+        let optional = plain.WithParameters(ImmutableArray.Create(value))
+        let plainConsumer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](plain, TypeSymbol.Int32),
+            TypeSymbol.Int32
+        )
+            .WithParameters(ImmutableArray.Create(ParameterSymbol("callback", plain, refKind: RefKind.Ref), value))
+        let optionalConsumer = FunctionTypeSymbol.Get(
+            ImmutableArray.Create[TypeSymbol](optional, TypeSymbol.Int32),
+            TypeSymbol.Int32
+        )
+            .WithParameters(ImmutableArray.Create(ParameterSymbol("callback", optional, refKind: RefKind.Ref), value))
+        Assert.False(Conversion.Classify(optionalConsumer, plainConsumer).Exists)
+        Assert.False(Conversion.Classify(plainConsumer, optionalConsumer).Exists)
+    }
+
+    @Theory
+    @InlineData("x int32 = 9")
+    @InlineData("x int32")
+    func Review3GenericLambdaAdaptersRejectChangedOptionalContracts(replacement string) {
+        let result = EmittedOracle.Evaluate(`func Run[T](value T) T {
+var f = func(x int32 = 7) T { return value }
+f = func(` + replacement + `) T { return value }
+return f()
+}
+Run(1)`)
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 2)
+    }
+
+    @Theory
+    @InlineData("MakeChild(f, 0)")
+    @InlineData("MakeClass(f, 0)")
+    func Review3SourceInterfaceProjectionPreservesCallableContracts(replacement string) {
+        let declarations = `interface IBase[T] {}
+interface IChild[T, U] : IBase[T] {}
+class C[T, U] : IChild[T, U] {}
+func MakeBase[T](value T) IBase[T] -> C[T, int32]()
+func MakeChild[T, U](value T, tag U) IChild[T, U] -> C[T, U]()
+func MakeClass[T, U](value T, tag U) C[T, U] -> C[T, U]()
+let f = (x int32 = 7) -> x
+var value = MakeBase(f)
+`
+        let result = EmittedOracle.Evaluate(declarations + "value = " + replacement + "\n1")
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(1, result.Value)
+        let invalid = EmittedOracle.Evaluate(
+            declarations + "let g = (x int32 = 9) -> x\nvalue = " + replacement.Replace("(f,", "(g,")
+        )
+        Assert.Contains(
+            invalid.Diagnostics,
+            (d Diagnostic) -> (d.Id == "GS0155" || d.Id == "GS0490") && d.Location.StartLine == 9
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Review3ConstructedInterfaceUsesDeclaredCovariance(nested bool) {
+        let declarations = if nested {
+            `class Outer[P] {
+public interface ISource[out T] {}
+public class C[T] : ISource[T] {}
+}
+`
+        } else {
+            `interface ISource[out T] {}
+class C[T] : ISource[T] {}
+`
+        }
+        let prefix = if nested {
+            "Outer[int32]."
+        } else {
+            ""
+        }
+        let result = EmittedOracle.Evaluate(
+            declarations + "func MakeSource[T](value T) " + prefix + "ISource[T] -> " + prefix + `C[T]()
+let f = (x int32 = 7) -> x
+let source = MakeSource(f)
+let widened ` + prefix + `ISource[(int32) -> int32] = source
+widened != nil`
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(true, result.Value)
+    }
+
     @Fact
     func Review2NumericReturnAdapterRetainsTheOptionalContract() {
         let result = EmittedOracle.Evaluate(`var f = func(x int32 = 7) int64 { return int64(x) }
@@ -207,6 +319,8 @@ class Issue5872SignedInt64BoundaryTests {
     @Theory
     @InlineData("9223372036854775808")
     @InlineData("9_223_372_036_854_775_808")
+    @InlineData("09223372036854775808")
+    @InlineData("0_9223372036854775808")
     func UnsuffixedDecimalBoundaryUsesTheSameUnaryMinusRule(magnitude string) {
         let negative = EmittedOracle.Evaluate("-" + magnitude)
         Assert.Empty(negative.Diagnostics)

@@ -5,6 +5,33 @@ import System.Text
 import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
+    @Theory
+    @InlineData("x int32 = 9")
+    @InlineData("x int32")
+    func Review3GenericLambdaReassignmentsReportConversionErrors(replacement string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let (code, output) = fixture.TryCompile(`func Run[T](value T) T {
+var f = func(x int32 = 7) T { return value }
+f = func(` + replacement + `) T { return value }
+return f()
+}
+Run(1)`, "generic", true)
+        Assert.NotEqual(0, code)
+        Assert.Contains("GS0155", output, StringComparison.Ordinal)
+        Assert.Contains(".gs(3,", output, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Review3LeadingZeroMinimumLiteralsVerifyAndExecute() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package LeadingZero5872
+import System
+Console.Write("${-09223372036854775808}:${-0_9223372036854775808}")
+`, "leading-zero", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("-9223372036854775808:-9223372036854775808"), fixture.RunBytes(dll))
+    }
+
     @Fact
     func Review2NumericAdapterVerifiesAndInvokesTheDeclaredDefault() {
         using let fixture = NativeSliceLanguageTests.Fixture()

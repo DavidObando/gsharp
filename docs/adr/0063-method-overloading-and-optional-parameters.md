@@ -300,6 +300,7 @@ Reassignment must retain the same optional slots and default values.
 The compiler rejects a replacement with different defaults or required slots.
 Widen the variable to a written function type to permit those replacements; supply all arguments through that type.
 Writable container positions keep optional contracts invariant; a widening conversion must not create an unchecked writable alias.
+Callable parameter contracts are contravariant; callable result contracts are covariant.
 
 ## References
 

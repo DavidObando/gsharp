@@ -1208,6 +1208,10 @@ internal class ConversionClassifier {
             ){ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch, HasTargetDelegateType = true}
             expression = this.createUserMethodGroupAdapter(resolvedUserMethodGroup)
         }
+        if expression.Type != nil && type != nil && !Conversion.HaveCompatibleOptionalContracts(expression.Type, type) {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)
+            return BoundErrorExpression(expression.Syntax)
+        }
         if expression is BoundFunctionLiteralExpression literal &&
             type is FunctionTypeSymbol targetFunctionType &&
             TypeSymbol

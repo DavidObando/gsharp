@@ -396,42 +396,84 @@ class Conversion {
                     (!invariant || !FunctionTypeSymbol.ContainsOptionalContract(source))
             }
             for var i = 0; i < targetElements.Length; i++ {
-                let invariantPosition = invariant || OptionalContractPositionIsInvariant(targetShape, i)
-                if !HaveCompatibleOptionalContracts(sourceElements[i], targetElements[i], invariantPosition) {
+                let variance = if invariant {
+                    TypeParameterVariance.None
+                } else {
+                    OptionalContractPositionVariance(targetShape, i)
+                }
+                let compatible = if variance == TypeParameterVariance.In {
+                    HaveCompatibleOptionalContracts(targetElements[i], sourceElements[i])
+                } else {
+                    HaveCompatibleOptionalContracts(
+                        sourceElements[i],
+                        targetElements[i],
+                        invariant: variance == TypeParameterVariance.None
+                    )
+                }
+                if !compatible {
                     return false
                 }
             }
             return true
         }
 
-        private func OptionalContractPositionIsInvariant(target TypeSymbol, index int32) bool {
+        private func OptionalContractPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
+            if target is FunctionTypeSymbol function {
+                if index < function
+                    .ParameterTypes
+                    .Length &&
+                    !function
+                    .Parameters
+                    .IsDefaultOrEmpty &&
+                    function
+                    .Parameters[index]
+                    .RefKind != RefKind.None {
+                    return TypeParameterVariance.None
+                }
+                return if index < function.ParameterTypes.Length {
+                    TypeParameterVariance.In
+                } else {
+                    TypeParameterVariance.Out
+                }
+            }
             if TupleTypeSymbol.TryGetTupleShape(target, out _) {
-                return false
+                return TypeParameterVariance.Out
             }
             if target is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol or MapTypeSymbol {
-                return true
+                return TypeParameterVariance.None
             }
             if NativeSliceTypes.TryGetElement(target, out _, out var isReadOnly) {
-                return !isReadOnly
+                return if isReadOnly {
+                    TypeParameterVariance.Out
+                } else {
+                    TypeParameterVariance.None
+                }
             }
             if target is StructSymbol {
-                return true
+                return TypeParameterVariance.None
             }
             if target is InterfaceSymbol targetInterface {
-                return index >= targetInterface
-                    .TypeParameters
-                    .Length ||
-                    targetInterface
-                    .TypeParameters[index]
-                    .Variance != TypeParameterVariance.Out
+                let interfaceDefinition = targetInterface.Definition ?? targetInterface
+                let ownIndex = index - StructSymbol.CollectEnclosingTypeParameters(interfaceDefinition).Length
+                let parameters = interfaceDefinition.DeclaredTypeParameters
+                return if ownIndex < 0 || ownIndex >= parameters.Length {
+                    TypeParameterVariance.None
+                } else {
+                    parameters[ownIndex].Variance
+                }
             }
             if TryGetConstructedGenericShape(target, out var definition, out _) {
                 let parameters = definition.GetGenericArguments()
-                return index >= parameters.Length ||
-                    (parameters[index].GenericParameterAttributes & GenericParameterAttributes.VarianceMask) !=
-                GenericParameterAttributes.Covariant
+                if index >= parameters.Length {
+                    return TypeParameterVariance.None
+                }
+                return switch parameters[index].GenericParameterAttributes & GenericParameterAttributes.VarianceMask {
+                    case GenericParameterAttributes.Covariant: TypeParameterVariance.Out
+                    case GenericParameterAttributes.Contravariant: TypeParameterVariance.In
+                    default: TypeParameterVariance.None
+                }
             }
-            return false
+            return TypeParameterVariance.Out
         }
 
         /// Classifies a conversion, optionally including structural projection.
@@ -4742,6 +4784,22 @@ class Conversion {
             )
         }
 
+        private func GetSourceInterfaceHierarchy(source TypeSymbol) sequence[InterfaceSymbol] {
+            if source is InterfaceSymbol sourceInterface {
+                for candidate in sourceInterface.SelfAndAllBaseInterfaces() {
+                    yield candidate
+                }
+            } else if source is StructSymbol sourceClass {
+                for level in GetStructHierarchy(sourceClass) {
+                    for implemented in level.Interfaces {
+                        for candidate in implemented.SelfAndAllBaseInterfaces() {
+                            yield candidate
+                        }
+                    }
+                }
+            }
+        }
+
         /// #4420: projects [`from`](paramref)'s element positions onto the
         /// generic definition of [`to`](paramref), when that definition is a
         /// base type or interface of the source's (or an array-compatible
@@ -4769,6 +4827,18 @@ class Conversion {
             to = UnwrapPlatformAndNullable(to)
             if from == nil || to == nil || IsValueTypeLikeFrom(to) {
                 return false
+            }
+            if includeCallableContracts && to is InterfaceSymbol targetInterface {
+                for candidate in GetSourceInterfaceHierarchy(from) {
+                    if object.ReferenceEquals(
+                        candidate.Definition ?? candidate,
+                        targetInterface.Definition ?? targetInterface
+                    ) {
+                        projected = GetEffectiveInterfaceTypeArguments(candidate)
+                        targetArguments = GetEffectiveInterfaceTypeArguments(targetInterface)
+                        return projected.Length == targetArguments.Length
+                    }
+                }
             }
             // A same-compilation G# base class has no CLR type while binding.
             // Reuse the same symbolic hierarchy projection as the ordinary class

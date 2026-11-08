@@ -3886,7 +3886,7 @@ internal partial class ExpressionBinder {
             operand is LiteralExpressionSyntax{Value: uint64 magnitude, LiteralToken: var token} &&
             magnitude == uint64(int64.MaxValue) +
             1UL &&
-            (token.RequiresInt64Negation || token.Text.Replace("_", "") == "9223372036854775808")
+            (token.RequiresInt64Negation || token.Text.Replace("_", "").TrimStart('0') == "9223372036854775808")
 
         internal func TryGetPromotedCharUnaryType(
             operatorKind SyntaxKind,
