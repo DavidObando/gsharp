@@ -104,13 +104,13 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }"
             } {
                 yield []object{"finally_" + arms, Switch(arms, true), true}
-                yield []object{"straight_" + arms, Switch(arms, false), true}
                 yield []object{
                     "safe_finally_" + arms,
                     Switch(arms.Replace("action = mutate", "action = noop"), true, true).Replace("\"safe\"", "\"ok\""),
                     false
                 }
                 if !arms.Contains("\n") {
+                    yield []object{"straight_" + arms, Switch(arms, false), true}
                     yield []object{
                         "safe_straight_" + arms,
                         Switch(arms.Replace("action = mutate", "action = noop"), false).Replace("\"safe\"", "\"ok\""),

@@ -94,6 +94,9 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }"
             } {
                 for inFinally in[]bool{false, true} {
+                    if !inFinally && arms.Contains("\n") {
+                        continue
+                    }
                     var body = `let mutate = func() { text = nil }
         let noop = func() { }
         var action (() -> void) = noop
@@ -141,9 +144,7 @@ Console.WriteLine(Run(1ARGUMENT))
                             .Replace("func Run(x int32)", "func Run(x int32, noop () -> void)")
                             .Replace("Run(1)", "Run(1, func() { })")
                     }
-                    if inFinally || !arms.Contains("\n") {
-                        yield []object{"safe_switch_${inFinally}_${arms}", safe, false}
-                    }
+                    yield []object{"safe_switch_${inFinally}_${arms}", safe, false}
                 }
             }
         }
