@@ -32,7 +32,7 @@ class BoundLiteralExpression : BoundExpression {
     /// @param value The constant value.
     /// @param type The static type.
     /// @param importedConstantField The imported field whose metadata supplied this value.
-    init(syntax SyntaxNode?, value object?, type TypeSymbol, importedConstantField FieldInfo?) : base(syntax) {
+    internal init(syntax SyntaxNode?, value object?, type TypeSymbol, importedConstantField FieldInfo?) : base(syntax) {
         Value = value
         _type = type
         ImportedConstantField = importedConstantField
