@@ -45,6 +45,13 @@ A source reference type can lack a runtime `Type` while its constant value is kn
    Preserve existing named local function-literal `const` bindings; these are not CLR field constants.
    Do not widen the ordinary `nil` conversion rule or add nullable-value constant declarations.
 
+## Existing coverage gaps
+
+Region-local null constant patterns still report false `GS0158` on safe captured-local reads.
+The class and string reproductions fail identically before and after these changes.
+[Issue #5881](https://github.com/DavidObando/gsharp/issues/5881) tracks immutable initializer value provenance inside regions.
+[Issue #5879](https://github.com/DavidObando/gsharp/issues/5879) tracks predefined cast call classification inside loops.
+
 ## Verification
 
 The focused binder, compiler-driver, and translator tests compare diagnostics, runtime results, and emitted metadata.
