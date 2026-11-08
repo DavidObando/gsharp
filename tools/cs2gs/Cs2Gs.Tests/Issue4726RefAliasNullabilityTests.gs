@@ -17,6 +17,18 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Fact
+    func Issue5868_IndexerTupleKey_ConstructionAlonePreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() {
+        var items = new Dictionary<(string, int), int> { [(null!, 0)] = 1 };
+        return items.Count.ToString();
+    }
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
     func Issue5868_InferredTupleKeywordLabel_PreservesCSharpOutput() {
         const source = `public static class Obj {
     public static string Run() {
@@ -35,9 +47,11 @@ class Issue4726RefAliasNullabilityTests {
     @InlineData("dictionary-add")
     @InlineData("dictionary-index")
     @InlineData("dictionary-key")
+    @InlineData("dictionary-index-key")
     @InlineData("array")
     @InlineData("implicit-array")
     @InlineData("bare-array")
+    @InlineData("jagged-array")
     @InlineData("target-typed")
     @InlineData("nested")
     @InlineData("promoted")
@@ -47,9 +61,11 @@ class Issue4726RefAliasNullabilityTests {
             case "dictionary-add": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
             case "dictionary-index": "new Dictionary<int, (string, int)> { [0] = (null!, 0), [1] = (\"abc\", 1) }"
             case "dictionary-key": "new Dictionary<(string, int), int> { { (null!, 0), 0 }, { (\"abc\", 1), 1 } }"
+            case "dictionary-index-key": "new Dictionary<(string, int), int> { [(null!, 0)] = 0, [(\"abc\", 1)] = 1 }"
             case "array": "new (string, int)[] { (null!, 0), (\"abc\", 1) }"
             case "implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
             case "bare-array": "{ (null!, 0), (\"abc\", 1) }"
+            case "jagged-array": "new[] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
             case "target-typed": "new() { (null!, 0), (\"abc\", 1) }"
             case "nested": "new List<((string, int), int)> { ((null!, 0), 1), ((\"abc\", 1), 2) }"
             case "promoted": "new List<(string, int)> { (Missing(), 0), (\"abc\", 1) }"
@@ -62,13 +78,13 @@ class Issue4726RefAliasNullabilityTests {
         }
         let collection = switch shape {
             case "dictionary-add" or "dictionary-index": "items.Values"
-            case "dictionary-key": "items.Keys"
+            case "dictionary-key" or "dictionary-index-key": "items.Keys"
             default: "items"
         }
-        let leaf = if shape == "nested" {
-            "row.Item1.Item1"
-        } else {
-            "row.Item1"
+        let leaf = switch shape {
+            case "nested": "row.Item1.Item1"
+            case "jagged-array": "row[0].Item1"
+            default: "row.Item1"
         }
         let source = `using System.Collections.Generic;
 public static class Obj {
@@ -116,8 +132,26 @@ public static class Obj {
     @InlineData("nested")
     @InlineData("nullable")
     @InlineData("guarded-nullable")
+    @InlineData("array")
+    @InlineData("jagged-array")
     func Issue5880_WholeTupleRefStorage_PreservesCSharpOutput(shape string) {
         let source = switch shape {
+            case "array": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 1) };
+        ref (string, int) alias = ref rows[0];
+        alias = (null!, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+            case "jagged-array": `public static class Obj {
+    public static string Run() {
+        var rows = new[] { new (string, int)[] { ("x", 1) } };
+        ref (string, int) alias = ref rows[0][0];
+        alias = (null!, 1);
+        return rows[0][0].Item1 ?? "null";
+    }
+}`
             case "parameter": `public static class Obj {
     private static void Clear(ref (string, int) value) { value = (null, 1); }
     public static string Run() {
@@ -237,6 +271,23 @@ public static class Obj {
 }`
         let printed = Translate(source)
         Assert.Contains("var ref alias (string, int32) = row", printed)
+        Assert.DoesNotContain("(string?, int32)", printed)
+    }
+
+    @Fact
+    func Issue5880_ArrayElementRefStorage_PreservesFixedLeafContracts() {
+        const source = `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string, int)[] rows = { ("x", 1) };
+#nullable disable
+        ref (string, int) alias = ref rows[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var ref alias (string, int32) = rows[0]", printed)
         Assert.DoesNotContain("(string?, int32)", printed)
     }
 

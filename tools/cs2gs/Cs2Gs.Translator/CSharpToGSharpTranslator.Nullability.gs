@@ -1095,11 +1095,15 @@ partial class CSharpToGSharpTranslator {
                 mappedElementType
             }
             if literal != nil {
+                let (sink, position) = this.ResolveArrayStorageSink(literal)
                 elementType = this.PromoteTupleTypeArguments(
                     elementType,
                     elementTypeSymbol,
-                    this.ResolveValueSink(literal),
-                    List[int32]{0}
+                    sink,
+                    position
+                        .Split('.')
+                        .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                        .ToList()
                 )
             }
             if literal is ImplicitArrayCreationExpressionSyntax implicitArray {
@@ -1193,6 +1197,7 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "0")
             }
             var node ExpressionSyntax = value
+            var elementDepth = 1
             while true {
                 if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
                     node = cast[ExpressionSyntax](node.Parent)
@@ -1214,10 +1219,27 @@ partial class CSharpToGSharpTranslator {
                     node = cast[ExpressionSyntax](node.Parent)
                     continue
                 }
+                if node.Parent is InitializerExpressionSyntax initializer && initializer.IsKind(
+                    SyntaxKind.ArrayInitializerExpression
+                ) {
+                    var outer = initializer
+                    while outer.Parent is InitializerExpressionSyntax dimension && dimension.IsKind(
+                        SyntaxKind.ArrayInitializerExpression
+                    ) {
+                        outer = dimension
+                    }
+                    elementDepth++
+                    node = outer
+                    continue
+                }
                 break
             }
             let (sink, prefix) = this.DirectValueSink(node)
-            return (sink, JoinPosition(prefix, "0"))
+            var position = prefix
+            for var i = 0; i < elementDepth; i++ {
+                position = JoinPosition(position, "0")
+            }
+            return (sink, position)
         }
 
         private func IsWidenedArrayCreationElement(value ExpressionSyntax?) bool {

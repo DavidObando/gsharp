@@ -4689,7 +4689,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
     }
 
-    internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
+    internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel, preserveSubstitution bool = false)(
+        Owner ISymbol?,
+        Depth int32
+    ) {
         var receiver = Unwrap(expression, unwrapSuppressions: true)
         var depth = 0
         while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
@@ -4698,8 +4701,19 @@ internal shared class ObliviousNullabilityAnalyzer {
             receiver = Unwrap(access.Expression, unwrapSuppressions: true)
         }
         let symbol = model.GetSymbolInfo(receiver).Symbol
+        let owner = GetArrayStorageOwner(
+            symbol,
+            model,
+            HashSet[ISymbol](SymbolEqualityComparer.Default),
+            preserveSubstitution
+        ) ??
+            symbol
         return (
-            Canonical(GetArrayStorageOwner(symbol, model, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? symbol),
+            if preserveSubstitution {
+                owner
+            } else {
+                Canonical(owner)
+            },
             depth
         )
     }
@@ -5541,15 +5555,26 @@ internal shared class ObliviousNullabilityAnalyzer {
             ConnectRefTupleStorage(target, conditional.WhenFalse, model, tupleTainted, tupleContractEdges)
             return
         }
-        if model.GetSymbolInfo(storage).Symbol is {} source {
+        let (source, depth) = RefArrayStorage(storage, model, preserveSubstitution: true)
+        if source != nil {
+            var sourceType = SymbolValueType(source)
+            var sourcePrefix = string.Empty
+            for var i = 0; i < depth; i++ {
+                if sourceType is not IArrayTypeSymbol array {
+                    return
+                }
+                sourceType = array.ElementType
+                sourcePrefix = AppendTuplePath(sourcePrefix, 0)
+            }
             // A ref shares every leaf contract, including fixed non-null positions.
             AddTupleContractPair(
                 target,
                 SymbolValueType(target),
                 source,
-                SymbolValueType(source),
+                sourceType,
                 tupleTainted,
-                tupleContractEdges
+                tupleContractEdges,
+                sourcePrefix
             )
         }
     }
@@ -5784,6 +5809,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                     model
                     .GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer {
                     CollectWrite(indexer.OriginalDefinition.Type, assignment.Right)
+                    for argument in GetCallArguments(assignment.Left, model) {
+                        if argument.Parameter is {} parameter && argument.Value.Syntax is ExpressionSyntax key {
+                            CollectWrite(parameter.OriginalDefinition.Type, key)
+                        }
+                    }
                 } else if initializer.IsKind(SyntaxKind.CollectionInitializerExpression) &&
                     model
                     .GetCollectionInitializerSymbolInfo(element).Symbol is IMethodSymbol add && !add.IsExtensionMethod {
@@ -7378,7 +7408,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         second ISymbol?,
         secondType ITypeSymbol?,
         tupleTainted HashSet[TupleElementKey],
-        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        secondPrefix string = ""
     ) {
         var comparisonType ITypeSymbol? = firstType
         if first is IMethodSymbol{Arity: > 0} firstMethod &&
@@ -7412,12 +7443,14 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let firstSlots = NestedTupleSlots(firstType)
-        let secondSlots = NestedTupleSlots(secondType)
+        let secondSlots = List[(Path string, Tuple INamedTypeSymbol)]()
         if firstType is INamedTypeSymbol{IsTupleType: true} firstTuple {
             firstSlots.Add((string.Empty, firstTuple))
         }
         if secondType is INamedTypeSymbol{IsTupleType: true} secondTuple {
-            secondSlots.Add((string.Empty, secondTuple))
+            secondSlots.Add((secondPrefix, secondTuple))
+        } else {
+            CollectNestedTupleSlots(secondType, secondPrefix, secondSlots)
         }
         if firstSlots.Count == 0 || firstSlots.Count != secondSlots.Count {
             return
@@ -8772,10 +8805,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     )
                 }
             }
-            if offset == indexes.Length || template is not INamedTypeSymbol named || !int32.TryParse(
-                indexes[offset],
-                out var index
-            ) {
+            if offset == indexes.Length || !int32.TryParse(indexes[offset], out var index) {
+                break
+            }
+            if template is IArrayTypeSymbol array && index == 0 {
+                template = array.ElementType
+                continue
+            }
+            if template is not INamedTypeSymbol named {
                 break
             }
             if named.IsTupleType && index < named.TupleElements.Length {

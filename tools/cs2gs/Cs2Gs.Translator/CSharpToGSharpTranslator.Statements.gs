@@ -368,6 +368,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 // Keep nullable tuple storage even when the initializer is non-null.
                 if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol tupleStorage &&
+                    tupleStorage
+                    .Type
+                    .TypeKind != TypeKind.Delegate &&
                     (
                     tupleStorage.Type is INamedTypeSymbol{IsTupleType: true} ||
                         ObliviousNullabilityAnalyzer.HasNestedTupleSlots(tupleStorage.Type)
