@@ -420,6 +420,41 @@ internal shared class ObliviousNullabilityAnalyzer {
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
     private let Cache ConditionalWeakTable[Compilation, TaintResult] = ConditionalWeakTable[Compilation, TaintResult]()
+    private let RefArraySources ConditionalWeakTable[Compilation, RefArraySourceIndex] = ConditionalWeakTable[
+        Compilation,
+        RefArraySourceIndex
+    ]()
+
+    private class RefArraySourceIndex {
+        let Outputs Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ISymbol]]
+        ](SymbolEqualityComparer.Default)
+        let Sources Dictionary[ISymbol, Dictionary[int32, List[ISymbol]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ISymbol]]
+        ](SymbolEqualityComparer.Default)
+        let Writes Dictionary[ISymbol, Dictionary[int32, List[ExpressionSyntax]]] = Dictionary[
+            ISymbol,
+            Dictionary[int32, List[ExpressionSyntax]]
+        ](SymbolEqualityComparer.Default)
+    }
+
+    private class RefArraySourceSlot {
+        var Parent RefArraySourceSlot? = nil
+        var Size int32 = 1
+        let Sources List[ISymbol] = List[ISymbol]()
+        let Writes List[ExpressionSyntax] = List[ExpressionSyntax]()
+        let Outputs List[ISymbol] = List[ISymbol]()
+
+        func Root() RefArraySourceSlot {
+            var root = this
+            while root.Parent != nil {
+                root = root.Parent!!
+            }
+            return root
+        }
+    }
 
     private let ComputeCounts ConditionalWeakTable[Compilation, StrongBox[int32]] = ConditionalWeakTable[
         Compilation,
@@ -3741,15 +3776,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         return function as MethodDeclarationSyntax
     }
 
-    // The expression with its parentheses removed. A `q!` is NOT unwrapped: the
-    // author asserted `q` non-null there, so the value is no longer "the
-    // parameter unchanged".
-    private func Unwrap(expression ExpressionSyntax) ExpressionSyntax {
+    // Value forwarding retains suppressions. Ref initializers unwrap them to identify the shared storage.
+    private func Unwrap(expression ExpressionSyntax, unwrapSuppressions bool = false) ExpressionSyntax {
         var current = expression
-        while current is ParenthesizedExpressionSyntax parenthesized {
-            current = parenthesized.Expression
+        while true {
+            if current is ParenthesizedExpressionSyntax parenthesized {
+                current = parenthesized.Expression
+            } else if unwrapSuppressions && current is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                current = suppress.Operand
+            } else {
+                return current
+            }
         }
-        return current
     }
 
     // Syntactic prefilter for a forwarding edge: a bare identifier that names a
@@ -4375,6 +4415,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         CollectOverrideContractEdges(compilation, edges)
         CollectTupleContractEdges(compilation, tupleTainted, tupleContractEdges)
         CollectConstructedTupleContractEdges(compilation, constructedTypes, tupleTainted, tupleContractEdges)
+        CollectRefArrayAliasEdges(compilation, tainted, edges, scalarTupleEdges)
         // A signature component shares one contract, even when only one
         // implementation inherits a fixed non-null metadata position.
         let fixedTupleContracts = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
@@ -4451,6 +4492,331 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
+    private func CollectRefArrayAliasEdges(
+        compilation Compilation,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+    ) {
+        let aliases = RefArraySources.GetValue(compilation, BuildRefArraySources).Sources
+        for sources in aliases
+            .Values
+            .SelectMany((positions Dictionary[int32, List[ISymbol]]) -> positions.Values)
+            .Distinct() {
+            for source in sources.Skip(1) {
+                edges.Add((sources[0], source))
+                edges.Add((source, sources[0]))
+            }
+        }
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+                if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
+                    continue
+                }
+                let (source, depth) = RefArrayStorage(assignment.Left, model)
+                if source != nil && depth > 0 && aliases.TryGetValue(source, out var positions) &&
+                    positions
+                    .TryGetValue(depth, out var sources) {
+                    CollectScalarValueFlow(sources[0], assignment.Right, model, tainted, edges, scalarTupleEdges)
+                }
+            }
+        }
+    }
+
+    private func BuildRefArraySources(compilation Compilation) RefArraySourceIndex {
+        let slots = Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]](SymbolEqualityComparer.Default)
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+                var target ISymbol? = if reference.Parent is EqualsValueClauseSyntax{
+                    Parent: VariableDeclaratorSyntax declaration
+                } {
+                    model.GetDeclaredSymbol(declaration)
+                } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+                    model.GetEnclosingSymbol(reference.SpanStart)
+                } else {
+                    default(ISymbol?)
+                }
+                if target is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                    target = property
+                }
+                if !IsRefStorageSymbol(target) {
+                    continue
+                }
+                let (source, depth) = RefArrayStorage(reference.Expression, model)
+                if depth > 0 && source != nil {
+                    RefArraySourceSlotFor(slots, source, depth).Root().Sources.Add(Canonical(target)!!)
+                }
+                ConnectRefArraySources(slots, target!!, reference.Expression, model)
+            }
+            for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                if argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) && model.GetOperation(
+                    argument
+                ) is IArgumentOperation{Parameter: {} output} {
+                    let (owner, depth) = RefArrayStorage(argument.Expression, model)
+                    if owner != nil && depth > 0 {
+                        RefArraySourceSlotFor(slots, owner, depth).Root().Outputs.Add(Canonical(output)!!)
+                    }
+                }
+                if argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword) && model.GetOperation(
+                    argument
+                ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                    let (owner, depth) = RefArrayStorage(argument.Expression, model)
+                    if owner != nil && depth > 0 {
+                        RefArraySourceSlotFor(slots, owner, depth).Root().Sources.Add(Canonical(parameter)!!)
+                    }
+                    ConnectRefArraySources(slots, parameter, argument.Expression, model)
+                }
+            }
+        }
+        for tree in compilation.SyntaxTrees {
+            let model = compilation.GetSemanticModel(tree)
+            for assignment in tree.GetRoot().DescendantNodes().OfType[AssignmentExpressionSyntax]() {
+                let (owner, depth) = RefArrayStorage(assignment.Left, model)
+                if assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && owner != nil && slots.TryGetValue(
+                    owner,
+                    out var positions
+                ) &&
+                    positions.TryGetValue(depth, out var slot) {
+                    slot.Root().Writes.Add(assignment.Right)
+                }
+            }
+        }
+        let index = RefArraySourceIndex()
+        for owner in slots {
+            let positions = Dictionary[int32, List[ISymbol]]()
+            let writes = Dictionary[int32, List[ExpressionSyntax]]()
+            let outputs = Dictionary[int32, List[ISymbol]]()
+            for slot in owner.Value {
+                let sources = slot.Value.Root().Sources
+                let values = slot.Value.Root().Writes
+                let writtenOutputs = slot.Value.Root().Outputs
+                if sources.Count > 0 {
+                    positions.Add(slot.Key, sources)
+                }
+                if values.Count > 0 {
+                    writes.Add(slot.Key, values)
+                }
+                if writtenOutputs.Count > 0 {
+                    outputs.Add(slot.Key, writtenOutputs)
+                }
+            }
+            if positions.Count > 0 {
+                index.Sources.Add(owner.Key, positions)
+            }
+            if writes.Count > 0 {
+                index.Writes.Add(owner.Key, writes)
+            }
+            if outputs.Count > 0 {
+                index.Outputs.Add(owner.Key, outputs)
+            }
+        }
+        return index
+    }
+
+    private func RefArraySourceSlotFor(
+        slots Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]],
+        owner ISymbol,
+        depth int32
+    ) RefArraySourceSlot {
+        if !slots.TryGetValue(owner, out var positions) {
+            positions = Dictionary[int32, RefArraySourceSlot]()
+            slots.Add(owner, positions)
+        }
+        if !positions.TryGetValue(depth, out var slot) {
+            slot = RefArraySourceSlot()
+            positions.Add(depth, slot)
+        }
+        return slot
+    }
+
+    private func ConnectRefArraySources(
+        slots Dictionary[ISymbol, Dictionary[int32, RefArraySourceSlot]],
+        target ISymbol,
+        expression ExpressionSyntax,
+        model SemanticModel
+    ) {
+        let value = Unwrap(expression, unwrapSuppressions: true)
+        if value is RefExpressionSyntax reference {
+            ConnectRefArraySources(slots, target, reference.Expression, model)
+            return
+        }
+        if value is ConditionalExpressionSyntax conditional {
+            ConnectRefArraySources(slots, target, conditional.WhenTrue, model)
+            ConnectRefArraySources(slots, target, conditional.WhenFalse, model)
+            return
+        }
+        var type ITypeSymbol? = SymbolValueType(target)
+        if type is not IArrayTypeSymbol || value == nil {
+            return
+        }
+        let (source, depth) = RefArrayStorage(value, model)
+        if source == nil {
+            return
+        }
+        let owner = Canonical(
+            GetArrayStorageOwner(target, model, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? target
+        )!!
+        var position = 0
+        while true {
+            let left = RefArraySourceSlotFor(slots, owner, position).Root()
+            let right = RefArraySourceSlotFor(slots, source, depth + position).Root()
+            if !object.ReferenceEquals(left, right) {
+                let larger = if left.Size >= right.Size {
+                    left
+                } else {
+                    right
+                }
+                let smaller = if object.ReferenceEquals(larger, left) {
+                    right
+                } else {
+                    left
+                }
+                smaller.Parent = larger
+                larger.Size += smaller.Size
+                larger.Sources.AddRange(smaller.Sources)
+                smaller.Sources.Clear()
+                larger.Writes.AddRange(smaller.Writes)
+                smaller.Writes.Clear()
+                larger.Outputs.AddRange(smaller.Outputs)
+                smaller.Outputs.Clear()
+            }
+            if type is not IArrayTypeSymbol array {
+                break
+            }
+            type = array.ElementType
+            position++
+        }
+    }
+
+    internal func RefArrayStorage(expression ExpressionSyntax, model SemanticModel)(Owner ISymbol?, Depth int32) {
+        var receiver = Unwrap(expression, unwrapSuppressions: true)
+        var depth = 0
+        while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+            .Type is IArrayTypeSymbol {
+            depth++
+            receiver = Unwrap(access.Expression, unwrapSuppressions: true)
+        }
+        let symbol = model.GetSymbolInfo(receiver).Symbol
+        return (
+            Canonical(GetArrayStorageOwner(symbol, model, HashSet[ISymbol](SymbolEqualityComparer.Default)) ?? symbol),
+            depth
+        )
+    }
+
+    internal func GetDeconstructionAliasValue(designation SingleVariableDesignationSyntax) ExpressionSyntax? {
+        var target SyntaxNode = designation
+        let elementIndices = Stack[int32]()
+        while true {
+            switch target.Parent {
+                case parenthesized is ParenthesizedVariableDesignationSyntax {
+                    elementIndices.Push(parenthesized.Variables.IndexOf(cast[VariableDesignationSyntax](target)))
+                    target = parenthesized
+                    continue
+                }
+                case declaration is DeclarationExpressionSyntax when declaration.Type.IsVar {
+                    target = declaration
+                    continue
+                }
+                case argument is ArgumentSyntax when argument.Parent is TupleExpressionSyntax tuple {
+                    elementIndices.Push(tuple.Arguments.IndexOf(argument))
+                    target = tuple
+                    continue
+                }
+                case assignment is AssignmentExpressionSyntax when assignment.Left == target {
+                    var value = assignment.Right
+                    for index in elementIndices {
+                        value = Unwrap(value)
+                        if value is not TupleExpressionSyntax tupleValue ||
+                            index < 0 ||
+                            index >= tupleValue
+                            .Arguments
+                            .Count {
+                            return nil
+                        }
+                        value = tupleValue.Arguments[index].Expression
+                    }
+                    return Unwrap(value)
+                }
+                default {
+                    return nil
+                }
+            }
+        }
+    }
+
+    internal func GetArrayStorageOwner(
+        symbol ISymbol?,
+        model SemanticModel,
+        visited HashSet[ISymbol],
+        preserveSubstitution bool = false
+    ) ISymbol? {
+        if symbol == nil ||
+            SymbolValueType(symbol) is not IArrayTypeSymbol arrayType ||
+            !arrayType
+            .ElementType
+            .IsReferenceType ||
+            !visited.Add(symbol) {
+            return nil
+        }
+        if symbol is not ILocalSymbol local {
+            return if symbol is IFieldSymbol or IPropertySymbol or IParameterSymbol or IMethodSymbol {
+                if preserveSubstitution {
+                    symbol
+                } else {
+                    symbol.OriginalDefinition
+                }
+            } else {
+                default(ISymbol?)
+            }
+        }
+        for reference in local.DeclaringSyntaxReferences {
+            let declaration = reference.GetSyntax()
+            let declarationModel = model.Compilation.GetSemanticModel(declaration.SyntaxTree)
+            if declaration is SingleVariableDesignationSyntax designation &&
+                GetDeconstructionAliasValue(designation) is {} value &&
+                declarationModel
+                .GetSymbolInfo(value).Symbol is {} deconstructedSource {
+                return GetArrayStorageOwner(deconstructedSource, declarationModel, visited, preserveSubstitution) ??
+                    local
+            }
+            if declaration is VariableDeclaratorSyntax{
+                Initializer: {Value: {} initializer},
+                Parent: VariableDeclarationSyntax{Type: {} type}
+            } {
+                let value = if initializer is RefExpressionSyntax referenceExpression {
+                    referenceExpression.Expression
+                } else {
+                    initializer
+                }
+                if (
+                    type.IsVar ||
+                        initializer is RefExpressionSyntax ||
+                        (
+                        !declarationModel.GetNullableContext(declaration.SpanStart).HasFlag(
+                            NullableContext.AnnotationsEnabled
+                        ) &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(local.Type, declarationModel.GetTypeInfo(value).Type)
+                    )
+                ) &&
+                    declarationModel
+                    .GetSymbolInfo(Unwrap(value))
+                    .Symbol is {} source &&
+                    source is ILocalSymbol or
+                    IFieldSymbol or
+                    IPropertySymbol or
+                    IParameterSymbol or
+                    IMethodSymbol {
+                    return GetArrayStorageOwner(source, declarationModel, visited, preserveSubstitution) ?? local
+                }
+            }
+        }
+        return local
+    }
+
     private func SeedEfEntityPropertyTaint(compilation Compilation, tainted HashSet[ISymbol]) {
         for entity in CollectEfEntityTypes(compilation) {
             for property in entity.GetMembers().OfType[IPropertySymbol]() {
@@ -4484,6 +4850,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 SyntaxKind.CoalesceAssignmentExpression
             ) {
                 TaintTarget(coalesceAssign.Left, model, tainted)
+            }
+            case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
+                // Coalescing a local is declaration evidence, including storage shared by ref aliases.
+                if ResolveAssignable(coalesce.Left, model) is ILocalSymbol local {
+                    tainted.Add(local)
+                }
             }
             case isPattern is IsPatternExpressionSyntax when IsNullConstantPattern(isPattern.Pattern) {
                 TaintTarget(isPattern.Expression, model, tainted)
@@ -4577,6 +4949,19 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case declarator is VariableDeclaratorSyntax when declarator.Initializer != nil {
                 if model.GetDeclaredSymbol(declarator) is ISymbol declared && IsValueDeclarationSymbol(declared) {
+                    if declared is ILocalSymbol{RefKind: not RefKind.None} &&
+                        Unwrap(declarator.Initializer!!.Value) is RefExpressionSyntax reference {
+                        // A ref initializer names storage. Guards narrow reads, not the shared declaration contract.
+                        CollectRefStorageFlow(
+                            Canonical(declared),
+                            reference.Expression,
+                            model,
+                            tainted,
+                            edges,
+                            scalarTupleEdges
+                        )
+                        break
+                    }
                     CollectScalarValueFlow(
                         Canonical(declared),
                         declarator.Initializer!!.Value,
@@ -7106,12 +7491,41 @@ internal shared class ObliviousNullabilityAnalyzer {
         transitive bool,
         $scope SourceScope = SourceScope.AllSources
     ) {
-        if IsDirectlyNullable(value, model) {
+        if value is RefExpressionSyntax reference {
+            CollectRefStorageFlow(returnSymbol, reference.Expression, model, tainted, edges, scalarTupleEdges)
+        } else if IsDirectlyNullable(value, model) {
             tainted.Add(returnSymbol!!)
         } else if transitive {
             CollectScalarValueFlow(returnSymbol, value, model, tainted, edges, scalarTupleEdges, $scope)
         }
     }
+
+    private func CollectRefStorageFlow(
+        target ISymbol?,
+        value ExpressionSyntax,
+        model SemanticModel,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
+    ) {
+        let storage = Unwrap(value, unwrapSuppressions: true)
+        CollectScalarValueFlow(target, storage, model, tainted, edges, scalarTupleEdges)
+        for source in ResolveSources(storage, model) {
+            if !IsEligibleScalarTarget(source) {
+                continue
+            }
+            if IsDeclaredNullablePosition(SymbolValueType(target)) {
+                tainted.Add(source!!)
+            }
+            edges.Add((source!!, Canonical(target)!!))
+        }
+    }
+
+    internal func IsRefStorageSymbol(symbol ISymbol?) bool -> symbol is ILocalSymbol{RefKind: not RefKind.None} ||
+        symbol is IMethodSymbol{ReturnsByRef: true} or
+        IMethodSymbol{ReturnsByRefReadonly: true} ||
+        symbol is IPropertySymbol{ReturnsByRef: true} or
+        IPropertySymbol{ReturnsByRefReadonly: true}
 
     // The `return` statements that belong to <paramref name="body"/> itself,
     // excluding those inside a nested lambda / local function (which have their
@@ -7180,7 +7594,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         edges List[(Target ISymbol?, Source ISymbol?)],
         scalarTupleEdges List[(Target ISymbol?, Source TupleElementKey)],
         $scope SourceScope = SourceScope.AllSources,
-        readConversion bool = true
+        readConversion bool = true,
+        visitedArrayWrites HashSet[List[ExpressionSyntax]]? = nil
     ) {
         if !IsEligibleScalarTarget(target) {
             return
@@ -7193,7 +7608,16 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if readConversion && GetResultConversion(value, model) is IConversionOperation conversion {
-            CollectScalarValueFlow(target, conversion, model, tainted, edges, scalarTupleEdges, $scope)
+            CollectScalarValueFlow(
+                target,
+                conversion,
+                model,
+                tainted,
+                edges,
+                scalarTupleEdges,
+                $scope,
+                visitedArrayWrites
+            )
             return
         }
         if IsDirectlyNullable(value, model, readConversion: false) {
@@ -7209,7 +7633,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7221,7 +7646,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7233,7 +7659,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tainted,
                     edges,
                     scalarTupleEdges,
-                    $scope
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
                 )
                 return
             }
@@ -7243,17 +7670,53 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
             case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                CollectScalarValueFlow(target, coalesce.Right, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    coalesce.Right,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
                 return
             }
             case conditional is ConditionalExpressionSyntax {
-                CollectScalarValueFlow(target, conditional.WhenTrue, model, tainted, edges, scalarTupleEdges, $scope)
-                CollectScalarValueFlow(target, conditional.WhenFalse, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    conditional.WhenTrue,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
+                CollectScalarValueFlow(
+                    target,
+                    conditional.WhenFalse,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites: visitedArrayWrites
+                )
                 return
             }
             case switchExpression is SwitchExpressionSyntax {
                 for arm in switchExpression.Arms {
-                    CollectScalarValueFlow(target, arm.Expression, model, tainted, edges, scalarTupleEdges, $scope)
+                    CollectScalarValueFlow(
+                        target,
+                        arm.Expression,
+                        model,
+                        tainted,
+                        edges,
+                        scalarTupleEdges,
+                        $scope,
+                        visitedArrayWrites: visitedArrayWrites
+                    )
                 }
                 return
             }
@@ -7273,8 +7736,45 @@ internal shared class ObliviousNullabilityAnalyzer {
             },
             out var forwarded
         ) {
-            CollectScalarValueFlow(target, forwarded, model, tainted, edges, scalarTupleEdges, $scope)
+            CollectScalarValueFlow(
+                target,
+                forwarded,
+                model,
+                tainted,
+                edges,
+                scalarTupleEdges,
+                $scope,
+                visitedArrayWrites: visitedArrayWrites
+            )
             return
+        }
+        if $scope != SourceScope.CallsOnly &&
+            value is ElementAccessExpressionSyntax access &&
+            !IsNullGuardDominatedRead(access, model) {
+            let (owner, depth) = RefArrayStorage(access, model)
+            if owner != nil &&
+                RefArraySources
+                .GetValue(model.Compilation, BuildRefArraySources)
+                .Writes
+                .TryGetValue(owner, out var positions) &&
+                positions
+                .TryGetValue(depth, out var writes) {
+                let visited = visitedArrayWrites ?? HashSet[List[ExpressionSyntax]]()
+                if visited.Add(writes) {
+                    for written in writes {
+                        CollectScalarValueFlow(
+                            target,
+                            written,
+                            model.Compilation.GetSemanticModel(written.SyntaxTree),
+                            tainted,
+                            edges,
+                            scalarTupleEdges,
+                            $scope,
+                            visitedArrayWrites: visited
+                        )
+                    }
+                }
+            }
         }
         if $scope != SourceScope.CallsOnly && TryResolveTupleElementSource(value, model, out var tupleSource) {
             scalarTupleEdges.Add((target, tupleSource))
@@ -7290,7 +7790,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tainted HashSet[ISymbol],
         edges List[(Target ISymbol?, Source ISymbol?)],
         scalarTupleEdges List[(Target ISymbol?, Source TupleElementKey)],
-        $scope SourceScope
+        $scope SourceScope,
+        visitedArrayWrites HashSet[List[ExpressionSyntax]]? = nil
     ) {
         if value is IConversionOperation conversion {
             if IsDirectlyNullable(conversion, model, respectNullGuards: false) {
@@ -7298,7 +7799,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
             if CanForwardCastOperandNullability(conversion) {
-                CollectScalarValueFlow(target, conversion.Operand, model, tainted, edges, scalarTupleEdges, $scope)
+                CollectScalarValueFlow(
+                    target,
+                    conversion.Operand,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    $scope,
+                    visitedArrayWrites
+                )
             }
             if conversion.OperatorMethod != nil && !IsNonNullableValueType(conversion.Type) {
                 CollectConversionResultFlow(target, conversion.OperatorMethod!!, tainted, edges)
@@ -7312,7 +7822,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 edges,
                 scalarTupleEdges,
                 $scope,
-                readConversion: false
+                readConversion: false,
+                visitedArrayWrites: visitedArrayWrites
             )
         }
     }
@@ -7403,6 +7914,36 @@ internal shared class ObliviousNullabilityAnalyzer {
             case invocation is InvocationExpressionSyntax {
                 if model.GetSymbolInfo(invocation).Symbol is IMethodSymbol called && !called.ReturnsVoid {
                     yield Canonical(called)
+                }
+            }
+            case access is ElementAccessExpressionSyntax when
+            $scope != SourceScope.CallsOnly &&
+                $scope != SourceScope.CallsAndNonPropertyDeclarations &&
+                model
+                .GetSymbolInfo(access).Symbol is IPropertySymbol property && IsRefStorageSymbol(property) {
+                yield Canonical(property)
+            }
+            case access is ElementAccessExpressionSyntax when $scope != SourceScope.CallsOnly {
+                let (owner, depth) = RefArrayStorage(access, model)
+                if owner != nil &&
+                    RefArraySources
+                    .GetValue(model.Compilation, BuildRefArraySources)
+                    .Sources
+                    .TryGetValue(owner, out var positions) &&
+                    positions.TryGetValue(depth, out var sources) {
+                    for source in sources {
+                        yield source
+                    }
+                }
+                if owner != nil &&
+                    RefArraySources
+                    .GetValue(model.Compilation, BuildRefArraySources)
+                    .Outputs
+                    .TryGetValue(owner, out var outputPositions) &&
+                    outputPositions.TryGetValue(depth, out var outputs) {
+                    for output in outputs {
+                        yield output
+                    }
                 }
             }
             case IdentifierNameSyntax, MemberAccessExpressionSyntax {

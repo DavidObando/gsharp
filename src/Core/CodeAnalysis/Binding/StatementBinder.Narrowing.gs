@@ -8814,9 +8814,12 @@ internal partial class StatementBinder {
             Diagnostics.ReportRefLocalRhsMustBeLvalue(refModifierLoc, exprText)
             rhsValid = false
         }
-        // Pointee type: the user may write an explicit type clause that must match
-        // the initializer's static type; otherwise infer from the initializer.
-        let pointeeType = initializer.Type ?? TypeSymbol.Error
+        // A ref local aliases declared storage, not the narrowed value read.
+        let pointeeType = if ExpressionBinder.TryGetAddressedStorageType(initializer, out var storageType) {
+            storageType ?? TypeSymbol.Error
+        } else {
+            initializer.Type ?? TypeSymbol.Error
+        }
         if declaredType != nil && rhsValid && pointeeType != TypeSymbol.Error && declaredType != pointeeType {
             Diagnostics.ReportCannotConvert(syntax.Initializer!!.Location, pointeeType, declaredType)
             rhsValid = false
