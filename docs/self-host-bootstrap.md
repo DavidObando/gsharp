@@ -59,6 +59,11 @@ Freezing preserves these directories in the snapshot and both derived stage tree
 Verification rejects added, removed, or renamed directories in the caller or snapshot.
 Directory rows use `kind: "directory"`, size `0`, and an empty `sha256` value.
 Regular-file rows keep their existing schema and toolchain identities remain unchanged.
+Root directory rows use path `.`.
+`callerTreeSha256` binds the caller's original permission bits, independently of the normalized read-only snapshot identity.
+Caller verification detects `chmod` changes to files, directories, and the root.
+Archive extraction and digest failures return controlled errors, including truncated streams and decompression failures.
+Certification writes `certified: false` in its failure report when the report directory is writable.
 
 ```sh
 python3 build/selfhost-stage2.py \

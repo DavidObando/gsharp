@@ -9,6 +9,7 @@ import dataclasses
 import hashlib
 import hmac
 import json
+import io
 import os
 import shutil
 import tarfile
@@ -2255,7 +2256,7 @@ class ToolchainManifestTests(unittest.TestCase):
                     tree = migrated if boundary == "caller" else snapshot
                     self.assertTrue((tree / "empty").is_dir())
                     if boundary == "caller":
-                        stage2.verify_migrated_caller_unchanged(tree, manifest)
+                        stage2.verify_migrated_caller_unchanged(tree, original_identity)
                     else:
                         valid = run_driver("--verify-manifest", tree, plan)
                         self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
@@ -2274,7 +2275,7 @@ class ToolchainManifestTests(unittest.TestCase):
                         with self.assertRaisesRegex(
                             stage2.CertificationError, "caller migrated tree changed",
                         ):
-                            stage2.verify_migrated_caller_unchanged(tree, manifest)
+                            stage2.verify_migrated_caller_unchanged(tree, original_identity)
                         changed = run_driver(
                             "--freeze-migrated-tree", tree, self.root / f"changed-{suffix}")
                         self.assertEqual(0, changed.returncode, changed.stdout + changed.stderr)
@@ -2300,10 +2301,42 @@ class ToolchainManifestTests(unittest.TestCase):
             [row.path for row in manifest if not isinstance(row, stage2.DirectoryIdentity)])
         self.assertIn("migratedTreeSha256", identity)
         self.assertEqual(0o555, (snapshot / "build.sh").stat().st_mode & 0o777)
-        stage2.verify_migrated_caller_unchanged(migrated, manifest)
+        stage2.verify_migrated_caller_unchanged(migrated, identity)
         (migrated / "src" / "App.gs").write_text("package tampered\n", encoding="utf-8")
         with self.assertRaises(stage2.CertificationError):
-            stage2.verify_migrated_caller_unchanged(migrated, manifest)
+            stage2.verify_migrated_caller_unchanged(migrated, identity)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are required")
+    def test_migrated_caller_chmod_is_not_hidden_by_snapshot_normalization(self) -> None:
+        for name, mode in (("App.gs", 0o640), ("build.sh", 0o750),
+                           ("empty", 0o750), (".", 0o775), ("empty", 0o1755)):
+            with self.subTest(path=name, mode=oct(mode)):
+                suffix = f"{name.replace('.', '_')}-{mode:o}"
+                migrated = self.root / f"migrated-{suffix}"
+                (migrated / "empty").mkdir(parents=True)
+                migrated.chmod(0o700)
+                (migrated / "empty").chmod(0o700)
+                source = migrated / "App.gs"
+                source.write_bytes(b"package app\n")
+                source.chmod(0o600)
+                script = migrated / "build.sh"
+                script.write_bytes(b"#!/bin/sh\n")
+                script.chmod(0o700)
+                original_bytes = (source.read_bytes(), script.read_bytes())
+                snapshot = self.root / f"snapshot-{suffix}"
+                manifest, identity = stage2.freeze_migrated_tree(migrated, snapshot)
+                stage2.verify_migrated_caller_unchanged(migrated, identity)
+                (migrated / name).chmod(mode)
+                self.assertEqual(original_bytes, (source.read_bytes(), script.read_bytes()))
+                with self.assertRaisesRegex(
+                    stage2.CertificationError, "caller migrated tree changed",
+                ):
+                    stage2.verify_migrated_caller_unchanged(migrated, identity)
+                stage2.verify_manifest(snapshot, manifest)
+                if name == ".":
+                    snapshot.chmod(0o755)
+                    with self.assertRaisesRegex(stage2.CertificationError, "manifest changed"):
+                        stage2.verify_manifest(snapshot, manifest)
 
     def test_freeze_migrated_tree_rejects_overlapping_roots_without_changing_caller(self) -> None:
         migrated = self.root / "migrated"
@@ -2319,6 +2352,95 @@ class ToolchainManifestTests(unittest.TestCase):
                 self.assertIn("caller tree and source snapshot are not disjoint", result.stderr)
                 self.assertEqual(original, stage2.migrated_tree_manifest(migrated))
                 self.assertFalse((migrated / "snapshot").exists())
+
+
+class ArchiveFailureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = REPO / "build" / f".stage2-archive-test-{self.id().rsplit('.', 1)[-1]}"
+        remove_tree(self.root)
+        self.root.mkdir()
+        payload = b"".join(hashlib.sha256(index.to_bytes(4, "little")).digest()
+                           for index in range(4096))
+        tar_path = self.root / "truncated.tar.gz"
+        with tarfile.open(tar_path, "w:gz") as archive:
+            member = tarfile.TarInfo("dotnet")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        data = tar_path.read_bytes()
+        tar_path.write_bytes(data[:len(data) // 2])
+        zip_path = self.root / "corrupt.nupkg"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("Sdk/Sdk.props", payload)
+        data = bytearray(zip_path.read_bytes())
+        name_length, extra_length = struct.unpack_from("<HH", data, 26)
+        offset = 30 + name_length + extra_length
+        data[offset] = (data[offset] & ~0x06) | 0x06
+        zip_path.write_bytes(data)
+        truncated_zip = self.root / "truncated.nupkg"
+        truncated_zip.write_bytes(data[:-30])
+        self.archives = [("gzip-eof", tar_path), ("zip-deflate", zip_path),
+                         ("zip-truncated", truncated_zip)]
+        if os.name != "nt" and os.geteuid() != 0:
+            denied = self.root / "denied.tar.gz"
+            denied.write_bytes(b"cannot read")
+            denied.chmod(0)
+            self.archives.append(("io-denied", denied))
+
+    def tearDown(self) -> None:
+        remove_tree(self.root)
+
+    def test_archive_driver_errors_are_controlled(self) -> None:
+        for name, archive in self.archives:
+            with self.subTest(archive=name):
+                if archive.suffix == ".gz":
+                    digest = (hashlib.sha256(archive.read_bytes()).hexdigest()
+                              if name != "io-denied" else "0" * 64)
+                    result = run_driver(
+                        "--verify-dotnet-archive", archive, digest, self.root / f"extract-{name}")
+                else:
+                    cache = self.root / f"cache-{name}"
+                    cache.mkdir()
+                    package = cache / "example.1.0.0.nupkg"
+                    shutil.copy2(archive, package)
+                    (cache / "example.1.0.0.nupkg.sha512").write_text(
+                        base64.b64encode(hashlib.sha512(package.read_bytes()).digest()).decode(),
+                        encoding="utf-8")
+                    result = run_driver(
+                        "--verify-package-cache", cache, self.root / f"extract-{name}")
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("selfhost-stage2:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_archive_errors_write_certification_failure_reports(self) -> None:
+        import argparse
+
+        for name, archive in self.archives:
+            with self.subTest(archive=name):
+                caller = self.root / f"caller-{name}"
+                caller.mkdir()
+                args = argparse.Namespace(
+                    tree=caller, migrated_tree=None, bootstrap=archive,
+                    package_cache=self.root / "cache", work=self.root / f"work-{name}",
+                    dotnet_archive=archive if archive.suffix == ".gz" else None,
+                    dotnet_archive_sha256=[hashlib.sha256(archive.read_bytes()).hexdigest()]
+                    if name != "io-denied" else ["0" * 64],
+                    config="Release", project=None, assembly=None, test=[],
+                    test_adapter_sha256=[])
+                controller = stage2.Controller(args)
+
+                def preflight() -> None:
+                    controller.reports.mkdir(parents=True)
+                    if archive.suffix == ".gz":
+                        controller.resolve_installed_dotnet()
+                    else:
+                        stage2.package_payload_hash(archive)
+
+                controller.preflight = preflight
+                self.assertEqual(2, controller.certify())
+                report = json.loads(
+                    (controller.reports / "stage2-report.json").read_text(encoding="utf-8"))
+                self.assertFalse(report["certified"])
+                self.assertTrue(report["error"])
 
 
 class PostSetupMutationTests(unittest.TestCase):

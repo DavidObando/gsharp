@@ -34,6 +34,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -273,6 +274,9 @@ ALLOWED_EXTERNAL_TASK_ASSEMBLY_HASHES = frozenset({
 
 class CertificationError(Exception):
     pass
+
+
+ARCHIVE_READ_ERRORS = (tarfile.TarError, zipfile.BadZipFile, EOFError, zlib.error)
 
 
 @dataclass(frozen=True)
@@ -901,6 +905,11 @@ def normalized_migrated_identity(row: FileIdentity) -> FileIdentity:
     return replace(row, mode=mode)
 
 
+def manifest_sha256(manifest: list[FileIdentity]) -> str:
+    return sha256_bytes(json.dumps(
+        [asdict(row) for row in manifest], sort_keys=True).encode())
+
+
 def manifest_identity(row: dict[str, Any]) -> FileIdentity:
     if row.get("kind") == "directory":
         return DirectoryIdentity(**row)
@@ -957,7 +966,7 @@ def verify_caller_unchanged(caller: Path, git_identity: dict[str, str] | None) -
 def migrated_tree_manifest(caller: Path) -> list[FileIdentity]:
     if not caller.is_dir():
         raise CertificationError(f"migrated tree does not exist: {caller}")
-    manifest: list[FileIdentity] = []
+    manifest: list[FileIdentity] = [tree_identity(caller, caller)]
     for path in sorted(caller.rglob("*")):
         rel = path.relative_to(caller)
         if ".git" in rel.parts:
@@ -965,7 +974,7 @@ def migrated_tree_manifest(caller: Path) -> list[FileIdentity]:
         relative = rel.as_posix()
         if "\r" in relative or "\n" in relative:
             raise CertificationError("snapshot paths cannot contain CR or LF")
-        manifest.append(normalized_migrated_identity(tree_identity(caller, path)))
+        manifest.append(tree_identity(caller, path))
     if not any(not isinstance(row, DirectoryIdentity) for row in manifest):
         raise CertificationError(f"migrated tree is empty: {caller}")
     return sorted(manifest, key=lambda row: row.path)
@@ -976,8 +985,10 @@ def freeze_migrated_tree(
 ) -> tuple[list[FileIdentity], dict[str, str]]:
     reject_root_collisions({"caller tree": caller, "source snapshot": snapshot})
     manifest = migrated_tree_manifest(caller)
+    caller_identity = {"callerTreeSha256": manifest_sha256(manifest)}
     snapshot.mkdir()
-    for row in manifest:
+    for caller_row in manifest:
+        row = normalized_migrated_identity(caller_row)
         destination = snapshot / row.path
         if isinstance(row, DirectoryIdentity):
             destination.mkdir(parents=True, exist_ok=True)
@@ -993,18 +1004,17 @@ def freeze_migrated_tree(
     make_read_only(snapshot)
     frozen = [tree_identity(snapshot, snapshot / row.path) for row in manifest]
     verify_manifest(snapshot, frozen)
-    verify_migrated_caller_unchanged(caller, frozen)
-    tree_sha256 = sha256_bytes(
-        json.dumps([asdict(row) for row in frozen], sort_keys=True).encode())
-    return frozen, {"migratedTreeSha256": tree_sha256}
+    verify_migrated_caller_unchanged(caller, caller_identity)
+    return frozen, {
+        "migratedTreeSha256": manifest_sha256(frozen),
+        **caller_identity,
+    }
 
 
 def verify_migrated_caller_unchanged(
-    caller: Path, expected_manifest: list[FileIdentity],
+    caller: Path, expected_identity: dict[str, str],
 ) -> None:
-    actual = migrated_tree_manifest(caller)
-    expected = [normalized_migrated_identity(row) for row in expected_manifest]
-    if actual != sorted(expected, key=lambda row: row.path):
+    if manifest_sha256(migrated_tree_manifest(caller)) != expected_identity["callerTreeSha256"]:
         raise CertificationError("caller migrated tree changed during certification")
 
 
@@ -1057,7 +1067,7 @@ def verify_manifest(root: Path, expected: list[FileIdentity]) -> None:
             for parent in Path(row.path).parents
             if parent != Path(".")
         }
-        actual = []
+        actual = [tree_identity(root, root)] if "." in recorded_directories else []
         for path in sorted(root.rglob("*")):
             relative = path.relative_to(root).as_posix()
             if path.is_symlink():
@@ -1590,7 +1600,7 @@ def extract_verified_dotnet_archive(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(extracted.read())
                 os.chmod(target, 0o755 if (member.mode & 0o111) else 0o644)
-    except tarfile.TarError as error:
+    except ARCHIVE_READ_ERRORS as error:
         raise CertificationError(f"invalid dotnet archive {archive_path}: {error}") from error
     dotnet_manifest_sha256(destination)
     executable = destination / "dotnet"
@@ -4047,14 +4057,14 @@ class Controller:
             # frozen snapshot and the caller worktree must both be unchanged.
             verify_manifest(self.source, manifest)
             if self.is_migrated_tree:
-                verify_migrated_caller_unchanged(self.caller, manifest)
+                verify_migrated_caller_unchanged(self.caller, git_identity)
             else:
                 verify_caller_unchanged(self.caller, git_identity)
             self.report["certified"] = True
             atomic_json(self.reports / "stage2-report.json", self.report)
             print(f"self-host stage 2: CERTIFIED ({self.reports / 'stage2-report.json'})")
             return 0
-        except (CertificationError, OSError, PeError, tarfile.TarError, zipfile.BadZipFile) as error:
+        except (CertificationError, OSError, PeError, *ARCHIVE_READ_ERRORS) as error:
             self.report["certified"] = False
             self.report["error"] = str(error)
             if self.reports.is_dir():
@@ -4208,7 +4218,7 @@ def main(argv: list[str]) -> int:
                 "dotnet": str(executable),
                 "manifestSha256": dotnet_manifest_sha256(executable.parent),
             }, sort_keys=True))
-        except (CertificationError, OSError, tarfile.TarError) as error:
+        except (CertificationError, OSError, *ARCHIVE_READ_ERRORS) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
@@ -4369,7 +4379,7 @@ def main(argv: list[str]) -> int:
         source, destination = args.verify_package_cache
         try:
             extract_verified_package(real(source), destination.resolve())
-        except (CertificationError, OSError, zipfile.BadZipFile) as error:
+        except (CertificationError, OSError, *ARCHIVE_READ_ERRORS) as error:
             print(f"selfhost-stage2: {error}", file=sys.stderr)
             return 2
         return 0
