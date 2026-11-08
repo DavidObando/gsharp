@@ -90,6 +90,21 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 NullChars("cast[string](cast[object?](Chars))", false, false),
                 false
             }
+            yield []object{"method_type_parameter_collision", GenericDefault(false), true}
+            yield []object{"owner_type_parameter_collision", GenericDefault(true), true}
+            yield []object{"unrelated_generic_default", GenericDefault(false, false), false}
+            for source in[]string{
+                "func Read() int32? { const N int32? = default(int32?) return N }\nfunc Probe() int32 { return if Read() == nil { 2 } else { -1 } }",
+                "func Pass(value int32?) int32? -> value\nfunc Probe() int32 { const N int32? = default(int32?) return if Pass(N).HasValue { -1 } else { 2 } }",
+                "func Probe() int32 { const N int32? = default(int32?) let boxed = cast[object?](N) return if boxed == nil { 2 } else { -1 } }",
+                "func Probe() int32 { const N int32? = default(int32?) let read = () -> N return if read() == nil { 2 } else { -1 } }"
+            } {
+                yield []object{
+                    "nullable_constant_" + source,
+                    "import System\n" + source + "\nConsole.WriteLine(Probe())",
+                    false
+                }
+            }
             yield []object{
                 "user_conversion",
                 "import System\nclass Source { var Callback () -> void }\nfunc operator explicit(src Source) int64 { src.Callback() return 1 }\n" +
@@ -158,6 +173,26 @@ Console.WriteLine(Run(1ARGUMENT))
                     }
                     yield []object{"safe_switch_${inFinally}_${arms}", safe, false}
                 }
+            }
+        }
+
+        private func GenericDefault(inType bool, rejected bool = true) string {
+            let source = NullChars(
+                if rejected {
+                    "default(T)"
+                } else {
+                    "default(C)"
+                },
+                false,
+                rejected
+            ).Replace("class C {}", "class C {}\nclass T {}")
+            return if inType {
+                source.Replace("func Read(", "class Container[T] { shared { func Read(").Replace(
+                    "\nConsole.WriteLine(Read(nil",
+                    "\n} }\nConsole.WriteLine(Container[int32].Read(nil"
+                )
+            } else {
+                source.Replace("func Read(", "func Read[T](").Replace("Read(nil", "Read[int32](nil")
             }
         }
 

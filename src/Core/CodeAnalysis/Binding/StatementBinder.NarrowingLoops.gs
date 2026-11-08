@@ -999,6 +999,9 @@ internal partial class StatementBinder {
         if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
             return nil
         }
+        if binderCtx.CurrentTypeParameters?.ContainsKey(FirstNameSegment(type.DottedName)) == true {
+            return nil
+        }
         let arity = if type.TypeArguments is {} arguments {
             arguments.Count
         } else {

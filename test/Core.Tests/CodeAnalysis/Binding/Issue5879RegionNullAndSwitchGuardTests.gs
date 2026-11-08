@@ -117,6 +117,17 @@ class Issue5879RegionNullAndSwitchGuardTests {
                 NullChars("cast[string](cast[object?](Chars))", false, false),
                 false
             }
+            yield []object{"method_type_parameter_collision", GenericDefault(false), true}
+            yield []object{"owner_type_parameter_collision", GenericDefault(true), true}
+            yield []object{"unrelated_generic_default", GenericDefault(false, false), false}
+            for source in[]string{
+                "func Read() int32? { const N int32? = default(int32?) return N }\nfunc Probe() int32 { return if Read() == nil { 2 } else { -1 } }\nProbe()",
+                "func Pass(value int32?) int32? -> value\nfunc Probe() int32 { const N int32? = default(int32?) return if Pass(N).HasValue { -1 } else { 2 } }\nProbe()",
+                "func Probe() int32 { const N int32? = default(int32?) let boxed = cast[object?](N) return if boxed == nil { 2 } else { -1 } }\nProbe()",
+                "func Probe() int32 { const N int32? = default(int32?) let read = () -> N return if read() == nil { 2 } else { -1 } }\nProbe()"
+            } {
+                yield []object{"nullable_constant_" + source, source, false}
+            }
             yield []object{
                 "user_defined_explicit_cast",
                 "class Source { var Callback () -> void }\nfunc operator explicit(src Source) int64 { src.Callback() return 1 }\n" +
@@ -145,6 +156,26 @@ class Issue5879RegionNullAndSwitchGuardTests {
                         false
                     }
                 }
+            }
+        }
+
+        private func GenericDefault(inType bool, rejected bool = true) string {
+            let source = NullChars(
+                if rejected {
+                    "default(T)"
+                } else {
+                    "default(C)"
+                },
+                false,
+                rejected
+            ).Replace("class C {}", "class C {}\nclass T {}")
+            return if inType {
+                source.Replace("func Read(", "class Container[T] { shared { func Read(").Replace(
+                    "\nRead(nil",
+                    "\n} }\nContainer[int32].Read(nil"
+                )
+            } else {
+                source.Replace("func Read(", "func Read[T](").Replace("Read(nil", "Read[int32](nil")
             }
         }
 

@@ -1345,6 +1345,8 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   The consumer checks null preservation for each source-to-target conversion through `Conversion.PreservesNull`.
   Reference casts, nullable lifts and boxing preserve null. Constructing a string from a null character array does not.
   Defaults use the shared `Conversion.IsNullDefault` query. An `Enum` constraint does not prove a reference-type default.
+  Type clauses naming in-scope generic parameters stay unresolved instead of selecting same-named global types.
+  Nullable null constants retain their provenance but use typed local storage instead of literal inlining.
   Mutable `var` and non-`const` `let` origins do not prove constant null values.
   Nested-region composition preserves these value records without changing cached records.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
