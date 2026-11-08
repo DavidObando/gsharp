@@ -726,7 +726,8 @@ internal shared class MagicCollectionZeroValue {
                 // would require an illegal external store) so the caller
                 // still knows this struct needs SOMETHING even if every
                 // zero-value field ends up omitted below.
-                if field.Accessibility != Accessibility.Public {
+                if field.Accessibility != Accessibility.Public &&
+                    IsFieldZeroInitializedInType(structType, visitKey, field, syntax, visiting, needsZeroCache) {
                     hasNonPublicZeroValueField = true
                     continue
                 }
@@ -745,32 +746,7 @@ internal shared class MagicCollectionZeroValue {
                         "synthesized struct zero entries target fields",
                         expression: "initializer.Field"
                     )
-                    let initializedInType = if visitKey.ValueStructDefaultCtorIsZeroInitialization {
-                        structType.GetDefinitionField(field) is {} definitionField &&
-                            (
-                            object.ReferenceEquals(definitionField.Type, field.Type) ||
-                                (
-                                if needsZeroCache.TryGetValue(definitionField.Type, out var needsZero) {
-                                    needsZero
-                                } else {
-                                    TrySynthesizeEmptyInstanceCore(
-                                        syntax,
-                                        definitionField.Type,
-                                        visiting,
-                                        needsZeroCache,
-                                        out _
-                                    ) != nil
-                                }
-                            )
-                        )
-                    } else {
-                        structType.GetDefinitionField(field) is {} declaredField &&
-                            (
-                            visitKey.InstanceFieldInitializers.ContainsKey(declaredField) ||
-                                declaredField.Declaration is FieldDeclarationSyntax{Initializer: not nil}
-                        )
-                    }
-                    if !initializedInType {
+                    if !IsFieldZeroInitializedInType(structType, visitKey, field, syntax, visiting, needsZeroCache) {
                         retained.Add(initializer)
                     }
                 }
@@ -787,6 +763,41 @@ internal shared class MagicCollectionZeroValue {
             )
         } finally {
             visiting!!.Remove(visitKey)
+        }
+    }
+
+    private func IsFieldZeroInitializedInType(
+        structType StructSymbol,
+        visitKey StructSymbol,
+        field FieldSymbol,
+        syntax SyntaxNode?,
+        visiting HashSet[StructSymbol]?,
+        needsZeroCache Dictionary[TypeSymbol, bool]
+    ) bool {
+        return if visitKey.ValueStructDefaultCtorIsZeroInitialization {
+            structType.GetDefinitionField(field) is {} definitionField &&
+                (
+                object.ReferenceEquals(definitionField.Type, field.Type) ||
+                    (
+                    if needsZeroCache.TryGetValue(definitionField.Type, out var needsZero) {
+                        needsZero
+                    } else {
+                        TrySynthesizeEmptyInstanceCore(
+                            syntax,
+                            definitionField.Type,
+                            visiting,
+                            needsZeroCache,
+                            out _
+                        ) != nil
+                    }
+                )
+            )
+        } else {
+            structType.GetDefinitionField(field) is {} declaredField &&
+                (
+                visitKey.InstanceFieldInitializers.ContainsKey(declaredField) ||
+                    declaredField.Declaration is FieldDeclarationSyntax{Initializer: not nil}
+            )
         }
     }
 

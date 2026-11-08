@@ -599,16 +599,7 @@ internal class MethodBodyPlanner {
         let collected = List[VariableSymbol]()
         this.slotPlanner.CollectBlockExpressionLocals(body, collected)
         for variable in collected {
-            if !locals.ContainsKey(variable) {
-                locals[variable] = localTypes.Count
-                localTypes.Add(
-                    if variable is LocalVariableSymbol{RefKind: not RefKind.None} alias {
-                        cast[TypeSymbol](ByRefTypeSymbol.Get(alias.Type))
-                    } else {
-                        variable.Type
-                    }
-                )
-            }
+            RegisterLocal(variable, locals, localTypes)
         }
     }
 
@@ -1192,6 +1183,11 @@ internal class MethodBodyPlanner {
             localTypes.Add(
                 if variable is LocalVariableSymbol local && local.RefKind != RefKind.None {
                     ByRefTypeSymbol.Get(local.Type)
+                } else if variable is LocalVariableSymbol{
+                    IsManagedPointerSlot: true,
+                    Type: PointerTypeSymbol pointerType
+                } {
+                    ByRefTypeSymbol.Get(pointerType.PointeeType)
                 } else {
                     variable.Type
                 }

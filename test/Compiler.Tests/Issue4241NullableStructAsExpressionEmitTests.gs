@@ -108,8 +108,8 @@ Console.WriteLine(int32(restored))`
         /// Gets the executable cases: each is (case name, source, temp-dir prefix).
         /// @returns The case data.
         func Cases() sequence[[]object] {
-            yield[]object{"struct", DirectStructRoundtripSource, "gs_4241_direct_struct_"}
-            yield[]object{"enum", DirectEnumRoundtripSource, "gs_4241_direct_enum_"}
+            yield []object{"struct", DirectStructRoundtripSource, "gs_4241_direct_struct_"}
+            yield []object{"enum", DirectEnumRoundtripSource, "gs_4241_direct_enum_"}
         }
 
         private const RunTimeoutMilliseconds int32 = 60_000

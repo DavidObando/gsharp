@@ -1188,7 +1188,7 @@ shared class SpillSequenceSpiller {
                         addressOf,
                         addressOf.Operand,
                         func (operand BoundExpression) BoundExpression {
-                            return BoundAddressOfExpression(nil, operand)
+                            return addressOf.Update(operand)
                         }
                     )
                 }
@@ -1274,6 +1274,14 @@ shared class SpillSequenceSpiller {
         /// guarantees awaits precede the (possibly ByRefLike) handler local, so
         /// no handler local is live across a suspension after this flattening.
         private func SpillBlockExpression(block BoundBlockExpression) BoundSpillSequenceExpression {
+            var remainingHasSuspension = HasSuspension(block.Expression)
+            for var i = block.Statements.Length - 1; i >= 0; i-- {
+                if remainingHasSuspension &&
+                    block.Statements[i] is BoundVariableDeclaration{Initializer: {} initializer} {
+                    SpillSequenceSpiller.MarkSpilledFixedBufferEscapes(initializer)
+                }
+                remainingHasSuspension |= HasSuspension(block.Statements[i])
+            }
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
             for statement in block.Statements {
                 RewriteStatementToList(statement, sideEffects)
@@ -1347,6 +1355,9 @@ shared class SpillSequenceSpiller {
             let rightHasAwait = HasAwait(binary.Right)
             if !leftHasAwait && !rightHasAwait {
                 return Trivial(binary)
+            }
+            if HasSuspension(binary.Right) {
+                SpillSequenceSpiller.MarkSpilledFixedBufferEscapes(binary.Left)
             }
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
@@ -3644,6 +3655,9 @@ shared class SpillSequenceSpiller {
             if !aHasAwait && !bHasAwait {
                 return Trivial(original)
             }
+            if HasSuspension(b) {
+                SpillSequenceSpiller.MarkSpilledFixedBufferEscapes(a)
+            }
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
             var left = a
@@ -3783,7 +3797,28 @@ shared class SpillSequenceSpiller {
                 sideEffects.Add(BoundExpressionStatement(nil, value))
                 return BoundThrowExpression(nil, BoundLiteralExpression(nil, value: nil))
             }
+            if value is BoundConversionExpression{Type: {} convType, Expression: {} inner} conv &&
+                (convType == TypeSymbol.NInt || convType == TypeSymbol.NUInt) &&
+                inner.Type is PointerTypeSymbol &&
+                ExpressionBinder
+                .ContainsFixedBufferPointer(inner) {
+                let pointerTemp = MakeSpillTemp(inner.Type)
+                pointerTemp.IsManagedPointerSlot = true
+                locals.Add(pointerTemp)
+                sideEffects.Add(BoundVariableDeclaration(nil, pointerTemp, inner))
+                let reloaded = BoundConversionExpression(
+                    nil,
+                    convType,
+                    BoundVariableExpression(nil, pointerTemp),
+                    conv.IsChecked
+                ){IsPatternInputConversion = conv.IsPatternInputConversion}
+                conv.CopyImplicitConversionTo(reloaded)
+                return reloaded
+            }
             let temp = MakeSpillTemp(value.Type)
+            if value.Type is PointerTypeSymbol && ExpressionBinder.ContainsFixedBufferPointer(value) {
+                temp.IsManagedPointerSlot = true
+            }
             locals.Add(temp)
             sideEffects.Add(BoundVariableDeclaration(nil, temp, value))
             return BoundVariableExpression(nil, temp)
@@ -3792,6 +3827,18 @@ shared class SpillSequenceSpiller {
         private func MakeLabel() BoundLabel {
             return BoundLabel("<>spill_label${spillOrdinal++}")
         }
+
+        private func HasSuspension(statement BoundStatement) bool -> AsyncBoundTreeQueries.HasAwait(
+            statement,
+            awaitMemo
+        ) ||
+            BodyFacts.ContainsYield(statement)
+
+        private func HasSuspension(expression BoundExpression) bool -> AsyncBoundTreeQueries.HasAwait(
+            expression,
+            awaitMemo
+        ) ||
+            SpillSequenceSpiller.HasYieldInBlockExpression(expression, yieldInBlockMemo)
 
         private func HasAwait(statement BoundStatement) bool -> AsyncBoundTreeQueries.HasAwait(statement, awaitMemo) ||
             (
@@ -3978,6 +4025,7 @@ shared class SpillSequenceSpiller {
         }
         let spiller = Spiller()
         let result = spiller.RewriteBlock(body)
+        MarkCrossSuspensionFixedBufferLocals(result)
         return result
     }
 
@@ -3988,10 +4036,15 @@ shared class SpillSequenceSpiller {
     /// @param body Lowered iterator body.
     /// @returns Body with yield-bearing block expressions lifted to statement level.
     func RewriteIteratorBlocks(body BoundBlockStatement) BoundBlockStatement {
-        if !HasYieldInBlockExpression(body) {
-            return body
+        let result = if HasYieldInBlockExpression(body) {
+            Spiller(includeYieldInBlockExpressions: true).RewriteBlock(body)
+        } else {
+            body
         }
-        return Spiller(includeYieldInBlockExpressions: true).RewriteBlock(body)
+        if BodyFacts.ContainsYield(result) {
+            MarkCrossSuspensionFixedBufferLocals(result)
+        }
+        return result
     }
 
     /// Issue #3355: lifts block expressions containing non-local control flow
@@ -4003,7 +4056,135 @@ shared class SpillSequenceSpiller {
         if !HasControlFlowInBlockExpression(body) {
             return body
         }
-        return Spiller(includeControlFlowInBlockExpressions: true).RewriteBlock(body)
+        let result = Spiller(includeControlFlowInBlockExpressions: true).RewriteBlock(body)
+        if AsyncBoundTreeQueries.HasAwait(result) || BodyFacts.ContainsYield(result) {
+            MarkCrossSuspensionFixedBufferLocals(result)
+        }
+        return result
+    }
+
+    private class FixedBufferOriginCollector : BoundTreeWalker {
+        let Origins Dictionary[VariableSymbol, List[BoundExpression]] = Dictionary[
+            VariableSymbol,
+            List[BoundExpression]
+        ]()
+
+        protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
+            base.VisitVariableDeclaration(node)
+            if node.Initializer != nil {
+                RecordAssignment(node.Variable, node.Initializer)
+            }
+        }
+
+        protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            base.VisitAssignmentExpression(node)
+            RecordAssignment(node.Variable, node.Expression)
+        }
+
+        private func RecordAssignment(variable VariableSymbol, value BoundExpression) {
+            if SpillSequenceSpiller.ContainsUnmarkedFixedBufferAddressOf(value) {
+                AddOrigin(variable, value)
+            }
+            CollectPointerOriginReads(variable, value)
+        }
+
+        private func AddOrigin(variable VariableSymbol, origin BoundExpression) {
+            if !Origins.TryGetValue(variable, out var list) {
+                list = List[BoundExpression]()
+                Origins[variable] = list
+            }
+            if !list.Contains(origin) {
+                list.Add(origin)
+            }
+        }
+
+        private func CollectPointerOriginReads(target VariableSymbol, expression BoundExpression) {
+            switch expression {
+                case BoundAddressOfExpression{Operand: BoundDereferenceExpression deref} {
+                    CollectPointerOriginReads(target, deref.Operand)
+                }
+                case conversion is BoundConversionExpression {
+                    CollectPointerOriginReads(target, conversion.Expression)
+                }
+                case binary is BoundBinaryExpression {
+                    CollectPointerOriginReads(target, binary.Left)
+                    CollectPointerOriginReads(target, binary.Right)
+                }
+                case block is BoundBlockExpression {
+                    CollectPointerOriginReads(target, block.Expression)
+                }
+                case conditional is BoundConditionalExpression {
+                    CollectPointerOriginReads(target, conditional.WhenTrue)
+                    CollectPointerOriginReads(target, conditional.WhenFalse)
+                }
+                case variableExpr is BoundVariableExpression {
+                    if Origins.TryGetValue(variableExpr.Variable, out var inherited) {
+                        for origin in inherited {
+                            AddOrigin(target, origin)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func MarkCrossSuspensionFixedBufferLocals(body BoundBlockStatement) {
+        let collector = FixedBufferOriginCollector()
+        collector.Visit(body)
+        if collector.Origins.Count == 0 {
+            return
+        }
+        let crossing = RefStructAsyncLivenessAnalyzer.FindLocalsLiveAcrossSuspension(body, collector.Origins.Keys)
+        for variable in crossing {
+            if collector.Origins.TryGetValue(variable, out var origins) {
+                for origin in origins {
+                    MarkSpilledFixedBufferEscapes(origin)
+                }
+            }
+        }
+    }
+
+    private func ContainsUnmarkedFixedBufferAddressOf(expression BoundExpression) bool -> switch expression {
+        case addressOf is BoundAddressOfExpression: (
+            addressOf.FixedBufferSyntax != nil && addressOf.FixedBufferEscapeSyntax == nil
+        ) ||
+            (
+            addressOf.Operand is BoundDereferenceExpression deref && ContainsUnmarkedFixedBufferAddressOf(deref.Operand)
+        )
+        case conversion is BoundConversionExpression: ContainsUnmarkedFixedBufferAddressOf(conversion.Expression)
+        case binary is BoundBinaryExpression: ContainsUnmarkedFixedBufferAddressOf(binary.Left) ||
+            ContainsUnmarkedFixedBufferAddressOf(binary.Right)
+        case block is BoundBlockExpression: ContainsUnmarkedFixedBufferAddressOf(block.Expression)
+        case conditional is BoundConditionalExpression: ContainsUnmarkedFixedBufferAddressOf(conditional.WhenTrue) ||
+            ContainsUnmarkedFixedBufferAddressOf(conditional.WhenFalse)
+        default: false
+    }
+
+    private func MarkSpilledFixedBufferEscapes(expression BoundExpression) {
+        switch expression {
+            case addressOf is BoundAddressOfExpression {
+                if addressOf.FixedBufferEscapeSyntax == nil && addressOf.FixedBufferSyntax != nil {
+                    addressOf.FixedBufferEscapeSyntax = addressOf.FixedBufferSyntax
+                }
+                if addressOf.Operand is BoundDereferenceExpression deref {
+                    MarkSpilledFixedBufferEscapes(deref.Operand)
+                }
+            }
+            case conversion is BoundConversionExpression {
+                MarkSpilledFixedBufferEscapes(conversion.Expression)
+            }
+            case binary is BoundBinaryExpression {
+                MarkSpilledFixedBufferEscapes(binary.Left)
+                MarkSpilledFixedBufferEscapes(binary.Right)
+            }
+            case block is BoundBlockExpression {
+                MarkSpilledFixedBufferEscapes(block.Expression)
+            }
+            case conditional is BoundConditionalExpression {
+                MarkSpilledFixedBufferEscapes(conditional.WhenTrue)
+                MarkSpilledFixedBufferEscapes(conditional.WhenFalse)
+            }
+        }
     }
 
     private func HasYieldInBlockExpression(node BoundNode, memo Dictionary[BoundNode, bool]? = nil) bool {

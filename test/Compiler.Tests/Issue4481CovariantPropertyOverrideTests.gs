@@ -249,7 +249,7 @@ class PSym : Sym {
         func Cases() sequence[[]object] {
             // The #4441 shape as written in G#: a get-only auto-property override
             // assigned in the constructor.
-            yield[]object{"auto-property", `
+            yield []object{"auto-property", `
 open class Node {
     open prop Property Sym? { get; }
 }
@@ -269,7 +269,7 @@ Console.WriteLine(a.Property.Tag)
 `, []string{"x", "p:y"}}
             // The shape cs2gs translates the C# get-only override into: a private
             // backing field and an arrow getter.
-            yield[]object{"arrow-getter", `
+            yield []object{"arrow-getter", `
 open class Node {
     open prop Property Sym? { get; }
 }
@@ -288,7 +288,7 @@ Console.WriteLine(n.Property!!.Name)
 `, []string{"x"}}
             // A further override of the covariant override reuses ITS slot, and a
             // call through the original base slot still reaches it.
-            yield[]object{"chained-override", `
+            yield []object{"chained-override", `
 open class Node {
     open prop Property Sym? { get; }
 }
@@ -318,7 +318,7 @@ Console.WriteLine(a.Property.Tag)
             // ordered base-first, not by the types their members mention), so its
             // base class is unknown when the override is bound. The migrated
             // GSharp.Core has this order: Binding/ sorts before Symbols/.
-            yield[]object{"override-type-declared-later", `
+            yield []object{"override-type-declared-later", `
 class Access : Node {
     init(p Later) {
         _property = p
@@ -344,7 +344,7 @@ Console.WriteLine(n.Property!!.Name)
             // base clauses and class interface closures are bound, or `IDerived`
             // (and a class implementing `IBase` only through `IDerived`) does not
             // yet convert to `IBase`.
-            yield[]object{"interface-and-transitive-narrowing", `
+            yield []object{"interface-and-transitive-narrowing", `
 open class Node {
     open prop Property IBase? { get; }
     open prop Other IBase? { get; }
@@ -375,7 +375,7 @@ Console.WriteLine(n.Other!!.Name())
             // the old top-level-only strip rejected) is the SAME slot type.
             // The setter makes that observable: a type change with a setter has no
             // covariant form, so treating it as one would report GS0185.
-            yield[]object{"nested-nullability-same-slot", `
+            yield []object{"nested-nullability-same-slot", `
 open class Node {
     open prop Items List[Sym?] { get; set; }
     open prop Arr []Sym? { get; set; }
@@ -400,7 +400,7 @@ Console.WriteLine(n.Items[0]!!.Name)
             // A constructed generic base: `Node[T].Property` (type `T`) narrowed
             // from `Sym` to `PSym`. Exercises the base-type substitution and the
             // MethodImpl declaration parented at the `Node[Sym]` TypeSpec.
-            yield[]object{"constructed-generic-base", `
+            yield []object{"constructed-generic-base", `
 open class Node[T] {
     open prop Property T { get; }
 }
@@ -424,7 +424,7 @@ Console.WriteLine(a.Property.Tag)
             // leaf over the non-generic covariant override, a generic middle level
             // below it, and a generic level that itself holds the override: each
             // is read through every receiver type in its chain.
-            yield[]object{"generic-levels-around-the-override", `
+            yield []object{"generic-levels-around-the-override", `
 open class Node[T] {
     open prop Property T { get; }
 }
@@ -489,7 +489,7 @@ let genericAccessAsNode Node[Sym] = genericAccessLeaf
 Console.WriteLine(genericAccessAsNode.Property.Name)
 `, []string{"p:a", "p:a", "a", "p:b", "p:b", "b", "p:c", "p:c", "c"}}
             // A same-type override (nullability aside) keeps reusing the base slot.
-            yield[]object{"same-type-control", `
+            yield []object{"same-type-control", `
 open class Node {
     open prop Property Sym? { get; }
 }

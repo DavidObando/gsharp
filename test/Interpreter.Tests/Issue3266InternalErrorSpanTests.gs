@@ -93,7 +93,7 @@ open class Issue3266InternalErrorSpanTests {
 
     shared {
         func AnchoredFailures() sequence[[]object] {
-            yield[]object{
+            yield []object{
                 "Console.WriteLine(42)\n",
                 "Console.WriteLine(42)",
                 0,
@@ -103,7 +103,7 @@ open class Issue3266InternalErrorSpanTests {
                 "NotSupportedException",
                 "unsupported conversion"
             }
-            yield[]object{`func probe() {
+            yield []object{`func probe() {
     var original = []int32{10, 20, 30}
     let ref r = original[^1]
     Console.WriteLine(r)

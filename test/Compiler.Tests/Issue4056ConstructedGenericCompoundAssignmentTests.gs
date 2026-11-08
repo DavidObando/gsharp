@@ -254,7 +254,7 @@ public class Registry<T>
         /// @returns Case name, G# source, and the expected stdout lines.
         func CompoundShapes() sequence[[]object] {
             // --- The issue's repro, and its member-kind/operator siblings. ---
-            yield[]object{"compound-field-source-argument", `package P
+            yield []object{"compound-field-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -263,7 +263,7 @@ class MyOptions : SchemeOptions {
 
 Handler[MyOptions].Field += "z"
 Console.WriteLine(Handler[MyOptions].Field)`, []string{"fz"}}
-            yield[]object{"compound-property-source-argument", `package P
+            yield []object{"compound-property-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -274,7 +274,7 @@ Handler[MyOptions].Prop += "z"
 Console.WriteLine(Handler[MyOptions].Prop)`, []string{"pz"}}
             // Issue #2154: a non-`+=` compound operator never probes for an event,
             // so it enters the constructed-generic branch by a different route.
-            yield[]object{"compound-field-multiply-source-argument", `package P
+            yield []object{"compound-field-multiply-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -283,7 +283,7 @@ class MyOptions : SchemeOptions {
 
 Handler[MyOptions].Count *= 3
 Console.WriteLine(Handler[MyOptions].Count)`, []string{"3"}}
-            yield[]object{"compound-property-unconstrained-source-argument", `package P
+            yield []object{"compound-property-unconstrained-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -295,7 +295,7 @@ Console.WriteLine(Registry[Item].Note)`, []string{"n?"}}
             // Issue #2670: the same-compilation type nested inside an imported
             // generic argument — `Registry[List[Item]]` — is retained by the same
             // gate and was erased the same way.
-            yield[]object{"compound-field-nested-source-argument", `package P
+            yield []object{"compound-field-nested-source-argument", `package P
 import System
 import System.Collections.Generic
 import HelperLib4056
@@ -307,7 +307,7 @@ Registry[List[Item]].Hits += 5
 Console.WriteLine(Registry[List[Item]].Hits)`, []string{"7"}}
             // Issue #1330: an in-scope type PARAMETER receiver is erased to the same
             // `object` surrogate for the same reason, and reaches the same branch.
-            yield[]object{"compound-field-type-parameter-receiver", `package P
+            yield []object{"compound-field-type-parameter-receiver", `package P
 import System
 import HelperLib4056
 
@@ -321,7 +321,7 @@ class Item {
 
 Console.WriteLine(bump[Item]())`, []string{"r!"}}
             // --- Controls. Already green before the fix; must stay green. ---
-            yield[]object{"read-source-argument", `package P
+            yield []object{"read-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -329,7 +329,7 @@ class MyOptions : SchemeOptions {
 }
 
 Console.WriteLine(Handler[MyOptions].Field)`, []string{"f"}}
-            yield[]object{"simple-write-source-argument", `package P
+            yield []object{"simple-write-source-argument", `package P
 import System
 import HelperLib4056
 
@@ -341,13 +341,13 @@ Console.WriteLine(Handler[MyOptions].Field)`, []string{"z"}}
             // An IMPORTED type argument has a real CLR type, so no symbolic receiver
             // is ever recorded and this row never took the repaired branch. It is the
             // proof that the fix is scoped to the erased shape.
-            yield[]object{"compound-field-imported-argument", `package P
+            yield []object{"compound-field-imported-argument", `package P
 import System
 import HelperLib4056
 
 Handler[SchemeOptions].Field += "z"
 Console.WriteLine(Handler[SchemeOptions].Field)`, []string{"fz"}}
-            yield[]object{"compound-property-imported-argument", `package P
+            yield []object{"compound-property-imported-argument", `package P
 import System
 import HelperLib4056
 

@@ -1115,6 +1115,7 @@ internal class ReflectionMetadataEmitter {
                 handle,
                 NullableFlagsBuilder.NotAnnotated
             ),
+            this.customAttrEncoder.EmitNullableAttributeOnType,
             this.customAttrEncoder.EmitNullableAttributeOnField,
             this.customAttrEncoder.EmitMethodNullability,
             (paramHandle ParameterHandle, paramType TypeSymbol) -> this
@@ -2137,7 +2138,7 @@ internal class ReflectionMetadataEmitter {
             // inline-struct first-row offsets pre-registered later in this
             // pass stay valid).
             let needsSynthesizedDefaultCtor = ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(s)
-            let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> f.IsReadOnly && structLetFields.Contains(f))
+            let hasLetFieldCtors = s.Fields.Any((f FieldSymbol) -> structLetFields.Contains(f))
             if s
                 .Methods
                 .IsDefaultOrEmpty &&
@@ -2335,7 +2336,7 @@ internal class ReflectionMetadataEmitter {
                 )
                 var nextTotalArity = Math.Max(2, maxExistingArity + 1)
                 for field in s.Fields {
-                    if !field.IsReadOnly || !structLetFields.Contains(field) {
+                    if !structLetFields.Contains(field) {
                         continue
                     }
                     let fieldCtor = MetadataTokens.MethodDefinitionHandle(methodRow++)
@@ -2406,13 +2407,14 @@ internal class ReflectionMetadataEmitter {
                     // from the constructed shape; the bare TypeDef key only
                     // resolves the open definition.
                     if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(iface) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(
                             this.cache.StructTypeDefs[c],
                             this.userTokens.GetUserInterfaceTypeSpec(iface)
                         )
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, iface)
                     } else if this.cache.InterfaceTypeDefs.TryGetValue(iface.Definition ?? iface, out var ifaceHandle) {
                         this.emitCtx.Metadata.AddInterfaceImplementation(this.cache.StructTypeDefs[c], ifaceHandle)
                     }
@@ -2428,45 +2430,49 @@ internal class ReflectionMetadataEmitter {
             // for these rows and for the static-virtual MethodImpls (#4614);
             // the #985 bridge rows below add to the same de-duplicated set.
             let clrClosure = ClrInterfaceClosure.Build(c, this.signatures)
-            for (symbolicIface, concreteIface) in clrClosure.Entries {
+            for (symbolicIface, concreteIface, annotationType) in clrClosure.Entries {
                 if symbolicIface != nil {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetElementTypeToken(symbolicIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 } else if concreteIface != nil {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetTypeHandleForMember(concreteIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 }
             }
-            let EmitClrInterfaceRow = func (clrIface Type) {
-                if clrClosure.TryAddConcrete(clrIface) {
-                    this
+            let EmitClrInterfaceRow = func (clrIface Type, annotationType TypeSymbol?) {
+                if clrClosure.TryAddConcrete(clrIface, annotationType) {
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetTypeHandleForMember(clrIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, annotationType)
                 }
             }
             let EmitSymbolicInterfaceRow = func (symbolicIface TypeSymbol) {
                 if clrClosure.TryAddSymbolic(symbolicIface) {
-                    this
+                    let implHandle = this
                         .emitCtx
                         .Metadata
                         .AddInterfaceImplementation(
                         this.cache.StructTypeDefs[c],
                         this.memberRefs.GetElementTypeToken(symbolicIface)
                     )
+                    this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, symbolicIface)
                 }
             }
             // Issue #985: a covariant-return interface bridge (e.g. the
@@ -2491,8 +2497,10 @@ internal class ReflectionMetadataEmitter {
                             EmitSymbolicInterfaceRow(declaringOwner)
                             continue
                         }
+                        EmitClrInterfaceRow(declaringIface, declaringOwner)
+                        continue
                     }
-                    EmitClrInterfaceRow(declaringIface)
+                    EmitClrInterfaceRow(declaringIface, nil)
                 }
             }
         }
@@ -2636,13 +2644,14 @@ internal class ReflectionMetadataEmitter {
             if !iface.BaseInterfaces.IsDefaultOrEmpty {
                 for baseIface in iface.BaseInterfaces {
                     if ReflectionMetadataEmitter.IsUserGenericInterfaceReference(baseIface) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(
                             ifaceTypeDef,
                             this.userTokens.GetUserInterfaceTypeSpec(baseIface)
                         )
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, baseIface)
                     } else if this
                         .cache
                         .InterfaceTypeDefs
@@ -2654,17 +2663,19 @@ internal class ReflectionMetadataEmitter {
             if !iface.BaseClrInterfaces.IsDefaultOrEmpty {
                 for clrBase in iface.BaseClrInterfaces {
                     if MemberLookup.TryGetSymbolicClrGenericInterface(clrBase, out _, out _) {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(ifaceTypeDef, this.memberRefs.GetElementTypeToken(clrBase))
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, clrBase)
                         continue
                     }
                     if clrBase?.ClrType is Type clrType {
-                        this
+                        let implHandle = this
                             .emitCtx
                             .Metadata
                             .AddInterfaceImplementation(ifaceTypeDef, this.memberRefs.GetTypeHandleForMember(clrType))
+                        this.customAttrEncoder.EmitNullableAttributeOnInterfaceImpl(implHandle, clrBase)
                     }
                 }
             }
@@ -4191,7 +4202,9 @@ internal class ReflectionMetadataEmitter {
         TypeDefEmitter.FlushPendingGenericParameters(
             this.emitCtx,
             this.memberRefs.GetElementTypeToken,
-            this.BuildUnmanagedConstraintTypeSpec
+            this.BuildUnmanagedConstraintTypeSpec,
+            this.customAttrEncoder.EmitNullableAttributeOnGenericParam,
+            this.customAttrEncoder.EmitNullableAttributeOnGenericParamConstraint
         )
         let managedResources = this.BuildManagedResources()
         let peHeaderBuilder = PEHeaderBuilder(
@@ -4293,6 +4306,10 @@ internal class ReflectionMetadataEmitter {
                 if type.InstanceFieldInitializers.TryGetValue(field, out var initializer) {
                     collector.VisitExpression(initializer)
                 }
+                if type.ValueStructDefaultCtorIsZeroInitialization &&
+                    MagicCollectionZeroValue.TrySynthesizeInTypeZeroField(nil, type, field) is {} zeroInit {
+                    collector.VisitExpression(zeroInit)
+                }
             }
             for field in type.StaticFields {
                 if type.StaticFieldInitializers.TryGetValue(field, out var initializer) {
@@ -4346,7 +4363,7 @@ internal class ReflectionMetadataEmitter {
             return
         }
         for field in structSym.Fields {
-            if !field.IsReadOnly || !this.cache.StructLetFieldCtorHandles.TryGetValue(field, out var entry) {
+            if !this.cache.StructLetFieldCtorHandles.TryGetValue(field, out var entry) {
                 continue
             }
             var bodyOffset = -1
@@ -4421,7 +4438,7 @@ internal class ReflectionMetadataEmitter {
                     ConstructorBodyEmitter.NeedsSynthesizedValueStructDefaultCtor(def)
                 }
                 for init in node.Initializers {
-                    if init.Field is not{IsReadOnly: true} field {
+                    if init.Field is not{} field || (!field.IsReadOnly && field.Accessibility == Accessibility.Public) {
                         continue
                     }
                     if node.IsInTypeZeroInitializer(init) {
@@ -4433,7 +4450,11 @@ internal class ReflectionMetadataEmitter {
                     if usesOwning && init.IsDeclarationInitializer {
                         continue
                     }
-                    this.structFields.Add(def.Fields.FirstOrDefault((f FieldSymbol) -> f.Name == field.Name) ?? field)
+                    let defField = structType.GetDefinitionField(field) ?? def.Fields.FirstOrDefault(
+                        (f FieldSymbol) -> f.Name == field.Name
+                    ) ??
+                        field
+                    this.structFields.Add(defField)
                 }
             }
             base.VisitStructLiteralExpression(node)
@@ -4842,7 +4863,8 @@ internal class ReflectionMetadataEmitter {
     private func NeedsRvalueReceiverSpill(
         receiver BoundExpression,
         function FunctionSymbol?,
-        locals IReadOnlyDictionary[VariableSymbol, int32]
+        locals IReadOnlyDictionary[VariableSymbol, int32],
+        isReadOnlyCall bool
     ) bool {
         // A constrained type parameter needs an address even though its
         // value/reference shape is unknown until the generic is closed.
@@ -4851,14 +4873,15 @@ internal class ReflectionMetadataEmitter {
         }
         // ADR-0184 amendment: shared with the binder's ref-safe-scope walk —
         // see RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy.
-        if RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver) {
+        if RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver, isReadOnlyCall) {
             return true
         }
         if receiver is BoundDereferenceExpression {
             return false
         }
-        if receiver is BoundTupleElementAccessExpression && RefCapabilities.IsDirectlyAddressableForImplicitIn(
-            receiver
+        if receiver is BoundTupleElementAccessExpression && this.IsAddressableReceiverStorage(
+            receiver,
+            (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
         ) {
             return false
         }
@@ -4881,10 +4904,18 @@ internal class ReflectionMetadataEmitter {
         // The constrained emitter still needs a spill for CLR type-parameter fields.
         if receiver.Type is not TypeParameterSymbol &&
             receiver is BoundClrPropertyAccessExpression clrField &&
-            IsAddressableClrFieldChain(clrField) {
+            this
+            .IsAddressableReceiverStorage(
+            clrField,
+            (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
+        ) {
             return false
         }
-        return true
+        // Field addresses need spills only when the receiver has no legal address.
+        return !isReadOnlyCall || !this.IsAddressableReceiverStorage(
+            receiver,
+            (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
+        )
     }
 
     private func CanLoadVariableAddressForReceiverSpill(
@@ -4934,35 +4965,59 @@ internal class ReflectionMetadataEmitter {
         fa BoundFieldAccessExpression,
         function FunctionSymbol?,
         locals IReadOnlyDictionary[VariableSymbol, int32]
-    ) bool {
-        if fa.Receiver == nil {
-            // Issue #1525: a static field receiver is normally addressable
-            // (ldsflda), but an initonly (readonly) static value-type field
-            // is only addressable inside its declaring type's .cctor; anywhere
-            // else force an rvalue spill (defensive copy) so the emitted IL is
-            // verifiable.
-            return this.IsStaticFieldAddressLegalHere(fa.Field)
+    ) bool -> this
+        .IsAddressableReceiverStorage(
+        fa,
+        (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
+    )
+
+    // Receiver emission and spill planning must reject illegal static-readonly addresses through every value-storage chain.
+    internal func IsAddressableReceiverStorage(
+        receiver BoundExpression,
+        canLoadVariableAddress(VariableSymbol) -> bool
+    ) bool -> switch receiver {
+        case variable is BoundVariableExpression: (
+            variable.NarrowedType == nil ||
+                variable.NarrowedType == variable
+                .Variable
+                .Type ||
+                (
+                variable.Type is not TypeParameterSymbol &&
+                    (IsValueTypeSymbol(variable.Type) || variable.Type?.ClrType?.IsValueType == true)
+            )
+        ) &&
+            canLoadVariableAddress(variable.Variable)
+        case field is BoundFieldAccessExpression: field.NarrowedType == nil && if field.Receiver is {} owner {
+            Binder.IsReferenceTypeForConstraint(owner.Type) || this.IsAddressableReceiverStorage(
+                owner,
+                canLoadVariableAddress
+            )
+        } else {
+            this.IsStaticFieldAddressLegalHere(field.Field)
         }
-        if fa.Receiver!!.Type is StructSymbol rs && rs.IsClass {
-            return true
-        }
-        if fa.Receiver!!.Type?.ClrType != nil && !fa.Receiver!!.Type.ClrType!!.IsValueType {
-            return true
-        }
-        if fa.Receiver is BoundVariableExpression bv && this.CanLoadVariableAddressForReceiverSpill(
-            bv.Variable,
-            function,
-            locals
-        ) {
-            return true
-        }
-        if fa.Receiver is BoundFieldAccessExpression nested {
-            return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals)
-        }
-        if fa.Receiver is BoundTupleElementAccessExpression tuple {
-            return RefCapabilities.IsDirectlyAddressableForImplicitIn(tuple)
-        }
-        return RefCapabilities.IsDirectlyAddressableForImplicitIn(fa.Receiver!!)
+        case BoundClrPropertyAccessExpression{Member: FieldInfo field, Receiver: var owner}: !field.IsLiteral &&
+            !(field.IsStatic && field.IsInitOnly) &&
+            (
+            field.IsStatic ||
+                owner != nil &&
+                (
+                Binder.IsReferenceTypeForConstraint(owner.Type) || this.IsAddressableReceiverStorage(
+                    owner,
+                    canLoadVariableAddress
+                )
+            )
+        )
+        case tuple is BoundTupleElementAccessExpression: this.IsAddressableReceiverStorage(
+            tuple.Receiver,
+            canLoadVariableAddress
+        )
+        case block is BoundBlockExpression: this.IsAddressableReceiverStorage(block.Expression, canLoadVariableAddress)
+        case conditional is BoundConditionalExpression: this.IsAddressableReceiverStorage(
+            conditional.WhenTrue,
+            canLoadVariableAddress
+        ) &&
+            this.IsAddressableReceiverStorage(conditional.WhenFalse, canLoadVariableAddress)
+        default: RefCapabilities.IsDirectlyAddressableForImplicitIn(receiver)
     }
 
     private func ResolveCoreType(fullName string, fallback Type) Type {

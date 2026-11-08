@@ -95,7 +95,7 @@ open class Issue5498And5502NarrowingTests {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"finally_assigned_out_write_discharges_widening", `import System
+            yield []object{"finally_assigned_out_write_discharges_widening", `import System
 import System.Collections.Generic
 func Write(out target string) int32 {
     target = "safe"
@@ -109,7 +109,7 @@ func Run(dict Dictionary[string, string]) int32 {
     return value.Length
 }
 func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4"}
-            yield[]object{"finally_out_write_discharges_nullable_widening", `import System
+            yield []object{"finally_out_write_discharges_nullable_widening", `import System
 import System.Collections.Generic
 func Write(out target string) { target = "safe" }
 func Run(dict Dictionary[string, string]) int32 {
@@ -119,7 +119,7 @@ func Run(dict Dictionary[string, string]) int32 {
     return value.Length
 }
 func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "", "run", "4"}
-            yield[]object{"finally_out_write_later_nullable_write_removes_proof", `import System
+            yield []object{"finally_out_write_later_nullable_write_removes_proof", `import System
 import System.Collections.Generic
 func Write(out target string) { target = "safe" }
 func Run(dict Dictionary[string, string]) int32 {
@@ -132,7 +132,7 @@ func Run(dict Dictionary[string, string]) int32 {
     return value.Length
 }
 func Main() { Console.WriteLine(Run(Dictionary[string, string]())) }`, "GS0158@11:18", "reject", ""}
-            yield[]object{"nested_assignment_native_map_read_before_next_operand", `import System
+            yield []object{"nested_assignment_native_map_read_before_next_operand", `import System
 class Key {
     var Callback () -> void
     override func GetHashCode() int32 {
@@ -150,7 +150,7 @@ func Run() int32 {
     return m[key] + text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@16:26", "reject", ""}
-            yield[]object{"nested_assignment_block_keeps_entry_external_aliases", `import System
+            yield []object{"nested_assignment_block_keeps_entry_external_aliases", `import System
 func External() { }
 func Run(callback () -> void) int32 {
     var text string? = nil
@@ -166,7 +166,7 @@ func Run(callback () -> void) int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run(External)) }`, "", "run", "4"}
-            yield[]object{"nested_assignment_block_uses_entry_callable_aliases", `import System
+            yield []object{"nested_assignment_block_uses_entry_callable_aliases", `import System
 func External() { }
 func Run(callback () -> void) int32 {
     var text string? = nil
@@ -181,7 +181,7 @@ func Run(callback () -> void) int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run(External)) }`, "GS0158@13:17", "reject", ""}
-            yield[]object{"nested_assignment_native_map_hash_callback", `import System
+            yield []object{"nested_assignment_native_map_hash_callback", `import System
 class Key {
     var Callback () -> void
     override func GetHashCode() int32 {
@@ -198,7 +198,7 @@ func Run() int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@15:17", "reject", ""}
-            yield[]object{"nested_assignment_block_native_map_read_callback", `import System
+            yield []object{"nested_assignment_block_native_map_read_callback", `import System
 class Key {
     var Callback () -> void
     override func GetHashCode() int32 {
@@ -220,7 +220,7 @@ func Run() int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@20:17", "reject", ""}
-            yield[]object{"nested_assignment_map_setter_preserves_uncaptured_local", `import System
+            yield []object{"nested_assignment_map_setter_preserves_uncaptured_local", `import System
 func Run() int32 {
     var text string? = nil
     var m = map[int32, string?]{}
@@ -228,7 +228,7 @@ func Run() int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "4"}
-            yield[]object{"nested_assignment_native_map_custom_comparer_callback", `import System
+            yield []object{"nested_assignment_native_map_custom_comparer_callback", `import System
 import System.Collections.Generic
 class Comparer : IEqualityComparer[int32] {
     var Callback () -> void
@@ -247,7 +247,7 @@ func Run() int32 {
     return text.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@17:17", "reject", ""}
-            yield[]object{"nested_assignment_discharges_failed_dictionary_lookup", `import System
+            yield []object{"nested_assignment_discharges_failed_dictionary_lookup", `import System
 import System.Collections.Generic
 func Run(dict Dictionary[string, HashSet[string]]) int32 {
     if !dict.TryGetValue("key", out var set) {
@@ -261,7 +261,7 @@ func Main() {
     Console.WriteLine(Run(dict))
     Console.WriteLine(Run(dict))
 }`, "", "run", "1|1"}
-            yield[]object{"nested_assignment_setter_callback_keeps_widening", `import System
+            yield []object{"nested_assignment_setter_callback_keeps_widening", `import System
 import System.Collections.Generic
 class Holder {
     var Callback () -> void
@@ -278,7 +278,7 @@ func Run() int32 {
     return value.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@15:18", "reject", ""}
-            yield[]object{"repro_5498_or_chain_trailing_and_operand_does_not_restore_fact", `import System
+            yield []object{"repro_5498_or_chain_trailing_and_operand_does_not_restore_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -302,7 +302,7 @@ func Run(stop bool) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(false)) }`, "GS0158@22:14", "reject", ""}
-            yield[]object{"repro_5498_negated_and_chain_call_after_test_does_not_restore_fact", `import System
+            yield []object{"repro_5498_negated_and_chain_call_after_test_does_not_restore_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -326,7 +326,7 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@22:14", "reject", ""}
-            yield[]object{"control_5498_or_chain_test_after_call_restores_fact", `import System
+            yield []object{"control_5498_or_chain_test_after_call_restores_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -350,7 +350,7 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "1"}
-            yield[]object{"control_5498_negated_and_chain_test_after_call_restores_fact", `import System
+            yield []object{"control_5498_negated_and_chain_test_after_call_restores_fact", `import System
 
 class C {
     var Value int32 = 1
@@ -374,7 +374,7 @@ func Run() int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "1"}
-            yield[]object{"repro_5502_cleanup_nested_block_assignment_after_call_restores_fact", `import System
+            yield []object{"repro_5502_cleanup_nested_block_assignment_after_call_restores_fact", `import System
 
 func Touch() { }
 func Run() int32 {
@@ -390,7 +390,7 @@ func Run() int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "", "run", "3"}
-            yield[]object{"control_5502_cleanup_nested_block_call_after_assignment_removes_fact", `import System
+            yield []object{"control_5502_cleanup_nested_block_call_after_assignment_removes_fact", `import System
 
 func Touch() { }
 func Run() int32 {
@@ -406,7 +406,7 @@ func Run() int32 {
     return x.Length
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@14:14", "reject", ""}
-            yield[]object{"repro_5502_bare_block_assignment_after_call_restores_callable_alias", `import System
+            yield []object{"repro_5502_bare_block_assignment_after_call_restores_callable_alias", `import System
 
 class C {
     var Value int32 = 1
@@ -431,7 +431,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
-            yield[]object{"control_5502_bare_block_call_after_assignment_removes_callable_alias", `import System
+            yield []object{"control_5502_bare_block_call_after_assignment_removes_callable_alias", `import System
 
 class C {
     var Value int32 = 1
@@ -456,7 +456,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@23:14", "reject", ""}
-            yield[]object{"repro_5502_cleanup_goto_assignment_after_call_restores_callable_alias", `import System
+            yield []object{"repro_5502_cleanup_goto_assignment_after_call_restores_callable_alias", `import System
 
 class C {
     var Value int32 = 1
@@ -485,7 +485,7 @@ After:
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
-            yield[]object{"control_5502_cleanup_goto_call_after_assignment_removes_callable_alias", `import System
+            yield []object{"control_5502_cleanup_goto_call_after_assignment_removes_callable_alias", `import System
 
 class C {
     var Value int32 = 1
@@ -514,7 +514,7 @@ After:
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
-            yield[]object{"review_switch_failed_guard_carries_alias_invalidation_to_default", `import System
+            yield []object{"review_switch_failed_guard_carries_alias_invalidation_to_default", `import System
 
 class C {
     var Value int32 = 1
@@ -540,7 +540,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@24:14", "reject", ""}
-            yield[]object{"review_primary_constructor_literal_invalidates_alias_after_arguments", `import System
+            yield []object{"review_primary_constructor_literal_invalidates_alias_after_arguments", `import System
 
 class C {
     var Value int32 = 1
@@ -569,7 +569,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
-            yield[]object{"review_constant_pattern_equals_invalidates_alias_after_pattern_value", `import System
+            yield []object{"review_constant_pattern_equals_invalidates_alias_after_pattern_value", `import System
 
 class C {
     var Value int32 = 1
@@ -599,7 +599,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@28:14", "reject", ""}
-            yield[]object{"review_for_range_invalidates_alias_after_collection_and_loop_body", `import System
+            yield []object{"review_for_range_invalidates_alias_after_collection_and_loop_body", `import System
 import System.Collections.Generic
 
 class C {
@@ -642,7 +642,7 @@ func RunBody(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(RunCollection(func() { }) + RunBody(func() { })) }`, "GS0158@28:14 GS0158@41:14", "reject", ""}
-            yield[]object{"review_early_exit_out_retest_is_pattern_survives_nested_if_in_then", `import System
+            yield []object{"review_early_exit_out_retest_is_pattern_survives_nested_if_in_then", `import System
 
 class C {
     var Value int32 = 1
@@ -673,7 +673,7 @@ func Run(stop bool) int32 {
     return x.Value + y.Value
 }
 func Main() { Console.WriteLine(Run(false)) }`, "", "run", "2"}
-            yield[]object{"review_5498_subtype_proof_weakened_by_later_call_and_nil_test_restores_base_only", `import System
+            yield []object{"review_5498_subtype_proof_weakened_by_later_call_and_nil_test_restores_base_only", `import System
 
 open class Base {
     var BaseVal int32 = 1
@@ -700,7 +700,7 @@ func Run() int32 {
     return x.BaseVal + x.DerivedVal
 }
 func Main() { Console.WriteLine(Run()) }`, "GS0158@25:26", "reject", ""}
-            yield[]object{"review_5502_plain_struct_literal_lexical_initializer_order", `import System
+            yield []object{"review_5502_plain_struct_literal_lexical_initializer_order", `import System
 
 class C {
     var Value int32 = 1
@@ -729,7 +729,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "GS0158@27:14", "reject", ""}
-            yield[]object{"review_5502_uncaptured_alias_saved_in_call_argument_keeps_external_classification", `import System
+            yield []object{"review_5502_uncaptured_alias_saved_in_call_argument_keeps_external_classification", `import System
 
 class C {
     var Value int32 = 1
@@ -754,7 +754,7 @@ func Run(callback () -> void) int32 {
     return x.Value
 }
 func Main() { Console.WriteLine(Run(func() { })) }`, "", "run", "1"}
-            yield[]object{"review_5502_data_struct_parameterless_ctor_literal_invalidates_alias", `import System
+            yield []object{"review_5502_data_struct_parameterless_ctor_literal_invalidates_alias", `import System
 
 class C {
     var Value int32 = 1

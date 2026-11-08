@@ -187,7 +187,7 @@ public static class Factory
         func AcceptedCases() sequence[[]object] {
             // The issue's own repro, `Dictionary` spelling: a constructed-generic
             // value reached through `.Values`. GS9998 on 3e5103de.
-            yield[]object{"dictionary-values-element-constructed-generic", `package Demo
+            yield []object{"dictionary-values-element-constructed-generic", `package Demo
 import System
 import System.Collections.Generic
 
@@ -206,7 +206,7 @@ main2()`, []string{"2"}}
             // the issue's central fact is that both failed identically. GS9998 on
             // 3e5103de, and still GS9998 after the Dictionary half of the fix
             // alone — this row is what forced TryGetClosedMapProjectionView.
-            yield[]object{"map-values-element-constructed-generic", `package Demo
+            yield []object{"map-values-element-constructed-generic", `package Demo
 import System
 import System.Collections.Generic
 
@@ -224,7 +224,7 @@ main2()`, []string{"2"}}
             // The issue's diagnosis said a constructed generic was the failing
             // ingredient. A plain `string` value fails identically (GS0158 on
             // 3e5103de) — this row is the correction.
-            yield[]object{"dictionary-values-element-is-a-plain-string", `package Demo
+            yield []object{"dictionary-values-element-is-a-plain-string", `package Demo
 import System
 import System.Collections.Generic
 
@@ -239,7 +239,7 @@ func main2() {
 
 main2()`, []string{"5", "HELLO"}}
             // The map spelling of the same correction. GS0158 on 3e5103de.
-            yield[]object{"map-keys-element-is-a-plain-string", `package Demo
+            yield []object{"map-keys-element-is-a-plain-string", `package Demo
 import System
 
 func main2() {
@@ -252,7 +252,7 @@ func main2() {
 main2()`, []string{"2"}}
             // The issue records `.Keys` as unaffected. Measured, it is affected
             // identically: GS0158 on 3e5103de.
-            yield[]object{"dictionary-keys-element-property", `package Demo
+            yield []object{"dictionary-keys-element-property", `package Demo
 import System
 import System.Collections.Generic
 
@@ -267,7 +267,7 @@ func main2() {
 main2()`, []string{"2"}}
             // The issue records a generic KEY as "not probed". Measured, GS9998 on
             // 3e5103de — the `.Keys` twin of the reported `.Values` row.
-            yield[]object{"dictionary-keys-element-constructed-generic", `package Demo
+            yield []object{"dictionary-keys-element-constructed-generic", `package Demo
 import System
 import System.Collections.Generic
 
@@ -286,7 +286,7 @@ func main2() {
 main2()`, []string{"3"}}
             // Not only `Dictionary`: every nested KeyCollection/ValueCollection was
             // affected. GS0158 on 3e5103de.
-            yield[]object{"sorted-dictionary-values-element-property", `package Demo
+            yield []object{"sorted-dictionary-values-element-property", `package Demo
 import System
 import System.Collections.Generic
 
@@ -303,7 +303,7 @@ main2()`, []string{"5"}}
             // `for` header — the receiver's node kind was the whole gate, so this
             // is the row that shows the defect is about the TYPE, not the syntax.
             // GS9998 on 3e5103de.
-            yield[]object{"values-collection-through-a-local-then-iterated", `package Demo
+            yield []object{"values-collection-through-a-local-then-iterated", `package Demo
 import System
 import System.Collections.Generic
 
@@ -321,7 +321,7 @@ main2()`, []string{"1"}}
             // An IMPORTED class as the value, reached through `.Values`, with its
             // own property read in the body. This is the shape the issue calls
             // green; it is not. GS0158 on 3e5103de.
-            yield[]object{"values-element-is-an-imported-class-property-read", `package Demo
+            yield []object{"values-element-is-an-imported-class-property-read", `package Demo
 import System
 import HelperLib
 
@@ -348,7 +348,7 @@ main2()`, []string{"box"}}
             // correctness here was a coincidence, not a faithful reading. So this
             // Issue #4066 makes the agreement faithful: each path is `string?`, so
             // the value is narrowed before its property is read.
-            yield[]object{"an-imported-nullable-value-dictionary-agrees-across-its-three-paths", `package Demo
+            yield []object{"an-imported-nullable-value-dictionary-agrees-across-its-three-paths", `package Demo
 import System
 import HelperLib
 
@@ -375,7 +375,7 @@ main2()`, []string{"5", "5", "5"}}
             // A dictionary handed over from a nullable-ENABLED C# assembly whose
             // value is NOT annotated. The element must be `string`, so the property
             // reads. GS0158 on 3e5103de.
-            yield[]object{"values-element-from-an-imported-non-nullable-value-dictionary", `package Demo
+            yield []object{"values-element-from-an-imported-non-nullable-value-dictionary", `package Demo
 import System
 import HelperLib
 
@@ -398,7 +398,7 @@ main2()`, []string{"5"}}
             // The three green paths to the SAME dictionary's values. Their
             // agreement (all `string`) against `.Values`' disagreement (`string?`)
             // is the measurement that located the defect.
-            yield[]object{"control-indexer-for-k-v-and-trygetvalue-all-agree", `package Demo
+            yield []object{"control-indexer-for-k-v-and-trygetvalue-all-agree", `package Demo
 import System
 import System.Collections.Generic
 
@@ -419,7 +419,7 @@ func main2() {
 main2()`, []string{"5", "2/5", "5"}}
             // A METHOD on the element from `.Values` was always green, because a
             // call never consults the receiver gate. It must stay green.
-            yield[]object{"control-a-method-on-the-values-element", `package Demo
+            yield []object{"control-a-method-on-the-values-element", `package Demo
 import System
 import System.Collections.Generic
 
@@ -437,7 +437,7 @@ main2()`, []string{"1"}}
             // Non-nested generic collections were never affected: their element
             // carries no placeholder byte. Four of them, so an over-broad change to
             // the projection would be visible here.
-            yield[]object{"control-non-nested-generic-collections-are-unaffected", `package Demo
+            yield []object{"control-non-nested-generic-collections-are-unaffected", `package Demo
 import System
 import System.Collections.Generic
 
@@ -470,7 +470,7 @@ func main2() {
 main2()`, []string{"5", "6", "6", "5"}}
             // A constructed-generic element from a plain enumerable was always
             // green — the ingredient the issue blamed, in isolation, is innocent.
-            yield[]object{"control-constructed-generic-element-from-a-plain-list", `package Demo
+            yield []object{"control-constructed-generic-element-from-a-plain-list", `package Demo
 import System
 import System.Collections.Generic
 
@@ -489,7 +489,7 @@ main2()`, []string{"1"}}
             // `K`, never `K?`. This is the spelling that was RIGHT all along, via
             // the very carve-out the fix now lets closed receivers reach, so it
             // pins that the fix did not disturb it.
-            yield[]object{"control-an-open-map-keys-iterates-as-k", `package Demo
+            yield []object{"control-an-open-map-keys-iterates-as-k", `package Demo
 import System
 
 func firstKey[K, V](m map[K, V], fallback K) K {
@@ -516,7 +516,7 @@ main2()`, []string{"only"}}
             // ADR-0001: an explicitly-written `string?` still requires narrowing or
             // `?.` before a property read. The fix must NOT relax this — it changes
             // which element type `.Values` produces, not what may be done to a `T?`.
-            yield[]object{"an-explicit-nullable-reference-still-refuses-a-property-read", `package Demo
+            yield []object{"an-explicit-nullable-reference-still-refuses-a-property-read", `package Demo
 import System
 
 func main2() {
@@ -529,7 +529,7 @@ main2()`, "GS0158", 1}
             // the author saying the elements may be nil, so the loop variable is
             // genuinely `string?` and the property read is genuinely refused —
             // unlike `.Values`, where the `?` was fabricated from a placeholder.
-            yield[]object{"an-explicitly-nullable-slice-element-still-refuses-a-property-read", `package Demo
+            yield []object{"an-explicitly-nullable-slice-element-still-refuses-a-property-read", `package Demo
 import System
 
 func main2() {
@@ -541,7 +541,7 @@ func main2() {
 
 main2()`, "GS0158", 1}
             // The fix does not invent members the element does not have.
-            yield[]object{"a-member-the-values-element-does-not-have-is-still-refused", `package Demo
+            yield []object{"a-member-the-values-element-does-not-have-is-still-refused", `package Demo
 import System
 import System.Collections.Generic
 

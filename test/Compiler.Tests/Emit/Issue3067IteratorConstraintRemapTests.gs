@@ -217,7 +217,7 @@ Console.WriteLine(Read[int32](AsyncValues[int32](99)).GetAwaiter().GetResult())`
         func DriverMatrix() sequence[[]object] {
             for position in Enum.GetValues[SourcePosition]() {
                 for driver in Enum.GetValues[Driver]() {
-                    yield[]object{position, driver}
+                    yield []object{position, driver}
                 }
             }
         }

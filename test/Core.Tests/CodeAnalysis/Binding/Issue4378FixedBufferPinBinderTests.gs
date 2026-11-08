@@ -5,10 +5,14 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.IO
 import System.Linq
 import Xunit
@@ -23,6 +27,247 @@ import Xunit
 /// value that is not a variable, or a pointee mismatch, is GS0401 (C# CS1708 /
 /// CS0266). Also covers the bare-name decay of issue #4377.
 open class Issue4378FixedBufferPinBinderTests {
+    @Theory
+    @InlineData("return int32((h.B.Name)[await NextIndex()])")
+    @InlineData("return int32(h.B.Name[await NextIndex()])")
+    @InlineData("return int32((b.Name)[await NextIndex()])")
+    @InlineData("return int32((MakeBone().Name)[await NextIndex()])")
+    @InlineData("return int32(((b, 0).Item1.Name)[await NextIndex()])")
+    @InlineData("let p *int8 = MakeBone().Name\n    await System.Threading.Tasks.Task.Yield()\n    return int32(p[0])")
+    @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
+    @InlineData("h.B.Name[await NextIndex()] += int8(1)\n    return 0")
+    @InlineData("h.B.Name[0] += await NextByte()\n    return 0")
+    @InlineData("var sink = int8(0)\n    h.B.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    sink, h.B.Name[0] = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    b.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    func AwaitingIndexBufferPointer_ReportsGS0638(statement string) {
+        let source = Prelude + `func MakeBone() Bone -> Bone{}
+async func NextIndex() int32 {
+    await System.Threading.Tasks.Task.Yield()
+    return 0
+}
+async func NextByte() int8 {
+    await System.Threading.Tasks.Task.Yield()
+    return int8(1)
+}
+unsafe async func f(h Holder, b Bone) int32 {
+    ` + statement + `
+}`
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Fact
+    func SynchronousControlFlowIndex_AllowsDirectBufferAccess() {
+        let source = Prelude + `unsafe func readAndWrite(h Holder, flag bool) int32 {
+    h.B.Name[{ if flag { return 10 } 0 }] = { if flag { return int8(20) } int8(42) }
+    var sink = int8(0)
+    h.B.Name[{ if flag { return 30 } 1 }], sink = int8(7), int8(8)
+    return int32(h.B.Name[{ if flag { return int8(40) } 0 }] + h.B.Name[1] + sink)
+}`
+        AssertNoErrors(source)
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func InlineAwaitBufferPointer_ReportsGS0638(parameter bool) {
+        let source = Prelude + `unsafe async func f(PARAMETER) int32 {
+    LOCAL
+    let p *int8 = ({ await System.Threading.Tasks.Task.Yield()
+        b }).Name
+    return int32(p[0])
+}`.Replace(
+            "PARAMETER",
+            if parameter {
+                "b Bone"
+            } else {
+                string.Empty
+            }
+        )
+            .Replace(
+            "LOCAL",
+            if parameter {
+                string.Empty
+            } else {
+                "var b = Bone{}"
+            }
+        )
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func BoxedTupleElement_IsMovableStorage(nested bool) {
+        // Tuple aliases do not parse yet; exercise the storage node directly.
+        let compilation = Compilation(SyntaxTree.Parse(Prelude))
+        let bone = Assert.Single(compilation.GlobalScope.Structs, (s StructSymbol) -> s.Name == "Bone")
+        let field = Assert.Single(bone.Fields, (f FieldSymbol) -> f.IsFixedBuffer)
+        let pair = TupleTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](bone, TypeSymbol.Int32))
+        let outer = if nested {
+            TupleTypeSymbol.Get(ImmutableArray.Create[TypeSymbol](pair, TypeSymbol.Int32))
+        } else {
+            pair
+        }
+        let boxed = BoundVariableExpression(nil, LocalVariableSymbol("boxed", false, TypeSymbol.Object), outer)
+        let receiver BoundExpression = if nested {
+            BoundTupleElementAccessExpression(nil, boxed, outer, 0)
+        } else {
+            boxed
+        }
+        let element = BoundTupleElementAccessExpression(nil, receiver, pair, 0)
+        let buffer = BoundFieldAccessExpression(nil, element, bone, field)
+        Assert.False(StatementBinder.IsFixedVariable(buffer))
+    }
+
+    @Theory
+    @InlineData("boxed.Item1.Name")
+    @InlineData("boxed.Item2.Item1.Name")
+    @InlineData("&boxed.Item2.Item1.Name[0]")
+    func BoxedTupleStorage_ReportsGS0638(expression string) {
+        let source = Prelude + `unsafe func f(boxed object) *int8 {
+    if boxed is ValueTuple[Bone, ValueTuple[Bone, int32]] {
+        return ` + expression + `
+    }
+    return nil
+}`
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let p *int8 = b.Name
+    let read = func() int32 { return b.Parent }
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func f(b Bone) {
+    let read = func() int32 { return b.Parent }
+    let p *int8 = b.Name
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read = func() int32 {
+        let p *int8 = b.Name
+        return int32(p[0])
+    }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read[T] = func(value T) int32 { return b.Parent }
+    let p *int8 = b.Name
+    Console.WriteLine(int32(p[0]) + read[int32](0))
+}`)
+    @InlineData(`unsafe async func f(b Bone) int32 {
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    return int32(p[0])
+}`)
+    @InlineData(`unsafe async func f() int32 {
+    var b = Bone{}
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    return int32(p[0])
+}`)
+    @InlineData(`unsafe func f() sequence[int32] {
+    var b = Bone{}
+    yield 0
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    @InlineData(`unsafe async func f(b Bone) sequence[int32] {
+    await System.Threading.Tasks.Task.Yield()
+    let p *int8 = b.Name
+    yield int32(p[0])
+}`)
+    @InlineData(`unsafe func f() {
+    let build = func() int32 {
+        var b = Bone{}
+        let read = func() int32 { return b.Parent }
+        let p *int8 = b.Name
+        return int32(p[0]) + read()
+    }
+    Console.WriteLine(build())
+}`)
+    @InlineData(`unsafe func f() {
+    let read = async func(b Bone) int32 {
+        await System.Threading.Tasks.Task.Yield()
+        let p *int8 = b.Name
+        return int32(p[0])
+    }
+    let ignored = read(Bone{})
+}`)
+    @InlineData(`unsafe func f() {
+    var pair = (Bone{}, 0)
+    let read = func() int32 { return pair.Item2 }
+    let p *int8 = pair.Item1.Name
+    Console.WriteLine(int32(p[0]) + read())
+}`)
+    func HeapPromotedBufferPointer_ReportsGS0638(function string) {
+        let source = Prelude + function
+        let error = Assert.Single(GetDiagnostics(source), (d Diagnostic) -> d.IsError)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
+        Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Theory
+    @InlineData("({ let marker = 0\n b }).Name")
+    @InlineData("pair.Item1.Name")
+    @InlineData("pair.Item2.Item1.Name")
+    @InlineData("(b, 0).Item1.Name")
+    @InlineData("({ let marker = 0\n pair }).Item2.Item1.Name")
+    @InlineData("({ var inner = Bone{}\n inner }).Name")
+    func LocalBlockAndTupleStorage_AllowsBufferDecay(expression string) {
+        AssertNoErrors(Prelude + `unsafe func f() {
+    var b = Bone{}
+    var pair = (b, (b, 0))
+    let p *int8 = ` + expression + `
+    Console.WriteLine(int32(p[0]))
+}`)
+    }
+
+    @Theory
+    @InlineData(`unsafe func f() {
+    var b = Bone{}
+    let read = func() int32 { return b.Parent }
+    fixed p *int8 = b.Name { p[0] = 3 }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe func f(b Bone) {
+    let read = func() int32 {
+        fixed p *int8 = b.Name { return int32(p[0]) }
+    }
+    Console.WriteLine(read())
+}`)
+    @InlineData(`unsafe async func f() int32 {
+    var b = Bone{}
+    await System.Threading.Tasks.Task.Yield()
+    fixed p *int8 = b.Name { return int32(p[0]) }
+}`)
+    @InlineData(`unsafe func f() sequence[int32] {
+    var b = Bone{}
+    yield 0
+    var result = 0
+    fixed p *int8 = b.Name { result = int32(p[0]) }
+    yield result
+}`)
+    func HeapPromotedBufferStorage_AllowsPinning(function string) {
+        AssertNoErrors(Prelude + function)
+    }
+
     @Fact
     func BareName_InsideDeclaringStruct_Pins() {
         const source = `
@@ -76,8 +321,8 @@ unsafe struct Bone {
         Name[i] = v
     }
 
-    func Ptr() *int8 {
-        return Name
+    func Bump(i int32) {
+        Name[i] += 1
     }
 }
 `
@@ -85,7 +330,53 @@ unsafe struct Bone {
     }
 
     @Theory
+    @InlineData("unsafe func f(h Holder) *int8 { return h.B.Name }")
+    @InlineData("unsafe func f(h Holder) { let q *int8 = h.B.Name }")
+    @InlineData("unsafe func f(ref b Bone) *int8 { return b.Name }")
+    @InlineData("unsafe func f(bones []Bone) *int8 { return bones[0].Name }")
+    @InlineData("unsafe func f(h Holder) *int8 { return &h.B.Name[0] }")
+    @InlineData("unsafe func f(h Holder) *int8 { return &{ let marker = 0\n h.B.Name[0] } }")
+    @InlineData(
+        "unsafe func f(h Holder, flag bool) *int8 { var local = Bone{}\n return &{ let marker = 0\n flag ? local.Name[0] : h.B.Name[1] } }"
+    )
+    @InlineData(
+        "unsafe func f(h Holder, maybe int32?) *int8 { var local = Bone{}\n return &(if let n = maybe { local.Name[0] } else { h.B.Name[1] }) }"
+    )
+    @InlineData(
+        "unsafe func f(h Holder, flag bool) { var local = Bone{}\n let _ = &(flag ? ref local.Name[0] : ref h.B.Name[1]) }"
+    )
+    @InlineData(
+        "unsafe func f() *int8 { var boxed object = Bone{}\n if boxed is Bone { return boxed.Name }\n return nil }"
+    )
+    @InlineData("unsafe struct S { fixed Name [4]int8\n func Ptr() *int8 { return Name } }")
+    @InlineData("unsafe struct S { fixed Name [4]int8\n func Ptr() *int8 { return this.Name } }")
+    func MovableBufferPointerOutsideFixed_ReportsGS0638(function string) {
+        let diagnostics = GetDiagnostics(Prelude + function).ToList()
+        let error = Assert.Single(diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
+        Assert.Equal("GS0638", error.Id)
+        Assert.Contains("'Name'", error.Message)
+    }
+
+    @Theory
+    @InlineData("unsafe func f(h Holder) int8 { return h.B.Name[0] }")
+    @InlineData("unsafe func f(h Holder) int8 { return unchecked(h.B.Name)[0] }")
+    @InlineData("unsafe func f(h Holder) int8 { return ({ let marker = 0\n h.B.Name })[0] }")
+    @InlineData("unsafe func f(h Holder) { h.B.Name[0] = 1\n h.B.Name[0] += 2 }")
+    @InlineData(
+        "unsafe func f() int8 { var boxed object = Bone{}\n if boxed is Bone { return boxed.Name[0] }\n return int8(0) }"
+    )
+    @InlineData("unsafe func f(h Holder) *int8 { var local = Bone{}\n return &local.Name[int32(h.B.Name[0])] }")
+    @InlineData("unsafe func f() *int8 { var b = Bone{}\n return b.Name }")
+    @InlineData("unsafe func f(b Bone) *int8 { return b.Name }")
+    @InlineData("unsafe func f(p *Bone) *int8 { return p->Name }")
+    @InlineData("unsafe func f() *int8 { var w = Wrap{}\n return w.B.Name }")
+    func FixedBufferDirectIndexOrFixedReceiver_AllowsDecay(function string) {
+        AssertNoErrors(Prelude + function)
+    }
+
+    @Theory
     @InlineData("unsafe func f(h Holder) { fixed p *int8 = h.B.Name { } }")
+    @InlineData("unsafe func f(h Holder) { fixed p *int8 = unchecked(h.B.Name) { } }")
     @InlineData("unsafe func f(ref b Bone) { fixed p *int8 = b.Name { } }")
     @InlineData("unsafe func f(bones []Bone) { fixed p *int8 = bones[0].Name { } }")
     @InlineData("unsafe func f(ws []Wrap) { fixed p *int8 = ws[0].B.Name { } }")

@@ -2841,7 +2841,12 @@ partial class CSharpToGSharpTranslator {
                 return cached
             }
             let symbols = List[ISymbol]()
-            for reference in $scope!!.DeclaringSyntaxReferences {
+            let references = if $scope is IMethodSymbol{AssociatedSymbol: {} associated} {
+                $scope.DeclaringSyntaxReferences.AsEnumerable().Concat(associated.DeclaringSyntaxReferences)
+            } else {
+                $scope!!.DeclaringSyntaxReferences.AsEnumerable()
+            }
+            for reference in references {
                 using let scopeModel = this.context.UseSemanticModelFor(reference.SyntaxTree)
                 symbols.AddRange(
                     reference

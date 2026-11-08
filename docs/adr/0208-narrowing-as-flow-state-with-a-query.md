@@ -1,10 +1,17 @@
 # ADR-0208: Narrowing as a flow-state computation consumed through a query
 
-- **Status**: Accepted (maintainer decision on PR
+- **Status**: Implemented (maintainer decision on PR
   [#5164](https://github.com/DavidObando/gsharp/pull/5164), 2026-10-23, with
   the split scope of section 18a; the eight questions of section 21 were
   decided as recommended on the same day, three of them deferred to
-  [#5196](https://github.com/DavidObando/gsharp/issues/5196))
+  [#5196](https://github.com/DavidObando/gsharp/issues/5196); representation
+  and production state shipped in PRs
+  [#5212](https://github.com/DavidObando/gsharp/pull/5212),
+  [#5230](https://github.com/DavidObando/gsharp/pull/5230),
+  [#5247](https://github.com/DavidObando/gsharp/pull/5247), and
+  [#5812](https://github.com/DavidObando/gsharp/pull/5812);
+  section 19 cleanup ships in
+  [#5852](https://github.com/DavidObando/gsharp/pull/5852))
 - **Date**: 2026-10-22 (accepted 2026-10-23)
 - **Amendments**: A1 (join fallback, #5206) and A2 (property reads, row
   R14, #5215) of section 19a, found by PR 1 of #5130 (#5212) and accepted by
@@ -489,7 +496,10 @@ are closed: a construct or situation that is on neither list kills.
   else-state. `!` swaps them; `&&` binds the right operand under the left
   then-state and intersects else-states; `||` is the dual; `??`, `?:` and
   the `if` expression use the same classification (ADR-0064 #4964
-  addendum). Unchanged.
+  addendum). Equality of a null-conditional Boolean with either Boolean
+  literal proves its receiver non-nil on the equality path (#5849).
+  Effects of the conditional getter or call must preserve that receiver's
+  storage. The inequality path includes nil and proves nothing about it.
 - **P2 Assignment.** `x = value` where `TryClassifyNonNullAssignment` holds
   (`:1145-1175`) adds `x` at its declared type with one nullable layer
   removed (ADR-0069 #4989 addendum: never the assigned class). Unchanged.
@@ -1489,6 +1499,20 @@ each predicted change listed in the PR body; the benchmark table of section
    notes under Unreleased. Acceptance: `StatementBinder.Narrowing.gs`
    reduced to the classifiers, the transfer functions and the loop
    collector; benchmark table; full suite green.
+
+**Completion notes.** Production reads use the maintained `NarrowingState`,
+including external-callable facts. Frames retain scope bookkeeping and the
+optional parity check, not a second read-side interpreter. The legacy `if`
+join, early-exit restoration, pending `if`/`switch` frames, and shadow
+comparison mode are retired. Normal conditional exits also answer nullable
+widening discharge queries without reinterpreting their branches.
+
+Statement effects use node-keyed records. State-independent child effects
+compose bottom-up; alias-sensitive operations retain ordered classification.
+Composition applies the shared alias invalidation rule to assigned roots,
+including erased callable values. Deferred cleanup still transfers from
+each jump's entry state; its transfer functions are not normal-branch join
+interpreters. Switch break paths are indexed once per switch (#5841).
 
 The pin-move PR after the release that carries PR 2 removes the `!!` that
 `GS0536` newly reports (section 15).

@@ -25,7 +25,8 @@ internal class CSharpFixture : IDisposable {
         parseOptions CSharpParseOptions? = nil,
         assemblyName string? = nil,
         allowUnsafe bool = false,
-        deterministic bool = false
+        deterministic bool = false,
+        optimizationLevel OptimizationLevel = OptimizationLevel.Release
     ) {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(DirectoryPath)
@@ -41,7 +42,8 @@ internal class CSharpFixture : IDisposable {
                 CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
                     allowUnsafe: allowUnsafe,
-                    deterministic: deterministic
+                    deterministic: deterministic,
+                    optimizationLevel: optimizationLevel
                 )
             )
             using let stream = File.Create(AssemblyPath)

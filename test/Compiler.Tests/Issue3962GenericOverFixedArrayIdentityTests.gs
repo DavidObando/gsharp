@@ -219,7 +219,7 @@ public static class ArrayProbes
             // indexed, iterated, and passed through LINQ. Every one of those goes
             // out to reflection and back, which is exactly where a symbolic type
             // argument can be dropped again.
-            yield[]object{"same-length-generic-round-trips-through-members", `package P
+            yield []object{"same-length-generic-round-trips-through-members", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -244,7 +244,7 @@ main2()`, []string{"2", "6", "3", "3", "1", "2"}}
             // The same length written twice must still be ONE type: the fix
             // escalates to a symbolic comparison, and that comparison has to
             // AGREE, not merely differ.
-            yield[]object{"matching-lengths-are-still-identity-across-declarations", `package P
+            yield []object{"matching-lengths-are-still-identity-across-declarations", `package P
 import System
 import System.Collections.Generic
 
@@ -271,7 +271,7 @@ func main2() {
 main2()`, []string{"8", "6"}}
             // A covariant interface over the SAME length still widens. The fix
             // must reject invariant length MISMATCH, not the upcast.
-            yield[]object{"covariant-upcast-over-the-same-length-still-widens", `package P
+            yield []object{"covariant-upcast-over-the-same-length-still-widens", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -290,7 +290,7 @@ func main2() {
 
 main2()`, []string{"1", "1"}}
             // A nested constructed generic over a matching length is one type too.
-            yield[]object{"nested-generic-over-the-same-length-is-one-type", `package P
+            yield []object{"nested-generic-over-the-same-length-is-one-type", `package P
 import System
 import System.Collections.Generic
 
@@ -311,7 +311,7 @@ main2()`, []string{"2"}}
             // in `ContainsMetadataRecoveredArray` must not change the answer or
             // throw. Round-trips the value through a field and a method so the
             // emitted signatures are exercised, not just the classification.
-            yield[]object{"same-compilation-generic-over-a-fixed-array-round-trips", `package P
+            yield []object{"same-compilation-generic-over-a-fixed-array-round-trips", `package P
 import System
 
 class Box[T] {
@@ -338,7 +338,7 @@ main2()`, []string{"2", "3"}}
             // retention site (`TryCloseImportedGenericTypeReceiver`) has to build
             // the symbolic view and still produce verifiable IL parented at the
             // constructed TypeSpec.
-            yield[]object{"static-generic-receiver-over-a-matching-length-runs", `package P
+            yield []object{"static-generic-receiver-over-a-matching-length-runs", `package P
 import System
 import System.Collections.Generic
 
@@ -355,7 +355,7 @@ main2()`, []string{"True", "True"}}
             // nullable-flags array (it only runs when NO symbolic argument is
             // kept), so the inner `?` now has to survive through
             // `NullableFlagsBuilder` on the `GetConstructed` path instead.
-            yield[]object{"nullable-reference-element-inside-a-fixed-array", `package P
+            yield []object{"nullable-reference-element-inside-a-fixed-array", `package P
 import System
 import System.Collections.Generic
 
@@ -377,7 +377,7 @@ main2()`, []string{"1", "a"}}
             // (`List[[3]Foo].Add` is a separate, PRE-EXISTING member-projection gap
             // — red on `main` too — filed as #3998, so this case moves the value
             // through the outer list instead.)
-            yield[]object{"same-compilation-element-inside-a-matching-fixed-array", `package P
+            yield []object{"same-compilation-element-inside-a-matching-fixed-array", `package P
 import System
 import System.Collections.Generic
 
@@ -408,7 +408,7 @@ main2()`, []string{"0", "3"}}
         /// neither side has.
         /// @returns Name, G# source, expected stdout lines.
         func InteropCases() sequence[[]object] {
-            yield[]object{"interop-fixed-array-generic-reaches-a-clr-list-of-arrays", `package P
+            yield []object{"interop-fixed-array-generic-reaches-a-clr-list-of-arrays", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -428,7 +428,7 @@ main2()`, []string{"1", "20"}}
             // plain CLR-backed constructed generic, whose symbolic type-argument
             // vector is empty. Measured green before and after — pinned so the
             // carve-out's reach is covered rather than argued about.
-            yield[]object{"interop-nested-metadata-arrays-convert-both-ways", `package P
+            yield []object{"interop-nested-metadata-arrays-convert-both-ways", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -446,7 +446,7 @@ main2()`, []string{"0", "20"}}
             // C# `IEnumerable<int[]>` records no length, so it still flows into an
             // `IEnumerable[[3]int32]` slot and back out, even though two SYMBOLIC
             // instantiations differing in length no longer do.
-            yield[]object{"interop-metadata-array-still-crosses-a-variant-interface", `package P
+            yield []object{"interop-metadata-array-still-crosses-a-variant-interface", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -468,21 +468,21 @@ main2()`, []string{"1", "1"}}
         /// @returns Name, G# source, a substring the diagnostics must name.
         func RejectedCases() sequence[[]object] {
             // The issue's headline row.
-            yield[]object{"different-lengths-do-not-convert", `package P
+            yield []object{"different-lengths-do-not-convert", `package P
 import System.Collections.Generic
 
 var l3 = List[[3]int32]()
 var l4 List[[4]int32] = l3`, "'System.Collections.Generic.List[[3]int32]' to 'System.Collections.Generic.List[[4]int32]'"}
             // The same conflation in a two-argument generic, on the second
             // position, so a fix that only inspects argument 0 stays red.
-            yield[]object{"different-lengths-do-not-convert-in-a-map-value-position", `package P
+            yield []object{"different-lengths-do-not-convert-in-a-map-value-position", `package P
 import System.Collections.Generic
 
 var d3 = Dictionary[string, [3]int32]()
 var d4 Dictionary[string, [4]int32] = d3`, "'System.Collections.Generic.Dictionary[string, [3]int32]' to 'System.Collections.Generic.Dictionary[string, [4]int32]'"}
             // The same conflation in ARGUMENT position, which is a different
             // classification entry point (GS0154, not GS0155).
-            yield[]object{"different-lengths-do-not-satisfy-a-parameter", `package P
+            yield []object{"different-lengths-do-not-satisfy-a-parameter", `package P
 import System.Collections.Generic
 
 func wants(l List[[4]int32]) {
@@ -492,7 +492,7 @@ var l3 = List[[3]int32]()
 wants(l3)`, "requires a value of type 'System.Collections.Generic.List[[4]int32]'"}
             // Declared-type form: neither side goes through the construction
             // binder, so this pins the type-clause binder independently.
-            yield[]object{"different-lengths-do-not-convert-between-declared-types", `package P
+            yield []object{"different-lengths-do-not-convert-between-declared-types", `package P
 import System.Collections.Generic
 
 func wants(l List[[4]int32]) int32 {
@@ -505,7 +505,7 @@ func pass(l List[[3]int32]) int32 {
 
 System.Console.WriteLine(pass(List[[3]int32]()).ToString())`, "requires a value of type 'System.Collections.Generic.List[[4]int32]'"}
             // Nested one level down: the length must be found at any depth.
-            yield[]object{"different-lengths-nested-inside-a-generic-argument", `package P
+            yield []object{"different-lengths-nested-inside-a-generic-argument", `package P
 import System.Collections.Generic
 
 func wants(l List[List[[4]int32]]) {
@@ -515,7 +515,7 @@ var outer = List[List[[3]int32]]()
 wants(outer)`, "requires a value of type 'System.Collections.Generic.List[System.Collections.Generic.List[[4]int32]]'"}
             // Behind a slice wrapper, so the recursion through GetWrappedTypes is
             // load-bearing rather than incidental.
-            yield[]object{"different-lengths-behind-a-slice-wrapper", `package P
+            yield []object{"different-lengths-behind-a-slice-wrapper", `package P
 import System.Collections.Generic
 
 func wants(l List[[][4]int32]) {
@@ -527,7 +527,7 @@ wants(outer)`, "requires a value of type 'System.Collections.Generic.List[[][4]i
             // in a third place (`ExpressionBinder.Access`), which had its own copy
             // of the retention rule. Without that site fixed, this row still
             // compiles while every row above is rejected.
-            yield[]object{"different-lengths-through-the-qualified-construction-spelling", `package P
+            yield []object{"different-lengths-through-the-qualified-construction-spelling", `package P
 import System.Collections.Generic
 
 var l3 = System.Collections.Generic.List[[3]int32]()
@@ -537,7 +537,7 @@ var l4 List[[4]int32] = l3`, "'System.Collections.Generic.List[[3]int32]' to 'Sy
             // bare `[3]int32` -> `[4]int32` conversion is implicit (#3998), so the
             // covariant slot accepted the pair until the shape mismatch was
             // rejected before variance was applied.
-            yield[]object{"covariance-does-not-readmit-a-length-mismatch", `package P
+            yield []object{"covariance-does-not-readmit-a-length-mismatch", `package P
 import System.Collections.Generic
 
 var l3 = List[[3]int32]()
@@ -545,7 +545,7 @@ var e3 IEnumerable[[3]int32] = l3
 var e4 IEnumerable[[4]int32] = e3`, "'System.Collections.Generic.IEnumerable[[3]int32]' to 'System.Collections.Generic.IEnumerable[[4]int32]'"}
             // The contravariant half of the same rule (`IComparer[in T]`), in the
             // direction contravariance would otherwise allow.
-            yield[]object{"contravariance-does-not-readmit-a-length-mismatch", `package P
+            yield []object{"contravariance-does-not-readmit-a-length-mismatch", `package P
 import System
 import System.Collections.Generic
 
@@ -563,7 +563,7 @@ Console.WriteLine(pass4(Comparer[[4]int32].Default).ToString())`, "requires a va
             // `EqualityComparer[[3]int32].Default` is exposed as a metadata-only
             // `EqualityComparer<int32[]>` and flows into the `[4]` slot through the
             // metadata-recovery leniency.
-            yield[]object{"static-generic-receiver-discriminates-lengths", `package P
+            yield []object{"static-generic-receiver-discriminates-lengths", `package P
 import System.Collections.Generic
 
 var c4 EqualityComparer[[4]int32] = EqualityComparer[[3]int32].Default`, "'System.Collections.Generic.EqualityComparer[[3]int32]' to 'System.Collections.Generic.EqualityComparer[[4]int32]'"}
@@ -572,7 +572,7 @@ var c4 EqualityComparer[[4]int32] = EqualityComparer[[3]int32].Default`, "'Syste
             // compared symbolically — so it is a CONTROL that the new metadata
             // traversal did not loosen that path while widening leniency for
             // genuinely reflected shapes.
-            yield[]object{"same-compilation-generic-still-discriminates-lengths", `package P
+            yield []object{"same-compilation-generic-still-discriminates-lengths", `package P
 import System
 
 class Box[T] {
@@ -593,7 +593,7 @@ main2()`, "'Box[[3]int32]' to 'Box[[4]int32]'"}
             // #3924's own control, restated here: a same-compilation element must
             // still discriminate, and this PR must not have traded one erasure for
             // another.
-            yield[]object{"same-compilation-elements-are-still-not-conflated", `package P
+            yield []object{"same-compilation-elements-are-still-not-conflated", `package P
 import System.Collections.Generic
 
 struct Foo {
@@ -611,7 +611,7 @@ var bars = List[Bar]()
 wants(bars)`, "requires a value of type 'System.Collections.Generic.List[Foo]'"}
             // A fixed length INSIDE a same-compilation-element generic: both
             // erasure reasons at once.
-            yield[]object{"different-lengths-over-a-same-compilation-element", `package P
+            yield []object{"different-lengths-over-a-same-compilation-element", `package P
 import System.Collections.Generic
 
 struct Foo {
@@ -638,7 +638,7 @@ wants(l3)`, "requires a value of type 'System.Collections.Generic.List[[4]Foo]'"
             // below. The third line survives, and is the direction #3998
             // deliberately kept implicit: dropping a KNOWN length for an unknown
             // one is a widening, so a fixed array still reaches every `[]T` slot.
-            yield[]object{"bare-fixed-array-still-widens-to-a-slice", `package P
+            yield []object{"bare-fixed-array-still-widens-to-a-slice", `package P
 import System
 
 func main2() {
@@ -679,7 +679,7 @@ main2()`, []string{"3"}}
         /// at the bare level, which is what these two cases measured before.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue3998Cases() sequence[[]object] {
-            yield[]object{"bare-fixed-array-lengths-no-longer-interconvert", `package P
+            yield []object{"bare-fixed-array-lengths-no-longer-interconvert", `package P
 import System
 
 func main2() {
@@ -689,7 +689,7 @@ func main2() {
 }
 
 main2()`, "Cannot convert type '[3]int32' to '[4]int32'"}
-            yield[]object{"member-argument-length-follows-the-bare-conversion-rule", `package P
+            yield []object{"member-argument-length-follows-the-bare-conversion-rule", `package P
 import System
 
 func take3(a [3]int32) int32 {
@@ -719,7 +719,7 @@ main2()`, "requires a value of type '[3]int32' but was given a value of type '[4
         /// inline one, in a different file.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue4012Cases() sequence[[]object] {
-            yield[]object{"member-argument-follows-the-projected-member-slot", `package P
+            yield []object{"member-argument-follows-the-projected-member-slot", `package P
 import System
 import System.Collections.Generic
 
@@ -748,7 +748,7 @@ main2()`, "Cannot convert type '[4]int32' to '[3]int32'"}
         /// every pair it stopped carried a fixed array on both sides.
         /// @returns Name, G# source, a substring the diagnostics must name.
         func FlippedByIssue4024Cases() sequence[[]object] {
-            yield[]object{"slice-argument-no-longer-reaches-a-fixed-array-generic", `package P
+            yield []object{"slice-argument-no-longer-reaches-a-fixed-array-generic", `package P
 import System
 import System.Collections.Generic
 

@@ -817,6 +817,21 @@ partial class CSharpToGSharpTranslator {
                 return elementType
             }
             let positions = this.ObliviousArrayLiteralPositions(literal)
+            let (sink, elementPosition) = this.ResolveArrayStorageSink(literal)
+            var current = elementTypeSymbol
+            var position = elementPosition
+            var relativePosition = "0"
+            while true {
+                if this.IsWidenedArrayElementStorage(sink, position) {
+                    positions.Add(relativePosition)
+                }
+                if current is not IArrayTypeSymbol array {
+                    break
+                }
+                current = array.ElementType
+                position = JoinPosition(position, "0")
+                relativePosition = JoinPosition(relativePosition, "0")
+            }
             return if positions.Count == 0 {
                 elementType
             } else {

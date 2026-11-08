@@ -363,13 +363,11 @@ internal partial class StatementBinder {
             using let _ = binderCtx.PushUnsafeContext(entersUnsafe)
             let blockFrameIndex = binderCtx.NarrowedVariables.Count
             let blockAliasesAtEntry = externalCallableAliases.ToImmutableArray()
-            let shadowEntry = ShadowBegin()
             let fallsThrough = BindBlockStatements(syntax.Statements, 0, statements)
             let block = BoundBlockStatement(syntax, statements.ToImmutable())
             if binderCtx.LoopStack.Count > 0 {
                 boundStatementEntries[block] = (blockFrameIndex, blockAliasesAtEntry)
             }
-            ShadowRecordBlock(block, shadowEntry)
             RecordBlockExit(block)
             if !reachableOnEntry && fallsThrough {
                 internallyReachableFallthroughStatements.Add(block)
@@ -500,8 +498,6 @@ internal partial class StatementBinder {
         let inheritedFallthrough = currentStatementListFallsThrough
         let blockFrameIndex = binderCtx.NarrowedVariables.Count
         let memberNotNullFrame = binderCtx.PushNarrowingFrame(Dictionary[AccessPath, TypeSymbol]())
-        let shadowSavedOverlay = ShadowEnterList()
-        let shadowSavedBase = binderCtx.ShadowOverlayBase
         var completedCleanupExit NarrowingState? = nil
         try {
             for var i = startIndex; i < statementSyntaxes.Length; i++ {
@@ -599,7 +595,6 @@ internal partial class StatementBinder {
                         aliasesAtEntry: externalCallableAliasesAtEntry
                     )
                     UpdateExternalCallableAliases(prefix, externalCallableAliasesAtEntry)
-                    ShadowAfterStatement(prefix)
                     let innerStatements = ImmutableArray.CreateBuilder[BoundStatement]()
                     let cleanupEffect = BoundExpressionStatement(nil, defer_.Cleanup!!)
                     let fallsThrough = BindWithinSynthesizedCleanup(
@@ -775,8 +770,7 @@ internal partial class StatementBinder {
                 // scope with the new bindings. Inline the per-binding decl + nil-
                 // check pairs directly into the enclosing statement list so that
                 // (a) the synthesized variables live for the rest of the block and
-                // (b) `ApplyEarlyExitNarrowings` lifts each binding's non-nil
-                // narrowing into the persistent block frame for subsequent reads.
+                // (b) the header's surviving proofs reach subsequent reads.
                 if statementSyntax is GuardLetStatementSyntax guardLetSyntax {
                     let guardLetStart = statements.Count
                     let externalCallableAliasesAtEntry = externalCallableAliases.ToArray()
@@ -811,12 +805,9 @@ internal partial class StatementBinder {
                     )
                 }
                 statements.Add(statement)
-                // ADR-0069 / issue #700: lift the else-frame of an
-                // `if x !is T { return }` (or any if whose then-branch
-                // ends in an unconditional exit) into the enclosing
-                // block's persistent frame, so subsequent reads in this
-                // block see the narrowing.
-                ApplyEarlyExitNarrowings(statement, memberNotNullFrame)
+                if statement is BoundIfStatement {
+                    RecordFallbackExit(statement, externalCallableAliasesAtEntry, statementSyntax)
+                }
                 // ADR-0166: the same lift for pattern variables — after
                 // `if !(x is T t) { return }`, `t` is declared for the rest of
                 // this block.
@@ -835,11 +826,6 @@ internal partial class StatementBinder {
                 // any [MemberNotNull] post-condition narrowings from this call
                 // to the persistent frame.
                 ApplyMemberNotNullNarrowings(statement, memberNotNullFrame)
-                RestoreEarlyExitLiftsWrittenOnlyByCondition(
-                    statement,
-                    memberNotNullFrame,
-                    externalCallableAliasesAtEntry
-                )
                 // Issue #1123: assignment-based smart cast. After invalidation
                 // (which clears any stale narrowing on the assigned variable),
                 // re-narrow a nullable `var` local that was just assigned a
@@ -849,19 +835,11 @@ internal partial class StatementBinder {
                 // the invalidation pass for the same statement.
                 ApplyAssignmentNarrowing(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 UpdateExternalCallableAliases(statement, externalCallableAliasesAtEntry)
-                // Issue #2159: `if`-join narrowing. After invalidation (which
-                // drops any narrowing the `if` mutates), lift a nullable `var`
-                // local that both the then- and else-branch leave non-null into
-                // the persistent frame, so subsequent reads see the non-nullable
-                // type. Runs after invalidation for the same reason as the
-                // assignment narrowing above.
-                ApplyIfJoinNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame)
                 // The normal exits already include their path's effects. Whole-statement kills must not remove their facts.
                 ApplyJoinExitNarrowings(statement, memberNotNullFrame, externalCallableAliasesAtEntry)
                 // ADR-0213 row R7 (f): the facts that the header of a loop proves when the loop ends.
                 ApplyLoopExitNarrowings(statementSyntax, memberNotNullFrame)
-                ShadowAfterStatement(statement)
                 let hasInternallyReachableFallthrough = HasInternallyReachableFallthrough(statement)
                 let canCompleteNormally = CanCompleteNormally(statement)
                 currentStatementListFallsThrough = (
@@ -891,7 +869,6 @@ internal partial class StatementBinder {
             }
             return currentStatementListFallsThrough
         } finally {
-            ShadowLeaveList(shadowSavedOverlay, shadowSavedBase)
             NoteListExit(completedCleanupExit)
             binderCtx.EndNarrowingProof()
             currentStatementListFallsThrough = inheritedFallthrough

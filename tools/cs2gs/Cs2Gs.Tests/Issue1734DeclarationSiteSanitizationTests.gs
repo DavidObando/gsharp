@@ -378,6 +378,39 @@ namespace Corpus.Issue3510
         AssertRoundTripParses(rendered)
     }
 
+    @Fact
+    func YieldIdentifier_IsSanitizedAsReservedKeyword() {
+        // Issue #4872: `yield` is now a reserved keyword (`SyntaxKind.YieldKeyword`),
+        // so C# parameters named `yield` escape to `$yield` (ADR-0170) and locals
+        // named `yield` sanitize to `yield_`.
+        let rendered = Render(`
+namespace Corpus.Issue4872
+{
+    public class Holder
+    {
+        public int Compute(int yield)
+        {
+            int local = yield + 1;
+            return local + yield;
+        }
+
+        public int ComputeLocal(int value)
+        {
+            int yield = value + 1;
+            return yield;
+        }
+    }
+}
+`)
+        Assert.Contains("Compute($$yield int32)", rendered, StringComparison.Ordinal)
+        Assert.Contains("let local = $$yield + 1", rendered, StringComparison.Ordinal)
+        Assert.Contains("return local + $$yield", rendered, StringComparison.Ordinal)
+        Assert.Contains("let yield_ = value + 1", rendered, StringComparison.Ordinal)
+        Assert.Contains("return yield_", rendered, StringComparison.Ordinal)
+        AssertNoRawKeywordCollision(rendered, "yield")
+        AssertRoundTripParses(rendered)
+    }
+
     shared {
         private func AssertNoRawKeywordCollision(rendered string, keyword string) {
             let regex = Regex("(?<![A-Za-z0-9_$$])${Regex.Escape(keyword)}(?![A-Za-z0-9_])")

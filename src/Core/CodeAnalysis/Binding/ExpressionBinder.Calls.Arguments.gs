@@ -1610,7 +1610,7 @@ internal partial class ExpressionBinder {
                 refinedArgs.Length,
                 recoverInheritedMethodGroupSlots
             )
-            return MemberLookup.BuildSymbolicMethodTypeArgs(
+            let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 typeArgSymbols,
                 refinedArgs,
@@ -1622,6 +1622,7 @@ internal partial class ExpressionBinder {
                 },
                 recoverInheritedMethodGroupSlots
             )
+            return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(receiver.Type, closed, recovered)
         }
         let resolution = ClrOverloadResolution.Resolve(
             candidates,
@@ -4065,7 +4066,7 @@ internal partial class ExpressionBinder {
                 refinedArgs.Length,
                 recoverConstrainedMethodGroupSlots
             )
-            return MemberLookup.BuildSymbolicMethodTypeArgs(
+            let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 default(ImmutableArray[TypeSymbol]),
                 refinedArgs,
@@ -4077,6 +4078,7 @@ internal partial class ExpressionBinder {
                 },
                 recoverConstrainedMethodGroupSlots
             )
+            return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(constraintType, closed, recovered)
         }
         let resolution = ClrOverloadResolution.Resolve(
             candidates,

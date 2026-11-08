@@ -104,7 +104,7 @@ open class Issue3924DirectionalChannelStructuralElementTests {
         /// Gets the executable cases: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func Cases() sequence[[]object] {
-            yield[]object{"slice-element-out-and-in", `package P
+            yield []object{"slice-element-out-and-in", `package P
 import System
 
 func produce(w out chan[[]int32]) {
@@ -129,7 +129,7 @@ func consume(r in chan[[]int32]) int32 {
 let ch = chan[[]int32](4)
 produce(ch)
 Console.WriteLine(consume(ch))`, []string{"15"}}
-            yield[]object{"map-element-out-and-in", `package P
+            yield []object{"map-element-out-and-in", `package P
 import System
 
 func produce(w out chan[map[string,int32]]) {
@@ -152,7 +152,7 @@ func consume(r in chan[map[string,int32]]) int32 {
 let ch = chan[map[string,int32]](2)
 produce(ch)
 Console.WriteLine(consume(ch))`, []string{"5"}}
-            yield[]object{"nested-slice-element", `package P
+            yield []object{"nested-slice-element", `package P
 import System
 
 func produce(w out chan[[][]int32]) {
@@ -184,7 +184,7 @@ func consume(r in chan[[][]int32]) int32 {
 let ch = chan[[][]int32](2)
 produce(ch)
 Console.WriteLine(consume(ch))`, []string{"7"}}
-            yield[]object{"slice-of-string-element", `package P
+            yield []object{"slice-of-string-element", `package P
 import System
 
 func produce(w out chan[[]string]) {
@@ -202,7 +202,7 @@ for parts in ch {
             // and `TryGetChannelShape` reads the ORIGINAL element symbol back out
             // of `TypeArguments[0]`. This bound before the fix and must keep
             // binding after it.
-            yield[]object{"struct-slice-element", `package P
+            yield []object{"struct-slice-element", `package P
 import System
 
 struct Point {
@@ -225,7 +225,7 @@ for points in ch {
             // of preserving G# element symbols at CONSTRUCTION could: this
             // `Channel<int32[]>` was never built by `chan[T](n)`, so its element
             // exists only as reflected CLR metadata.
-            yield[]object{"foreign-bcl-channel-with-slice-element", `package P
+            yield []object{"foreign-bcl-channel-with-slice-element", `package P
 import System
 import System.Threading.Channels
 
@@ -256,14 +256,14 @@ Console.WriteLine(consume(ch))`, []string{"30"}}
         /// of the reported diagnostic).
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
-            yield[]object{"mismatched-slice-element", `package P
+            yield []object{"mismatched-slice-element", `package P
 
 func wants(w out chan[[]int32]) {
 }
 
 let wrong = chan[[]int64](1)
 wants(wrong)`, "requires a value of type 'out chan[[]int32]'"}
-            yield[]object{"nullable-element-is-not-the-bare-element", `package P
+            yield []object{"nullable-element-is-not-the-bare-element", `package P
 
 func wants(w out chan[int32?]) {
 }
@@ -275,7 +275,7 @@ wants(plain)`, "requires a value of type 'out chan[int32?]'"}
             // CLR-type fallback must not reach them — `[3]int32` and `[4]int32`
             // are one `int32[]`. A mutant that drops the fallback's
             // "one side came back from metadata" guard compiles this.
-            yield[]object{"fixed-array-lengths-still-discriminate", `package P
+            yield []object{"fixed-array-lengths-still-discriminate", `package P
 
 func wants(w out chan[[4]int32]) {
 }
@@ -291,7 +291,7 @@ wants(a)`, "requires a value of type 'out chan[[4]int32]'"}
             // must not reach a source-constructed element. A mutant that widens
             // the guard from "no symbolic type arguments" to "any imported
             // symbol" compiles both of these.
-            yield[]object{"source-constructed-generic-elements-are-not-conflated", `package P
+            yield []object{"source-constructed-generic-elements-are-not-conflated", `package P
 import System.Collections.Generic
 
 struct Foo {
@@ -307,7 +307,7 @@ func wants(w out chan[List[Foo]]) {
 
 var barChan chan[List[Bar]] = chan[List[Bar]](1)
 wants(barChan)`, "requires a value of type 'out chan[System.Collections.Generic.List[Foo]]'"}
-            yield[]object{"fixed-array-length-inside-a-constructed-generic-element", `package P
+            yield []object{"fixed-array-length-inside-a-constructed-generic-element", `package P
 import System.Collections.Generic
 
 struct Foo {
@@ -319,7 +319,7 @@ func wants(w out chan[List[[4]Foo]]) {
 
 var nested chan[List[[3]Foo]] = chan[List[[3]Foo]](1)
 wants(nested)`, "requires a value of type 'out chan[System.Collections.Generic.List[[4]Foo]]'"}
-            yield[]object{"receive-only-does-not-satisfy-send-only", `package P
+            yield []object{"receive-only-does-not-satisfy-send-only", `package P
 
 func wants(w out chan[[]int32]) {
 }

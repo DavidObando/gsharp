@@ -270,7 +270,7 @@ run()`
     func SyncMapGenericShape_CompilesAndRuns() {
         let source = `import System.Collections.Concurrent
 
-class GenericSyncMap[K, V any] {
+class GenericSyncMap[K notnull, V any] {
     private var items ConcurrentDictionary[K, V]
 
     init() {

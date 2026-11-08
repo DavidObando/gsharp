@@ -762,6 +762,15 @@ internal partial class MethodBodyEmitter {
                 ) {
                     return (candidate, ResolveOpenInterfaceMethod(candidate, substitutedMethod))
                 }
+                let def = candidate.Definition ?? candidate
+                for prop in def.Properties {
+                    if object.ReferenceEquals(prop.GetterSymbol, substitutedMethod) || object.ReferenceEquals(
+                        prop.SetterSymbol,
+                        substitutedMethod
+                    ) {
+                        return (candidate, substitutedMethod)
+                    }
+                }
             }
             for candidate in receiverIface.SelfAndAllBaseInterfaces() {
                 let open_ = ResolveOpenInterfaceMethod(candidate, substitutedMethod)

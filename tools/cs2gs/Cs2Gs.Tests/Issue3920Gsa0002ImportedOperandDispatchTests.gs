@@ -227,9 +227,9 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         /// Gets the GSA0002 positive and negative cases.
         /// @returns The theory data.
         func Gsa0002Cases() sequence[[]object] {
-            yield[]object{Gsa0002Positive, []string{"GSA0002", "GSA0002", "GSA0002"}}
-            yield[]object{Gsa0002NegativeExemptions, Array.Empty[string]()}
-            yield[]object{Gsa0002NegativeNamespace, Array.Empty[string]()}
+            yield []object{Gsa0002Positive, []string{"GSA0002", "GSA0002", "GSA0002"}}
+            yield []object{Gsa0002NegativeExemptions, Array.Empty[string]()}
+            yield []object{Gsa0002NegativeNamespace, Array.Empty[string]()}
         }
 
         // A migrated analyzer that reads IInvocationOperation.TargetMethod.ReturnType.

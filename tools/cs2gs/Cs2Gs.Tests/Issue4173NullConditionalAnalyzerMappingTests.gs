@@ -1223,7 +1223,7 @@ public sealed class NullConditionalAccessAnalyzer : DiagnosticAnalyzer
         /// @returns The theory data.
         func ParityCases() sequence[[]object] {
             // Single-hop positive: `a?.b`.
-            yield[]object{`package sample
+            yield []object{`package sample
 
 class Box(Name string) { }
 
@@ -1234,7 +1234,7 @@ func Get(box Box?) string?
             // Negative: ordinary `.` access must NOT fire — the falsifier for the
             // property-pattern rewrite. Before the fix, a naive kind-rename (or
             // an unguarded registration) would have matched this too.
-            yield[]object{`package sample
+            yield []object{`package sample
 
 class Box(Name string) { }
 
@@ -1247,14 +1247,14 @@ func Get(box Box) string
             // alone), so an IndexExpressionSyntax hop never reached the handler at
             // all: a genuine under-fire (0 instead of 1), not merely a disclosed
             // gap. Now registers SyntaxKind.IndexExpression too.
-            yield[]object{`package sample
+            yield []object{`package sample
 
 func Get(nums []int32?) int32?
 {
     return [|nums?[0]|]
 }`, []string{"TEST4173"}}
             // Negative companion: an ORDINARY element access must NOT fire either.
-            yield[]object{`package sample
+            yield []object{`package sample
 
 func Get(nums []int32) int32
 {

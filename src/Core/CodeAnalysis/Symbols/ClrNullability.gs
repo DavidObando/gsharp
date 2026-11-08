@@ -544,11 +544,13 @@ shared class ClrNullability {
             declaration
         }
         let layout = definition.BaseType ?? actual
-        let flags = ReadNullableFlags(definition, definition)
-        if project is {} projector {
-            return NullableFlagsBuilder.MergeDeclarationNullability(projector(layout), layout, flags)
+        let flags = NormalizeRelationshipFlags(layout, ReadNullableFlags(definition, definition))
+        let baseSymbol = if project is {} projector {
+            NullableFlagsBuilder.MergeDeclarationNullability(projector(layout), layout, flags)
+        } else {
+            SymbolFromLayoutFlags(actual, layout, flags)
         }
-        return SymbolFromLayoutFlags(actual, layout, flags)
+        return TupleElementNamesReader.ApplyNames(baseSymbol, definition, layout)
     }
 
     /// Reads the declared interfaces and their InterfaceImpl annotations.
@@ -562,10 +564,14 @@ shared class ClrNullability {
         return ClrSignatureMetadata
             .Interfaces(declaration)
             .Select(
-            (row(Layout Type, Flags ImmutableArray[uint8])) -> if project is {} projector {
-                NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, row.Flags)
-            } else {
-                SymbolFromLayoutFlags(row.Layout, row.Layout, row.Flags)
+            (row(Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])) -> {
+                let flags = NormalizeRelationshipFlags(row.Layout, row.Flags)
+                let symbol = if project is {} projector {
+                    NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, flags)
+                } else {
+                    SymbolFromLayoutFlags(row.Layout, row.Layout, flags)
+                }
+                return TupleElementNamesReader.ApplyNames(symbol, row.TupleNames, row.Layout)
             }
         )
             .ToImmutableArray()
@@ -583,13 +589,71 @@ shared class ClrNullability {
         return ClrSignatureMetadata
             .Constraints(parameter)
             .Select(
-            (row(Layout Type, Flags ImmutableArray[uint8])) -> if project is {} projector {
-                NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, row.Flags)
-            } else {
-                SymbolFromLayoutFlags(row.Layout, row.Layout, row.Flags)
+            (row(Layout Type, Flags ImmutableArray[uint8], TupleNames ImmutableArray[string?])) -> {
+                let symbol = if project is {} projector {
+                    NullableFlagsBuilder.MergeDeclarationNullability(projector(row.Layout), row.Layout, row.Flags)
+                } else {
+                    SymbolFromLayoutFlags(row.Layout, row.Layout, row.Flags)
+                }
+                return TupleElementNamesReader.ApplyNames(symbol, row.TupleNames, row.Layout)
             }
         )
             .ToImmutableArray()
+    }
+
+    /// Reads the declared nullability of a reflected generic parameter itself
+    /// (`class`, `class?`, `notnull`, `struct`).
+    /// @param parameter The reflected generic parameter.
+    /// @returns The annotated generic-parameter type symbol.
+    @NullabilityFunnel
+    internal func GetGenericParameterTypeSymbol(parameter Type) TypeSymbol {
+        let enclosing MemberInfo? = parameter.DeclaringMethod ?? cast[MemberInfo?](parameter.DeclaringType)
+        let flags = ReadNullableFlags(parameter, enclosing)
+        return SymbolFromFlagsOffset(parameter, flags, 0)
+    }
+
+    /// Returns whether a reflected generic parameter declares a `notnull`
+    /// constraint (flag `1` without `class`, `struct`, or type bounds).
+    @NullabilityFunnel
+    internal func HasNotNullConstraint(parameter Type) bool {
+        let attrs = parameter.GenericParameterAttributes & GenericParameterAttributes.SpecialConstraintMask
+        if (
+            attrs & (
+                GenericParameterAttributes.ReferenceTypeConstraint |
+                GenericParameterAttributes.NotNullableValueTypeConstraint
+            )
+        ) != 0 {
+            return false
+        }
+        let own = ReadRawNullableFlags(parameter, context: false)
+        if !own.IsDefault {
+            return ClassifyPosition(own, 0) == ClrNullabilityState.NotAnnotated
+        }
+        if parameter.GetGenericParameterConstraints().Length != 0 {
+            return false
+        }
+        if !ReadRawNullableFlags(parameter.Assembly, context: true).IsDefault {
+            return false
+        }
+        return GetGenericParameterTypeSymbol(parameter).ReferenceNullability == ReferenceNullabilityKind.NotNull
+    }
+
+    /// Normalizes the nullable flags of a base-type or implemented-interface
+    /// relationship so the root nominal type is always non-null (`1`), matching
+    /// both `csc` (which writes `0` for the unannotatable root of `[Nullable]`
+    /// on `TypeDef` / `InterfaceImpl`) and `gsc` (which writes `1`).
+    /// @param layout The open relationship layout type.
+    /// @param flags The raw flags read from the `TypeDef` or `InterfaceImpl` row.
+    /// @returns Flags with the root position normalized to `1`.
+    internal func NormalizeRelationshipFlags(layout Type, flags ImmutableArray[uint8]) ImmutableArray[uint8] {
+        if layout.IsValueType || layout.IsGenericParameter {
+            return flags
+        }
+        let expanded = ExpandNullableFlags(layout, flags, absentFill: uint8(0))
+        if expanded.IsDefaultOrEmpty || expanded[0] == NullableFlagsBuilder.NotAnnotated {
+            return expanded
+        }
+        return expanded.SetItem(0, NullableFlagsBuilder.NotAnnotated)
     }
 
     /// Reads the full `[NullableAttribute]` byte array for a declaration,
@@ -1651,6 +1715,7 @@ shared class ClrNullability {
             let attrs = switch provider {
                 case mi is MemberInfo: mi.GetCustomAttributesData()?.ToList()
                 case pi is ParameterInfo: pi.GetCustomAttributesData()?.ToList()
+                case asm is Assembly: asm.GetCustomAttributesData()?.ToList()
                 default: default(List[CustomAttributeData]?)
             }
             return if attrs == nil {

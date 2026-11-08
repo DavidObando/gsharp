@@ -86,7 +86,7 @@ stderr:
         func Cases() sequence[[]object] {
             // The ClrBaseline shape: `GoChan[T] : Channel[T]` installing the
             // inner channel's reader/writer through the base's protected setters.
-            yield[]object{"generic-derived-from-imported-generic-base", `
+            yield []object{"generic-derived-from-imported-generic-base", `
 package P
 import System
 import System.Threading.Channels
@@ -109,7 +109,7 @@ if asBase.Reader.TryRead(&got) {
 `, []string{"42"}}
             // The `this.`-qualified write is a different binder path than the bare
             // name; both must project the inherited member through the base.
-            yield[]object{"generic-derived-this-qualified-write", `
+            yield []object{"generic-derived-this-qualified-write", `
 package P
 import System
 import System.Threading.Channels
@@ -133,7 +133,7 @@ if asBase.Reader.TryRead(&got) {
             // The same generic definition instantiated at TWO different arguments in
             // one program: each construction must see its own T, not a shared
             // erasure.
-            yield[]object{"one-generic-definition-two-instantiations", `
+            yield []object{"one-generic-definition-two-instantiations", `
 package P
 import System
 import System.Threading.Channels
@@ -162,7 +162,7 @@ if ws.Reader.TryRead(&gotS) {
             // Reading the inherited member inside the generic derived type must
             // give `ChannelReader[T]`, not `ChannelReader[object]` — proved by
             // handing it to a T-typed local and round-tripping the value.
-            yield[]object{"inherited-member-read-inside-the-generic-derived-type", `
+            yield []object{"inherited-member-read-inside-the-generic-derived-type", `
 package P
 import System
 import System.Threading.Channels
@@ -191,7 +191,7 @@ Console.WriteLine(w.Echo(99).ToString())
 `, []string{"99"}}
             // ANTI-VACUITY (passes on `origin/main` too, since #3813): the
             // NON-generic derived class already worked and must keep working.
-            yield[]object{"non-generic-derived-from-constructed-imported-base-still-works", `
+            yield []object{"non-generic-derived-from-constructed-imported-base-still-works", `
 package P
 import System
 import System.Threading.Channels
@@ -222,7 +222,7 @@ if asBase.Reader.TryRead(&got) {
             // `ChannelReader[string]` must NOT be assignable to it inside
             // `Wrap[T]`. Before the fix both sides were `object`-erased, which is
             // exactly the unsound direction this could have been "fixed" into.
-            yield[]object{"wrong-instantiation-still-rejected", `
+            yield []object{"wrong-instantiation-still-rejected", `
 package P
 import System
 import System.Threading.Channels
@@ -237,7 +237,7 @@ Console.WriteLine("unreachable")
 `}
             // ANTI-VACUITY: `protected` stays out of reach from a NON-derived type
             // (the #3813 guard rail, re-asserted for the generic shape).
-            yield[]object{"protected-setter-not-reachable-from-outside", `
+            yield []object{"protected-setter-not-reachable-from-outside", `
 package P
 import System
 import System.Threading.Channels

@@ -203,7 +203,7 @@ Console.WriteLine(0)`
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"source_struct_class_and_interface_deconstruct", `import System
+            yield []object{"source_struct_class_and_interface_deconstruct", `import System
 struct Pair {
     var A int32
     var B int32
@@ -252,7 +252,7 @@ func Many(items []Pair, nodes []DerivedNode, iface IPair) int32 {
     return total + l + r
 }
 Console.WriteLine(One(Pair{A: 3, B: 4}) + Many([]Pair{Pair{A: 1, B: 2}, Pair{A: 5, B: 6}}, []DerivedNode{DerivedNode{X: 7, Y: 8}}, ImplPair{Left: 9, Right: 11}))`, "", "run", "78"}
-            yield[]object{"generic_source_box_and_interface_deconstruct", `import System
+            yield []object{"generic_source_box_and_interface_deconstruct", `import System
 class Box[T] {
     var Value T
     var Count int32
@@ -312,7 +312,7 @@ func Run(box Box[string], items []Box[string], iface IBox[string], derived Deriv
     return "${head}:${sum}:${ifaceText}:${ifaceCount}:${Constrained(derived)}:${d1 + d2 + g1 + g2}"
 }
 Console.WriteLine(Run(Box[string]{Value: "hi", Count: 2}, []Box[string]{Box[string]{Value: "abc", Count: 4}}, BoxImpl[string]{Item: "ok", Tag: 9}, DerivedBoxImpl{Item: "tp", Tag: 5}, DimImpl{}, DimGenericImpl{}))`, "", "run", "hi:9:ok:9:tp:5:45"}
-            yield[]object{"source_extension_deconstruct", `import System
+            yield []object{"source_extension_deconstruct", `import System
 import System.Collections.Generic
 struct Pair {
     var A int32
@@ -394,7 +394,7 @@ func Run(p Pair, items []Pair, h Holder[string], pt Point, kv KeyValuePair[int32
     return "${total}:${text}:${w}:${px + py + psum}:${k + v}:${na + nb}:${shapeSum}:${ox + oy + oz}"
 }
 Console.WriteLine(Run(Pair{A: 2, B: 3}, []Pair{Pair{A: 4, B: 5}}, Holder[string]{Item: "ext", Weight: 7}, Point(6, 8), KeyValuePair[int32, int32](10, 20), uint8(5), ShapeA{Value: 3}, []ShapeA{ShapeA{Value: 4}}, ShapeC{Value: 9}))`, "", "run", "14:ext:7:28:30:6:27:6"}
-            yield[]object{"byref_like_receiver_rejected_by_generic_extension_deconstruct", `import System
+            yield []object{"byref_like_receiver_rejected_by_generic_extension_deconstruct", `import System
 func (p T) Deconstruct[T](out a int32, out b int32) {
     a = 1
     b = 2
@@ -404,7 +404,7 @@ func Run(s Span[int32]) int32 {
     return 0
 }
 Console.WriteLine(Run(Span[int32].Empty))`, "GS0164@7:9", "reject", ""}
-            yield[]object{"scoped_receiver_deconstruct_output_cannot_escape", `import System
+            yield []object{"scoped_receiver_deconstruct_output_cannot_escape", `import System
 import System.Diagnostics.CodeAnalysis
 import System.Runtime.InteropServices
 interface IUnscopedDeconstruct[T] {
@@ -469,7 +469,7 @@ func LeakNarrowedConstrainedRefParam[T IUnscopedDeconstruct[int32]](ref obj obje
 let (topInstSpan, _) = UnscopedHolder{Value: 7}
 let (topExtSpan, _) = Span[int32].Empty
 Console.WriteLine(0)`, "GS0219@11:12 GS0219@15:12 GS0219@19:12 GS0219@42:12 GS0219@46:12 GS0219@52:16 GS0219@59:16 GS0219@63:6 GS0219@64:6", "reject", ""}
-            yield[]object{"overloaded_deconstruct_selects_matching_arity", `import System
+            yield []object{"overloaded_deconstruct_selects_matching_arity", `import System
 struct Multi {
     var A int32
     var B int32
@@ -510,7 +510,7 @@ func Run(m Multi, items []Multi, em ExtMulti) int32 {
     return a2 + b2 + a3 + b3 + c3 + loopSum + ex2 + ey2 + ex3 + ey3 + ez3
 }
 Console.WriteLine(Run(Multi{A: 1, B: 2, C: 3}, []Multi{Multi{A: 4, B: 5, C: 6}}, ExtMulti{X: 7, Y: 8, Z: 9}))`, "", "run", "63"}
-            yield[]object{"inaccessible_private_and_protected_deconstruct_reports_gs0164", `import System
+            yield []object{"inaccessible_private_and_protected_deconstruct_reports_gs0164", `import System
 struct Secret {
     var A int32
     var B int32
@@ -539,7 +539,7 @@ func Outside(s Secret, items []Secret, b ProtectedBase) int32 {
     return 0
 }
 Console.WriteLine(Outside(Secret{A: 1, B: 2}, []Secret{}, ProtectedBase{A: 3, B: 4}))`, "GS0164@23:9 GS0164@24:9 GS0164@26:9", "reject", ""}
-            yield[]object{"source_deconstruct_removes_narrowed_global_fact", `import System
+            yield []object{"source_deconstruct_removes_narrowed_global_fact", `import System
 class Box {
     var Value int32 = 5
 }
@@ -587,7 +587,7 @@ func LoopInstance(items []Pair) int32 {
 }
 var g Box? = Box{}
 Console.WriteLine(StatementInstance(Pair{A: 1, B: 2}) + StatementExtension(ExtPair{A: 1, B: 2}) + LoopInstance([]Pair{Pair{A: 1, B: 2}}))`, "GS0158@26:18 GS0158@33:18 GS0158@43:18", "reject", ""}
-            yield[]object{"source_deconstruct_in_loop_removes_narrowed_ref_parameter_fact", `import System
+            yield []object{"source_deconstruct_in_loop_removes_narrowed_ref_parameter_fact", `import System
 struct Pair {
     var A int32
     var B int32
@@ -619,7 +619,7 @@ func LoopBodyStatement(ref s string?, items []Pair) int32 {
 }
 var text string? = "abc"
 Console.WriteLine(ForRangePrelude(ref text, []Pair{Pair{A: 1, B: 2}}) + LoopBodyStatement(ref text, []Pair{Pair{A: 3, B: 4}}))`, "GS0158@18:14 GS0158@29:14", "reject", ""}
-            yield[]object{"control_data_struct_deconstruct_keeps_global_and_ref_facts", `import System
+            yield []object{"control_data_struct_deconstruct_keeps_global_and_ref_facts", `import System
 class Box {
     var Value int32 = 5
 }

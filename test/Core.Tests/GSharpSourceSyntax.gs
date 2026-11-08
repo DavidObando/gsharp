@@ -47,10 +47,10 @@ internal shared class GSharpSourceSyntax {
         for node in root.DescendantNodesAndSelf() {
             switch node {
                 case name is NameExpressionSyntax {
-                    yield(node, name.IdentifierToken.Text)
+                    yield (node, name.IdentifierToken.Text)
                 }
                 case call is CallExpressionSyntax when call.Callee == nil && call.ConversionTypeClause == nil {
-                    yield(node, call.Identifier.Text)
+                    yield (node, call.Identifier.Text)
                 }
             }
         }

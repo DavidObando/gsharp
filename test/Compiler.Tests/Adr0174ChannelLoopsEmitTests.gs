@@ -75,7 +75,7 @@ stderr:
         /// Gets the executable cases: each is (name, source, expected stdout lines).
         /// @returns The case data.
         func Cases() sequence[[]object] {
-            yield[]object{"for-in-drains-a-goroutine-producer", `package P
+            yield []object{"for-in-drains-a-goroutine-producer", `package P
 import System
 
 func produce(w out chan[int32], n int32) {
@@ -92,7 +92,7 @@ for v in ch {
     sum = sum + v
 }
 Console.WriteLine(sum)`, []string{"15"}}
-            yield[]object{"while-let-delivers-nil-elements", `package P
+            yield []object{"while-let-delivers-nil-elements", `package P
 import System
 
 let ch = chan[string?](3)
@@ -104,7 +104,7 @@ while let s = <-ch {
     Console.WriteLine(s ?? "<nil>")
 }
 Console.WriteLine("closed")`, []string{"a", "<nil>", "b", "closed"}}
-            yield[]object{"two-value-receive-forms", `package P
+            yield []object{"two-value-receive-forms", `package P
 import System
 
 let ch = chan[int32](2)
@@ -117,7 +117,7 @@ second, ok2 = <-ch
 ch.Close()
 let (zero, ok3) = <-ch
 Console.WriteLine("{0} {1} {2} {3} {4} {5}", first, ok1, second, ok2, zero, ok3)`, []string{"7 True 8 True 0 False"}}
-            yield[]object{"while-let-short-circuits-across-clauses", `package P
+            yield []object{"while-let-short-circuits-across-clauses", `package P
 import System
 
 let x = chan[int32](1)

@@ -108,6 +108,20 @@ No new diagnostic is introduced. The previously-emitted `GS0159` (member-not-fou
 
 ## Implementation notes
 
+The original frame-based implementation notes below are historical.
+[ADR-0208](0208-narrowing-as-flow-state-with-a-query.md) defines the current
+flow-state query and reachable-exit joins. Branches and bare blocks carry
+their normal exit states; writes on exiting paths do not reach the join.
+[ADR-0213](0213-narrowing-across-loops-and-backward-jumps.md) defines the
+single-bind region lower bound for loops and backward jumps.
+
+Equality of a null-conditional Boolean result with either Boolean literal
+proves a non-nil receiver on the equality path. Therefore
+`if value?.IsInterface != true { return }` narrows `value` afterwards.
+`if value?.IsInterface == false { return }` does not: nil falls through.
+Effects after the receiver read must preserve its storage for this proof
+to survive (#5849).
+
 - **Syntax** (Parser only — no new node kinds). `Parser.ParseBinaryExpression` already recognises the `is` keyword at relational precedence (tier 3). The same dispatch is extended: when the current token is `BangToken` and the next token is `IsKeyword`, the parser consumes both, parses the trailing type clause, and produces a `UnaryExpressionSyntax(BangToken, IsExpressionSyntax(left, isKeyword, typeClause))`. The bound representation of `x !is T` is therefore identical to `!(x is T)`, and every downstream path (binder, lowerer, emitter, printer, walker, rewriter) handles it without further change.
 - **Binder — `is` classifier**. `StatementBinder` gains a `TryClassifyTypeTestNarrowing(BoundExpression)` that recognises three shapes:
   - `BoundIsExpression(variable, T)` where the operand is a `BoundVariableExpression` whose `Variable` is a `LocalVariableSymbol` or `ParameterSymbol`. Yields then = `{ variable → T }`, else = `{}`.

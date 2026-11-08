@@ -47,13 +47,180 @@ specialized
         let (code, output) = fixture.TryCompile(`package NullLiteralAdapter
 interface Empty { }
 interface DefaultOnly { func Read() int32 { return 1 } }
-func Bad() {
+func Bad(flag bool, scoped handle managed[int32]) {
     let empty = adapt[Empty](nil)
-    let defaulted = adapt[DefaultOnly](nil)
+    let defaulted = adapt[DefaultOnly]((nil))
+    let cond = adapt[Empty](flag ? nil : nil)
+    let scopedVal = adapt[Empty](handle)
 }`, "null-literal-adapter", executable: false)
         Assert.NotEqual(0, code)
-        Assert.Equal(2, output.Split("error GS0606:").Length - 1)
+        Assert.Equal(4, output.Split("error GS0606:").Length - 1)
         Assert.Contains("null literal cannot be adapted", output)
+        Assert.Contains("scoped managed handle cannot be retained", output)
+    }
+
+    @Fact
+    func GenericUserInterfaceAndInheritedBaseSourcesAdaptPropertiesEventsAndConstraints() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`using System;
+namespace GenericConstraintAdapterContracts;
+public interface IProcessor<T>
+{
+    U Process<U>(U item) where U : IComparable<T>;
+    U ProcessStruct<U>(U item) where U : struct, IComparable<T>;
+}
+public sealed class StringProcessor
+{
+    public U Process<U>(U item) where U : IComparable<string> => item;
+    public U ProcessStruct<U>(U item) where U : struct, IComparable<string> => item;
+}
+public interface IFoo { }
+public class Base { }
+public interface IEchoTarget
+{
+    U Echo<U>(U item) where U : IFoo;
+}
+public sealed class StrongerSource
+{
+    public U Echo<U>(U item) where U : Base, IFoo => item;
+}
+public interface IImportedIndexerTarget
+{
+    string this[int index] { get; set; }
+}`, "GenericConstraintAdapterContracts")
+        let dll = fixture.Compile(`package GenericSourceAdapterMatrix
+import System
+import GenericConstraintAdapterContracts
+
+interface IBaseIndexer[T] {
+    prop this[i int32] T { get; set; }
+}
+interface IChildIndexer : IBaseIndexer[string] { }
+interface IUserIndexerTarget {
+    prop this[i int32] string { get; set; }
+}
+class ChildIndexerImpl : IChildIndexer {
+    var item string = "idx-init"
+    public prop this[i int32] string {
+        get -> item
+        set -> this.item = value
+    }
+}
+interface IUserProcessor[T] {
+    func Process[U IComparable[T]](item U) U;
+}
+class UserStringProcessor {
+    public func Process[U IComparable[string]](item U) U -> item
+}
+interface IReadSource[T] {
+    func Read[U IComparable[T]](tag T, item U) U;
+}
+interface IBothReadSource : IReadSource[int32], IReadSource[string] { }
+interface IBothReadTarget {
+    func Read[U IComparable[int32]](tag int32, item U) U;
+    func Read[U IComparable[string]](tag string, item U) U;
+}
+class BothReadImpl : IBothReadSource {
+    public func Read[U IComparable[int32]](tag int32, item U) U -> item
+    public func Read[U IComparable[string]](tag string, item U) U -> item
+}
+interface ISource[T] {
+    prop Value T { get; set; }
+    event Changed (T) -> void
+}
+interface ITarget {
+    prop Value string { get; set; }
+    event Changed (string) -> void
+}
+open class GenericBase[T] {
+    public var stored T
+    public event Changed (T) -> void
+    public func Echo(value T) T -> value
+    public func Emit(value T) { Changed?.Invoke(value) }
+}
+class DerivedSource : GenericBase[string] {
+    public prop Value string {
+        get -> stored
+        set -> this.stored = value
+    }
+}
+class InterfaceImpl : ISource[string] {
+    var stored string = "init"
+    public prop Value string {
+        get -> stored
+        set -> this.stored = value
+    }
+    public event Changed (string) -> void
+    public func Emit(value string) { Changed?.Invoke(value) }
+}
+
+func Main() {
+    let impl = InterfaceImpl()
+    let ifaceSource ISource[string] = impl
+    let fromIface = adapt[ITarget](ifaceSource)
+    var seenIface = ""
+    let ifaceHandler = (v string) -> { seenIface = v }
+    fromIface.Changed += ifaceHandler
+    fromIface.Value = "from-iface"
+    impl.Emit("evt-iface")
+    fromIface.Changed -= ifaceHandler
+    Console.WriteLine(fromIface.Value)
+    Console.WriteLine(seenIface)
+
+    let derived = DerivedSource{stored: "base"}
+    let fromDerived = adapt[ITarget](derived)
+    var seenDerived = ""
+    let derivedHandler = (v string) -> { seenDerived = v }
+    fromDerived.Changed += derivedHandler
+    fromDerived.Value = "from-derived"
+    derived.Emit("evt-derived")
+    fromDerived.Changed -= derivedHandler
+    Console.WriteLine(fromDerived.Value)
+    Console.WriteLine(seenDerived)
+
+    let processor = adapt[IProcessor[string]](StringProcessor())
+    Console.WriteLine(processor.Process[string]("constraint-ok"))
+
+    let userProcessor = adapt[IUserProcessor[string]](UserStringProcessor())
+    Console.WriteLine(userProcessor.Process[string]("user-constraint-ok"))
+
+    let childIdx IChildIndexer = ChildIndexerImpl()
+    let userIdx = adapt[IUserIndexerTarget](childIdx)
+    userIdx[0] = "user-idx-ok"
+    Console.WriteLine(userIdx[0])
+    let importedIdx = adapt[IImportedIndexerTarget](childIdx)
+    importedIdx[0] = "imported-idx-ok"
+    Console.WriteLine(importedIdx[0])
+
+    let bothSource IBothReadSource = BothReadImpl()
+    let bothTarget = adapt[IBothReadTarget](bothSource)
+    Console.WriteLine(bothTarget.Read[int32](1, 77))
+    Console.WriteLine(bothTarget.Read[string]("tag", "both-string-ok"))
+}`, "generic-source-adapter-matrix", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`from-iface
+evt-iface
+from-derived
+evt-derived
+constraint-ok
+user-constraint-ok
+user-idx-ok
+imported-idx-ok
+77
+both-string-ok
+`, fixture.Run(dll))
+
+        let (badCode, badOutput) = fixture.TryCompile(`package StrongerSourceRejected
+import GenericConstraintAdapterContracts
+interface IUserEchoTarget {
+    func Echo[U IFoo](item U) U;
+}
+func Bad(source StrongerSource) {
+    let importedAdapted = adapt[IEchoTarget](source)
+    let userAdapted = adapt[IUserEchoTarget](source)
+}`, "stronger-source-rejected", executable: false, "/r:" + contracts)
+        Assert.NotEqual(0, badCode)
+        Assert.Equal(2, badOutput.Split("error GS0606:").Length - 1)
     }
 
     @Fact
@@ -75,6 +242,48 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(`null
 1
+`, fixture.Run(dll))
+    }
+
+    @Fact
+    func OverriddenSourceMethodsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace OverrideAdapterContracts;
+public interface IReader { int Read(); }
+public interface IEcho { string Echo(string value); }`, "OverrideAdapterContracts")
+        let dll = fixture.Compile(`package OverrideAdapters
+import System
+import OverrideAdapterContracts
+interface Reader { func Read() int32; }
+interface Echo { func Echo(value string) string; }
+open class Base {
+    public open func Read() int32 -> 1
+}
+class Derived : Base {
+    public override func Read() int32 -> 2
+}
+open class GenericBase[T] {
+    public open func Echo(value T) T -> value
+}
+class GenericDerived : GenericBase[string] {
+    public override func Echo(value string) string -> "override:" + value
+}
+class Inherited : GenericBase[string] { }
+func Main() {
+    Console.WriteLine(adapt[Reader](Derived()).Read())
+    Console.WriteLine(adapt[IReader](Derived()).Read())
+    Console.WriteLine(adapt[Echo](GenericDerived()).Echo("local"))
+    Console.WriteLine(adapt[IEcho](GenericDerived()).Echo("imported"))
+    Console.WriteLine(adapt[Echo](Inherited()).Echo("inherited-local"))
+    Console.WriteLine(adapt[IEcho](Inherited()).Echo("inherited-imported"))
+}`, "override-adapters", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`2
+2
+override:local
+override:imported
+inherited-local
+inherited-imported
 `, fixture.Run(dll))
     }
 
@@ -126,6 +335,168 @@ func Bad() {
             Assert.NotEqual(0, code)
             Assert.Contains("error GS0606:", output)
         }
+    }
+
+    @Fact
+    func RedeclaredInheritedInterfaceMethodsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace InheritedAdapterContracts;
+public interface IReader { int Read(); }
+public interface IEcho { string Echo(string value); }`, "InheritedAdapterContracts")
+        let dll = fixture.Compile(`package InheritedAdapters
+import System
+import InheritedAdapterContracts
+interface Reader { func Read() int32; }
+interface IBaseReader { func Read() int32; }
+interface ILeftReader : IBaseReader { }
+interface IRightReader : IBaseReader { }
+interface IDiamondReader : ILeftReader, IRightReader { }
+class Source : IDiamondReader { public func Read() int32 -> 7 }
+interface IDerivedReader : IBaseReader { func Read() int32; }
+interface IBaseFirstReader : IBaseReader, IDerivedReader { }
+class RedeclaredSource : IBaseFirstReader {
+    func (IBaseReader) Read() int32 -> 11
+    func (IDerivedReader) Read() int32 -> 23
+}
+interface Echo { func Echo(value string) string; }
+interface IBaseEcho[T] { func Echo(value T) T; }
+interface IChildEcho[T] : IBaseEcho[T] { func Echo(value T) T; }
+interface IBaseFirstEcho[T] : IBaseEcho[T], IChildEcho[T] { }
+class GenericSource : IBaseFirstEcho[string] {
+    func (IBaseEcho[string]) Echo(value string) string -> "base:" + value
+    func (IChildEcho[string]) Echo(value string) string -> "child:" + value
+}
+interface ILeftEcho[T] : IBaseEcho[T] { }
+interface IRightEcho[T] : IBaseEcho[T] { }
+interface IDiamondEcho[T] : ILeftEcho[T], IRightEcho[T] { }
+class GenericDiamondSource : IDiamondEcho[string] {
+    public func Echo(value string) string -> "diamond:" + value
+}
+func Main() {
+    let source IDiamondReader = Source()
+    Console.WriteLine(adapt[Reader](source).Read())
+    Console.WriteLine(adapt[IReader](source).Read())
+    let redeclared IBaseFirstReader = RedeclaredSource()
+    let baseReader IBaseReader = redeclared
+    Console.WriteLine(baseReader.Read())
+    Console.WriteLine(adapt[Reader](redeclared).Read())
+    Console.WriteLine(adapt[IReader](redeclared).Read())
+    let derived IDerivedReader = redeclared
+    Console.WriteLine(adapt[Reader](derived).Read())
+    let generic IChildEcho[string] = GenericSource()
+    Console.WriteLine(adapt[Echo](generic).Echo("generic-local"))
+    Console.WriteLine(adapt[IEcho](generic).Echo("generic-imported"))
+    let baseFirst IBaseFirstEcho[string] = GenericSource()
+    Console.WriteLine(adapt[Echo](baseFirst).Echo("base-first-local"))
+    Console.WriteLine(adapt[IEcho](baseFirst).Echo("base-first-imported"))
+    let diamond IDiamondEcho[string] = GenericDiamondSource()
+    Console.WriteLine(adapt[Echo](diamond).Echo("local"))
+    Console.WriteLine(adapt[IEcho](diamond).Echo("imported"))
+}`, "inherited-adapters", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`7
+7
+11
+23
+23
+23
+child:generic-local
+child:generic-imported
+child:base-first-local
+child:base-first-imported
+diamond:local
+diamond:imported
+`, fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IndependentInheritedInterfaceSlotsRejectAdaptationWithDistinctImplementations(generic bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace IndependentSlotContracts;
+public interface IImportedReader { int Read(); }`, "IndependentSlotContracts")
+        let interfaces = if generic {
+            `interface IGeneric[T, Unused] { func Read() T; }
+interface IBoth : IGeneric[int32, string], IGeneric[int32, bool] { }
+class Source : IBoth {
+    func (IGeneric[int32, string]) Read() int32 -> 11
+    func (IGeneric[int32, bool]) Read() int32 -> 22
+}`
+        } else {
+            `interface ILeft { func Read() int32; }
+interface IRight { func Read() int32; }
+interface IBoth : ILeft, IRight { }
+class Source : IBoth {
+    func (ILeft) Read() int32 -> 11
+    func (IRight) Read() int32 -> 22
+}`
+        }
+        let left = if generic {
+            "IGeneric[int32, string]"
+        } else {
+            "ILeft"
+        }
+        let right = if generic {
+            "IGeneric[int32, bool]"
+        } else {
+            "IRight"
+        }
+        let prefix = `package IndependentSlotConsumer
+import System
+import IndependentSlotContracts
+interface Reader { func Read() int32; }
+` + interfaces
+        let control = fixture.Compile(prefix + `
+func Main() {
+    let both IBoth = Source()
+    let left ` + left + ` = both
+    let right ` + right + ` = both
+    Console.WriteLine(left.Read())
+    Console.WriteLine(right.Read())
+}`, "independent-slot-control", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(control, []string{contracts})
+        Assert.Equal("11\n22\n", fixture.Run(control))
+        let (code, output) = fixture.TryCompile(prefix + `
+func Main() {
+    let both IBoth = Source()
+    let local = adapt[Reader](both)
+    let imported = adapt[IImportedReader](both)
+}`, "independent-slot-adapter", executable: true, "/r:" + contracts)
+        Assert.NotEqual(0, code)
+        Assert.Equal(2, output.Split("error GS0606:").Length - 1)
+        Assert.Equal(2, output.Split("is ambiguous").Length - 1)
+    }
+
+    @Fact
+    func DistinctInheritedInterfaceReturnContractsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace DistinctReturnContracts;
+public interface IImportedNumber { int Read(); }
+public interface IImportedText { string Read(); }`, "DistinctReturnContracts")
+        let dll = fixture.Compile(`package DistinctInheritedReturns
+import System
+import DistinctReturnContracts
+interface INumber { func Read() int32; }
+interface IText { func Read() string; }
+interface IBoth : INumber, IText { }
+class Source : IBoth {
+    func (INumber) Read() int32 -> 31
+    func (IText) Read() string -> "text"
+}
+func Main() {
+    let both IBoth = Source()
+    Console.WriteLine(adapt[INumber](both).Read())
+    Console.WriteLine(adapt[IText](both).Read())
+    Console.WriteLine(adapt[IImportedNumber](both).Read())
+    Console.WriteLine(adapt[IImportedText](both).Read())
+}`, "distinct-inherited-returns", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`31
+text
+31
+text
+`, fixture.Run(dll))
     }
 
     @Fact
@@ -1004,6 +1375,57 @@ import RefPropertyAdapterContracts
             Assert.NotEqual(0, code)
             Assert.True(output.Contains("error GS0606:", StringComparison.Ordinal), output)
         }
+        let roslynContracts = fixture.CompileCSharp(`using System.Diagnostics.CodeAnalysis;
+namespace RoslynRefPropertyContracts;
+public interface IUnscopedPropAndIndexer
+{
+    [UnscopedRef] ref int RefValue { get; }
+    [UnscopedRef] ref int this[int i] { get; }
+}
+public interface IScopedPropAndIndexer
+{
+    ref int RefValue { get; }
+    ref int this[int i] { get; }
+}
+public struct UnscopedSource
+{
+    private int stored;
+    [UnscopedRef] public ref int RefValue => ref stored;
+    [UnscopedRef] public ref int this[int i] => ref stored;
+    [UnscopedRef] public int PlainValue => stored;
+    [UnscopedRef] public int this[int i, int j] => stored;
+}`, "RoslynRefPropertyContracts")
+        let roslynValid = fixture.Compile(`package RoslynRefPropertyAdapterValid
+import System.Diagnostics.CodeAnalysis
+import RoslynRefPropertyContracts
+interface ILocalUnscoped {
+    @UnscopedRef prop PlainValue int32 { get; }
+    @UnscopedRef prop this[i int32, j int32] int32 { get; }
+}
+public struct LocalUnscopedSource {
+    shared { var stored int32 }
+    @UnscopedRef public prop RefValue ref int32 -> LocalUnscopedSource.stored
+    @UnscopedRef public prop this[i int32] ref int32 {
+        get { return ref LocalUnscopedSource.stored }
+    }
+}
+public func AdaptToLocal(source UnscopedSource) ILocalUnscoped -> adapt[ILocalUnscoped](source)
+public func AdaptToImported(source UnscopedSource) IUnscopedPropAndIndexer -> adapt[IUnscopedPropAndIndexer](source)
+public func AdaptLocalSourceToImported(source LocalUnscopedSource) IUnscopedPropAndIndexer -> adapt[IUnscopedPropAndIndexer](source)
+`, "RoslynRefPropertyAdapterValid", executable: false, "/r:" + roslynContracts)
+        IlVerifier.Verify(roslynValid, []string{roslynContracts})
+        let (roslynBadCode, roslynBadOutput) = fixture.TryCompile(`package RoslynRefPropertyAdapterInvalid
+import RoslynRefPropertyContracts
+interface ILocalScoped {
+    prop PlainValue int32 { get; }
+    prop this[i int32, j int32] int32 { get; }
+}
+func Bad(source UnscopedSource) {
+    let a = adapt[ILocalScoped](source)
+    let b = adapt[IScopedPropAndIndexer](source)
+}`, "RoslynRefPropertyAdapterInvalid", executable: false, "/r:" + roslynContracts)
+        Assert.NotEqual(0, roslynBadCode)
+        Assert.True(roslynBadOutput.Split("error GS0606:").Length - 1 >= 2, roslynBadOutput)
     }
 
     @Fact

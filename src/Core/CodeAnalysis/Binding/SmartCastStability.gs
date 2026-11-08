@@ -232,6 +232,7 @@ internal shared class SmartCastStability {
         let narrowedUnderlying TypeSymbol? = switch targetType {
             case nullableTarget is NullableTypeSymbol: nullableTarget.UnderlyingType
             case platformTarget is PlatformTypeSymbol: platformTarget.UnderlyingType
+            case tpTarget is TypeParameterSymbol when !Binder.SatisfiesNotNullConstraint(tpTarget): tpTarget
             default: default(TypeSymbol?)
         }
         if target == nil || narrowedUnderlying == nil {
@@ -266,7 +267,7 @@ internal shared class SmartCastStability {
             return false
         }
         if declared == candidate {
-            return false
+            return declared is TypeParameterSymbol tp && !Binder.SatisfiesNotNullConstraint(tp)
         }
         // Stripping the nullable wrapper alone counts as narrowing
         // (`string? → string`).

@@ -50,6 +50,30 @@ trees, runs graph discovery, restore, build, pack, test, and output acceptance
 inside restricted command boundaries, and writes evidence outside both build
 trees. The work path must not exist before the run.
 
+Use `--migrated-tree` instead of `--tree` to certify a pre-migrated directory without Git metadata.
+`--freeze-migrated-tree TREE SNAPSHOT` creates a read-only snapshot for inspection.
+The caller and snapshot roots must be disjoint, including through symbolic-link aliases.
+The controller rejects overlapping roots before it changes either tree.
+The migrated-tree manifest records directory paths, including empty directories.
+Freezing preserves these directories in the snapshot and both derived stage trees.
+Verification rejects added, removed, or renamed directories in the caller or snapshot.
+Directory rows use `kind: "directory"`, size `0`, and an empty `sha256` value.
+Regular-file rows keep their existing schema and toolchain identities remain unchanged.
+Root directory rows use path `.`.
+`callerTreeSha256` binds the caller's original permission bits, independently of the normalized read-only snapshot identity.
+Caller verification detects `chmod` changes to files, directories, and the root.
+Archive extraction and digest failures return controlled errors, including truncated streams and decompression failures.
+All archive readers share the same error boundary, including delegated package verification.
+It handles encrypted or unsupported ZIP members, malformed UTF-8 names and hash files, and available codec failures.
+Certification writes `certified: false` in its failure report when the report directory is writable.
+Tar and ZIP readers validate the complete member tree before payload hashing or extraction.
+They reject duplicate paths, normalized aliases, case-folded or Unicode-equivalent aliases, and file/directory prefix collisions.
+The same validation applies to package caches, SDK resolution, payload verification, and bootstrap package rewriting.
+The caller archive and default toolchain archive snapshot must be disjoint, including through path aliases.
+Only explicit controller-owned, read-only snapshots support same-path reuse, and their hashes still require approval.
+Invalid member trees cannot replace an existing extracted package cache.
+Valid single paths with repeated separators remain supported, and valid package payload hashes retain their existing encoding.
+
 ```sh
 python3 build/selfhost-stage2.py \
   --tree <prepared-migrated-tree> \
@@ -78,10 +102,18 @@ layout fail identically under stage 1 and are excluded by name in
 `build/selfhost/stage2-env-bound-tests.json` until
 [#4873](https://github.com/DavidObando/gsharp/issues/4873) is fixed.
 
-The controller trusts only a pinned .NET layout and a run takes about eight
-hours, so it fits neither a hosted runner's toolchain nor its six-hour limit
+When `CS2GS_TEST_SOURCE_ROOT` selects a source tree, cs2gs stages local SDK and RID compiler packages in
+`AppContext.BaseDirectory/.cs2gs-local-feed`. Compilation and test projects read that feed through generated NuGet configuration.
+This directory is in the writable test workspace. The immutable source tree stays unchanged.
+Newest-version and exact-version discovery also search this staging feed.
+Existing source `.nugs` lookup and build-output precedence remain unchanged.
+
+The controller accepts a pinned .NET layout or a verified SDK archive through
+`--dotnet-archive ARCHIVE --dotnet-archive-sha256 SHA256`.
+Migration and certification can use separate jobs through `--migrated-tree`.
+CI workflow wiring remains deferred
 ([#4885](https://github.com/DavidObando/gsharp/issues/4885)); no CI workflow runs
-it. `python3 build/selfhost-stage2.py --probe-toolchain` reports in seconds
+the controller. `python3 build/selfhost-stage2.py --probe-toolchain` reports in seconds
 whether a machine qualifies. `build/verify-stage2-report.py` rejects a report
 unless it is a real `certified: true` with equal `GSharp.Core.dll` and `gsc.dll`
 and positive passing tests. Recorded runs on the 0.4.13xx line certified with

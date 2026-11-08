@@ -57,7 +57,7 @@ open class Issue4985NarrowedExpressionAssignmentTests {
 
     shared {
         func RejectedShapes() IEnumerable[[]object] {
-            yield[]object{"if_statement_argument_assignment", `import System
+            yield []object{"if_statement_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func ifs(p string?) int32 {
     var s = p
@@ -65,35 +65,35 @@ func ifs(p string?) int32 {
     return 0
 }
 Console.WriteLine(ifs("abc"))`, "GS0158", 5, 47}
-            yield[]object{"if_expression_argument_assignment", `import System
+            yield []object{"if_expression_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func ifx(p string?) int32 {
     var s = p
     return if s != nil { consume((s = nil), s.Length) } else { 0 }
 }
 Console.WriteLine(ifx("abc"))`, "GS0158", 5, 47}
-            yield[]object{"logical_and_argument_assignment", `import System
+            yield []object{"logical_and_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func andx(p string?) bool {
     var s = p
     return s != nil && consume((s = nil), s.Length) > 0
 }
 Console.WriteLine(andx("abc"))`, "GS0158", 5, 45}
-            yield[]object{"ternary_conditional_argument_assignment", `import System
+            yield []object{"ternary_conditional_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func tern(p string?) int32 {
     var s = p
     return s != nil ? consume((s = nil), s.Length) : 0
 }
 Console.WriteLine(tern("abc"))`, "GS0158", 5, 44}
-            yield[]object{"logical_or_argument_assignment", `import System
+            yield []object{"logical_or_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func orx(p string?) bool {
     var s = p
     return s == nil || consume((s = nil), s.Length) > 0
 }
 Console.WriteLine(orx("abc"))`, "GS0158", 5, 45}
-            yield[]object{"switch_expression_arm_argument_assignment", `import System
+            yield []object{"switch_expression_arm_argument_assignment", `import System
 func consume(a string?, n int32) int32 -> n
 func swx(p string?) int32 {
     var s = p
@@ -103,7 +103,7 @@ func swx(p string?) int32 {
     }
 }
 Console.WriteLine(swx("abc"))`, "GS0158", 6, 46}
-            yield[]object{"native_slice_index_assignment_invalidates_rhs", `import System
+            yield []object{"native_slice_index_assignment_invalidates_rhs", `import System
 func Run(backing []int32, seed string?) int32 {
     var s = seed
     let sp = span[int32](backing)
@@ -114,7 +114,7 @@ func Run(backing []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 6, 42}
-            yield[]object{"native_slice_compound_index_assignment_invalidates_rhs", `import System
+            yield []object{"native_slice_compound_index_assignment_invalidates_rhs", `import System
 func Run(backing []int32, seed string?) int32 {
     var s = seed
     let sp = span[int32](backing)
@@ -125,7 +125,7 @@ func Run(backing []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 6, 43}
-            yield[]object{"from_end_index_assignment_invalidates_rhs", `import System
+            yield []object{"from_end_index_assignment_invalidates_rhs", `import System
 func Run(arr []int32, seed string?) int32 {
     var s = seed
     if s != nil {
@@ -135,7 +135,7 @@ func Run(arr []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 5, 46}
-            yield[]object{"parenthesized_from_end_native_slice_assignment_invalidates_rhs", `import System
+            yield []object{"parenthesized_from_end_native_slice_assignment_invalidates_rhs", `import System
 func Run(backing []int32, seed string?) int32 {
     var s = seed
     let sp = span[int32](backing)
@@ -146,7 +146,7 @@ func Run(backing []int32, seed string?) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, "abc"))`, "GS0158", 6, 47}
-            yield[]object{"imported_list_subclass_with_effectful_length_compound_from_end_invalidates_rhs", `import System
+            yield []object{"imported_list_subclass_with_effectful_length_compound_from_end_invalidates_rhs", `import System
 import GSharp.Core.Tests.CodeAnalysis.Binding
 class Box {
     let Text string? = "abcd"
@@ -159,7 +159,7 @@ func Run(xs EffectfulLengthList4985, b Box) int32 {
     return 0
 }
 Console.WriteLine(Run(EffectfulLengthList4985{}, Box{}))`, "GS0158", 8, 26}
-            yield[]object{"imported_list_subclass_with_effectful_length_plain_from_end_invalidates_rhs", `import System
+            yield []object{"imported_list_subclass_with_effectful_length_plain_from_end_invalidates_rhs", `import System
 import GSharp.Core.Tests.CodeAnalysis.Binding
 class Box {
     let Text string? = "abcd"
@@ -175,7 +175,7 @@ Console.WriteLine(Run(EffectfulLengthList4985{}, Box{}))`, "GS0158", 8, 25}
         }
 
         func AcceptedControlShapes() IEnumerable[[]object] {
-            yield[]object{"read_before_assignment_in_if_statement", `import System
+            yield []object{"read_before_assignment_in_if_statement", `import System
 func consume(n int32, a string?) int32 -> n
 func ifs(p string?) int32 {
     var s = p
@@ -183,28 +183,28 @@ func ifs(p string?) int32 {
     return 0
 }
 Console.WriteLine(ifs("abc"))`, "3"}
-            yield[]object{"read_before_assignment_in_if_expression", `import System
+            yield []object{"read_before_assignment_in_if_expression", `import System
 func consume(n int32, a string?) int32 -> n
 func ifx(p string?) int32 {
     var s = p
     return if s != nil { consume(s.Length, (s = nil)) } else { 0 }
 }
 Console.WriteLine(ifx("abc"))`, "3"}
-            yield[]object{"read_before_assignment_in_logical_and", `import System
+            yield []object{"read_before_assignment_in_logical_and", `import System
 func consume(n int32, a string?) int32 -> n
 func andx(p string?) bool {
     var s = p
     return s != nil && consume(s.Length, (s = nil)) == 3
 }
 Console.WriteLine(andx("abc"))`, "True"}
-            yield[]object{"read_before_assignment_in_ternary", `import System
+            yield []object{"read_before_assignment_in_ternary", `import System
 func consume(n int32, a string?) int32 -> n
 func tern(p string?) int32 {
     var s = p
     return s != nil ? consume(s.Length, (s = nil)) : 0
 }
 Console.WriteLine(tern("abc"))`, "3"}
-            yield[]object{"pure_from_end_index_assignment_preserves_member_narrowing_for_rhs", `import System
+            yield []object{"pure_from_end_index_assignment_preserves_member_narrowing_for_rhs", `import System
 class Box {
     let Text string? = "abcd"
 }
@@ -216,7 +216,7 @@ func Run(arr []int32, b Box) int32 {
     return 0
 }
 Console.WriteLine(Run([]int32{1, 2}, Box{}))`, "4"}
-            yield[]object{
+            yield []object{
                 "parenthesized_from_end_native_slice_and_array_assignment_preserves_member_narrowing_for_rhs",
                 `import System
 class Box {
@@ -245,7 +245,7 @@ func Run(backing []int32, arr []int32, b Box) int32 {
 Console.WriteLine(Run([]int32{1, 2}, []int32{10, 20}, Box{}))`,
                 "22"
             }
-            yield[]object{"plain_array_and_list_compound_from_end_preserves_member_narrowing_for_rhs", `import System
+            yield []object{"plain_array_and_list_compound_from_end_preserves_member_narrowing_for_rhs", `import System
 import System.Collections.Generic
 class Box {
     let Text string? = "abcd"

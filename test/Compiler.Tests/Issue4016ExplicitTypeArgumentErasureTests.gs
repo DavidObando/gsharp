@@ -207,7 +207,7 @@ public static class Probes
         func BindingCases() sequence[[]object] {
             // RED BEFORE. The issue's own repro: the map spelling at an inferred
             // slot with explicit type arguments.
-            yield[]object{"a-map-of-a-derived-class-reaches-an-inferred-dictionary-slot", `package P
+            yield []object{"a-map-of-a-derived-class-reaches-an-inferred-dictionary-slot", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -220,7 +220,7 @@ entries["k"] = Derived{}
 Console.WriteLine(Probes.CountAnyMap[string, Derived](entries))`, []string{"anymap:1"}}
             // RED BEFORE. The KEY position fails for the same reason as the value
             // position, so both are pinned.
-            yield[]object{"a-derived-class-in-the-key-position-reaches-the-slot-too", `package P
+            yield []object{"a-derived-class-in-the-key-position-reaches-the-slot-too", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -232,7 +232,7 @@ let entries = map[Derived, string]{}
 Console.WriteLine(Probes.CountAnyMap[Derived, string](entries))`, []string{"anymap:0"}}
             // RED BEFORE, and the row that shows this is not `map`-specific: the
             // issue's title says `map`, but a slice fails identically.
-            yield[]object{"a-slice-of-a-derived-class-reaches-an-inferred-array-slot", `package P
+            yield []object{"a-slice-of-a-derived-class-reaches-an-inferred-array-slot", `package P
 import System
 import Interop
 
@@ -242,7 +242,7 @@ class Derived : ImportedBase {
 let items = []Derived{Derived{}}
 Console.WriteLine(Probes.CountArray[Derived](items))`, []string{"arr:1"}}
             // RED BEFORE. The fixed-length array spelling, same mechanism.
-            yield[]object{"a-fixed-length-array-of-a-derived-class-reaches-the-same-slot", `package P
+            yield []object{"a-fixed-length-array-of-a-derived-class-reaches-the-same-slot", `package P
 import System
 import Interop
 
@@ -254,7 +254,7 @@ Console.WriteLine(Probes.CountArray[Derived](items))`, []string{"arr:2"}}
             // GREEN BEFORE. The `List` spelling the issue contrasts against — the
             // row the fix RE-ROUTES (its parameter now closes over `ImportedBase`
             // rather than `object`), so it is pinned with IL verification.
-            yield[]object{"the-list-spelling-that-already-bound-still-binds-and-verifies", `package P
+            yield []object{"the-list-spelling-that-already-bound-still-binds-and-verifies", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -282,7 +282,7 @@ Console.WriteLine(Probes.CountAny[Derived](items))`, []string{"any:1"}}
             // `MemberLookup.UnifyForMethodTypeArgs` the `map` arm it never had. Its
             // row lives in `Issue4026ExplicitTypeArgumentSoundnessTests`; the slice
             // spelling stays here because it is the one THIS issue is about.
-            yield[]object{"inferred-type-arguments-bound-before-and-still-do", `package P
+            yield []object{"inferred-type-arguments-bound-before-and-still-do", `package P
 import System
 import Interop
 
@@ -294,7 +294,7 @@ Console.WriteLine(Probes.CountArray(items))`, []string{"arr:1"}}
             // GREEN BEFORE. A same-compilation class with NO imported base erases
             // to `object` on both sides already — the control that disproves the
             // issue's "a same-compilation class" framing.
-            yield[]object{"a-class-with-no-imported-base-bound-before-and-still-does", `package P
+            yield []object{"a-class-with-no-imported-base-bound-before-and-still-does", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -309,7 +309,7 @@ let items = []Standalone{Standalone{}}
 Console.WriteLine(Probes.CountArray[Standalone](items))`, []string{"anymap:0", "arr:1"}}
             // GREEN BEFORE. Primitives are unaffected: they have a real CLR type
             // and never reached the placeholder branch at all.
-            yield[]object{"primitive-type-arguments-are-untouched", `package P
+            yield []object{"primitive-type-arguments-are-untouched", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -322,7 +322,7 @@ Console.WriteLine(Probes.CountAnyMap[string, int32](entries))`, []string{"anymap
         /// surrogate still does not satisfy a genuine (non-erased) slot.
         /// @returns Case name, G# source, expected diagnostic id.
         func StillRejectedCases() sequence[[]object] {
-            yield[]object{"a-derived-map-still-does-not-satisfy-a-genuine-base-dictionary", `package P
+            yield []object{"a-derived-map-still-does-not-satisfy-a-genuine-base-dictionary", `package P
 import System
 import System.Collections.Generic
 import Interop
@@ -332,7 +332,7 @@ class Derived : ImportedBase {
 
 let entries = map[string, Derived]{}
 Console.WriteLine(Probes.TakeBaseMap(entries))`, "GS0159"}
-            yield[]object{"a-derived-list-still-does-not-satisfy-a-genuine-base-list", `package P
+            yield []object{"a-derived-list-still-does-not-satisfy-a-genuine-base-list", `package P
 import System
 import System.Collections.Generic
 import Interop

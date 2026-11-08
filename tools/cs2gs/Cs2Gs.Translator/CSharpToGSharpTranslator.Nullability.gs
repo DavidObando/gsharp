@@ -35,6 +35,34 @@ partial class CSharpToGSharpTranslator {
 
         private var repositoryCompilationsByIdentity Dictionary[AssemblyIdentity, CSharpCompilation]?
         private var repositorySharedDocumentPaths HashSet[string]?
+        private var refStorageSlots Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]]?
+        private var frozenRefStorageContracts Dictionary[ISymbol, HashSet[int32]]?
+        private let linkedRefStoragePromotions Dictionary[ISymbol, HashSet[int32]] = Dictionary[
+            ISymbol,
+            HashSet[int32]
+        ](SymbolEqualityComparer.Default)
+
+        private class RefStorageSlot {
+            let Symbol ISymbol
+            let Depth int32
+            var Parent RefStorageSlot? = nil
+            var EvaluatingArrays bool = false
+            let Members List[RefStorageSlot] = List[RefStorageSlot]()
+
+            init(symbol ISymbol, depth int32) {
+                this.Symbol = symbol
+                this.Depth = depth
+                this.Members.Add(this)
+            }
+
+            func Root() RefStorageSlot {
+                var root = this
+                while root.Parent != nil {
+                    root = root.Parent!!
+                }
+                return root
+            }
+        }
 
         // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
         // backing `EmittedAssemblyIdentities()` below — see that method for
@@ -1134,11 +1162,22 @@ partial class CSharpToGSharpTranslator {
         // element type and its element keeps the `!!`, because there the
         // compiler really did check the write (CS8601).
         private func PromoteArrayElementIfGeneratedNullElement(type GTypeReference?, symbol ISymbol) GTypeReference? {
-            if !(type is ArrayTypeReference{ElementType: {IsNullable: false} element} array) ||
-                (!this.IsGeneratedArrayElementPromotedSink(symbol) && !this.IsWidenedArrayElementStorage(symbol)) {
+            let declared = ObliviousNullabilityAnalyzer.SymbolValueType(symbol)
+            if type == nil || declared is not IArrayTypeSymbol {
                 return type
             }
-            return ArrayTypeReference(MakeNullable(element), array.Rank){IsNullable = array.IsNullable}
+            let positions = HashSet[string](StringComparer.Ordinal)
+            var current ITypeSymbol = declared
+            var position = "0"
+            while current is IArrayTypeSymbol array {
+                if this.IsWidenedArrayElementStorage(symbol, position) ||
+                    (position == "0" && this.IsGeneratedArrayElementPromotedSink(symbol)) {
+                    positions.Add(position)
+                }
+                current = array.ElementType
+                position = JoinPosition(position, "0")
+            }
+            return PromoteNestedPositions(type, declared, positions, "")
         }
 
         private func ResolveArrayStorageSink(value ExpressionSyntax?)(Sink ISymbol?, ElementPosition string) {
@@ -2083,7 +2122,7 @@ partial class CSharpToGSharpTranslator {
             return named
         }
 
-        private func ShouldPromoteToNullableReference(symbol ISymbol?) bool {
+        private func ShouldPromoteToNullableReference(symbol ISymbol?, checkRefStorage bool = true) bool {
             let declared ITypeSymbol? = PromotableDeclaredType(symbol)
             if !(declared != nil && declared.IsReferenceType == true) ||
                 declared.NullableAnnotation == Microsoft
@@ -2100,6 +2139,12 @@ partial class CSharpToGSharpTranslator {
             // reference type the type argument substitutes, so a maybe-null
             // value stored into it keeps its bridge.
             if PromotableDeclaredType(symbol?.OriginalDefinition)?.IsReferenceType != true {
+                return false
+            }
+            if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
+                return this.RefStorageIsNullable(slot, includeArrays: true)
+            }
+            if this.RefStorageContractIsFrozen(symbol, 0) {
                 return false
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
@@ -2301,16 +2346,531 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
+            let symbol = if reference.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declaration} {
+                model.GetDeclaredSymbol(declaration)
+            } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
+                model.GetEnclosingSymbol(reference.SpanStart)
+            } else {
+                default(ISymbol?)
+            }
+            let normalized = if symbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                cast[ISymbol](property)
+            } else {
+                symbol
+            }
+            return if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(normalized) {
+                normalized?.OriginalDefinition
+            } else {
+                default(ISymbol?)
+            }
+        }
+
+        private func GetRefStorageSlot(symbol ISymbol, depth int32) RefStorageSlot {
+            let identity = RefStorageIdentity(symbol)
+            let slots = this.refStorageSlots!!
+            if !slots.TryGetValue(identity, out var positions) {
+                positions = Dictionary[int32, RefStorageSlot]()
+                slots.Add(identity, positions)
+            }
+            if !positions.TryGetValue(depth, out var slot) {
+                slot = RefStorageSlot(identity, depth)
+                positions.Add(depth, slot)
+            }
+            return slot
+        }
+
+        private func ConnectRefStorage(target RefStorageSlot, expression ExpressionSyntax, model SemanticModel) {
+            let storage = UnwrapParenthesesAndSuppressions(expression)!!
+            if storage is RefExpressionSyntax nested {
+                this.ConnectRefStorage(target, nested.Expression, model)
+                return
+            }
+            if storage is ConditionalExpressionSyntax conditional {
+                this.ConnectRefStorage(target, conditional.WhenTrue, model)
+                this.ConnectRefStorage(target, conditional.WhenFalse, model)
+                return
+            }
+            var receiver ExpressionSyntax = storage
+            var depth = 0
+            while receiver is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
+                .Type is IArrayTypeSymbol {
+                depth++
+                receiver = UnwrapParenthesesAndSuppressions(access.Expression)!!
+            }
+            var source = if receiver is DeclarationExpressionSyntax{
+                Designation: SingleVariableDesignationSyntax designation
+            } {
+                model.GetDeclaredSymbol(designation)
+            } else {
+                model.GetSymbolInfo(receiver).Symbol
+            }
+            if source is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
+                source = property
+            }
+            if source == nil || source is IDiscardSymbol {
+                return
+            }
+            if receiver is InvocationExpressionSyntax{
+                Expression: MemberAccessExpressionSyntax{Name: IdentifierNameSyntax} access
+            } &&
+                model
+                .GetTypeInfo(access.Expression).Type is INamedTypeSymbol receiverType {
+                source = this.RefStorageIdentity(source, receiverType)
+            }
+            if depth > 0 {
+                source = this.GetArrayStorageOwner(
+                    source,
+                    HashSet[ISymbol](SymbolEqualityComparer.Default),
+                    preserveSubstitution: true
+                ) ??
+                    source
+            }
+            this.JoinRefStorageSlots(target, this.GetRefStorageSlot(source!!, depth))
+            var type = this.RefStorageSlotType(target)
+            var nestedDepth = 0
+            while type is IArrayTypeSymbol array {
+                nestedDepth++
+                this.JoinRefStorageSlots(
+                    this.GetRefStorageSlot(target.Symbol, target.Depth + nestedDepth),
+                    this.GetRefStorageSlot(source!!, depth + nestedDepth)
+                )
+                type = array.ElementType
+            }
+        }
+
+        private func JoinRefStorageSlots(first RefStorageSlot, second RefStorageSlot) {
+            let left = first.Root()
+            let right = second.Root()
+            if object.ReferenceEquals(left, right) {
+                return
+            }
+            let larger = if left.Members.Count >= right.Members.Count {
+                left
+            } else {
+                right
+            }
+            let smaller = if object.ReferenceEquals(larger, left) {
+                right
+            } else {
+                left
+            }
+            smaller.Parent = larger
+            larger.Members.AddRange(smaller.Members)
+            smaller.Members.Clear()
+        }
+
+        private func EnsureRefStorageSlots() {
+            if this.refStorageSlots != nil {
+                return
+            }
+            this.refStorageSlots = Dictionary[ISymbol, Dictionary[int32, RefStorageSlot]](
+                SymbolEqualityComparer.IncludeNullability
+            )
+            // Constructed slots retain nullable arguments. Declaration constraints use the original symbol.
+            this.frozenRefStorageContracts = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
+            for tree in this.context.Compilation.SyntaxTrees {
+                let model = this.context.Compilation.GetSemanticModel(tree)
+                using let modelScope = this.context.UseSemanticModelFor(tree)
+                for reference in tree.GetRoot().DescendantNodes().OfType[RefExpressionSyntax]() {
+                    if this.RefStorageDestination(reference, model) is {} destination {
+                        this.ConnectRefStorage(this.GetRefStorageSlot(destination, 0), reference.Expression, model)
+                    }
+                }
+                for argument in tree.GetRoot().DescendantNodes().OfType[ArgumentSyntax]() {
+                    if (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)) && model.GetOperation(
+                        argument
+                    ) is IArgumentOperation{Parameter: {RefKind: RefKind.Ref} parameter} {
+                        let storageType = ObliviousNullabilityAnalyzer.SymbolValueType(
+                            model.GetSymbolInfo(argument.Expression).Symbol
+                        ) ??
+                            model
+                            .GetTypeInfo(argument.Expression).Type
+                        if storageType?.IsReferenceType == true &&
+                            storageType?.NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .Annotated &&
+                            parameter
+                            .Type
+                            .NullableAnnotation == Microsoft
+                            .CodeAnalysis
+                            .NullableAnnotation
+                            .NotAnnotated {
+                            continue
+                        }
+                        this.ConnectRefStorage(this.GetRefStorageSlot(parameter, 0), argument.Expression, model)
+                    }
+                }
+            }
+            this.FreezeRefStorageContracts()
+            this.ReconcileLinkedRefStorageContracts()
+        }
+
+        private func ReconcileLinkedRefStorageContracts() {
+            if this.context.RepositoryCompilations is not{Count: > 1} repository {
+                return
+            }
+            this.EnsureRepositorySharedDocumentPaths()
+            if this.repositorySharedDocumentPaths!!.Count == 0 {
+                return
+            }
+            let visitors = List[DeclarationVisitor](){this}
+            for owner in repository {
+                if owner == this.context.Compilation {
+                    continue
+                }
+                let tree = owner.SyntaxTrees.FirstOrDefault(
+                    (candidate SyntaxTree) -> this.repositorySharedDocumentPaths!!.Contains(candidate.FilePath)
+                )
+                if tree == nil {
+                    continue
+                }
+                // Foreign visitors compute local constraints without repository recursion.
+                let ownerContext = TranslationContext(owner, owner.GetSemanticModel(tree), tree.FilePath)
+                let ownerVisitor = DeclarationVisitor(
+                    ownerContext,
+                    this.typeMapper,
+                    subclassedBases: nil,
+                    staticUsingTargets: nil,
+                    entryPoint: nil,
+                    keptTopLevelProgram: nil,
+                    partialTypeParts: nil,
+                    CSharpToGSharpTranslator.GetOrCollectOwnedExtensions(owner),
+                    this.nameAllocator,
+                    widenObliviousReferenceFields: this.widenObliviousReferenceFields
+                )
+                ownerVisitor.EnsureRefStorageSlots()
+                visitors.Add(ownerVisitor)
+            }
+            var changed bool
+            do {
+                changed = false
+                for source in visitors {
+                    let promotions = Dictionary[ISymbol, HashSet[int32]](SymbolEqualityComparer.Default)
+                    for slots in source.refStorageSlots!!.Values {
+                        for slot in slots.Values {
+                            if source.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
+                                ?.IsReferenceType != true {
+                                continue
+                            }
+                            let tree = slot.Symbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree
+                            if tree == nil || !source.context.Compilation.ContainsSyntaxTree(tree) {
+                                continue
+                            }
+                            using let modelScope = source.context.UseSemanticModelFor(tree)
+                            if source.RefStorageIsNullable(slot, includeArrays: true) {
+                                if !promotions.TryGetValue(slot.Symbol.OriginalDefinition, out var positions) {
+                                    positions = HashSet[int32]()
+                                    promotions.Add(slot.Symbol.OriginalDefinition, positions)
+                                }
+                                positions.Add(slot.Depth)
+                            }
+                        }
+                    }
+                    let decisions = source.frozenRefStorageContracts!!
+                        .Select(
+                        (contract KeyValuePair[ISymbol, HashSet[int32]]) -> (
+                            Symbol: contract.Key,
+                            Positions: contract.Value,
+                            Frozen: true
+                        )
+                    )
+                        .Concat(
+                        promotions.Select(
+                            (promotion KeyValuePair[ISymbol, HashSet[int32]]) -> (
+                                Symbol: promotion.Key,
+                                Positions: promotion.Value,
+                                Frozen: false
+                            )
+                        )
+                    )
+                        .ToList()
+                    for contract in decisions {
+                        for reference in contract.Symbol.DeclaringSyntaxReferences {
+                            if !this.repositorySharedDocumentPaths!!.Contains(reference.SyntaxTree.FilePath) {
+                                continue
+                            }
+                            let declaration = reference.GetSyntax()
+                            for target in visitors {
+                                if target == source {
+                                    continue
+                                }
+                                let tree = target
+                                    .context
+                                    .Compilation
+                                    .SyntaxTrees
+                                    .FirstOrDefault(
+                                    (candidate SyntaxTree) -> string.Equals(
+                                        candidate.FilePath,
+                                        reference.SyntaxTree.FilePath,
+                                        StringComparison.OrdinalIgnoreCase
+                                    )
+                                )
+                                if tree == nil || tree.GetRoot().FullSpan.End < reference.Span.End {
+                                    continue
+                                }
+                                let node = tree.GetRoot().FindNode(reference.Span)
+                                if node.RawKind != declaration.RawKind || node.ToString() != declaration.ToString() {
+                                    continue
+                                }
+                                let symbol = target
+                                    .context
+                                    .Compilation
+                                    .GetSemanticModel(tree)
+                                    .GetDeclaredSymbol(node)
+                                    ?.OriginalDefinition
+                                if symbol == nil {
+                                    continue
+                                }
+                                let decisions = if contract.Frozen {
+                                    target.frozenRefStorageContracts!!
+                                } else {
+                                    target.linkedRefStoragePromotions
+                                }
+                                if !decisions.TryGetValue(symbol, out var positions) {
+                                    positions = HashSet[int32]()
+                                    decisions.Add(symbol, positions)
+                                }
+                                for depth in contract.Positions {
+                                    changed |= positions.Add(depth)
+                                    if !contract.Frozen {
+                                        target.GetRefStorageSlot(symbol, depth)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for visitor in visitors {
+                    visitor.FreezeRefStorageContracts()
+                }
+            } while changed
+        }
+
+        private func TryGetRefStorageSlot(symbol ISymbol?, depth int32) RefStorageSlot? {
+            if symbol == nil {
+                return nil
+            }
+            this.EnsureRefStorageSlots()
+            return if this.refStorageSlots!!.TryGetValue(RefStorageIdentity(symbol), out var positions) &&
+                positions.TryGetValue(depth, out var slot) {
+                slot
+            } else {
+                default(RefStorageSlot?)
+            }
+        }
+
+        private func RefStoragePositionType(symbol ISymbol, position int32) ITypeSymbol? {
+            var type = ObliviousNullabilityAnalyzer.SymbolValueType(symbol)
+            for var depth = 0; depth < position; depth++ {
+                type = (type as IArrayTypeSymbol)?.ElementType
+            }
+            return type
+        }
+
+        private func RefStorageSlotType(slot RefStorageSlot) ITypeSymbol? ->
+        this.RefStoragePositionType(slot.Symbol, slot.Depth)
+
+        private func RefStorageIdentity(symbol ISymbol, receiver INamedTypeSymbol? = nil) ISymbol {
+            if symbol is IMethodSymbol{ReducedFrom: {} original} method {
+                if method.IsGenericMethod {
+                    let arguments = Enumerable
+                        .Range(0, method.Arity)
+                        .Select((index int32) -> this.GetEffectiveMethodTypeArgument(method, index))
+                        .ToArray()
+                    let definition = original.ConstructedFrom
+                    if receiver != nil {
+                        for var index = 0; index < arguments.Length; index++ {
+                            if this.TryGetProjectedTypeArgument(
+                                definition.Parameters[0].Type,
+                                receiver,
+                                definition.TypeParameters[index],
+                                this.context.Compilation,
+                                out var inferred,
+                                out var conflict,
+                                includeAllArguments: true
+                            ) &&
+                                !conflict &&
+                                inferred != nil &&
+                                !(
+                                inferred.NullableAnnotation == Microsoft
+                                    .CodeAnalysis
+                                    .NullableAnnotation
+                                    .Annotated &&
+                                    NullableTypeArgumentViolatesTranslatedConstraints(definition.TypeParameters[index])
+                            ) {
+                                arguments[index] = inferred
+                            }
+                        }
+                    }
+                    return original.ConstructedFrom.Construct(
+                        arguments.ToImmutableArray(),
+                        arguments.Select((argument ITypeSymbol) -> argument.NullableAnnotation).ToImmutableArray()
+                    )
+                }
+                return original
+            }
+            return symbol
+        }
+
+        private func RefStorageContractIsFrozen(symbol ISymbol?, depth int32) bool -> symbol != nil &&
+            this
+            .frozenRefStorageContracts
+            ?.TryGetValue(RefStorageIdentity(symbol).OriginalDefinition, out var positions) == true &&
+            positions.Contains(depth)
+
+        private func RefStorageSlotIsFixed(slot RefStorageSlot) bool {
+            let type = this.RefStorageSlotType(slot)
+            // A nullable substitution already admits nil. Freezing prevents only new nullable layers.
+            if type?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return false
+            }
+            if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) || this.RefStoragePositionType(
+                slot.Symbol.OriginalDefinition,
+                slot.Depth
+            )
+                ?.IsReferenceType != true {
+                return true
+            }
+            if type?.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated {
+                return false
+            }
+            if slot.Depth == 0 {
+                return !this.ShouldPromoteToNullableReference(slot.Symbol, checkRefStorage: false)
+            }
+            if slot.Symbol is ILocalSymbol local &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{
+                Parent: VariableDeclarationSyntax{Type: {IsVar: true}}
+            } declaration &&
+                !this
+                .context
+                .Compilation
+                .GetSemanticModel(declaration.SyntaxTree)
+                .GetNullableContext(declaration.SpanStart)
+                .HasFlag(NullableContext.AnnotationsEnabled) {
+                return false
+            }
+            return !(slot.Depth == 1 && this.IsGeneratedArrayElementPromotedSink(slot.Symbol)) &&
+                !this
+                .IsWidenedArrayElementStorageCore(
+                slot.Symbol,
+                string.Join(".", Enumerable.Repeat("0", slot.Depth)),
+                checkRefStorage: false
+            )
+        }
+
+        private func FreezeRefStorageContracts() {
+            // A fixed argument can freeze the generic declaration before any document emits it.
+            let roots = this.refStorageSlots!!
+                .Values
+                .SelectMany((positions Dictionary[int32, RefStorageSlot]) -> positions.Values)
+                .Select((slot RefStorageSlot) -> slot.Root())
+                .Distinct()
+                .ToList()
+            var changed bool
+            do {
+                changed = false
+                for root in roots {
+                    root.EvaluatingArrays = true
+                    var fixedContract bool
+                    try {
+                        fixedContract = root.Members.Any(this.RefStorageSlotIsFixed)
+                    } finally {
+                        root.EvaluatingArrays = false
+                    }
+                    if !fixedContract {
+                        continue
+                    }
+                    for member in root.Members {
+                        let symbol = member.Symbol.OriginalDefinition
+                        if !this.frozenRefStorageContracts!!.TryGetValue(symbol, out var positions) {
+                            positions = HashSet[int32]()
+                            this.frozenRefStorageContracts!!.Add(symbol, positions)
+                        }
+                        changed |= positions.Add(member.Depth)
+                    }
+                }
+            } while changed
+        }
+
+        private func RefStorageIsNullable(slot RefStorageSlot, includeArrays bool) bool {
+            let root = slot.Root()
+            if root.EvaluatingArrays {
+                return false
+            }
+            // A cycle adds no evidence. Keep searching its other array and scalar sources.
+            root.EvaluatingArrays = true
+            try {
+                if root.Members.Any(this.RefStorageSlotIsFixed) {
+                    return false
+                }
+                for member in root.Members {
+                    if this.linkedRefStoragePromotions.TryGetValue(
+                        member.Symbol.OriginalDefinition,
+                        out var positions
+                    ) &&
+                        positions.Contains(member.Depth) || this.RefStorageSlotType(member)?.NullableAnnotation ==
+                    Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated ||
+                        (
+                        member.Depth == 0 && this.ShouldPromoteToNullableReference(
+                            member.Symbol,
+                            checkRefStorage: false
+                        )
+                    ) {
+                        return true
+                    }
+                }
+                if includeArrays {
+                    for member in root.Members {
+                        if member.Depth > 0 && this.IsWidenedArrayElementStorage(
+                            member.Symbol,
+                            string.Join(".", Enumerable.Repeat("0", member.Depth))
+                        ) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            } finally {
+                root.EvaluatingArrays = false
+            }
+        }
+
+        private func RefStorageArrayIsNullable(symbol ISymbol, position string) bool {
+            if this.TryGetRefStorageSlot(symbol, position.Split('.').Length) is {} slot {
+                return this.RefStorageIsNullable(slot, includeArrays: false)
+            }
+            return false
+        }
+
         // Issue #3501: file paths that appear in MORE THAN ONE repository
         // compilation — linked/shared sources whose translation must not
         // depend on which project is being translated.
         private func IsDeclaredInRepositorySharedDocument(symbol ISymbol?) bool {
-            if this.context.RepositoryCompilations is not{Count: > 1} repository {
+            if this.context.RepositoryCompilations is not{Count: > 1} {
                 return false
             }
+            this.EnsureRepositorySharedDocumentPaths()
+            for reference in symbol!!.DeclaringSyntaxReferences {
+                let path string? = reference.SyntaxTree?.FilePath
+                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path!!) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func EnsureRepositorySharedDocumentPaths() {
             if this.repositorySharedDocumentPaths == nil {
                 let counts = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase)
-                for compilation in repository {
+                for compilation in this.context.RepositoryCompilations ?? Array.Empty[CSharpCompilation]() {
                     for tree in compilation.SyntaxTrees {
                         if !string.IsNullOrEmpty(tree.FilePath) {
                             counts[tree.FilePath] = if counts.TryGetValue(tree.FilePath, out var n) {
@@ -2326,13 +2886,6 @@ partial class CSharpToGSharpTranslator {
                     .Select((kv KeyValuePair[string, int32]) -> kv.Key)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase)
             }
-            for reference in symbol!!.DeclaringSyntaxReferences {
-                let path string? = reference.SyntaxTree?.FilePath
-                if !string.IsNullOrEmpty(path) && this.repositorySharedDocumentPaths!!.Contains(path!!) {
-                    return true
-                }
-            }
-            return false
         }
 
         // Issue #2521: sink lowering must use the target contract that G# will
@@ -2401,7 +2954,7 @@ partial class CSharpToGSharpTranslator {
             // NullReferenceException; throw`), unlike C#'s erased `x!`, so a
             // gratuitous assertion on a legitimately-null argument turns a legal
             // C# call into a crash that translate, compile and ILVerify all pass.
-            if this.IsImportedObliviousNullableTarget(targetSymbol, targetType) {
+            if this.IsImportedObliviousNullableTarget(targetSymbol, targetType, writtenValue) {
                 return false
             }
             // Issue #3886: the DECLARATION side deliberately never promotes a
@@ -2584,7 +3137,38 @@ partial class CSharpToGSharpTranslator {
         //    a member whose own declared type is a concrete oblivious reference
         //    type qualifies, exactly as `IsImportedObliviousNullableMember` scopes
         //    the read side.
-        private func IsImportedObliviousNullableTarget(targetSymbol ISymbol?, targetType ITypeSymbol? = nil) bool {
+        private func IsImportedObliviousNullableTarget(
+            targetSymbol ISymbol?,
+            targetType ITypeSymbol? = nil,
+            writtenValue ExpressionSyntax? = nil
+        ) bool {
+            if targetSymbol is IMethodSymbol method && writtenValue != nil && this.ResultLambda(
+                method,
+                writtenValue
+            ) is {} lambda &&
+                !this
+                .LambdaHasExplicitDelegateCast(lambda) {
+                let sink = this.ResolveValueSink(lambda)
+                if sink != nil && this.TargetContractIsFrozenInMetadata(sink) {
+                    let declaredDelegate ITypeSymbol? = switch sink.OriginalDefinition {
+                        case parameter is IParameterSymbol: GetParamsElementType(parameter) ?? parameter.Type
+                        case field is IFieldSymbol: field.Type
+                        case property is IPropertySymbol: property.Type
+                        case owner is IMethodSymbol: owner.ReturnType
+                        default: default(ITypeSymbol?)
+                    }
+                    let delegateType = this.UnwrapExpressionTreeDelegateType(declaredDelegate) as INamedTypeSymbol
+                    var declaredReturn = GetEffectiveReturnType(
+                        delegateType?.DelegateInvokeMethod?.ReturnType,
+                        lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                    )
+                    if this.ResolveLambdaResultTuplePath(lambda, writtenValue, nil) is {} path {
+                        declaredReturn = this.GetTupleElementTypeAtPath(declaredReturn, path)
+                    }
+                    return ObliviousNullabilityAnalyzer.IsObliviousConcreteReferencePosition(declaredReturn)
+                }
+                return false
+            }
             if !(
                 (targetSymbol is IParameterSymbol || targetSymbol is IFieldSymbol || targetSymbol is IPropertySymbol)
             ) {

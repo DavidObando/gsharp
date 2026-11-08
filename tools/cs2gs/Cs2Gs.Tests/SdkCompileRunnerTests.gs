@@ -537,11 +537,65 @@ open class SdkCompileRunnerTests {
         Assert.Equal("build", args[0])
         Assert.Equal("/out/App.gsproj", args[1])
         Assert.Contains("-p:GeneratePackageOnBuild=false", args)
+        Assert.Contains("-p:RestoreForceEvaluate=true", args)
+        Assert.Contains("-p:RestoreLockedMode=false", args)
         Assert.Contains("-p:Cs2GsArtifactRoot=/artifacts/app", args)
         Assert.Contains("-p:RestoreConfigFile=/out/nuget.config", args)
         // Issue #3782: the strict compile — the one whose verdict the gate acts
         // on — must not carry the polish loop's demotion.
         Assert.DoesNotContain(args, (a string) -> a.StartsWith("-p:WarningsNotAsErrors=", StringComparison.Ordinal))
+    }
+
+    @Fact
+    func Transform_PrunesSuppressedProjectReferenceFromMirroredPackagesLockJson() {
+        let root = Path.Combine(Path.GetTempPath(), "cs2gs-lock-prune-" + Guid.NewGuid().ToString("N"))
+        let srcDir = Path.Combine(root, "src", "Repl")
+        let destDir = Path.Combine(root, "dest", "Repl")
+        Directory.CreateDirectory(srcDir)
+        Directory.CreateDirectory(destDir)
+        try {
+            let csprojPath = Path.Combine(srcDir, "Repl.csproj")
+            File.WriteAllText(csprojPath, `<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <ProjectReference Include="../Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj" />
+  </ItemGroup>
+</Project>`)
+            let lockPath = Path.Combine(destDir, "packages.lock.json")
+            File.WriteAllText(lockPath, `{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "GSharp.Core": {
+        "type": "Project"
+      },
+      "GSharp.Gsharp.Extensions": {
+        "type": "Project"
+      },
+      "GSharp.Repl": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
+          "GSharp.Gsharp.Extensions": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}`)
+            let generatedPaths = Dictionary[string, string](StringComparer.OrdinalIgnoreCase){
+                [Path.GetFullPath(Path.Combine(srcDir, "../Core/Core.csproj"))] = Path.GetFullPath(
+                    Path.Combine(destDir, "../Core/Core.gsproj")
+                )
+            }
+            let _ = GSharpProjectTransformer.Transform(csprojPath, destDir, "Gsharp.NET.Sdk", generatedPaths)
+            let updatedLock = File.ReadAllText(lockPath)
+            Assert.Contains("GSharp.Core", updatedLock)
+            Assert.DoesNotContain("GSharp.Gsharp.Extensions", updatedLock)
+        } finally {
+            if Directory.Exists(root) {
+                Directory.Delete(root, recursive: true)
+            }
+        }
     }
 
     @Fact

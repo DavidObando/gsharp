@@ -92,7 +92,7 @@ stderr:
             // The reduction of the defect: a nilable handler on a user-declared
             // event, added and removed. Both statements are no-ops; neither is a
             // conversion error and neither throws.
-            yield[]object{"user-event-nilable-handler", `
+            yield []object{"user-event-nilable-handler", `
 package P
 import System
 
@@ -119,7 +119,7 @@ Run()
             // The same on a CLR (imported) event, and with the literal `nil`
             // written directly at the subscription site — the shape cs2gs had to
             // spell `c.PropertyChanged += h!!` to get past the binder.
-            yield[]object{"clr-event-nilable-and-literal-nil", `
+            yield []object{"clr-event-nilable-and-literal-nil", `
 package P
 import System
 import System.ComponentModel
@@ -144,7 +144,7 @@ Run()
             // cs2gs maps a C# named delegate declaration/reference to a structural
             // arrow type. The nullable arrow must receive the same nil-tolerant
             // event-site conversion as a nullable named delegate.
-            yield[]object{"clr-event-nilable-arrow-handler", `
+            yield []object{"clr-event-nilable-arrow-handler", `
 package P
 import System
 import System.Diagnostics
@@ -160,7 +160,7 @@ func Run() {
 
 Run()
 `, []string{"arrow-added", "arrow-removed"}}
-            yield[]object{"clr-event-nilable-arrow-member", `
+            yield []object{"clr-event-nilable-arrow-member", `
 package P
 import System
 import System.Diagnostics
@@ -184,7 +184,7 @@ Run()
             // real one. A nil `+=` before and after a genuine handler leaves
             // exactly one subscriber; the nil `-=` removes nothing; the real `-=`
             // removes it. Three fires, and only the middle two print.
-            yield[]object{"nil-subscriptions-do-not-disturb-a-real-one", `
+            yield []object{"nil-subscriptions-do-not-disturb-a-real-one", `
 package P
 import System
 
@@ -222,7 +222,7 @@ Run()
             // The other two spellings of the subscription LHS: a bare event name
             // inside the declaring type, and an event reached through a
             // member-access chain, each with a nilable field as the handler.
-            yield[]object{"bare-name-and-member-access-handlers", `
+            yield []object{"bare-name-and-member-access-handlers", `
 package P
 import System
 
@@ -261,7 +261,7 @@ Run()
             // the relaxation had widened the handler position generally, these
             // would still pass — but if it had BROKEN the ordinary path, this is
             // the case that says so.
-            yield[]object{"ordinary-handlers-unchanged", `
+            yield []object{"ordinary-handlers-unchanged", `
 package P
 import System
 

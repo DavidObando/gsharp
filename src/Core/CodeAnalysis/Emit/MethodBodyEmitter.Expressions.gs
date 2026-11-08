@@ -1556,7 +1556,7 @@ internal partial class MethodBodyEmitter {
                 "a field initializer targets either a field or a property, and the property form is handled above",
                 expression: "init.Field"
             )
-            if initField.IsReadOnly &&
+            if (initField.IsReadOnly || initField.Accessibility != Accessibility.Public) &&
                 literal
                 .StructType
                 .ClrType == nil &&
@@ -2212,15 +2212,28 @@ internal partial class MethodBodyEmitter {
 
     /// ADR-0039: Emits address-of by dispatching on the operand shape.
     private func EmitAddressOf(node BoundAddressOfExpression) {
+        if node.IsUnmanaged &&
+            node.FixedBufferEscapeSyntax != nil &&
+            node.Operand is BoundFieldAccessExpression{Field: {IsFixedBuffer: true}} buffer &&
+            !StatementBinder
+            .IsFixedVariable(
+            buffer,
+            this.IsHeapPromotedFixedBufferVariable,
+            allowTemporaryValues: this.asyncFieldMap == nil && this.iteratorEmitCtx == nil
+        ) {
+            EmitDiagnosticException.ThrowDiagnostic(
+                node.FixedBufferEscapeSyntax,
+                DiagnosticDescriptors.MovableFixedBufferRequiresFixed,
+                buffer.Field.Name
+            )
+        }
         switch node.Operand {
             case block is BoundBlockExpression {
                 // Issue #3355: execute prefix statements, then take the
                 // address of the trailing lvalue. Keeping address-of as the
                 // outer bound shape preserves ref/out call classification.
                 this.EmitBlockExpressionPrefix(block)
-                this.EmitAddressOf(
-                    BoundAddressOfExpression(node.Syntax, block.Expression, node.IsUnmanaged, node.IsReadOnly)
-                )
+                this.EmitAddressOf(node.Update(block.Expression))
             }
             case conditional is BoundConditionalExpression {
                 this.EmitConditionalAddress(
@@ -2296,8 +2309,20 @@ internal partial class MethodBodyEmitter {
             case uic is BoundUserInstanceCallExpression {
                 this.EmitUserInstanceCall(uic)
             }
+            case importedCall is BoundImportedInstanceCallExpression when importedCall.Method.ReturnType.IsByRef {
+                this.EmitExpression(importedCall)
+            }
             case propAcc is BoundPropertyAccessExpression {
                 this.EmitPropertyAccess(propAcc, addressOnly: true)
+            }
+            case BoundClrPropertyAccessExpression{Member: PropertyInfo clrProp} clrAccess when clrProp
+                .GetMethod
+                ?.ReturnType
+                .IsByRef == true {
+                this.EmitClrPropertyAccess(clrAccess)
+            }
+            case clrIdx is BoundClrIndexExpression when clrIdx.Indexer.GetMethod?.ReturnType.IsByRef == true {
+                this.EmitClrIndex(clrIdx)
             }
             case baseInterface is BoundBaseInterfaceCallExpression {
                 this.EmitBaseInterfaceCall(baseInterface)

@@ -58,7 +58,7 @@ stderr:
             // iterator — the hoisted nullable local's symbolic container was not
             // unwrapped, so GetEnumerator bound erased (IEnumerator<object>)
             // while the state-machine field reified (IEnumerator<Item>).
-            yield[]object{"iterator-as-ienumerable", `
+            yield []object{"iterator-as-ienumerable", `
 package P
 import System.Collections.Generic
 
@@ -83,7 +83,7 @@ class Holder {
             // narrowing — the hoisted-field rewrite dropped the read's
             // NarrowedType, so the narrowing castclass never fired and the
             // `current` store mismatched.
-            yield[]object{"iterator-yield-cast-after-pattern", `
+            yield []object{"iterator-yield-cast-after-pattern", `
 package P
 import System.Collections.Generic
 
@@ -108,7 +108,7 @@ class Walker {
             // Defect 3: a reference-to-reference narrowed out-var re-bind
             // (`Type?` read as `Type`) went through the boxed-struct unbox path
             // (`unbox System.Type` — ValueTypeExpected, readonly pointer).
-            yield[]object{"narrowed-reference-out-rebind", `
+            yield []object{"narrowed-reference-out-rebind", `
 package P
 import System
 import System.Collections.Generic
@@ -139,7 +139,7 @@ class Resolver {
             // Defect 4: an array-typed pattern binding (`GetIndexParameters() is
             // { Length: 1 } indexParams`) tokenised `ParameterInfo[]` as a
             // name-based TypeRef, which fails to load — arrays need a TypeSpec.
-            yield[]object{"array-pattern-binding-typespec", `
+            yield []object{"array-pattern-binding-typespec", `
 package P
 import System
 import System.Linq
@@ -157,7 +157,7 @@ class Finder {
             // generic argument carrying a user type was not classified symbolic,
             // so the ctor targeted the erased `List<object>` while the local slot
             // reified `List<Func<BoundNode, object>>`.
-            yield[]object{"function-typed-generic-argument", `
+            yield []object{"function-typed-generic-argument", `
 package P
 import System
 import System.Collections.Concurrent
@@ -193,7 +193,7 @@ class Model {
             // Defect 6: a nullable user constructed generic narrowed then called
             // inside an iterator — the same symbolic-container/narrowing pair as
             // defects 1–2, over a same-compilation generic class.
-            yield[]object{"iterator-user-generic-nullable-call", `
+            yield []object{"iterator-user-generic-nullable-call", `
 package P
 import System.Collections.Generic
 

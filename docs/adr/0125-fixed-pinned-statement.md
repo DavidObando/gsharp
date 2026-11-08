@@ -213,6 +213,9 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
 - **`GS0506`** — `await` or `yield` appears directly inside a `fixed` body.
 - **`GS0507`** — a `fixed` statement pins a fixed-size buffer reached through an
   already-fixed variable (C# CS0213); see the 2026-09-23 amendment.
+- **`GS0638`** — taking the pointer value of a movable fixed-size buffer outside
+  a `fixed` statement initializer or direct element indexing (`name[i]`) (C#
+  CS1666, issue #4383).
 
 ## Amendment 2026-09-23: fixed-size buffer pin source (#4378)
 
@@ -265,25 +268,32 @@ kind, so the coverage matrix is unchanged.
 | buffer declared directly on a class (`c.Data`) | n/a (CS1642) | accepted |
 | array / slice element (`bones[i].Name`) | accepted | accepted |
 | static field | accepted | accepted |
-| by-value local or parameter (`b.Name`), incl. nested struct fields | CS0213 | **GS0507** |
+| unpromoted by-value local or parameter (`b.Name`), incl. nested value fields | CS0213 | **GS0507** |
+| local or parameter promoted to a closure or state-machine field | varies | accepted |
 | pointer dereference (`p->Name`, `(*p).Name`) | CS0213 | **GS0507** |
 | value that is not a variable (`make().Name`) | CS1708 | GS0401 |
 | pointee mismatch (`*uint8` over an `int8` buffer) | CS0266 | GS0401 |
 
-Anything the classifier does not recognise is treated as movable: an extra pin
-is sound, whereas wrongly rejecting a movable variable would leave no way to
-pin it. A local captured by a lambda is classified as a local (fixed), as C#
-does — C# also reports CS0213 there — even though G# hoists it into a closure
-object; such a buffer can still be addressed through its decayed `*T`.
+The classifier treats unknown storage as movable. It follows value-field,
+tuple-element, block-result, and conditional-result storage until it reaches
+the physical root. Unboxed value temporaries use stack spill storage.
+Reference receivers, array elements, static fields, and ref aliases remain movable.
+Flow narrowing does not turn a reference slot into unboxed value storage.
+
+Capture and state-machine lowering can promote a local or parameter into a
+heap field. Such storage requires `fixed`; an unpinned decay reports `GS0638`.
+Emission checks the finalized closure, async, and iterator storage maps.
+It also defers `GS0507` until those maps are available, so promoted buffers can be pinned.
+This replaces the earlier captured-local exception, which permitted pointers into movable storage.
 
 Two C# rules are **deliberately not ported**:
 
-- **CS1666** ("fixed size buffers contained in unfixed expressions") rejects
-  *taking the pointer value* of a movable buffer outside `fixed`
-  (`sbyte* q = this.Name;`), while still allowing indexing (`Name[i]`) since
-  C# 7.3. G#'s pre-existing decay makes both forms bind through the same
-  `*T`, and adopting CS1666 would reject G# code accepted today; it is left as a
-  possible follow-up rather than folded into this change.
+- ~~**CS1666** ("fixed size buffers contained in unfixed expressions")~~ Ported
+  in issue #4383 as **`GS0638`**: taking the pointer value of a movable
+  fixed-size buffer outside a `fixed` statement initializer (`sbyte* q =
+  holder.H.Name;` or `sbyte* q = this.Name;`) is rejected with `GS0638`, while
+  direct element indexing (`holder.H.Name[i]`, `Name[i]`) and already-fixed
+  storage (`local.Name`, `ptr->Name`) remain legal.
 - **`void*` targets.** C# accepts `fixed (void* p = Name)` through the implicit
   `T* → void*` conversion. The G# `fixed` statement keeps its existing rule
   that the pointee must equal the buffer's element type for every source kind.
@@ -324,4 +334,3 @@ translated pin lands in the accepted rows above.
 
 **Diagnostics.** New **`GS0507`** (C# CS0213). **`GS0401`**'s description now
 lists the fixed-size buffer source.
-

@@ -322,13 +322,7 @@ class SdkCompileRunner {
         if !string.IsNullOrEmpty(warningsNotAsErrors) {
             args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors)
         }
-        let repoNugetConfig = if !string.IsNullOrEmpty(repoRoot) && File.Exists(
-            Path.Combine(repoRoot, "nuget.config")
-        ) {
-            Path.Combine(repoRoot, "nuget.config")
-        } else {
-            Path.Combine(appRunDir, "nuget.config")
-        }
+        let repoNugetConfig = GsharpTestProjectRunner.ResolveRestoreConfigFile(appRunDir, repoRoot)
         if File.Exists(repoNugetConfig) {
             // MSBuild has no `--configfile` switch (that is a `dotnet restore`/
             // `dotnet nuget` only switch, and fails hard with MSB1001 under
@@ -1243,7 +1237,9 @@ class SdkCompileRunner {
                 "-p:RestoreConfigFile=" + projectNugetConfig,
                 "-p:RestorePackagesPath=" + Path.Combine(nugetRoot, ".nuget-packages"),
                 "-p:Cs2GsArtifactRoot=" + artifactDirectory,
-                "-p:GeneratePackageOnBuild=false"
+                "-p:GeneratePackageOnBuild=false",
+                "-p:RestoreForceEvaluate=true",
+                "-p:RestoreLockedMode=false"
             }
             if !string.IsNullOrEmpty(warningsNotAsErrors) {
                 args.Add("-p:WarningsNotAsErrors=" + warningsNotAsErrors)
@@ -1450,7 +1446,7 @@ class SdkCompileRunner {
         }
 
         /// Writes a `nuget.config` directly into [`appRunDir`](paramref)
-        /// pointing at the repo's `.nugs` local feed (by absolute path) plus
+        /// pointing at the local package feed (by absolute path) plus
         /// nuget.org. MSBuild's SDK resolver (which resolves `Sdk="Gsharp.NET.Sdk/…"`
         /// before evaluation even starts, independent of any `-p:RestoreConfigFile`
         /// passed to the build) discovers `nuget.config` by walking up from the
@@ -1461,17 +1457,13 @@ class SdkCompileRunner {
         /// Writing an equivalent config in the same directory as the generated
         /// `.gsproj` makes it discoverable unconditionally.
         /// @param appRunDir The directory the `.gsproj` is written to.
-        /// @param repoRoot The repository root containing the `.nugs` feed.
+        /// @param repoRoot The source root used to select the local feed.
         internal func WriteLocalNugetConfig(appRunDir string, repoRoot string?, globalPackagesOverride string? = nil) {
             WriteLocalNugetConfigFile(Path.Combine(appRunDir, "nuget.config"), repoRoot, globalPackagesOverride)
         }
 
         private func WriteLocalNugetConfigFile(path string, repoRoot string?, globalPackagesOverride string? = nil) {
-            let localFeed string? = if string.IsNullOrEmpty(repoRoot) {
-                default(string?)
-            } else {
-                Path.Combine(repoRoot, ".nugs")
-            }
+            let localFeed = GsharpTestProjectRunner.LocalPackageFeed(repoRoot)
             let packageSources = XElement(
                 XName?("packageSources")!!,
                 XElement(XName?("clear")!!),
@@ -1691,13 +1683,7 @@ class SdkCompileRunner {
         private func ResolveFallbackPackageFromLocalFeed(repoRoot string?, packageId string)(
             NupkgPath string,
             Version string
-        )? {
-            if string.IsNullOrEmpty(repoRoot) {
-                return nil
-            }
-            let feed = Path.Combine(repoRoot, ".nugs")
-            return GsharpTestProjectRunner.ResolveNewestPackage(feed, packageId)
-        }
+        )? -> GsharpTestProjectRunner.ResolveLocalFeedPackage(repoRoot, packageId)
 
         private func SynthesizeFallbackDiagnostic(
             result ProcessRunResult,

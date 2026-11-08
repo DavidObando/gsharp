@@ -166,11 +166,11 @@ public static class Probes
             // On `main` this compiled, ran, printed `1` then `9:z`, and ilverify
             // reported StackUnexpected in `firstOf`
             // [found ValueTuple`2<int32,object>] [expected ValueTuple`2<int32,T0>].
-            yield[]object{"the-reported-repro-verifies", `package P
+            yield []object{"the-reported-repro-verifies", `package P
 import System
 import Interop
 
-func countMap[K, V](entries map[K, V]) int32 {
+func countMap[K notnull, V](entries map[K, V]) int32 {
     return Probes.CountEntries[K, V](entries)
 }
 
@@ -184,7 +184,7 @@ Console.WriteLine(countMap[string, int32](m).ToString())
 Console.WriteLine(firstOf[string]((9, "z")))`, []string{"1", "9:z"}}
             // Position independence: the open element first, one level down, and
             // in every position at once.
-            yield[]object{"the-open-element-verifies-in-any-position", `package P
+            yield []object{"the-open-element-verifies-in-any-position", `package P
 import System
 import Interop
 
@@ -206,7 +206,7 @@ Console.WriteLine(bothOf[string, int32](("k", 5)))`, []string{"7:q", "1:2:n", "k
             // A value-type element: the erasure that would have boxed is the one
             // the CLR cannot undo, so this is the shape where a wrong target costs
             // more than a verifier complaint.
-            yield[]object{"a-value-type-element-verifies", `package P
+            yield []object{"a-value-type-element-verifies", `package P
 import System
 import Interop
 
@@ -219,7 +219,7 @@ Console.WriteLine(firstOf[int32]((9, 42)))`, []string{"9:42"}}
             // generic: `(int, object)` is the genuine parameter, so the argument
             // must still be boxed and rebuilt exactly as before. If the new arm
             // over-reached, this row would stop boxing and fail.
-            yield[]object{"a-genuine-object-element-still-boxes-and-rebuilds", `package P
+            yield []object{"a-genuine-object-element-still-boxes-and-rebuilds", `package P
 import System
 import Interop
 
@@ -238,7 +238,7 @@ Console.WriteLine(Probes.TakeObjPair((6, "p")))`, []string{"objpair:5:o", "objpa
             // (it demands a parameter that still `ContainsTypeParameter` or
             // `ContainsSameCompilationUserType`). The argument therefore falls
             // through to `GetClrParameterTargetType` exactly as before.
-            yield[]object{"an-inferred-type-argument-still-binds", `package P
+            yield []object{"an-inferred-type-argument-still-binds", `package P
 import System
 import Interop
 
@@ -251,7 +251,7 @@ Console.WriteLine(Probes.FirstOf(p))
 
 Console.WriteLine(Probes.FirstOf((3, 4)))`, []string{"9:z", "7:q", "1:2:n", "5:v", "3:4"}}
             // Fully concrete: nothing erased, nothing to recover, unchanged.
-            yield[]object{"a-fully-concrete-call-is-unchanged", `package P
+            yield []object{"a-fully-concrete-call-is-unchanged", `package P
 import System
 import Interop
 
@@ -272,7 +272,7 @@ Console.WriteLine(Probes.SecondOf[string](("q", 7)))`, []string{"9:z", "7:q"}}
             // closed over the real `T`. The source-side guard the first fix used —
             // "recover only when the ARGUMENT's elements are symbolic" — cannot see
             // this: the question that decides both directions is what the SLOT is.
-            yield[]object{"a-concrete-tuple-does-not-reach-a-symbolic-slot", `package P
+            yield []object{"a-concrete-tuple-does-not-reach-a-symbolic-slot", `package P
 import System
 import Interop
 
@@ -283,7 +283,7 @@ func bad[T](pair (int32, object)) string {
 Console.WriteLine(bad[string]((9, "z")))`, "GS0155"}
             // The same mirror with the open element FIRST, so the refusal is not
             // an artefact of one position.
-            yield[]object{"a-concrete-tuple-does-not-reach-a-symbolic-slot-in-the-first-position", `package P
+            yield []object{"a-concrete-tuple-does-not-reach-a-symbolic-slot-in-the-first-position", `package P
 import System
 import Interop
 
@@ -297,7 +297,7 @@ Console.WriteLine(bad[string](("q", 7)))`, "GS0155"}
             // `ValueTuple<...>` is INVARIANT, so element-wise identity is the only
             // relation there is — the same rule #3987 and #3984 already apply in
             // the constructor and `: base(...)` positions.
-            yield[]object{"a-concrete-element-does-not-reach-an-open-slot", `package P
+            yield []object{"a-concrete-element-does-not-reach-an-open-slot", `package P
 import System
 import Interop
 

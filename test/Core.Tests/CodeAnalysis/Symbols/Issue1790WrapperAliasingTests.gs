@@ -175,14 +175,14 @@ open class Issue1790WrapperAliasingTests {
         )
 
         func WrapperFactories() sequence[[]object] {
-            yield[]object{"Sequence", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> SequenceTypeSymbol.Get(e)))}
-            yield[]object{
+            yield []object{"Sequence", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> SequenceTypeSymbol.Get(e)))}
+            yield []object{
                 "AsyncSequence",
                 Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> AsyncSequenceTypeSymbol.Get(e)))
             }
-            yield[]object{"Channel", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> ChannelTypeSymbol.Get(e)))}
-            yield[]object{"ByRef", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> ByRefTypeSymbol.Get(e)))}
-            yield[]object{"Pointer", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> PointerTypeSymbol.Get(e)))}
+            yield []object{"Channel", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> ChannelTypeSymbol.Get(e)))}
+            yield []object{"ByRef", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> ByRefTypeSymbol.Get(e)))}
+            yield []object{"Pointer", Func[TypeSymbol, TypeSymbol](((e TypeSymbol) -> PointerTypeSymbol.Get(e)))}
         }
     }
 }

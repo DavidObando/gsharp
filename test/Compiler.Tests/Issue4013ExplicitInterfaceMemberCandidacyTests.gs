@@ -255,7 +255,7 @@ public sealed class Greeter : IGreeter, IHidden, IDerivedIface
         func RejectedCases() sequence[[]object] {
             // The reported repro. `IList.Add(object)` accepted the string, and the
             // program threw `ArgumentException` at run time.
-            yield[]object{"the-reported-repro-a-string-does-not-reach-ilist-add-object", `package P
+            yield []object{"the-reported-repro-a-string-does-not-reach-ilist-add-object", `package P
 import System.Collections.Generic
 
 func main2() {
@@ -266,7 +266,7 @@ func main2() {
 main2()`, "GS0159"}
             // Not specific to `List`: `Dictionary<K, V>` implements
             // `IDictionary.Add(object, object)` explicitly and had the same hole.
-            yield[]object{"a-dictionary-does-not-reach-idictionary-add-object-object", `package P
+            yield []object{"a-dictionary-does-not-reach-idictionary-add-object-object", `package P
 import System.Collections.Generic
 
 let d = Dictionary[string, int32]()
@@ -275,7 +275,7 @@ d.Add(1, "x")`, "GS0159"}
             // implementation that has NO same-named sibling on the class surface.
             // Before #4013 this bound and printed `secret`; now the type has no
             // member of that name at all, so the new GS0577 explains why.
-            yield[]object{"an-explicit-implementation-with-no-sibling-reports-gs0577", `package P
+            yield []object{"an-explicit-implementation-with-no-sibling-reports-gs0577", `package P
 import System
 import Interop
 
@@ -286,7 +286,7 @@ Console.WriteLine(g.Secret())`, "GS0577"}
             // `Contains`, so the call used to bind `IDictionary.Contains(object)`
             // and compile. It now names the interface instead of reading like a
             // misspelling.
-            yield[]object{"map-contains-had-no-other-candidate-and-now-reports-gs0577", `package P
+            yield []object{"map-contains-had-no-other-candidate-and-now-reports-gs0577", `package P
 import System
 import System.Collections.Generic
 
@@ -297,7 +297,7 @@ Console.WriteLine(d.Contains("k"))`, "GS0577"}
             // name, but every `Contains` on `Dictionary<K, V>` is unary, so
             // "reach it through an interface-typed receiver" would be a dead end.
             // The ordinary GS0159 is the honest answer here.
-            yield[]object{"an-inapplicable-arity-keeps-gs0159-rather-than-gs0577", `package P
+            yield []object{"an-inapplicable-arity-keeps-gs0159-rather-than-gs0577", `package P
 import System
 import System.Collections.Generic
 
@@ -305,7 +305,7 @@ let d = map[string, int32]{}
 Console.WriteLine(d.Contains(1, 2))`, "GS0159"}
             // The same rule on a user-written type: `IHidden.Secret()` is
             // parameterless, so a one-argument call cannot reach it either.
-            yield[]object{"an-inapplicable-explicit-member-keeps-gs0159-rather-than-gs0577", `package P
+            yield []object{"an-inapplicable-explicit-member-keeps-gs0159-rather-than-gs0577", `package P
 import System
 import Interop
 
@@ -319,7 +319,7 @@ Console.WriteLine(g.Secret(1))`, "GS0159"}
             // The type's own public members are untouched — this is the overload
             // that was always meant to win, and the surrounding collection surface
             // still works.
-            yield[]object{"the-types-own-public-members-still-bind", `package P
+            yield []object{"the-types-own-public-members-still-bind", `package P
 import System
 import System.Collections.Generic
 
@@ -337,7 +337,7 @@ Console.WriteLine(d.ContainsKey("k"))`, []string{"2", "True", "1", "1", "True"}}
             // The issue's own "Expected" section: the explicit member is still
             // reachable, through an interface-typed receiver. `IList.Add` returns
             // the new index, and the value really does land in the list.
-            yield[]object{"an-interface-typed-receiver-still-reaches-the-explicit-member", `package P
+            yield []object{"an-interface-typed-receiver-still-reaches-the-explicit-member", `package P
 import System
 import System.Collections
 import System.Collections.Generic
@@ -350,7 +350,7 @@ Console.WriteLine(ys[0])`, []string{"0", "1", "7"}}
             // A genuine DEFAULT interface method is exactly what the interface walk
             // exists to surface, and it is NOT abstract, so it survives the rule.
             // Without this row the change would only have been shown to say no.
-            yield[]object{"a-default-interface-method-is-still-a-candidate-on-a-class-receiver", `package P
+            yield []object{"a-default-interface-method-is-still-a-candidate-on-a-class-receiver", `package P
 import System
 import Interop
 
@@ -358,7 +358,7 @@ let g = Greeter{}
 Console.WriteLine(g.Greet())`, []string{"dim:g"}}
             // An interface receiver keeps the full walk: a base interface's
             // abstract members are members of the derived interface.
-            yield[]object{"an-interface-receiver-still-reaches-its-base-interface-members", `package P
+            yield []object{"an-interface-receiver-still-reaches-its-base-interface-members", `package P
 import System
 import Interop
 
@@ -368,7 +368,7 @@ Console.WriteLine(i.FromBase())
 Console.WriteLine(i.FromDerived())`, []string{"frombase", "fromderived"}}
             // An IMPLICIT implementation is on the class surface and must still
             // bind from a class-typed receiver — the case the rule must not catch.
-            yield[]object{"an-implicitly-implemented-interface-member-still-binds-on-the-class", `package P
+            yield []object{"an-implicitly-implemented-interface-member-still-binds-on-the-class", `package P
 import System
 import Interop
 
@@ -379,7 +379,7 @@ Console.WriteLine(g.FromDerived())`, []string{"frombase", "fromderived"}}
             // `GetEnumerator` on `List<T>` has both a public struct-returning
             // overload and explicit `IEnumerable`/`IEnumerable<T>` ones. The public
             // one must keep winning.
-            yield[]object{"iteration-and-collection-literals-still-work", `package P
+            yield []object{"iteration-and-collection-literals-still-work", `package P
 import System
 import System.Collections.Generic
 

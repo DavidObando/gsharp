@@ -537,7 +537,7 @@ public static class Obj {
             "Choose"
         }
         let initializer = "$choose ? null : \"x\""
-        let yield = if guarded {
+        let yieldStmt = if guarded {
             "if (text != null) { yield return (text, 1); }"
         } else {
             "yield return $choose ? (text, 1) : (\"x\", 2);"
@@ -548,7 +548,7 @@ public sealed class Obj {
     public ` + "$envelope" + `<(string Text, int Code)> ` + "$member" + ` {
         get {
             string text = ` + "$initializer" + `;
-            ` + "$yield" + `
+            ` + "$yieldStmt" + `
         }
     }
 }`))
@@ -826,7 +826,7 @@ public static class Consumer {
         } else {
             "override "
         }
-        let yield = if guarded {
+        let yieldStmt = if guarded {
             "if (text != null) { yield return (text, 1); }"
         } else {
             "yield return (text, 1);"
@@ -836,7 +836,7 @@ public static class Consumer {
 public sealed class MissingRows : IRows<(string Text, int Code)> {
     public ` + "$modifier" + `IEnumerable<(string Text, int Code)> Rows() {
         string text = null;
-        ` + "$yield" + `
+        ` + "$yieldStmt" + `
     }
 }
 public sealed class PresentRows : IRows<(string Text, int Code)> {

@@ -225,7 +225,7 @@ shared class AsyncCaptureWalker {
             // simply stays a plain MoveNext-body local, and the existing
             // RefKind-driven ldind/stind emission handles it exactly as it
             // would in an ordinary function.
-            if local.RefKind != RefKind.None {
+            if local.RefKind != RefKind.None || local.IsManagedPointerSlot {
                 continue
             }
             // Skip ref-struct (ByRef-like) locals — e.g. the synthesized

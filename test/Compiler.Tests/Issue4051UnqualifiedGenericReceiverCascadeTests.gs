@@ -184,22 +184,22 @@ public class Handler<TOptions>
         func ConstraintViolations() sequence[[]object] {
             // The five spellings PR #4040 already left clean. They are here as the
             // control the fix must not disturb.
-            yield[]object{"qualified-static", `package P
+            yield []object{"qualified-static", `package P
 import System
 
 Console.WriteLine(System.Nullable[string].Value)`, []string{"GS0152"}}
-            yield[]object{"import-qualified", `package P
+            yield []object{"import-qualified", `package P
 import System
 
 let v = System.Nullable[string].Value
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"type-clause", `package P
+            yield []object{"type-clause", `package P
 import System
 import HelperLib4051
 
 var h Handler[string]
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"base-clause", `package P
+            yield []object{"base-clause", `package P
 import System
 import HelperLib4051
 
@@ -207,7 +207,7 @@ class Bad : Handler[string] {
 }
 
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"object-literal", `package P
+            yield []object{"object-literal", `package P
 import System
 import HelperLib4051
 
@@ -215,18 +215,18 @@ let h = Handler[string]{Tag: "z"}
 Console.WriteLine("x")`, []string{"GS0152"}}
             // THE ISSUE'S THREE. Before the fix: GS0125 x2, GS0125 x2 + GS0159,
             // and GS0130 respectively, each beside the accurate GS0152.
-            yield[]object{"import-alias", `package P
+            yield []object{"import-alias", `package P
 import System
 
 let v = Nullable[string].Value
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"unqualified-static-call", `package P
+            yield []object{"unqualified-static-call", `package P
 import System
 import HelperLib4051
 
 let d = Handler[string].Describe()
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"constructor", `package P
+            yield []object{"constructor", `package P
 import System
 import HelperLib4051
 
@@ -236,25 +236,25 @@ Console.WriteLine("x")`, []string{"GS0152"}}
             // than by reading the issue's table. Before the fix: GS0125 x2 each for
             // the three field spellings, and GS0124 + GS0159 for the generic-NAME
             // receiver shape, which reaches a different resolver overload.
-            yield[]object{"static-field-read", `package P
+            yield []object{"static-field-read", `package P
 import System
 import HelperLib4051
 
 let f = Handler[string].Field
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"static-field-write", `package P
+            yield []object{"static-field-write", `package P
 import System
 import HelperLib4051
 
 Handler[string].Field = "z"
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"static-field-compound-assignment", `package P
+            yield []object{"static-field-compound-assignment", `package P
 import System
 import HelperLib4051
 
 Handler[string].Field += "z"
 Console.WriteLine("x")`, []string{"GS0152"}}
-            yield[]object{"generic-name-receiver-shape", `package P
+            yield []object{"generic-name-receiver-shape", `package P
 import System
 import HelperLib4051
 
@@ -286,11 +286,11 @@ Console.WriteLine("x")`, []string{"GS0152"}}
         /// not the emit path those three fail in.
         /// @returns Case name, G# source, expected stdout lines.
         func SatisfyingShapes() sequence[[]object] {
-            yield[]object{"qualified-static", `package P
+            yield []object{"qualified-static", `package P
 import System
 
 Console.WriteLine(System.Collections.Generic.Comparer[int32].Default.Compare(1, 2))`, []string{"-1"}}
-            yield[]object{"type-clause", `package P
+            yield []object{"type-clause", `package P
 import System
 import HelperLib4051
 
@@ -299,7 +299,7 @@ class MyOptions : SchemeOptions {
 
 var h Handler[MyOptions]
 Console.WriteLine("x")`, []string{"x"}}
-            yield[]object{"base-clause", `package P
+            yield []object{"base-clause", `package P
 import System
 import HelperLib4051
 
@@ -311,18 +311,18 @@ class Good : Handler[MyOptions] {
 
 let g = Good()
 Console.WriteLine(g.Tag)`, []string{"t"}}
-            yield[]object{"object-literal", `package P
+            yield []object{"object-literal", `package P
 import System
 import HelperLib4051
 
 let h = Handler[SchemeOptions]{Tag: "z"}
 Console.WriteLine(h.Tag)`, []string{"z"}}
-            yield[]object{"import-alias", `package P
+            yield []object{"import-alias", `package P
 import System
 
 let v = Nullable[int32]()
 Console.WriteLine(v.HasValue)`, []string{"False"}}
-            yield[]object{"unqualified-static-call", `package P
+            yield []object{"unqualified-static-call", `package P
 import System
 import HelperLib4051
 
@@ -330,7 +330,7 @@ class MyOptions : SchemeOptions {
 }
 
 Console.WriteLine(Handler[MyOptions].Describe())`, []string{"described"}}
-            yield[]object{"constructor", `package P
+            yield []object{"constructor", `package P
 import System
 import HelperLib4051
 
@@ -339,24 +339,24 @@ class MyOptions : SchemeOptions {
 
 let h = Handler[MyOptions]()
 Console.WriteLine(h.Tag)`, []string{"t"}}
-            yield[]object{"static-field-read", `package P
+            yield []object{"static-field-read", `package P
 import System
 import HelperLib4051
 
 Console.WriteLine(Handler[SchemeOptions].Field)`, []string{"f"}}
-            yield[]object{"static-field-write", `package P
+            yield []object{"static-field-write", `package P
 import System
 import HelperLib4051
 
 Handler[SchemeOptions].Field = "z"
 Console.WriteLine(Handler[SchemeOptions].Field)`, []string{"z"}}
-            yield[]object{"static-field-compound-assignment", `package P
+            yield []object{"static-field-compound-assignment", `package P
 import System
 import HelperLib4051
 
 Handler[SchemeOptions].Field += "z"
 Console.WriteLine(Handler[SchemeOptions].Field)`, []string{"fz"}}
-            yield[]object{"generic-name-receiver-shape", `package P
+            yield []object{"generic-name-receiver-shape", `package P
 import System
 import System.Collections.Generic
 

@@ -55,24 +55,12 @@ internal partial class StatementBinder {
         var hasDefault = false
         let callableEntry = CaptureExternalCallableAliases()
         let nonNullByRefEntry = CaptureNonNullByRefVariables()
-        let shadowFlow = ShadowBegin(discriminant)
         let joinExits = List[NarrowingState]()
         var fallthroughState NarrowingState? = nil
-        var shadowApproximate = false
         var callableExits HashSet[VariableSymbol]? = nil
         var callableFallthrough HashSet[VariableSymbol]? = nil
         var nonNullByRefExits HashSet[VariableSymbol]? = nil
         var nonNullByRefFallthrough HashSet[VariableSymbol]? = nil
-        // ADR-0069 addendum / issue #712: track each non-exiting arm's
-        // discriminator narrowing so we can lift a common post-switch
-        // narrowing into the enclosing block when every fall-through arm
-        // contributes the same `{discriminator → T}` mapping. Arms that
-        // end in an unconditional exit (return/throw/break/continue) do
-        // not contribute to the merge — they remove themselves from the
-        // post-switch dataflow.
-        var hasAnyFallThroughArm = false
-        var mergedExitFrame Dictionary[AccessPath, TypeSymbol]? = nil
-        var mergeFailed = false
         // Issue #3501 A3: (a) an unlabeled `break` inside an arm exits the
         // switch — push a LoopStack frame whose ContinueLabel is null so
         // `continue` still binds to the enclosing loop; (b) an arm whose
@@ -93,7 +81,6 @@ internal partial class StatementBinder {
         binderCtx.LoopStack.Push((nil, switchBreakLabel, nil))
         try {
             for var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++ {
-                ShadowBeginBranch(shadowFlow)
                 let caseSyntax = syntax.Cases[caseIndex]
                 let callableArmEntry = HashSet[VariableSymbol](callableEntry)
                 if callableFallthrough != nil {
@@ -179,14 +166,12 @@ internal partial class StatementBinder {
                         )
                     }
                     AddBranchExits(joinExits, defaultBody)
-                    ShadowAddBranch(shadowFlow, nil, defaultBody, true)
                     fallthroughState = if endsInFallthrough {
                         listExitState
                     } else {
                         default(NarrowingState?)
                     }
                     RestoreThenBranchConditionKills(defaultOuterKills, defaultEntry)
-                    shadowApproximate = shadowApproximate || endsInFallthrough
                     defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex])
                     arms.Add(BoundPatternSwitchArm(nil, pattern: nil, $guard: nil, defaultBody))
                     let callableDefaultExit = defaultExitAliases ?? CaptureExternalCallableAliases()
@@ -204,13 +189,6 @@ internal partial class StatementBinder {
                     if !EndsInUnconditionalExit(defaultBody, gotoExits: false) {
                         callableExits = JoinExternalCallableAliases(callableExits, callableDefaultExit)
                         nonNullByRefExits = JoinExternalCallableAliases(nonNullByRefExits, nonNullByRefDefaultExit)
-                    }
-                    if !EndsInUnconditionalExit(defaultBody) {
-                        // A default arm that falls through carries no narrowing
-                        // on the discriminator (we can't observe any specific
-                        // type), so it defeats the merge unconditionally.
-                        hasAnyFallThroughArm = true
-                        mergeFailed = true
                     }
                     continue
                 }
@@ -264,9 +242,6 @@ internal partial class StatementBinder {
                 if header.RemovedNonNullByRef is {} removedNonNull {
                     nonNullByRefEntry.ExceptWith(removedNonNull)
                 }
-                if guard_ is {} boundGuard {
-                    ShadowAddGuard(shadowFlow, boundGuard)
-                }
                 // ADR-0166: the arm body runs only when the guard was true, so the
                 // guard's when-true pattern variables (`when x.Tag is string tag`)
                 // are in scope there.
@@ -283,14 +258,12 @@ internal partial class StatementBinder {
                 )
                 $scope = $scope.Pop()
                 AddBranchExits(joinExits, body)
-                ShadowAddBranch(shadowFlow, frame, body)
                 fallthroughState = if endsInFallthrough {
                     listExitState
                 } else {
                     default(NarrowingState?)
                 }
                 RestoreThenBranchConditionKills(armOuterKills, armEntry)
-                shadowApproximate = shadowApproximate || endsInFallthrough
                 body = PrependArmEntryLabel(body, armEntryLabels[caseIndex])
                 arms.Add(BoundPatternSwitchArm(nil, pattern, guard_, body))
                 let callableArmExit = CaptureExternalCallableAliases()
@@ -308,42 +281,6 @@ internal partial class StatementBinder {
                 if !EndsInUnconditionalExit(body, gotoExits: false) {
                     callableExits = JoinExternalCallableAliases(callableExits, callableArmExit)
                     nonNullByRefExits = JoinExternalCallableAliases(nonNullByRefExits, nonNullByRefArmExit)
-                }
-                // Issue #991: a guarded arm may not actually run even when its
-                // pattern matches, so it cannot contribute a reliable post-switch
-                // narrowing. Conservatively defeat the narrowing merge.
-                if hasGuard {
-                    mergeFailed = true
-                }
-                if mergeFailed {
-                    continue
-                }
-                if EndsInUnconditionalExit(body) {
-                    continue
-                }
-                hasAnyFallThroughArm = true
-                if frame == nil || frame.Count == 0 {
-                    // Fall-through arm with no narrowing — nothing to lift.
-                    mergeFailed = true
-                    continue
-                }
-                if mergedExitFrame == nil {
-                    mergedExitFrame = Dictionary[AccessPath, TypeSymbol](frame)
-                    continue
-                }
-                // Intersect with the running merge. Only variables narrowed to
-                // the same type by every fall-through arm survive.
-                let next = Dictionary[AccessPath, TypeSymbol]()
-                for kv in frame {
-                    if mergedExitFrame!!.TryGetValue(kv.Key, out var existing) && existing == kv.Value {
-                        next[kv.Key] = kv.Value
-                    }
-                }
-                if next.Count == 0 {
-                    mergeFailed = true
-                    mergedExitFrame = nil
-                } else {
-                    mergedExitFrame = next
                 }
             }
         } finally {
@@ -374,57 +311,34 @@ internal partial class StatementBinder {
         if breaks != nil {
             let activeFinallySet = HashSet[FinallyClauseSyntax](activeFinallyClauses)
             let activeCleanupSet = HashSet[BoundStatement](activeCleanupStatements)
+            // Index every break path in one traversal (#5841). Prefix and cleanup transfers remain per edge.
+            let paths = BoundNodePathFinder(
+                breaks.Select((snapshot NarrowingJumpState) -> snapshot.BreakNode).OfType[BoundNode](),
+                stopAfterFirst: false
+            )
+            paths.Visit(result)
+            let entryAliases = callableEntry.ToImmutableArray()
             for snapshot in breaks {
-                ApplyBreakPrefixEffects(snapshot, syntax, result, nil, callableEntry.ToImmutableArray())
+                ApplyBreakPrefixEffects(snapshot, syntax, result, nil, entryAliases, indexedPaths: paths.Paths)
                 if ApplyExitedFinallyEffects(snapshot, activeFinallySet, activeCleanupSet) {
                     joinExits.Add(NarrowingState.Empty.WithAll(snapshot.GetNarrowedVariablesSnapshot()))
                 }
             }
         }
-        let shadowBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
-        // ADR-0069 addendum / issue #712: park the merged narrowing on the
-        // bound switch so the enclosing block walker can lift it. Only do
-        // so when at least one arm fell through (otherwise the switch
-        // itself unconditionally exits and the post-switch dataflow is
-        // unreachable). Also require the switch to be exhaustive — if a
-        // non-matching value escapes the switch without entering any arm,
-        // the discriminator's type is unchanged and we must not narrow.
-        if !mergeFailed &&
-            hasAnyFallThroughArm &&
-            mergedExitFrame != nil &&
-            mergedExitFrame.Count > 0 &&
-            SwitchHandlesAllValues(boundArms, switchType) {
-            binderCtx.PendingSwitchExitFrames[result] = mergedExitFrame
-        }
+        let hasBreaks = binderCtx.UsedBreakLabels.Contains(switchBreakLabel)
         // Issue #3501 A3: when an arm actually used `break`, its goto targets
         // the statement position right after the switch — append the label
         // there. Switches with no arm-level break keep their bare shape (so
         // exhaustive all-arms-return switches still read as unconditional
         // exits to the all-paths-return check).
-        if shadowBreaks {
+        if hasBreaks {
             let wrapped = BoundBlockStatement(
                 syntax,
                 ImmutableArray.Create[BoundStatement](result, BoundLabelStatement(nil, switchBreakLabel))
             )
-            ShadowFinish(
-                shadowFlow,
-                "switch",
-                syntax.SwitchKeyword.Location,
-                []BoundStatement{result, wrapped},
-                !(hasCatchAll || isExhaustive),
-                true
-            )
             RecordJoinExits(wrapped, joinExits)
             return wrapped
         }
-        ShadowFinish(
-            shadowFlow,
-            "switch",
-            syntax.SwitchKeyword.Location,
-            []BoundStatement{result},
-            !(hasCatchAll || isExhaustive),
-            shadowApproximate
-        )
         RecordJoinExits(result, joinExits)
         return result
     }
@@ -1956,12 +1870,7 @@ internal partial class StatementBinder {
                 (tail BoundExpression) -> tail
             )
             if rewritten is BoundBlockExpression {
-                return BoundAddressOfExpression(
-                    outerAddress.Syntax,
-                    BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten),
-                    outerAddress.IsUnmanaged,
-                    outerAddress.IsReadOnly
-                )
+                return outerAddress.Update(BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten))
             }
             return rewritten
         }
@@ -1974,12 +1883,7 @@ internal partial class StatementBinder {
                 retainRemaining,
                 (tail BoundExpression) -> tail
             )
-            return BoundAddressOfExpression(
-                addressBlock.Syntax,
-                rewritten,
-                addressBlock.IsUnmanaged,
-                addressBlock.IsReadOnly
-            )
+            return addressBlock.Update(rewritten)
         }
         if operand is BoundBlockExpression plainBlock &&
             !ReadsUncapturableVariable(plainBlock, retainedVariables) &&
@@ -3059,7 +2963,16 @@ internal partial class StatementBinder {
         $scope = BoundScope($scope)
         try {
             let pointerType = bindTypeClause(syntax.TypeClause)
-            var source = bindExpression(syntax.PinnedSource, false)
+            let previousAllowedFixedBuffer = binderCtx.AllowedMovableFixedBufferSyntax
+            binderCtx.AllowedMovableFixedBufferSyntax = ExpressionBinder.GetRightmostMemberNameSyntax(
+                syntax.PinnedSource
+            )
+            var source BoundExpression
+            try {
+                source = bindExpression(syntax.PinnedSource, false)
+            } finally {
+                binderCtx.AllowedMovableFixedBufferSyntax = previousAllowedFixedBuffer
+            }
             var fixedBufferSourceName string? = nil
             var pinKind FixedPinKind
             var elementType TypeSymbol
@@ -3083,11 +2996,8 @@ internal partial class StatementBinder {
                     // C# CS1708: the buffer belongs to a value (e.g. a call
                     // result), not a variable; there is no storage to pin.
                     Diagnostics.ReportFixedSourceNotPinnable(syntax.PinnedSource.Location, fixedBufferSourceName)
-                } else if IsFixedVariable(bufferAccess) {
-                    // C# CS0213: the storage cannot move, so there is nothing
-                    // to pin; the buffer is already usable as a pointer.
-                    Diagnostics.ReportFixedBufferAlreadyFixed(syntax.PinnedSource.Location, bufferAccess.Field.Name)
                 }
+                // Capture and state-machine promotion determine whether this storage needs pinning at emission.
                 source = MakeFixedBufferElementReference(bufferAccess)
             } else if ExpressionBinder.GetArraySliceElementType(source.Type) is {} arrayElement {
                 // This query covers []T, [N]T, and imported CLR arrays.
@@ -3480,21 +3390,60 @@ internal partial class StatementBinder {
         // reference-type object, an array element, and a static field. Applied to
         // the buffer field access itself, so a buffer declared directly on a class
         // instance classifies as movable through the reference-type receiver arm. Anything
-        // not recognised is treated as movable — an unnecessary pin is sound,
-        // whereas wrongly rejecting a movable variable would leave no way to pin it.
-        private func IsFixedVariable(expression BoundExpression?) bool -> switch expression {
+        // not recognised is treated as movable. Emission supplies the actual promoted-variable storage map.
+        internal func IsFixedVariable(
+            expression BoundExpression?,
+            isHeapPromoted((VariableSymbol) -> bool)? = nil,
+            allowTemporaryValues bool = true
+        ) bool -> switch expression {
             case boundVariableExpression is BoundVariableExpression when boundVariableExpression.Variable is ParameterSymbol &&
                 boundVariableExpression
                 .Variable
                 .IsReceiverParameter == true: false
-            case BoundVariableExpression{Variable: LocalVariableSymbol local}: local.RefKind == RefKind.None &&
-                !(local.Type is ByRefTypeSymbol)
-            case BoundFieldAccessExpression{Receiver: {} receiver} when !Binder.IsReferenceTypeForConstraint(
-                receiver.Type
-            ): IsFixedVariable(receiver)
+            case variable is BoundVariableExpression{
+                Variable: LocalVariableSymbol local
+            }: local.RefKind == RefKind.None &&
+                !(local.Type is ByRefTypeSymbol) &&
+                isHeapPromoted?.Invoke(local) != true && HasUnboxedValueStorage(variable)
+            case BoundFieldAccessExpression{Receiver: {} receiver} when HasUnboxedValueStorage(
+                receiver
+            ): IsFixedVariable(receiver, isHeapPromoted, allowTemporaryValues)
+            case BoundClrPropertyAccessExpression{
+                Member: FieldInfo field,
+                Receiver: {} receiver
+            } when !field.IsStatic &&
+                HasUnboxedValueStorage(receiver): IsFixedVariable(receiver, isHeapPromoted, allowTemporaryValues)
+            case tuple is BoundTupleElementAccessExpression: HasUnboxedValueStorage(tuple.Receiver) &&
+                IsFixedVariable(tuple.Receiver, isHeapPromoted, allowTemporaryValues)
+            case block is BoundBlockExpression: IsFixedVariable(block.Expression, isHeapPromoted, allowTemporaryValues)
+            case conditional is BoundConditionalExpression: IsFixedVariable(
+                conditional.WhenTrue,
+                isHeapPromoted,
+                allowTemporaryValues
+            ) &&
+                IsFixedVariable(conditional.WhenFalse, isHeapPromoted, allowTemporaryValues)
             case dereference is BoundDereferenceExpression: dereference.Operand.Type is PointerTypeSymbol
+            case {} value when allowTemporaryValues && HasUnboxedValueStorage(value) && !ExpressionBinder.IsLvalue(
+                value
+            ): true
             default: false
         }
+
+        private func HasUnboxedValueStorage(expression BoundExpression) bool {
+            let declaredType = switch expression {
+                case variable is BoundVariableExpression: variable.Variable.Type
+                case field is BoundFieldAccessExpression: field.SubstitutedType ?? field.Field.Type
+                case BoundClrPropertyAccessExpression{Member: FieldInfo}: ExpressionBinder.AddressedLeafStorageType(
+                    expression,
+                    useEffectiveNullability: false
+                )
+                default: expression.Type
+            }
+            return IsUnboxedValueType(expression.Type) && IsUnboxedValueType(declaredType)
+        }
+
+        private func IsUnboxedValueType(type TypeSymbol) bool -> type is TupleTypeSymbol ||
+            Binder.IsNonNullableValueTypeForConstraint(type)
 
         // ADR-0125 / issue #1043: detect a span-like pin source — a type exposing a
         // public instance `ref T GetPinnableReference()` (canonically `System.Span[T]`

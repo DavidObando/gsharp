@@ -156,7 +156,7 @@ public static class Picker
         func FailingCases() sequence[[]object] {
             // The GS9998 crash: no imported library involved at all, only a BCL
             // class (`System.Type`) in the tuple.
-            yield[]object{"bcl-class-element-to-ienumerable", `package P
+            yield []object{"bcl-class-element-to-ienumerable", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -165,7 +165,7 @@ let xs = [](int32, Type){(1, typeof(string)), (2, typeof(int32))}
 let e IEnumerable[(int32, Type)] = xs
 Console.WriteLine(e.Count())`, []string{"2"}}
             // The same crash through a read-only list interface.
-            yield[]object{"bcl-class-element-to-ireadonlylist", `package P
+            yield []object{"bcl-class-element-to-ireadonlylist", `package P
 import System
 import System.Collections.Generic
 
@@ -176,7 +176,7 @@ Console.WriteLine(e[0].Item2.Host)`, []string{"example.org"}}
             // that has a non-generic sibling overload. Before the fix the generic
             // candidate dropped out, the `object?` overload won, and `.Item1`
             // reported GS0158.
-            yield[]object{"inference-picks-the-generic-overload-named-tuple", `package P
+            yield []object{"inference-picks-the-generic-overload-named-tuple", `package P
 import System
 import HelperLib
 
@@ -186,7 +186,7 @@ Console.WriteLine(call.Item1)
 Console.WriteLine(call.Item2!!.Name)
 Console.WriteLine(call.Method!!.Name)`, []string{"3", "String", "String"}}
             // A class from the referenced library (not in the core assembly).
-            yield[]object{"imported-library-class-element", `package P
+            yield []object{"imported-library-class-element", `package P
 import System
 import HelperLib
 
@@ -196,7 +196,7 @@ Console.WriteLine(pair.Item1)
 Console.WriteLine(pair.Item2.Name)`, []string{"5", "five"}}
             // An imported INTERFACE element, which has no base-type chain to find
             // its load context through.
-            yield[]object{"imported-library-interface-element", `package P
+            yield []object{"imported-library-interface-element", `package P
 import System
 import HelperLib
 
@@ -207,7 +207,7 @@ Console.WriteLine(pair.Item2.Shape)`, []string{"1", "square"}}
             // Arity nine: the CLR shape nests a `TRest` ValueTuple, and the
             // imported elements live in that rest node, so the recursion has to
             // build it in the same load context as the outer node.
-            yield[]object{"arity-nine-imported-elements-in-the-rest-node", `package P
+            yield []object{"arity-nine-imported-elements-in-the-rest-node", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -226,7 +226,7 @@ Console.WriteLine(one.Item9.Host)`, []string{"1", "1", "b.example"}}
             // instantiation over a context type; its parts decide the context, so
             // the tuple is rebuilt there instead of falling back to a host tuple
             // over the context `Uri`.
-            yield[]object{"imported-element-beside-a-function-over-an-imported-type", `package P
+            yield []object{"imported-element-beside-a-function-over-an-imported-type", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -241,7 +241,7 @@ Console.WriteLine(one.Item2(one.Item1))`, []string{"1", "8443"}}
             // from the host `typeof(Nullable<>)` before the tuple ever saw it, an
             // instantiation that is already poisoned (the #4035 trap), so the
             // wrapper has to be built in the context too.
-            yield[]object{"nullable-bcl-struct-element-to-ienumerable", `package P
+            yield []object{"nullable-bcl-struct-element-to-ienumerable", `package P
 import System
 import System.Collections.Generic
 import System.Linq
@@ -250,7 +250,7 @@ let xs = [](int32, DateTime?){(1, DateTime(2020, 1, 2)), (2, nil)}
 let e IEnumerable[(int32, DateTime?)] = xs
 Console.WriteLine(e.Count())
 Console.WriteLine(e.Last().Item2.HasValue)`, []string{"2", "False"}}
-            yield[]object{"nullable-library-struct-element-inference", `package P
+            yield []object{"nullable-library-struct-element-inference", `package P
 import System
 import HelperLib
 
@@ -264,7 +264,7 @@ Console.WriteLine(pair.Item2!!.X)`, []string{"6", "3"}}
         /// non-tuple containers of a non-runtime element.
         /// @returns Case name, G# source, expected stdout lines.
         func GreenNeighbours() sequence[[]object] {
-            yield[]object{"primitive-only-tuple", `package P
+            yield []object{"primitive-only-tuple", `package P
 import System
 import HelperLib
 
@@ -272,13 +272,13 @@ let xs = [](int32, string){(4, "four")}
 let x = Picker.Single(xs)
 Console.WriteLine(x.Item1)
 Console.WriteLine(x.Item2)`, []string{"4", "four"}}
-            yield[]object{"array-of-non-runtime-element", `package P
+            yield []object{"array-of-non-runtime-element", `package P
 import System
 import HelperLib
 
 let xs = []Type{typeof(string)}
 Console.WriteLine(Picker.Single(xs).Name)`, []string{"String"}}
-            yield[]object{"tuple-literal-construction-and-read", `package P
+            yield []object{"tuple-literal-construction-and-read", `package P
 import System
 
 let t = (1, typeof(string))
@@ -287,7 +287,7 @@ Console.WriteLine(t.Item2.Name)`, []string{"String"}}
             // is the code-exploder migration's shape (`tools.Select(...)`,
             // `tools.FirstOrDefault(...)`), which an earlier draft of the fix
             // broke by making the tuple symbolic.
-            yield[]object{"function-type-element-through-linq", `package P
+            yield []object{"function-type-element-through-linq", `package P
 import System
 import System.Linq
 
@@ -298,7 +298,7 @@ let names = tools.Select((t (Name string, Handler (Uri) -> int32)) -> t.Name).To
 Console.WriteLine(names[0])`, []string{"8443", "a"}}
             // Explicit type arguments bypass inference and already bound before the
             // fix; kept so the context-aware construction cannot regress them.
-            yield[]object{"explicit-type-arguments", `package P
+            yield []object{"explicit-type-arguments", `package P
 import System
 import HelperLib
 

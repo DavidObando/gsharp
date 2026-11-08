@@ -176,7 +176,7 @@ public static class UnrelatedExtensions
         func Cases() sequence[[]object] {
             // The issue's exact repro, plus a value pulled through the receiver so
             // the reader view is the one actually emitted.
-            yield[]object{"a-generic-reader-extension-binds-on-a-chan-receiver", `package P
+            yield []object{"a-generic-reader-extension-binds-on-a-chan-receiver", `package P
 import System
 import Interop
 
@@ -196,7 +196,7 @@ Console.WriteLine(run())`, []string{"207"}}
             // The writer twin, with `T` reachable ONLY through the receiver (the
             // value arrives boxed as `object`). The element is read back out
             // through G#'s own receive, so a wrong view cannot fake the result.
-            yield[]object{"a-generic-writer-extension-binds-on-a-chan-receiver", `package P
+            yield []object{"a-generic-writer-extension-binds-on-a-chan-receiver", `package P
 import System
 import Interop
 
@@ -217,7 +217,7 @@ Console.WriteLine(run())`, []string{"141"}}
             // SAME writer extension bound before the fix whenever `T` was reachable
             // from a user argument. Only the receiver's own contribution to
             // inference was missing.
-            yield[]object{"control-a-generic-writer-extension-whose-T-comes-from-an-argument", `package P
+            yield []object{"control-a-generic-writer-extension-whose-T-comes-from-an-argument", `package P
 import System
 import Interop
 
@@ -237,7 +237,7 @@ func run() int32 {
 Console.WriteLine(run())`, []string{"234"}}
             // The finding that corrects the issue: a generic imported method fails
             // in ARGUMENT position too, so this row is red before the fix as well.
-            yield[]object{"a-generic-static-infers-through-the-view-in-argument-position", `package P
+            yield []object{"a-generic-static-infers-through-the-view-in-argument-position", `package P
 import System
 import Interop
 
@@ -256,7 +256,7 @@ func run() int32 {
 Console.WriteLine(run())`, []string{"2"}}
             // The issue's control 1, green on both sides: the same imported
             // extension reached through a receiver that is already `in chan[T]`.
-            yield[]object{"control-the-same-extension-on-an-in-chan-receiver", `package P
+            yield []object{"control-the-same-extension-on-an-in-chan-receiver", `package P
 import System
 import Interop
 
@@ -282,7 +282,7 @@ Console.WriteLine(run())`, []string{"207"}}
             // already bound on a `chan[int32]` receiver and already emitted
             // `get_Reader`. Whatever was broken, it was not the receiver slot's
             // ability to classify the view.
-            yield[]object{"control-a-non-generic-reader-extension-already-bound", `package P
+            yield []object{"control-a-non-generic-reader-extension-already-bound", `package P
 import System
 import Interop
 
@@ -300,7 +300,7 @@ func run() int32 {
 Console.WriteLine(run())`, []string{"7"}}
             // The issue's control 2, green on both sides: G#'s own extension lookup
             // has always applied the view in receiver position.
-            yield[]object{"control-a-gsharp-declared-extension-on-a-chan-receiver", `package P
+            yield []object{"control-a-gsharp-declared-extension-on-a-chan-receiver", `package P
 import System
 
 func (r in chan[int32]) firstOrZero() int32 {
@@ -329,7 +329,7 @@ Console.WriteLine(run())`, []string{"7"}}
         /// @returns The case data.
         func RejectedCases() sequence[[]object] {
             // A send-only handle must not acquire a reader's surface.
-            yield[]object{"a-reader-extension-is-invisible-on-a-send-only-receiver", `package P
+            yield []object{"a-reader-extension-is-invisible-on-a-send-only-receiver", `package P
 import System
 import Interop
 
@@ -341,7 +341,7 @@ Console.WriteLine(viaWriter(chan[int32](1)))`, "CountSoFar"}
             // …and the twin, which is the row the fix could most plausibly have
             // broken: inference now infers `T` for a `ChannelWriter<T>` formal from
             // a `ChannelReader<int>` argument, and applicability has to reject it.
-            yield[]object{"a-writer-extension-is-invisible-on-a-receive-only-receiver", `package P
+            yield []object{"a-writer-extension-is-invisible-on-a-receive-only-receiver", `package P
 import System
 import Interop
 
@@ -352,7 +352,7 @@ func viaReader(r in chan[int32]) int32 {
 Console.WriteLine(viaReader(chan[int32](1)))`, "SendAll"}
             // `Channel<T>` is invariant; the element check runs whatever the
             // direction lattice says.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import Interop
 
@@ -361,7 +361,7 @@ Console.WriteLine(ch.TakeTextLength())`, "TakeTextLength"}
             // An extension with nothing to do with channels stays member-not-found:
             // the fix widened inference through channel SHAPES, not through
             // everything the receiver could be coerced into.
-            yield[]object{"an-unrelated-extension-stays-member-not-found", `package P
+            yield []object{"an-unrelated-extension-stays-member-not-found", `package P
 import System
 import Interop
 

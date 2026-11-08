@@ -372,7 +372,7 @@ public class PairHolder<T>
             // `List[T]` declares `List(int)` and `List(IEnumerable<T>)`, so the
             // printed Count is what says which one ran — 3 for the enumerable, 0
             // for the capacity.
-            yield[]object{"the-issues-repro-a-slice-of-the-open-element-into-a-bcl-base", `package P
+            yield []object{"the-issues-repro-a-slice-of-the-open-element-into-a-bcl-base", `package P
 import System
 import System.Collections.Generic
 
@@ -384,7 +384,7 @@ class MyList[T] : List[T] {
 Console.WriteLine(MyList[int32]([]int32{1, 2, 3}).Count)`, []string{"3"}}
             // The same shape against a plain C# assembly, which is where it bites
             // an author with no BCL type in sight.
-            yield[]object{"a-slice-of-the-open-element", `package P
+            yield []object{"a-slice-of-the-open-element", `package P
 import System
 import Interop
 
@@ -396,18 +396,18 @@ class Seq[T] : SeqHolder[T] {
 Console.WriteLine(Seq[int32]([]int32{1, 2, 3}).Tag)`, []string{"seq:3"}}
             // `map[K, V]` over two open parameters — the #3303 arm of the erasure
             // projection, reached from `: base(...)` for the first time.
-            yield[]object{"a-map-over-an-open-key-and-value", `package P
+            yield []object{"a-map-over-an-open-key-and-value", `package P
 import System
 import Interop
 
-class Holder[K, V] : MapHolder[K, V] {
+class Holder[K notnull, V] : MapHolder[K, V] {
     init(entries map[K, V]) : base(entries) {
     }
 }
 
 Console.WriteLine(Holder[string, int32](map[string, int32]{"a": 1, "b": 2}).Tag)`, []string{"map:2"}}
             // A tuple with a symbolic element — the #3087 arm.
-            yield[]object{"a-tuple-carrying-the-open-element", `package P
+            yield []object{"a-tuple-carrying-the-open-element", `package P
 import System
 import Interop
 
@@ -420,7 +420,7 @@ Console.WriteLine(Pairish[string]((7, "x")).Tag)`, []string{"tuple:7"}}
             // ADR-0174 D2's `chan[T]` over an open element — the #3876 arm. This
             // row is red on the parent commit even though that arm is already in
             // the tree, because this path never called the projection carrying it.
-            yield[]object{"a-channel-over-the-open-element", `package P
+            yield []object{"a-channel-over-the-open-element", `package P
 import System
 import Interop
 
@@ -436,7 +436,7 @@ Console.WriteLine(Relay[int32](chan[int32](2)).Tag)`, []string{"chan:4"}}
             // argument (`if …`) beside an erased one. Its erased-argument loop
             // returned early on the null, so the branchy argument was never rebound
             // against the candidate set.
-            yield[]object{"a-deferred-branchy-argument-beside-an-erased-one", `package P
+            yield []object{"a-deferred-branchy-argument-beside-an-erased-one", `package P
 import System
 import Interop
 
@@ -451,7 +451,7 @@ Console.WriteLine(Pair[int32]([]int32{1, 2}, false).Tag)`, []string{"seq:3:4", "
             // BOTH `(IEnumerable<T>, int)` and `(IEnumerable<T>, string)`, so the
             // deferred argument's rebind is what picks the overload — `label:`
             // rather than `seq:` in the output is the proof it ran.
-            yield[]object{"a-deferred-branchy-argument-selects-the-string-overload", `package P
+            yield []object{"a-deferred-branchy-argument-selects-the-string-overload", `package P
 import System
 import Interop
 
@@ -465,7 +465,7 @@ Console.WriteLine(Labelled[int32]([]int32{1, 2}, false).Tag)`, []string{"label:3
             // Control 1 from the issue: the same base constructor set reached with
             // a NON-erased argument. Green on both sides — this is what says the
             // bug was never about base initializers or generic bases as such.
-            yield[]object{"control-a-non-erased-argument-to-the-same-generic-base", `package P
+            yield []object{"control-a-non-erased-argument-to-the-same-generic-base", `package P
 import System
 import Interop
 
@@ -477,7 +477,7 @@ class Seq[T] : SeqHolder[T] {
 Console.WriteLine(Seq[int32](5).Tag)`, []string{"int:5"}}
             // Control 2 from the issue: the same base constructor with a CLOSED
             // element. Green on both sides.
-            yield[]object{"control-a-closed-element-in-the-same-position", `package P
+            yield []object{"control-a-closed-element-in-the-same-position", `package P
 import System
 import Interop
 
@@ -493,7 +493,7 @@ Console.WriteLine(Derived(chan[int32](2)).Tag)`, []string{"chan:4"}}
             // materialising the omitted default it indexed past the supplied
             // arguments and crashed the compiler outright (GS9998,
             // IndexOutOfRangeException). The printed `:0` is the default arriving.
-            yield[]object{"an-omitted-optional-parameter-beside-an-erased-argument", `package P
+            yield []object{"an-omitted-optional-parameter-beside-an-erased-argument", `package P
 import System
 import Interop
 
@@ -510,7 +510,7 @@ Console.WriteLine(Opt[int32]([]int32{1, 2, 3}).Tag)`, []string{"seq:3:0"}}
             // supplied. What this PR changed is that an erased argument can now
             // reach that loop as well; the repair covers both, and this row is what
             // says the older half is fixed rather than merely avoided.
-            yield[]object{"an-omitted-optional-on-a-closed-base-crashed-on-main-too", `package P
+            yield []object{"an-omitted-optional-on-a-closed-base-crashed-on-main-too", `package P
 import System
 import Interop
 
@@ -528,7 +528,7 @@ Console.WriteLine(D([]int32{1, 2, 3}).Tag)`, []string{"seq:3:0"}}
             // for the same reason: `default(T)` must reify over the real slot rather
             // than lower to `ldnull`. `T` closes to `int32` here, so the default
             // arriving is `0`.
-            yield[]object{"an-omitted-symbolic-default-beside-an-erased-argument", `package P
+            yield []object{"an-omitted-symbolic-default-beside-an-erased-argument", `package P
 import System
 import Interop
 
@@ -545,7 +545,7 @@ Console.WriteLine(Fb[int32]([]int32{1, 2, 3}).Tag)`, []string{"seq:3:0"}}
             // signature says `T0[]` — this case ran and printed the right string
             // while failing ILVerify, which is why the harness verifies as well as
             // runs.
-            yield[]object{"an-expanded-params-array-over-the-open-element", `package P
+            yield []object{"an-expanded-params-array-over-the-open-element", `package P
 import System
 import Interop
 
@@ -561,12 +561,12 @@ Console.WriteLine(Pk[int32](7).Tag)`, []string{"params:1"}}
             // `map[K, V]` pushed this valid call into the very classifier gap
             // (#3987) the rewrite exists to route around. Green on `main`, so this
             // is a regression guard, not a new capability.
-            yield[]object{"control-an-explicitly-imported-dictionary-spelling", `package P
+            yield []object{"control-an-explicitly-imported-dictionary-spelling", `package P
 import System
 import System.Collections.Generic
 import Interop
 
-class Holder[K, V] : MapHolder[K, V] {
+class Holder[K notnull, V] : MapHolder[K, V] {
     init(entries Dictionary[K, V]) : base(entries) {
     }
 }
@@ -577,7 +577,7 @@ Console.WriteLine(Holder[string, int32](Dictionary[string, int32]()).Tag)`, []st
             // the `TRest` chain before it can name the shape — otherwise the long
             // tuples, which need the rewrite most, keep the imported spelling and
             // hit the open-element identity gap.
-            yield[]object{"a-tuple-of-arity-eight-carrying-the-open-element", `package P
+            yield []object{"a-tuple-of-arity-eight-carrying-the-open-element", `package P
 import System
 import Interop
 
@@ -595,7 +595,7 @@ Console.WriteLine(Big[string]((1, 2, 3, 4, 5, 6, 7, "z")).Tag)`, []string{"big:1
         func RejectedCases() sequence[[]object] {
             // Wrong arity against a base that really declares nothing of that
             // arity — GS0214's claim is TRUE here, so GS0214 is what it stays.
-            yield[]object{"wrong-arity-still-reports-gs0214", `package P
+            yield []object{"wrong-arity-still-reports-gs0214", `package P
 import System
 import Interop
 
@@ -609,7 +609,7 @@ Console.WriteLine(Seq[int32]([]int32{1}).Tag)`, "GS0214"}
             // base had no two-argument constructor, which was false; now that
             // resolution has actually run, the report names applicability — the
             // same GS0267 the ordinary imported-constructor probe gives.
-            yield[]object{"a-wrong-argument-type-now-names-applicability", `package P
+            yield []object{"a-wrong-argument-type-now-names-applicability", `package P
 import System
 import Interop
 
@@ -628,7 +628,7 @@ Console.WriteLine(Relay[int32](chan[int32](2)).Tag)`, "GS0267"}
             // `ValueTuple<int32, !T0>`. ILVerify rejected the emitted constructor
             // with StackUnexpected on both. Targeting the symbolic parameter is
             // what makes them a bind-time error, where they belong.
-            yield[]object{"a-clr-typed-slice-does-not-satisfy-a-symbolic-element", `package P
+            yield []object{"a-clr-typed-slice-does-not-satisfy-a-symbolic-element", `package P
 import System
 import Interop
 
@@ -638,7 +638,7 @@ class Seq[T] : SeqHolder[T] {
 }
 
 Console.WriteLine(Seq[int32]([]string{"a", "b"}).Tag)`, "GS0155"}
-            yield[]object{"an-erased-tuple-spelling-does-not-satisfy-a-symbolic-element", `package P
+            yield []object{"an-erased-tuple-spelling-does-not-satisfy-a-symbolic-element", `package P
 import System
 import Interop
 
@@ -652,7 +652,7 @@ Console.WriteLine(Pairish[string]((7, "x")).Tag)`, "GS0155"}
             // `map[string, T]` erases to a `Dictionary<…>`, which is no
             // `IEnumerable<T>`, so no constructor is applicable and the report
             // names applicability. Being projected is what let it be judged.
-            yield[]object{"an-erased-shape-that-does-not-fit-is-still-refused", `package P
+            yield []object{"an-erased-shape-that-does-not-fit-is-still-refused", `package P
 import System
 import Interop
 

@@ -22,19 +22,17 @@ import System.Threading
 
 internal partial class StatementBinder {
     private let externalCallableAliases HashSet[VariableSymbol] = HashSet[VariableSymbol]()
-    private let lastEarlyExitLifts List[(Path AccessPath, Type TypeSymbol)] = List[(Path AccessPath, Type TypeSymbol)]()
-    private let earlyExitRemovedFacts Dictionary[BoundIfStatement, Dictionary[AccessPath, TypeSymbol]] = Dictionary[
-        BoundIfStatement,
-        Dictionary[AccessPath, TypeSymbol]
-    ]()
-    private var lastEarlyExitRemovedFacts Dictionary[AccessPath, TypeSymbol]? = nil
-    // Issue #5128: effect summary of the statement bound last. Invalidation
-    // and the callable alias update read the same summary, so the bound tree of
-    // a statement is walked once. A summary is valid only for the node and the
-    // entry alias set it was computed for.
-    private var effectsNode BoundStatement? = nil
-    private var effectsAliases HashSet[VariableSymbol]? = nil
-    private var effects AssignedRootsCollector? = nil
+    private let pendingStatementEffects Dictionary[
+        BoundStatement,
+        (Aliases HashSet[VariableSymbol], Summary AssignedRootsCollector)
+    ] = Dictionary[BoundStatement, (Aliases HashSet[VariableSymbol], Summary AssignedRootsCollector)](
+        ReferenceEqualityComparer.Instance
+    )
+    // Alias-independent records survive consumption and compose enclosing statements without another subtree walk.
+    private let composedStatementEffects Dictionary[BoundStatement, StatementEffects] = Dictionary[
+        BoundStatement,
+        StatementEffects
+    ](ReferenceEqualityComparer.Instance)
     // Member-mutation facts are a pure function of a statement's syntax.
     private let memberMutationBySyntax Dictionary[SyntaxNode, bool] = Dictionary[SyntaxNode, bool]()
     // ADR-0208 R18: reused for each condition; read only before the branches are bound.
@@ -72,6 +70,7 @@ internal partial class StatementBinder {
     }
 
     internal func SyncExpressionCallableAliasesNow() {
+        binderCtx.NarrowedVariables.SetExternalCallables(externalCallableAliases)
         syncExpressionCallableAliases?.Invoke(externalCallableAliases)
     }
 
@@ -340,6 +339,7 @@ internal partial class StatementBinder {
     internal func IsolateExternalCallableAliases() HashSet[VariableSymbol] {
         let saved = HashSet[VariableSymbol](externalCallableAliases)
         externalCallableAliases.Clear()
+        binderCtx.NarrowedVariables.SetExternalCallables(externalCallableAliases)
         return saved
     }
 
@@ -352,6 +352,7 @@ internal partial class StatementBinder {
     internal func SetExternalCallableAliasesFromExpression(aliases HashSet[VariableSymbol]) {
         externalCallableAliases.Clear()
         externalCallableAliases.UnionWith(aliases)
+        binderCtx.NarrowedVariables.SetExternalCallables(externalCallableAliases)
     }
 
     private func CaptureExternalCallableAliases() HashSet[VariableSymbol] -> HashSet[VariableSymbol](
@@ -407,12 +408,14 @@ internal partial class StatementBinder {
     /// (cref:MayShareStorage).
     private func NewCollector(
         assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
-        externalFunctionValues IEnumerable[VariableSymbol]? = nil
+        externalFunctionValues IEnumerable[VariableSymbol]? = nil,
+        knownStatements Dictionary[BoundStatement, StatementEffects]? = nil
     ) AssignedRootsCollector -> AssignedRootsCollector(
         assignmentPreservesNarrowing,
         externalFunctionValues,
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
-        (variable VariableSymbol) -> NamesClosureAssignedStorage(variable)
+        (variable VariableSymbol) -> NamesClosureAssignedStorage(variable),
+        knownStatements
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -575,95 +578,6 @@ internal partial class StatementBinder {
         narrowedType TypeSymbol
     ) {
         frame[path] = narrowedType
-    }
-
-    // `if !TryGet(out var v) || v == nil { return }` tests `v` AFTER the
-    // condition wrote it through the out argument, so the narrowing it lifts is
-    // about the new value. The post-statement invalidation drops every root the
-    // statement writes, which discarded that lift; put back the lifted
-    // narrowing of a bare variable that only the condition wrote through a
-    // writable reference and that no branch or plain assignment touches.
-    private func RestoreEarlyExitLiftsWrittenOnlyByCondition(
-        statement BoundStatement?,
-        persistentFrame NarrowingFrame,
-        aliasesAtEntry IReadOnlyCollection[VariableSymbol]? = nil
-    ) {
-        var statement = statement
-        var aliasesAtEntry = aliasesAtEntry
-        if lastEarlyExitLifts.Count == 0 {
-            return
-        }
-        while statement is BoundBlockStatement labeledBlock &&
-            labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
-            labeledBlock.Statements[0] is BoundLabelStatement {
-            statement = labeledBlock.Statements[1]
-            aliasesAtEntry = Array.Empty[VariableSymbol]()
-        }
-        if statement is not BoundIfStatement ifStatement {
-            return
-        }
-        let initialAliases = aliasesAtEntry ?? externalCallableAliases
-        let condition = NewCollector(nil, initialAliases)
-        condition.VisitExpression(ifStatement.Condition)
-        if condition
-            .WritableReferenceRoots
-            .Count == 0 ||
-            condition.MayMutateAnyRoot ||
-            condition.MayMutateWritableReferenceRoots {
-            return
-        }
-        let branches = NewCollector(nil, initialAliases)
-        branches.VisitStatement(ifStatement.ThenStatement)
-        if ifStatement.ElseStatement != nil {
-            branches.VisitStatement(ifStatement.ElseStatement)
-        }
-        let plainTargets = PlainAssignmentTargetCollector()
-        plainTargets.VisitExpression(ifStatement.Condition)
-        var inOrderElse Dictionary[AccessPath, TypeSymbol]? = nil
-        var computedInOrderElse = false
-        for (path, narrowedType) in lastEarlyExitLifts {
-            if path.HasMembers || !condition.WritableReferenceRoots.Contains(path.Root) ||
-                plainTargets
-                .Targets
-                .Contains(path.Root) || branches.AssignsRoot(path.Root) {
-                continue
-            }
-            // ADR-0208 R15 (#5498): a condition that runs source code or writes the root after the test can clear
-            // it, so the lift is restored only when the evaluation-order else state still holds the fact.
-            if !computedInOrderElse {
-                inOrderElse = ComputeConditionNarrowingInOrder(
-                    ifStatement.Condition,
-                    HashSet[VariableSymbol](initialAliases),
-                    lastEarlyExitRemovedFacts,
-                    keepBoolCallInLogicalOps: true
-                ).Else
-                computedInOrderElse = true
-            }
-            if inOrderElse == nil || !inOrderElse.TryGetValue(path, out var inOrderType) {
-                continue
-            }
-            SetPersistentNarrowing(persistentFrame, path, inOrderType)
-        }
-    }
-
-    private class PlainAssignmentTargetCollector : BoundTreeWalker {
-        init() {
-            Targets = HashSet[VariableSymbol]()
-        }
-
-        prop Targets HashSet[VariableSymbol] {
-            get;
-        }
-
-        protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            if node.Variable != nil {
-                Targets.Add(node.Variable)
-            }
-            base.VisitAssignmentExpression(node)
-        }
     }
 
     private func InvalidateNarrowingsForAssignedVariables(
@@ -994,8 +908,7 @@ internal partial class StatementBinder {
             aliasesAtEntry = Array.Empty[VariableSymbol]()
         }
         let collector = GetStatementEffects(statement, aliasesAtEntry)
-        // The summary serves one statement; later statements recompute it.
-        ClearStatementEffects()
+        pendingStatementEffects.Remove(statement)
         ApplyCallableAliasExitState(externalCallableAliases, statement, aliasesAtEntry, collector)
         // A filter of an enclosing try can run between any two statements of its protected block,
         // when a nested handler catches a replacement exception.
@@ -1035,42 +948,28 @@ internal partial class StatementBinder {
         statement BoundStatement,
         aliases IReadOnlyCollection[VariableSymbol]
     ) AssignedRootsCollector {
-        if effects != nil && object.ReferenceEquals(effectsNode, statement) && HasSameAliases(aliases) {
+        if pendingStatementEffects.TryGetValue(statement, out var recorded) && recorded.Aliases.SetEquals(aliases) {
             CompilationMeasurements.Count("narrowing.effect-reuses")
-            return effects!!
+            return recorded.Summary
         }
-        let collector = NewCollector(nil, aliases)
+        let collector = NewCollector(nil, aliases, composedStatementEffects)
+        collector.MeasureStatementEffects = true
         collector.Visit(statement)
         CompilationMeasurements.Count("narrowing.effect-walks")
-        effectsNode = statement
-        effectsAliases = if aliases.Count == 0 {
-            nil
-        } else {
-            HashSet[VariableSymbol](aliases)
+        pendingStatementEffects[statement] = (HashSet[VariableSymbol](aliases), collector)
+        if collector.CanComposeRootEffects {
+            composedStatementEffects[statement] = StatementEffects.Create(
+                collector.Roots,
+                Array.Empty[VariableSymbol](),
+                false,
+                false,
+                false,
+                false,
+                false
+            )
+            CompilationMeasurements.Count("narrowing.effects-composed")
         }
-        effects = collector
         return collector
-    }
-
-    private func HasSameAliases(aliases IReadOnlyCollection[VariableSymbol]) bool {
-        if aliases.Count == 0 {
-            return effectsAliases == nil
-        }
-        if effectsAliases == nil || effectsAliases!!.Count != aliases.Count {
-            return false
-        }
-        for alias in aliases {
-            if !effectsAliases!!.Contains(alias) {
-                return false
-            }
-        }
-        return true
-    }
-
-    private func ClearStatementEffects() {
-        effectsNode = nil
-        effectsAliases = nil
-        effects = nil
     }
 
     // Issue #5128: same member-mutation rule as CollectAssignedNamesAndMemberMutation,
@@ -1215,69 +1114,12 @@ internal partial class StatementBinder {
         }
     }
 
-    /// ADR-0069 / issue #700: when the bound statement is an
-    /// (cref:BoundIfStatement) whose then-branch unconditionally
-    /// exits the enclosing block, and whose else-frame (recorded by
-    /// (cref:BindIfStatement)) is non-empty, merge that frame into
-    /// [`persistentFrame`](paramref) so subsequent statements in the
-    /// enclosing block see the narrowing.
-    private func ApplyEarlyExitNarrowings(statement BoundStatement?, persistentFrame NarrowingFrame) {
-        var statement = statement
-        lastEarlyExitLifts.Clear()
-        lastEarlyExitRemovedFacts = nil
-        while statement is BoundBlockStatement labeledBlock &&
-            labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
-            labeledBlock.Statements[0] is BoundLabelStatement {
-            statement = labeledBlock.Statements[1]
-        }
-        if statement is BoundIfStatement ifStmt {
-            earlyExitRemovedFacts.TryGetValue(ifStmt, out var removedFacts)
-            earlyExitRemovedFacts.Remove(ifStmt)
-            if !binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame) {
-                return
-            }
-            binderCtx.PendingEarlyExitFrames.Remove(ifStmt)
-            // Only apply the lift if the then-branch unconditionally exits.
-            // Falling through means the variable could still be of any type
-            // that satisfies the original condition, so the else-frame is not
-            // a safe post-condition.
-            if !EndsInUnconditionalExit(ifStmt.ThenStatement) {
-                return
-            }
-            if ifStmt.ElseStatement != nil && ContainsUserLabel(ifStmt.ElseStatement) {
-                return
-            }
-            lastEarlyExitRemovedFacts = removedFacts
-            for kv in elseFrame {
-                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
-                lastEarlyExitLifts.Add((kv.Key, kv.Value))
-            }
-            return
-        }
-        // ADR-0069 addendum / issue #712: post-switch narrowing lift. When
-        // every non-exiting arm contributes the same narrowing on the
-        // discriminator, propagate that narrowing into the enclosing block.
-        if statement is BoundPatternSwitchStatement switchStmt && binderCtx.PendingSwitchExitFrames.TryGetValue(
-            switchStmt,
-            out var switchFrame
-        ) {
-            binderCtx.PendingSwitchExitFrames.Remove(switchStmt)
-            for kv in switchFrame {
-                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value)
-            }
-        }
-    }
-
     /// Issue #1123: assignment-based smart cast. When the bound statement is a
     /// plain `x = rhs` assignment whose target is a nullable flow-tracked
     /// variable and whose right-hand side is statically <em>non-nullable</em>
     /// value assignable to the local's underlying type, record a narrowing of
     /// `x` to that underlying non-nullable type in
-    /// [`persistentFrame`](paramref). Mirrors the post-guard narrowing of
-    /// (cref:ApplyEarlyExitNarrowings): the entry persists for the rest
+    /// [`persistentFrame`](paramref). Like a normal-exit proof, the entry persists for the rest
     /// of the enclosing block (and into nested blocks) until
     /// (cref:InvalidateNarrowingsForAssignedVariables) clears it on a
     /// subsequent mutation. Called after invalidation so the fresh narrowing
@@ -1756,6 +1598,7 @@ internal partial class StatementBinder {
 
     private func CanCompleteNormally(statement BoundStatement) bool -> switch statement {
         case block is BoundBlockStatement: CanStatementListCompleteNormally(block.Statements)
+        case expression is BoundExpressionStatement: !ExpressionAlwaysExits(expression.Expression)
         case BoundTryStatement{FinallyBlock: {} finallyBlock} when !CanCompleteNormally(finallyBlock): false
         case infiniteLoop is BoundForInfiniteStatement when IsSyntacticallyInfiniteLoop(
             infiniteLoop
@@ -1792,7 +1635,7 @@ internal partial class StatementBinder {
     private func ComputeCleanupFallthroughNonNull(
         cleanup BoundStatement,
         callableAliases IReadOnlyCollection[VariableSymbol]
-    ) Dictionary[AccessPath, TypeSymbol]? -> ComputeBranchFallthroughNonNull(cleanup, entry: nil, callableAliases)
+    ) Dictionary[AccessPath, TypeSymbol]? -> ComputeCleanupFallthroughNonNull(cleanup, entry: nil, callableAliases)
 
     private func ApplyMutationsToState(state Dictionary[AccessPath, TypeSymbol], mutations AssignedRootsCollector) {
         for entry in state.ToArray() {
@@ -1917,7 +1760,12 @@ internal partial class StatementBinder {
             return false
         }
         if !AssignmentTypePreservesNarrowing(assign.AssignedValueType, u) &&
-            !NestedAssignmentPreservesNarrowing(assign.Expression, u) {
+            !NestedAssignmentPreservesNarrowing(assign.Expression, u) &&
+            !(
+            u is TypeParameterSymbol &&
+                assign.AssignedValueType == u &&
+                ExpressionBinder.IsProvenNonNullTypeParameterExpression(assign.Expression)
+        ) {
             return false
         }
         variable = assign.Variable
@@ -2192,13 +2040,16 @@ internal partial class StatementBinder {
                 EndsInUnconditionalExit(ifStmt.ElseStatement) {
                 return false
             }
-            let joined = ComputeIfJoinNonNull(ifStmt, entry: nil, externalCallableAliases)
+            if !normalStatementExits.TryGetValue(ifStmt, out var joined) {
+                return false
+            }
             let underlying = if widenedType is NullableTypeSymbol nullable {
                 nullable.UnderlyingType
             } else {
                 widenedType
             }
-            return joined != nil && joined.TryGetValue(path, out var joinedType) &&
+            let joinedType = joined.NarrowedType(path)
+            return joinedType != nil &&
                 !IsNullableWidening(path, joinedType) &&
                 AssignmentTypePreservesNarrowing(joinedType, underlying)
         }
@@ -2208,7 +2059,10 @@ internal partial class StatementBinder {
     private func AssignmentPreservesNarrowing(assignment BoundAssignmentExpression, narrowedType TypeSymbol) bool {
         // Loop back-edges need stronger proof than straight-line issue #1123
         // narrowing because the assigned value feeds a later iteration.
-        return AssignmentTypePreservesNarrowing(assignment.AssignedValueType, narrowedType) &&
+        return (
+            AssignmentTypePreservesNarrowing(assignment.AssignedValueType, narrowedType) ||
+                (narrowedType is TypeParameterSymbol && assignment.AssignedValueType == narrowedType)
+        ) &&
             IsDefinitelyNonNullValue(assignment.Expression)
     }
 
@@ -2221,11 +2075,28 @@ internal partial class StatementBinder {
             case _ is BoundConstructorCallExpression: true
             case _ is BoundClrConstructorCallExpression: true
             case _ is BoundTypeParameterConstructionExpression: true
+            case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}}: true
+            case binary is BoundBinaryExpression when binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce:
+            binary.Right.Type == TypeSymbol.Never || IsDefinitelyNonNullValue(binary.Right)
             case literal is BoundLiteralExpression: literal.Value != nil
-            case BoundVariableExpression{NarrowedType: not nil} variable when variable
-                .Variable
-                .Type is NullableTypeSymbol &&
+            case BoundVariableExpression{NarrowedType: not nil} variable when(
+                variable.Variable.Type is NullableTypeSymbol || variable.Variable.Type is TypeParameterSymbol
+            ) &&
                 !(variable.NarrowedType is NullableTypeSymbol): true
+            case BoundFieldAccessExpression{NarrowedType: not nil} field when !(
+                field.NarrowedType is NullableTypeSymbol
+            ): true
+            case BoundPropertyAccessExpression{NarrowedType: not nil} prop when !(
+                prop.NarrowedType is NullableTypeSymbol
+            ): true
+            case BoundClrPropertyAccessExpression{NarrowedType: not nil} clrProp when !(
+                clrProp.NarrowedType is NullableTypeSymbol
+            ): true
+            case _ when SmartCastStability.TryGetStableMemberPath(expression, out var path, out _) &&
+                path != nil &&
+                binderCtx
+                .NarrowedVariables
+                .Query(path) is {} pathNarrowed && !(pathNarrowed is NullableTypeSymbol): true
             case variable is BoundVariableExpression: IsDefinitelyNonNullVariable(variable.Variable)
             case call is BoundCallExpression: FunctionReturnsDefinitelyNonNull(call.Function)
             default: false
@@ -2274,86 +2145,9 @@ internal partial class StatementBinder {
             .TryLookupFunctions(call.Identifier.ValueText).IsDefaultOrEmpty
     }
 
-    /// Issue #2159: `if`-join narrowing. When both the then-branch and the
-    /// else-branch (explicit or the implicit negated-condition else) of a
-    /// fall-through (cref:BoundIfStatement) leave a nullable `var`
-    /// local non-null at their exit, lift that narrowing into the enclosing
-    /// block's persistent frame so subsequent reads see the non-nullable type.
-    /// This generalises the straight-line assignment narrowing (issue #1123)
-    /// and the early-exit narrowing (issue #700) to the ubiquitous
-    /// "null-check then reassign in the null branch" idiom.
-    ///
-    /// A branch leaves the local non-null when it either (a) assigns it a
-    /// statically non-null value (see (cref:TryClassifyNonNullAssignment)),
-    /// or (b) is entered under a condition that narrows it non-null
-    /// (`x != nil`) and never reassigns it to a nullable value. The result
-    /// is the intersection over the two branch exits, so the local is narrowed
-    /// only when proven non-null on every path that reaches the join.
-    ///
-    /// Runs after (cref:InvalidateNarrowingsForAssignedVariables) (which
-    /// clears any stale narrowing on variables the `if` mutates) so the
-    /// fresh join narrowing supersedes the clearing pass; a later statement that
-    /// reassigns the local to a nullable value re-nullable-izes it through its
-    /// own invalidation pass.
-    private func ApplyIfJoinNarrowings(
-        statement BoundStatement?,
-        persistentFrame NarrowingFrame,
-        callableAliases IReadOnlyCollection[VariableSymbol]? = nil
-    ) {
-        var statement = statement
-        var callableAliases = callableAliases
-        while statement is BoundBlockStatement labeledBlock &&
-            labeledBlock.Syntax is LabeledStatementSyntax &&
-            labeledBlock
-            .Statements
-            .Length == 2 &&
-            labeledBlock.Statements[0] is BoundLabelStatement {
-            statement = labeledBlock.Statements[1]
-            callableAliases = Array.Empty[VariableSymbol]()
-        }
-        if statement is not BoundIfStatement ifStmt {
-            return
-        }
-        // Both branches must fall through to the join. A branch that
-        // unconditionally exits (return/throw/break/continue/goto) is the
-        // early-exit case handled by ApplyEarlyExitNarrowings; requiring both
-        // branches to fall through here keeps the two passes from overlapping.
-        if EndsInUnconditionalExit(ifStmt.ThenStatement) {
-            return
-        }
-        if ifStmt.ElseStatement != nil && EndsInUnconditionalExit(ifStmt.ElseStatement) {
-            return
-        }
-        let joined Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(ifStmt, entry: nil, callableAliases)
-        if joined == nil || joined.Count == 0 {
-            return
-        }
-        for kv in joined {
-            let path = kv.Key
-            // Lift plain nullable reference-like flow variables only, matching the
-            // scope of the straight-line assignment narrowing. Value-type
-            // nullables and member paths are intentionally excluded.
-            if path.HasMembers || !SmartCastStability.IsAssignmentNarrowingRoot(path.Root) ||
-                path
-                .Root
-                .IsReadOnly ||
-                path
-                .Root
-                .Type is not NullableTypeSymbol nullable ||
-                !IsReferenceLikeType(nullable.UnderlyingType) {
-                continue
-            }
-            SetPersistentNarrowing(persistentFrame, path, nullable.UnderlyingType)
-        }
-    }
-
-    /// Issue #2159: computes the set of locals proven non-null at the normal
-    /// (fall-through) exit of [`ifStmt`](paramref), given the non-null
-    /// locals on entry ([`entry`](paramref)). Recurses through
-    /// `else if` chains (an `else if` is a nested
-    /// (cref:BoundIfStatement)). Returns `null` when the
-    /// whole `if` exits unconditionally (no path falls through).
-    private func ComputeIfJoinNonNull(
+    /// Applies a conditional cleanup to the jump's entry facts.
+    /// Cleanup runs after binding and must transfer the state supplied by each exiting edge.
+    private func ComputeCleanupConditionalExit(
         ifStmt BoundIfStatement,
         entry Dictionary[AccessPath, TypeSymbol]?,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil,
@@ -2370,7 +2164,7 @@ internal partial class StatementBinder {
             initialAliases
         )
         let thenAliases = HashSet[VariableSymbol](trueAliases)
-        let thenState Dictionary[AccessPath, TypeSymbol]? = ComputeBranchFallthroughNonNull(
+        let thenState Dictionary[AccessPath, TypeSymbol]? = ComputeCleanupFallthroughNonNull(
             ifStmt.ThenStatement,
             MergeLocalNonNull(conditionEntry, thenNarrow),
             thenAliases
@@ -2379,7 +2173,7 @@ internal partial class StatementBinder {
         let elseState Dictionary[AccessPath, TypeSymbol]? = if ifStmt.ElseStatement == nil {
             MergeLocalNonNull(conditionEntry, elseNarrow)
         } else {
-            ComputeBranchFallthroughNonNull(
+            ComputeCleanupFallthroughNonNull(
                 ifStmt.ElseStatement,
                 MergeLocalNonNull(conditionEntry, elseNarrow),
                 elseAliases
@@ -2410,11 +2204,8 @@ internal partial class StatementBinder {
         return IntersectNonNull(thenState, elseState)
     }
 
-    /// Issue #2159: computes the locals proven non-null at the normal exit of a
-    /// single branch [`branch`](paramref), seeded with the non-null locals
-    /// on entry. Returns `null` when the branch unconditionally
-    /// exits (does not fall through to the join).
-    private func ComputeBranchFallthroughNonNull(
+    /// Transfers deferred cleanup in evaluation order from the supplied facts and callable aliases.
+    private func ComputeCleanupFallthroughNonNull(
         branch BoundStatement,
         entry Dictionary[AccessPath, TypeSymbol]?,
         callableAliases IReadOnlyCollection[VariableSymbol]? = nil
@@ -2425,18 +2216,15 @@ internal partial class StatementBinder {
         } else {
             HashSet[VariableSymbol](callableAliases ?? externalCallableAliases)
         }
-        return if ProcessBranchStatement(branch, state, aliases) {
+        return if TransferCleanupStatement(branch, state, aliases) {
             state
         } else {
             default(Dictionary[AccessPath, TypeSymbol]?)
         }
     }
 
-    /// Issue #2159: folds a single branch statement into the running non-null
-    /// [`state`](paramref). Returns `false` when the
-    /// statement unconditionally exits the branch (so later statements are
-    /// unreachable).
-    private func ProcessBranchStatement(
+    /// Transfers one deferred cleanup statement, returning whether it reaches the next statement.
+    private func TransferCleanupStatement(
         stmt BoundStatement,
         state Dictionary[AccessPath, TypeSymbol],
         aliases HashSet[VariableSymbol]
@@ -2472,7 +2260,7 @@ internal partial class StatementBinder {
                     // The nested join is the exact post-if non-null set given the
                     // current state as entry, so it fully replaces the tracked
                     // state (it carries surviving entry facts through).
-                    let nestedResult Dictionary[AccessPath, TypeSymbol]? = ComputeIfJoinNonNull(
+                    let nestedResult Dictionary[AccessPath, TypeSymbol]? = ComputeCleanupConditionalExit(
                         nested,
                         Dictionary[AccessPath, TypeSymbol](state),
                         aliases,
@@ -2498,7 +2286,7 @@ internal partial class StatementBinder {
                     // so only facts established after the label hold on all paths out.
                     state.Clear()
                     aliases.Clear()
-                    return ProcessBranchStatement(inner.Statements[1], state, aliases)
+                    return TransferCleanupStatement(inner.Statements[1], state, aliases)
                 }
                 if inner.Statements.Any((statement BoundStatement) -> statement is BoundLabelStatement) {
                     if ContainsUserLabel(inner) {
@@ -2520,7 +2308,7 @@ internal partial class StatementBinder {
                         aliases.Clear()
                         fallsThrough = true
                     }
-                    if !ProcessBranchStatement(s, state, aliases) {
+                    if !TransferCleanupStatement(s, state, aliases) {
                         fallsThrough = false
                     }
                 }
@@ -2552,7 +2340,7 @@ internal partial class StatementBinder {
                     ClearAssignedRootsAndUpdateAliases(finallyBlock, state, aliases)
                     return true
                 }
-                return ProcessBranchStatement(finallyBlock, state, aliases)
+                return TransferCleanupStatement(finallyBlock, state, aliases)
             }
             default {
                 if !CanCompleteNormally(stmt) {
@@ -2824,6 +2612,15 @@ internal partial class StatementBinder {
             }
         }
         var (thenNarrow, elseNarrow) = TryClassifyNilGuard(condition, forShortCircuitOperand)
+        let (conditionalThen, conditionalElse) = TryClassifyNullConditionalBoolNarrowing(
+            condition,
+            forShortCircuitOperand,
+            beforeAliases,
+            (node BoundNode, state Dictionary[AccessPath, TypeSymbol], aliases IReadOnlyCollection[VariableSymbol]?) ->
+            ClearAssignedRoots(node, state, aliases)
+        )
+        thenNarrow = MergeNarrowingFrames(thenNarrow, conditionalThen)
+        elseNarrow = MergeNarrowingFrames(elseNarrow, conditionalElse)
         if !forShortCircuitOperand && allowBoolCall {
             let (boolThen, boolElse) = TryClassifyBoolCallNarrowing(condition, beforeAliases)
             thenNarrow = MergeNarrowingFrames(thenNarrow, boolThen)
@@ -4670,12 +4467,7 @@ internal partial class StatementBinder {
                             reboundRef is BoundAddressOfExpression reboundAddr &&
                             !object
                             .ReferenceEquals(reboundAddr.Operand, finalAddr.Operand) {
-                            let rebuiltAddr = BoundAddressOfExpression(
-                                finalAddr.Syntax,
-                                reboundAddr.Operand,
-                                finalAddr.IsUnmanaged,
-                                finalAddr.IsReadOnly
-                            )
+                            let rebuiltAddr = finalAddr.Update(reboundAddr.Operand)
                             replacements[finalAddr] = rebuiltAddr
                             finalArg = rebuiltAddr
                         } else if finalArg is BoundConditionalAddressExpression finalCondAddr &&
@@ -5959,13 +5751,18 @@ internal partial class StatementBinder {
         private var functionLiteralFinallyDepth int32
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
         private let isClosureAssigned((VariableSymbol) -> bool)?
+        private let knownStatements Dictionary[BoundStatement, StatementEffects]?
+        private var hasAliasSensitiveOperations bool
+        private var hasControlTransfer bool
 
         init(
             assignmentPreservesNarrowing((BoundAssignmentExpression, TypeSymbol) -> bool)?,
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
             mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
-            isClosureAssigned((VariableSymbol) -> bool)? = nil
+            isClosureAssigned((VariableSymbol) -> bool)? = nil,
+            knownStatements Dictionary[BoundStatement, StatementEffects]? = nil
         ) {
+            this.knownStatements = knownStatements
             this.mayShareStorage = mayShareStorage
             this.isClosureAssigned = isClosureAssigned
             Roots = HashSet[VariableSymbol]()
@@ -6077,6 +5874,19 @@ internal partial class StatementBinder {
             get;
         }
 
+        internal var MeasureStatementEffects bool
+
+        internal prop CanComposeRootEffects bool -> !hasAliasSensitiveOperations &&
+            !hasControlTransfer &&
+            !ContainsTry &&
+            !MayMutateMemberPaths &&
+            !MayMutateReferenceStorage &&
+            !MayMutateAnyRoot &&
+            !MayMutateGlobalRoots &&
+            !MayRunEscapedClosure &&
+            writableReferenceAliases.Count == 0 &&
+            Roots.All((root VariableSymbol) -> root is LocalVariableSymbol{RefKind: RefKind.None})
+
         prop AlreadyProcessedExpressions HashSet[BoundExpression]? {
             get;
             set;
@@ -6150,6 +5960,45 @@ internal partial class StatementBinder {
         }
 
         open override func VisitStatement(node BoundStatement?) {
+            if node != nil && MeasureStatementEffects {
+                CompilationMeasurements.Count("narrowing.effect-node-visits")
+            }
+            if node != nil &&
+                knownStatements != nil &&
+                enclosingAssignments.Count == 0 &&
+                enclosingGlobalAssignments.Count == 0 &&
+                visitedFunctionLiterals.Count == 0 &&
+                tryAssignedVariables == nil &&
+                pendingConditionalTargets.Count == 0 &&
+                normalCallableState
+                .LocalParameters
+                .Count == 0 &&
+                allEntryCallableState
+                .LocalParameters
+                .Count == 0 &&
+                writableReferenceAliases.Count == 0 &&
+                knownStatements
+                .TryGetValue(node, out var known) {
+                Roots.UnionWith(known.AssignedRoots)
+                for root in known.AssignedRoots {
+                    normalCallableState.InvalidateVariable(root, mayShareStorage)
+                    allEntryCallableState.InvalidateVariable(root, mayShareStorage)
+                }
+                CompilationMeasurements.Count("narrowing.effects-child-reuses")
+                return
+            }
+            if node is BoundLoopStatement or
+                BoundLabelStatement or
+                BoundGotoStatement or
+                BoundConditionalGotoStatement or
+                BoundReturnStatement or
+                BoundThrowStatement or
+                BoundRethrowStatement {
+                hasControlTransfer = true
+            }
+            if node is BoundLocalFunctionDeclaration or BoundVariableDeclaration {
+                hasAliasSensitiveOperations = true
+            }
             if node is BoundLoopStatement loop {
                 declaredRegionLabels.Add(loop.BreakLabel)
                 if loop.ContinueLabel is {} continueLabel {
@@ -6177,6 +6026,14 @@ internal partial class StatementBinder {
         open override func VisitExpression(node BoundExpression?) {
             if node == nil {
                 return
+            }
+            if IsCallableType(node.Type) ||
+                node is BoundCallOperationExpression or
+                BoundFunctionLiteralExpression or
+                BoundFunctionPointerInvocationExpression or
+                BoundAddressOfExpression or
+                BoundConditionalAddressExpression {
+                hasAliasSensitiveOperations = true
             }
             if AlreadyProcessedExpressions != nil &&
                 visitedFunctionLiterals.Count == 0 &&
@@ -7674,6 +7531,11 @@ internal partial class StatementBinder {
         }
 
         protected open override func VisitAssignmentExpression(node BoundAssignmentExpression) {
+            let assignedValue = UnwrapCallable(node.Expression)
+            if !assignedValue.Type.IsValueType && !(assignedValue is BoundLiteralExpression{Value: nil}) {
+                // Erased callable copies still transfer provenance in evaluation order.
+                hasAliasSensitiveOperations = true
+            }
             let protectedGlobalRoot GlobalVariableSymbol? = node.Variable as GlobalVariableSymbol
             if protectedGlobalRoot != nil {
                 enclosingGlobalAssignments.Push(protectedGlobalRoot)
@@ -8825,6 +8687,7 @@ internal partial class StatementBinder {
         }
         if convertedInitializer is {} callableInitializer && IsExternalCallableSource(callableInitializer) {
             externalCallableAliases.Add(declaredVariable)
+            binderCtx.NarrowedVariables.SetExternalCallables(externalCallableAliases)
         }
         // Issue #216 / #3519: a foldable `const` initializer carries its
         // target-typed compile-time value. Package constants also retain that
@@ -8951,9 +8814,12 @@ internal partial class StatementBinder {
             Diagnostics.ReportRefLocalRhsMustBeLvalue(refModifierLoc, exprText)
             rhsValid = false
         }
-        // Pointee type: the user may write an explicit type clause that must match
-        // the initializer's static type; otherwise infer from the initializer.
-        let pointeeType = initializer.Type ?? TypeSymbol.Error
+        // A ref local aliases declared storage, not the narrowed value read.
+        let pointeeType = if ExpressionBinder.TryGetAddressedStorageType(initializer, out var storageType) {
+            storageType ?? TypeSymbol.Error
+        } else {
+            initializer.Type ?? TypeSymbol.Error
+        }
         if declaredType != nil && rhsValid && pointeeType != TypeSymbol.Error && declaredType != pointeeType {
             Diagnostics.ReportCannotConvert(syntax.Initializer!!.Location, pointeeType, declaredType)
             rhsValid = false
@@ -10447,7 +10313,8 @@ internal partial class StatementBinder {
             if assignedType == nil ||
                 assignedType == TypeSymbol.Error ||
                 assignedType == TypeSymbol.Null ||
-                assignedType is NullableTypeSymbol {
+                assignedType is NullableTypeSymbol ||
+                (assignedType is TypeParameterSymbol assignedTp && !Binder.SatisfiesNotNullConstraint(assignedTp)) {
                 return false
             }
             let conversion = Conversion.Classify(assignedType, narrowedType)
@@ -10522,7 +10389,14 @@ internal partial class StatementBinder {
             }
             if inner.Type is not NullableTypeSymbol &&
                 inner.Type is not PlatformTypeSymbol &&
-                AssignmentTypePreservesNarrowing(inner.Type, narrowedType) {
+                (
+                AssignmentTypePreservesNarrowing(inner.Type, narrowedType) ||
+                    (
+                    narrowedType is TypeParameterSymbol &&
+                        inner.Type == narrowedType &&
+                        ExpressionBinder.IsProvenNonNullTypeParameterExpression(inner)
+                )
+            ) {
                 return true
             }
             var innerValue = inner
@@ -10531,7 +10405,14 @@ internal partial class StatementBinder {
             }
             return (
                 innerValue.Type is not PlatformTypeSymbol &&
-                    AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType)
+                    (
+                    AssignmentTypePreservesNarrowing(innerValue.Type, narrowedType) ||
+                        (
+                        narrowedType is TypeParameterSymbol &&
+                            innerValue.Type == narrowedType &&
+                            ExpressionBinder.IsProvenNonNullTypeParameterExpression(innerValue)
+                    )
+                )
             ) ||
                 NestedAssignmentPreservesNarrowing(innerValue, narrowedType)
         }
@@ -12036,19 +11917,26 @@ internal partial class StatementBinder {
             }
         }
 
-        /// ADR-0069 / issue #700: structurally determine whether the given
-        /// bound statement unconditionally transfers control out of its
-        /// enclosing block (return / throw / unconditional goto, which covers
-        /// the lowered shapes of `break` and `continue`). A block
-        /// counts when its last statement does any of those; an
-        /// (cref:BoundIfStatement) counts only if both arms do; a
-        /// (cref:BoundTryStatement) counts when its `finally` exits or
-        /// its protected block and every handler exit.
+        private func ExpressionAlwaysExits(expression BoundExpression) bool {
+            var expression = expression
+            while true {
+                if expression.Type == TypeSymbol.Never {
+                    return true
+                }
+                if expression is BoundConversionExpression conversion {
+                    expression = conversion.Expression
+                } else if expression is BoundAssignmentExpression assignment {
+                    expression = assignment.Expression
+                } else {
+                    return false
+                }
+            }
+        }
+
+        /// Classifies return, throw, mandatory `never` evaluation, and unconditional jump exits.
         /// @param statement The statement to classify.
-        /// @param gotoExits When `false`, a goto is not counted as an exit, so only
-        /// return/throw do. Callable-alias joins use this because a goto can still
-        /// reach code after the enclosing construct.
-        /// @returns `true` when the statement always leaves its block.
+        /// @param gotoExits Whether an unconditional goto counts as exiting this construct.
+        /// @returns Whether the statement always leaves its block.
         internal func EndsInUnconditionalExit(statement BoundStatement?, gotoExits bool = true) bool {
             switch statement {
                 case nil {
@@ -12056,6 +11944,9 @@ internal partial class StatementBinder {
                 }
                 case BoundReturnStatement, BoundThrowStatement, BoundRethrowStatement {
                     return true
+                }
+                case expression is BoundExpressionStatement {
+                    return ExpressionAlwaysExits(expression.Expression)
                 }
                 case BoundGotoStatement {
                     // `break`/`continue` lower to BoundGotoStatement before this

@@ -152,7 +152,7 @@ public class ClrDerived : ClrBase {
         private const RunTimeout int32 = 30000
 
         public func Rows() IEnumerable[[]object] {
-            yield[]object{"dim_bare_getter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
+            yield []object{"dim_bare_getter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
 class C { }
 class State {
     shared {
@@ -192,7 +192,7 @@ class BadReader : IReader {
 }
 let r IReader = BadReader{}
 Console.WriteLine(r.ReadInLoop(ref State.Item) + r.ReadInSpan(ref State.Item))`, "GS0155@14:23 GS0155@24:19", "reject", ""}
-            yield[]object{"dim_bare_setter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
+            yield []object{"dim_bare_setter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
 class C { }
 class State {
     shared {
@@ -230,7 +230,7 @@ class BadWriter : IWriter {
 }
 let w IWriter = BadWriter{}
 Console.WriteLine(w.WriteInLoop(ref State.Item) + w.WriteInSpan(ref State.Item))`, "GS0155@14:23 GS0155@24:19", "reject", ""}
-            yield[]object{"inherited_clr_bare_getter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
+            yield []object{"inherited_clr_bare_getter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
 class C { }
 open class BaseError : Exception {
     func ReadInLoop(ref item C?) int32 {
@@ -268,7 +268,7 @@ var g C? = C()
 var s C? = C()
 let err BaseError = BadError()
 Console.WriteLine(err.ReadInLoop(ref s) + err.ReadInSpan(ref s))`, "GS0155@8:23 GS0155@9:23 GS0155@19:19 GS0155@20:19", "reject", ""}
-            yield[]object{"inherited_clr_bare_setter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
+            yield []object{"inherited_clr_bare_setter_in_loop_and_span_removes_global_and_ref_facts_5470", `import System
 class C { }
 open class BaseError : Exception {
     func WriteInLoop(ref item C?) int32 {
@@ -304,7 +304,7 @@ var g C? = C()
 var s C? = C()
 let err BaseError = BadError()
 Console.WriteLine(err.WriteInLoop(ref s) + err.WriteInSpan(ref s))`, "GS0155@8:23 GS0155@9:23 GS0155@19:19 GS0155@20:19", "reject", ""}
-            yield[]object{"control_inherited_stable_clr_getter_and_non_open_auto_property_keep_ref_fact_5470", `import System
+            yield []object{"control_inherited_stable_clr_getter_and_non_open_auto_property_keep_ref_fact_5470", `import System
 import System.Collections.Generic
 class MyList : List[int32] {
     func SumInLoop(ref text string?) int32 {
@@ -343,7 +343,7 @@ holder.Auto = 2
 Console.WriteLine(list.SumInLoop(ref s))
 Console.WriteLine(list.SumInSpan(ref s))
 Console.WriteLine(holder.ReadAutoInLoop(ref s))`, "", "run", "2|3|3"}
-            yield[]object{"issue_5657_repro_and_conversion_free_sites_keep_global_fact", `import System
+            yield []object{"issue_5657_repro_and_conversion_free_sites_keep_global_fact", `import System
 class C {
     var Value int32
 }
@@ -370,7 +370,7 @@ func RunSpan() int32 {
 var g C? = C{Value: 42}
 Console.WriteLine(Run().Value)
 Console.WriteLine(RunSpan())`, "", "run", "42|44"}
-            yield[]object{"conversion_free_loop_sites_keep_closure_assigned_and_member_path_facts_5657", `import System
+            yield []object{"conversion_free_loop_sites_keep_closure_assigned_and_member_path_facts_5657", `import System
 class C {
     var Value int32
 }
@@ -413,7 +413,7 @@ func RunSpan(box Box) int32 {
 }
 Console.WriteLine(RunLoop(Box(C{Value: 20})))
 Console.WriteLine(RunSpan(Box(C{Value: 20})))`, "", "run", "33|26"}
-            yield[]object{"control_user_conversion_and_projection_in_loop_remove_global_and_captured_facts_5657", `import System
+            yield []object{"control_user_conversion_and_projection_in_loop_remove_global_and_captured_facts_5657", `import System
 class C { }
 struct Source {
     var Raw int32
@@ -472,7 +472,7 @@ func WithProjection(src ProjSrc) int32 {
 }
 var g C? = C()
 Console.WriteLine(WithDeclaration(Source{Raw: 1}) + WithAssignment(Source{Raw: 1}) + WithProjection(ProjSrc{}))`, "GS0155@28:19 GS0155@41:19 GS0155@52:19", "reject", ""}
-            yield[]object{"static_import_bare_getter_and_initializer_in_loop_and_span_remove_facts_5470", `package T
+            yield []object{"static_import_bare_getter_and_initializer_in_loop_and_span_remove_facts_5470", `package T
 import System
 import T.Host
 class C { }
@@ -527,7 +527,7 @@ func ReadFieldInSpan(ref item C?) int32 {
 var g C? = C()
 var s C? = C()
 Console.WriteLine(ReadGetterInLoop(ref s) + ReadGetterInSpan(ref s) + ReadFieldInSpan(ref s))`, "GS0155@24:19 GS0155@25:19 GS0155@35:15 GS0155@36:15 GS0155@46:15 GS0155@47:15", "reject", ""}
-            yield[]object{"populated_map_literal_in_loop_and_span_removes_global_and_ref_facts_5657", `import System
+            yield []object{"populated_map_literal_in_loop_and_span_removes_global_and_ref_facts_5657", `import System
 class C { }
 class Key {
     override func GetHashCode() int32 {
@@ -561,7 +561,7 @@ func InSpan(ref item C?, key Key) int32 {
 var g C? = C()
 var s C? = C()
 Console.WriteLine(InLoop(ref s, Key{}) + InSpan(ref s, Key{}))`, "GS0155@14:19 GS0155@15:19 GS0155@25:15 GS0155@26:15", "reject", ""}
-            yield[]object{"channel_capacity_conversion_and_static_import_collision_remove_facts_5470_5657", `package T
+            yield []object{"channel_capacity_conversion_and_static_import_collision_remove_facts_5470_5657", `package T
 import System
 import T.Host
 class C { }
@@ -635,7 +635,7 @@ var g C? = C()
 var s C? = C()
 let err BaseError = BadError()
 Console.WriteLine(err.ReadInLoop(ref s) + err.ReadInSpan(ref s) + ChannelInLoop(ref s, Cap{Raw: 1}) + ChannelInSpan(ref s, Cap{Raw: 1}))`, "GS0155@22:23 GS0155@23:23 GS0155@33:19 GS0155@34:19 GS0155@53:19 GS0155@54:19 GS0155@64:15 GS0155@65:15", "reject", ""}
-            yield[]object{"imported_clr_static_field_and_implicit_static_write_initializers_remove_facts_5470_5657", `package T
+            yield []object{"imported_clr_static_field_and_implicit_static_write_initializers_remove_facts_5470_5657", `package T
 import System
 import ImportedClrFixture.ClrSeedHolder
 class C { }
@@ -692,7 +692,7 @@ func ReadClrInSpan() int32 {
 var g C? = C()
 let inner = Outer.Inner{}
 Console.WriteLine(inner.WriteInLoop() + inner.WriteInSpan() + ReadClrInLoop() + ReadClrInSpan())`, "GS0155@17:27 GS0155@27:23 GS0155@39:19 GS0155@49:15", "reject", ""}
-            yield[]object{"method_group_collision_beats_static_import_property_in_loop_and_span_5470", `package T
+            yield []object{"method_group_collision_beats_static_import_property_in_loop_and_span_5470", `package T
 import System
 import ImportedClrFixture.ClrDerived
 import T.Host

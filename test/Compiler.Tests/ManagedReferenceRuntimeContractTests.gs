@@ -125,8 +125,8 @@ func View(p managed[int32]) readonly managed[int32] { return p.AsReadOnly() }`
                 "slice-capture",
                 "native-factory"
             } {
-                yield[]object{mutation, false}
-                yield[]object{mutation, true}
+                yield []object{mutation, false}
+                yield []object{mutation, true}
             }
         }
 

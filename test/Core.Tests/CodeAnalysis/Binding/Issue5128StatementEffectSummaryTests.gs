@@ -22,6 +22,51 @@ import Xunit
 /// diagnostics.
 class Issue5128StatementEffectSummaryTests {
     @Fact
+    func PureNestedBlocks_ComposeTheirEffectsBottomUp() {
+        let Count = func (depth int32) int64 {
+            using let measurements = CompilationMeasurements.Start("issue5130")
+            let source = "func Run() int32 {\nvar n = 0\n" + string.Concat(Enumerable.Repeat("{\n", depth)) +
+                "n = n + 1\n" +
+                string.Concat(Enumerable.Repeat("}\n", depth)) + "return n\n}"
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            Assert.Empty(tree.Diagnostics)
+            let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+            Assert.Empty(globalScope.Diagnostics)
+            let program = Binder.BindProgram(globalScope)
+            Assert.Empty(program.Diagnostics)
+            return measurements.GetCounter("narrowing.effect-node-visits")
+        }
+        let small = Count(32)
+        let large = Count(64)
+        Assert.True(small >= 32)
+        Assert.True(large >= 64)
+        Assert.True(large <= small * 2 + 16, "Effect visits must grow linearly: ${small} -> ${large}.")
+    }
+
+    @Fact
+    func SwitchBreakPathDiscovery_VisitsTheSwitchOnce() {
+        let Count = func (arms int32) int64 {
+            using let measurements = CompilationMeasurements.Start("issue5841")
+            let cases = string.Join("\n", Enumerable.Range(0, arms).Select((i int32) -> "case ${i} { break }"))
+            let source = "func Run(k int32) int32 {\nvar value string? = \"ok\"\nif value != nil {\nswitch k {\n" +
+                cases +
+                "\ndefault { break }\n}\nreturn value.Length\n}\nreturn 0\n}"
+            let tree = SyntaxTree.Parse(SourceText.From(source))
+            Assert.Empty(tree.Diagnostics)
+            let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+            Assert.Empty(globalScope.Diagnostics)
+            let program = Binder.BindProgram(globalScope)
+            Assert.Empty(program.Diagnostics)
+            return measurements.GetCounter("narrowing.break-path-visits")
+        }
+        let small = Count(64)
+        let large = Count(128)
+        Assert.True(small >= 64)
+        Assert.True(large >= 128)
+        Assert.True(large <= small * 2 + 16, "Break-path visits must grow linearly: ${small} -> ${large}.")
+    }
+
+    @Fact
     func ActiveNarrowing_ReusesTheSummaryForTheAliasUpdate() {
         // `x = fresh` activates an assignment narrowing, so each later
         // statement reaches invalidation with a bound statement and then the

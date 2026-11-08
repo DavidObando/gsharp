@@ -131,7 +131,7 @@ public struct ImportedPoint
         /// @returns Name, G# source, expected stdout lines.
         func AcceptedCases() sequence[[]object] {
             // The issue's own repro.
-            yield[]object{"read-a-nullable-int-value-through-the-indexer", `package Demo
+            yield []object{"read-a-nullable-int-value-through-the-indexer", `package Demo
 import System
 
 func main2() {
@@ -143,7 +143,7 @@ func main2() {
 }
 
 main2()`, []string{"1", "1", "True"}}
-            yield[]object{"write-a-nullable-int-value-through-the-indexer", `package Demo
+            yield []object{"write-a-nullable-int-value-through-the-indexer", `package Demo
 import System
 
 func main2() {
@@ -154,7 +154,7 @@ func main2() {
 }
 
 main2()`, []string{"1", "7"}}
-            yield[]object{"trygetvalue-into-a-nullable-int-out-slot", `package Demo
+            yield []object{"trygetvalue-into-a-nullable-int-out-slot", `package Demo
 import System
 
 func main2() {
@@ -166,7 +166,7 @@ func main2() {
 }
 
 main2()`, []string{"3"}}
-            yield[]object{"iterate-a-map-over-a-nullable-int-value", `package Demo
+            yield []object{"iterate-a-map-over-a-nullable-int-value", `package Demo
 import System
 
 func main2() {
@@ -179,7 +179,7 @@ func main2() {
 main2()`, []string{"a=4"}}
             // The `.Values` iteration is the row that needed the erasure fix, not
             // only the construction fix.
-            yield[]object{"iterate-the-values-of-a-map-over-a-nullable-int", `package Demo
+            yield []object{"iterate-the-values-of-a-map-over-a-nullable-int", `package Demo
 import System
 
 func main2() {
@@ -192,7 +192,7 @@ func main2() {
 main2()`, []string{"6"}}
             // An actual nil stored at a nullable value slot: the whole point of
             // `map[K, V?]`, and observable through HasValue.
-            yield[]object{"store-nil-at-a-nullable-int-value", `package Demo
+            yield []object{"store-nil-at-a-nullable-int-value", `package Demo
 import System
 
 func main2() {
@@ -203,7 +203,7 @@ func main2() {
 }
 
 main2()`, []string{"1", "False"}}
-            yield[]object{"containsvalue-over-a-nullable-int-value", `package Demo
+            yield []object{"containsvalue-over-a-nullable-int-value", `package Demo
 import System
 
 func main2() {
@@ -216,7 +216,7 @@ main2()`, []string{"True"}}
             // MetadataLoadContext, so a host-built `Nullable<DateTime>` is the
             // unreflectable stand-in. The `.Value.Year` read moves a real value
             // through the wrapper.
-            yield[]object{"a-nullable-imported-struct-value-datetime", `package Demo
+            yield []object{"a-nullable-imported-struct-value-datetime", `package Demo
 import System
 
 func main2() {
@@ -230,7 +230,7 @@ func main2() {
 main2()`, []string{"1", "True", "2020"}}
             // The same arm over a struct from a user-supplied assembly rather than
             // the BCL, so the projector is exercised on a genuinely external one.
-            yield[]object{"a-nullable-imported-struct-value-from-a-referenced-assembly", `package Demo
+            yield []object{"a-nullable-imported-struct-value-from-a-referenced-assembly", `package Demo
 import System
 import HelperLib
 
@@ -254,7 +254,7 @@ main2()`, []string{"1", "42"}}
             // lookup with `null` leaves the `int32?` iteration green and turns
             // this row and its `.Keys` twin into `GS0158: Cannot find member
             // Value`.
-            yield[]object{"iterate-the-values-of-a-map-over-a-nullable-imported-struct", `package Demo
+            yield []object{"iterate-the-values-of-a-map-over-a-nullable-imported-struct", `package Demo
 import System
 
 func main2() {
@@ -267,7 +267,7 @@ func main2() {
 
 main2()`, []string{"2021"}}
             // The `.Keys` twin of the row above, over a nullable imported KEY.
-            yield[]object{"iterate-the-keys-of-a-map-over-a-nullable-imported-struct-key", `package Demo
+            yield []object{"iterate-the-keys-of-a-map-over-a-nullable-imported-struct-key", `package Demo
 import System
 
 func main2() {
@@ -281,7 +281,7 @@ func main2() {
 main2()`, []string{"2021"}}
             // `for k, v in m` over an imported nullable value, so the destructured
             // form is covered alongside `.Values`.
-            yield[]object{"iterate-key-and-value-of-a-map-over-a-nullable-imported-struct", `package Demo
+            yield []object{"iterate-key-and-value-of-a-map-over-a-nullable-imported-struct", `package Demo
 import System
 
 func main2() {
@@ -294,7 +294,7 @@ func main2() {
 
 main2()`, []string{"a=2021"}}
             // The KEY position. The issue only measured the value position.
-            yield[]object{"a-nullable-int-in-the-key-position", `package Demo
+            yield []object{"a-nullable-int-in-the-key-position", `package Demo
 import System
 
 func main2() {
@@ -307,7 +307,7 @@ func main2() {
 
 main2()`, []string{"1", "True", "one"}}
             // The key position on the reference-context arm.
-            yield[]object{"a-nullable-imported-struct-in-the-key-position", `package Demo
+            yield []object{"a-nullable-imported-struct-in-the-key-position", `package Demo
 import System
 
 func main2() {
@@ -324,7 +324,7 @@ main2()`, []string{"1", "x"}}
             // this assignment failed with
             // `[found ref Dictionary`2<string,int32>]
             //  [expected ref Dictionary`2<string,Nullable`1<int32>>]`.
-            yield[]object{"a-map-over-a-nullable-int-assigns-to-the-dictionary-spelling", `package Demo
+            yield []object{"a-map-over-a-nullable-int-assigns-to-the-dictionary-spelling", `package Demo
 import System
 import System.Collections.Generic
 
@@ -340,7 +340,7 @@ main2()`, []string{"1", "2"}}
             // all — but the CLOSED argument's wrong backing dictionary reached the
             // call, so this row is red on 3e5103de too. Its non-nullable
             // instantiation is the genuine control.
-            yield[]object{"an-open-map-parameter-called-with-a-nullable-value-argument", `package Demo
+            yield []object{"an-open-map-parameter-called-with-a-nullable-value-argument", `package Demo
 import System
 
 func countVia[K, V](m map[K, V], probe K) int32 {
@@ -365,7 +365,7 @@ main2()`, []string{"2"}}
         /// @returns Name, G# source, expected stdout lines.
         func ControlCases() sequence[[]object] {
             // The non-nullable sibling: unchanged.
-            yield[]object{"control-a-map-over-a-plain-int-value", `package Demo
+            yield []object{"control-a-map-over-a-plain-int-value", `package Demo
 import System
 
 func main2() {
@@ -379,7 +379,7 @@ main2()`, []string{"1", "1"}}
             // backing dictionary is `Dictionary<string, string>` and must NOT gain
             // a `Nullable<>`. An over-broad fix that wrapped every
             // NullableTypeSymbol would break this row.
-            yield[]object{"control-a-map-over-a-nullable-string-value-is-unaffected", `package Demo
+            yield []object{"control-a-map-over-a-nullable-string-value-is-unaffected", `package Demo
 import System
 
 func main2() {
@@ -392,7 +392,7 @@ func main2() {
 main2()`, []string{"1", "True", "True"}}
             // The `Dictionary` spelling over a nullable value was already green;
             // it must remain so, and it is the shape the map spelling now matches.
-            yield[]object{"control-the-dictionary-spelling-over-a-nullable-int-value", `package Demo
+            yield []object{"control-the-dictionary-spelling-over-a-nullable-int-value", `package Demo
 import System
 import System.Collections.Generic
 
@@ -406,7 +406,7 @@ func main2() {
 main2()`, []string{"1", "5"}}
             // A map over an IMPORTED non-nullable value: #4023's shape, kept here
             // so the reference-context changes cannot regress it unnoticed.
-            yield[]object{"control-a-map-over-a-non-nullable-imported-struct", `package Demo
+            yield []object{"control-a-map-over-a-non-nullable-imported-struct", `package Demo
 import System
 import HelperLib
 
@@ -424,7 +424,7 @@ main2()`, []string{"1", "True"}}
             // NON-nullable value here so the row is genuinely green before and
             // after — the `int32?` instantiation is an accepted row instead,
             // because passing a `map[string, int32?]` was itself broken.
-            yield[]object{"control-an-open-map-over-type-parameters", `package Demo
+            yield []object{"control-an-open-map-over-type-parameters", `package Demo
 import System
 
 func countVia[K, V](m map[K, V], probe K) int32 {

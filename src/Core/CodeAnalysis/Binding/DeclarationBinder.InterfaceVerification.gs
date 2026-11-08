@@ -2809,7 +2809,7 @@ internal partial class DeclarationBinder {
             for declared in structSymbol.ImplementedClrInterfaces {
                 if MemberLookup.TryGetSymbolicClrGenericInterface(declared, out var openIface, out var symbolicArgs) {
                     if TryAddSymbolic(declared) {
-                        yield(declared, default(Type?))
+                        yield (declared, default(Type?))
                     }
                     for baseIface in ClrTypeUtilities.SafeGetInterfaces(openIface) {
                         let baseSym = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
@@ -2820,21 +2820,21 @@ internal partial class DeclarationBinder {
                         )
                         if MemberLookup.TryGetSymbolicClrGenericInterface(baseSym, out _, out _) {
                             if TryAddSymbolic(baseSym) {
-                                yield(baseSym, default(Type?))
+                                yield (baseSym, default(Type?))
                             }
                         } else if baseSym.ClrType is Type concreteBase && concreteSeen.Add(concreteBase) {
-                            yield(default(TypeSymbol?), concreteBase)
+                            yield (default(TypeSymbol?), concreteBase)
                         }
                     }
                     continue
                 }
                 if declared?.ClrType is Type clrIface {
                     if concreteSeen.Add(clrIface) {
-                        yield(default(TypeSymbol?), clrIface)
+                        yield (default(TypeSymbol?), clrIface)
                     }
                     for baseIface in ClrTypeUtilities.SafeGetInterfaces(clrIface) {
                         if concreteSeen.Add(baseIface) {
-                            yield(default(TypeSymbol?), baseIface)
+                            yield (default(TypeSymbol?), baseIface)
                         }
                     }
                 }

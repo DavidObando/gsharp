@@ -269,7 +269,7 @@ public static class Probe
         /// @returns Case name, G# source, expected diagnostic id.
         func DependentViolations() sequence[[]object] {
             // The issue's own repro, verbatim.
-            yield[]object{"the-issues-own-repro", `package P
+            yield []object{"the-issues-own-repro", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -286,7 +286,7 @@ var c Coupled[A, List[Bee]]
 Console.WriteLine("compiled")`, "GS0152"}
             // The constructor spelling, which the issue records as additionally
             // failing `ilverify` with `UnsatisfiedMethodParentInst`.
-            yield[]object{"the-constructor-spelling-of-the-same-instantiation", `package P
+            yield []object{"the-constructor-spelling-of-the-same-instantiation", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -303,7 +303,7 @@ let c = Coupled[A, List[Bee]]()
 Console.WriteLine(c.Tag)`, "GS0152"}
             // Only ONE side erased is enough to lose the answer: an imported
             // `string` against a same-compilation `Bee` collapses the `Bee` half.
-            yield[]object{"one-erased-side-against-an-imported-one", `package P
+            yield []object{"one-erased-side-against-an-imported-one", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -321,7 +321,7 @@ Console.WriteLine("compiled")`, "GS0152"}
             // erased comparison then saw `IDep<object>` on both sides and ACCEPTED
             // this, and it threw `TypeLoadException` at run time. That is this
             // change's own defect reached by a different route.
-            yield[]object{"review-a-source-class-implementing-the-bound-generic-interface", `package P
+            yield []object{"review-a-source-class-implementing-the-bound-generic-interface", `package P
 import System
 import HelperLib3
 
@@ -344,7 +344,7 @@ Console.WriteLine("compiled")`, "GS0152"}
             // At that cap the shape returned indeterminate and fell back to the
             // erased comparison — the very hole the check exists to close — so the
             // cap was replaced by cycle detection.
-            yield[]object{"review-a-bound-nested-past-the-old-recursion-cap", `package P
+            yield []object{"review-a-bound-nested-past-the-old-recursion-cap", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -362,7 +362,7 @@ Console.WriteLine("compiled")`, "GS0152"}
             // NESTED erasure: the bound is `IList<List<T>>`, so the comparison has
             // to recurse rather than stop at a reference check on the outer
             // construction.
-            yield[]object{"a-nested-dependent-bound-over-two-erased-classes", `package P
+            yield []object{"a-nested-dependent-bound-over-two-erased-classes", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -386,7 +386,7 @@ Console.WriteLine("compiled")`, "GS0152"}
         func SatisfiedShapes() sequence[[]object] {
             // MATCHED, same-compilation: both positions are the same erased class,
             // so the symbols agree even though the CLR vector cannot tell.
-            yield[]object{"matched-over-one-same-compilation-class", `package P
+            yield []object{"matched-over-one-same-compilation-class", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -399,7 +399,7 @@ var c Coupled[A, List[A]]
 Console.WriteLine("compiled")`, []string{"compiled"}}
             // MATCHED, fully imported: nothing is erased, so the trigger never
             // fires and the pre-existing path answers exactly as before.
-            yield[]object{"matched-over-imported-types", `package P
+            yield []object{"matched-over-imported-types", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -409,7 +409,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // COVARIANT: `IEnumerable<out T>` admits `List<CovDerived>` at
             // `IEnumerable<CovBase>`, so identity is the wrong relation and the
             // symbolic path must decline to answer.
-            yield[]object{"a-covariant-bound-over-a-derived-erased-class", `package P
+            yield []object{"a-covariant-bound-over-a-derived-erased-class", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -425,7 +425,7 @@ class CovDerived : CovBase {
 var c Covariant[CovBase, List[CovDerived]]
 Console.WriteLine("compiled")`, []string{"compiled"}}
             // MATCHED nested.
-            yield[]object{"matched-nested-over-one-same-compilation-class", `package P
+            yield []object{"matched-nested-over-one-same-compilation-class", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -439,7 +439,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // OPEN: the bound is forwarded through a G# generic, so the arguments
             // still mention type parameters and there is no closed answer. The
             // check must leave it alone; the CLR only loads it once closed.
-            yield[]object{"an-open-forwarded-instantiation-is-left-alone", `package P
+            yield []object{"an-open-forwarded-instantiation-is-left-alone", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -456,7 +456,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // of a bound the relation is assignability, not the invariant identity
             // that is correct at an argument position, so the symbolic path
             // deliberately declines to answer there.
-            yield[]object{"a-bare-dependent-bound-that-holds-over-erased-classes", `package P
+            yield []object{"a-bare-dependent-bound-that-holds-over-erased-classes", `package P
 import System
 import HelperLib3
 
@@ -472,7 +472,7 @@ var c Chain[ChBase, ChDerived]
 Console.WriteLine("compiled")`, []string{"compiled"}}
             // REVIEW FINDING (#4068) control: the MATCHED spelling of the
             // source-implements-the-bound-interface shape must keep binding.
-            yield[]object{"review-a-source-class-implementing-the-bound-interface-matched", `package P
+            yield []object{"review-a-source-class-implementing-the-bound-interface-matched", `package P
 import System
 import HelperLib3
 
@@ -488,7 +488,7 @@ var c Coupled3[A, Impl]
 Console.WriteLine("compiled")`, []string{"compiled"}}
             // REVIEW FINDING (#4068) control: the deeply nested bound SATISFIED.
             // Removing the cap must not turn a legal deep bound into a rejection.
-            yield[]object{"review-a-deeply-nested-bound-that-holds", `package P
+            yield []object{"review-a-deeply-nested-bound-that-holds", `package P
 import System
 import System.Collections.Generic
 import HelperLib3
@@ -502,7 +502,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // A generic METHOD carrying the same dependent bound: the imported
             // METHOD path has had its own constraint check since #750/ADR-0088, and
             // it must keep accepting the matched spelling.
-            yield[]object{"a-generic-method-with-a-matched-dependent-bound", `package P
+            yield []object{"a-generic-method-with-a-matched-dependent-bound", `package P
 import System
 import System.Collections.Generic
 import HelperLib3

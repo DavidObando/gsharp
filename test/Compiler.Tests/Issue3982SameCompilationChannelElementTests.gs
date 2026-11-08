@@ -230,7 +230,7 @@ public static class OverloadedExtensions
             // The report's three failing lines, verbatim, plus a value moved
             // through the reader view so a wrong element would print the wrong
             // field rather than merely verify.
-            yield[]object{"the-reported-repro-binds-on-a-same-compilation-element", `package P
+            yield []object{"the-reported-repro-binds-on-a-same-compilation-element", `package P
 import System
 import Interop
 
@@ -250,7 +250,7 @@ Console.WriteLine(taken.b)
 Console.WriteLine(ch.CountSoFar())`, []string{"1", "1", "1", "11", "22", "0"}}
             // The writer half. `PushBoxed[T]` recovers `T` only from the receiver,
             // so the unbox-any it performs is wrong unless `T` really is `Pair`.
-            yield[]object{"a-writer-extension-binds-on-a-same-compilation-element", `package P
+            yield []object{"a-writer-extension-binds-on-a-same-compilation-element", `package P
 import System
 import Interop
 
@@ -271,7 +271,7 @@ Console.WriteLine(second.b)`, []string{"1", "1", "33", "66"}}
             // the view is exactly what the erasure hid. The two handles are
             // observably different — only the sink can push, only the source can
             // count — so a wrong choice does not merely verify.
-            yield[]object{"an-imported-generic-constructor-takes-a-directional-view", `package P
+            yield []object{"an-imported-generic-constructor-takes-a-directional-view", `package P
 import System
 import Interop
 
@@ -294,7 +294,7 @@ Console.WriteLine(source.Kind)`, []string{"True", "5", "1", "6"}}
             // an `object` overload to a library would turn the repaired call back
             // into a diagnostic. `Pick[T]` returns 100 + Count and `Pick(object)`
             // returns 900 + Count, so the winner is visible in stdout.
-            yield[]object{"an-object-overload-beside-the-generic-one-does-not-steal-the-call", `package P
+            yield []object{"an-object-overload-beside-the-generic-one-does-not-steal-the-call", `package P
 import System
 import Interop
 
@@ -314,7 +314,7 @@ Console.WriteLine(ch.PickOn())`, []string{"101", "101"}}
             // no erasure comparison was needed because nothing had to be VIEWED.
             // Only the bidirectional receiver, which must cross the D2 lattice to
             // reach a reader or a writer, ever failed.
-            yield[]object{"control-the-declared-directional-spellings-already-bound", `package P
+            yield []object{"control-the-declared-directional-spellings-already-bound", `package P
 import System
 import Interop
 
@@ -337,7 +337,7 @@ Console.WriteLine(drain(ch))`, []string{"1", "77"}}
             // A same-compilation CLASS element erases to `object` too, but through
             // `StructSymbol { IsClass: true }`'s imported-base arm rather than the
             // plain struct arm.
-            yield[]object{"a-same-compilation-class-element-binds", `package P
+            yield []object{"a-same-compilation-class-element-binds", `package P
 import System
 import Interop
 
@@ -352,7 +352,7 @@ Console.WriteLine(ch.TakeFirst().name)`, []string{"1", "leaf"}}
             // An OPEN element inside a generic function: the element is a type
             // parameter rather than a same-compilation type, and it erases exactly
             // the same way.
-            yield[]object{"an-open-element-inside-a-generic-function-binds", `package P
+            yield []object{"an-open-element-inside-a-generic-function-binds", `package P
 import System
 import Interop
 
@@ -380,7 +380,7 @@ Console.WriteLine(staticCountOf[Pair](ch))
 Console.WriteLine(takeOf[Pair](ch).b)`, []string{"1", "1", "99"}}
             // Control (green on both sides): nothing erases for a built-in element,
             // so the lattice compared like with like and the call always bound.
-            yield[]object{"control-a-closed-element-was-never-broken", `package P
+            yield []object{"control-a-closed-element-was-never-broken", `package P
 import System
 import Interop
 
@@ -393,7 +393,7 @@ Console.WriteLine(ch.TakeFirst())`, []string{"1", "7"}}
             // in general — `[]Pair` erases to `object[]`, which really does convert
             // to `IEnumerable<object>`. This is what pins the cause to the channel
             // formal rather than to erasure as such.
-            yield[]object{"control-the-linq-count-over-a-same-compilation-element", `package P
+            yield []object{"control-the-linq-count-over-a-same-compilation-element", `package P
 import System
 import System.Linq
 import Interop
@@ -408,7 +408,7 @@ Console.WriteLine(items.Count())`, []string{"2"}}
             // Control (green on both sides), and the issue's own control 3: the
             // facade routes through ChannelRuntimeBinder, never through CLR
             // overload resolution.
-            yield[]object{"control-the-channel-facade-still-binds", `package P
+            yield []object{"control-the-channel-facade-still-binds", `package P
 import System
 import Interop
 
@@ -431,7 +431,7 @@ Console.WriteLine(ok)`, []string{"5", "True"}}
         func RejectedCases() sequence[[]object] {
             // Erasure-tolerant applicability must not become a direction-tolerant
             // lattice: a reader extension stays invisible on a send-only handle.
-            yield[]object{"a-reader-extension-is-invisible-on-a-send-only-receiver", `package P
+            yield []object{"a-reader-extension-is-invisible-on-a-send-only-receiver", `package P
 import System
 import Interop
 
@@ -446,7 +446,7 @@ func bad(w out chan[Pair]) int32 {
 
 Console.WriteLine(bad(chan[Pair](1)))`, "CountSoFar"}
             // ...and a writer extension stays invisible on a receive-only handle.
-            yield[]object{"a-writer-extension-is-invisible-on-a-receive-only-receiver", `package P
+            yield []object{"a-writer-extension-is-invisible-on-a-receive-only-receiver", `package P
 import System
 import Interop
 
@@ -462,7 +462,7 @@ func bad(r in chan[Pair]) int32 {
 Console.WriteLine(bad(chan[Pair](1)))`, "PushBoxed"}
             // An element that DOES have CLR identity is still compared on its own
             // terms, so an explicit type argument naming the wrong one is refused.
-            yield[]object{"an-explicit-type-argument-still-has-to-match-the-element", `package P
+            yield []object{"an-explicit-type-argument-still-has-to-match-the-element", `package P
 import System
 import Interop
 
@@ -474,7 +474,7 @@ struct Pair {
 let ch = chan[Pair](1)
 Console.WriteLine(ch.CountSoFar[int32]())`, "CountSoFar"}
             // `Channel<T>` is invariant; the closed-element mismatch is untouched.
-            yield[]object{"the-element-still-has-to-match", `package P
+            yield []object{"the-element-still-has-to-match", `package P
 import System
 import Interop
 
@@ -482,7 +482,7 @@ let ch = chan[int32](1)
 Console.WriteLine(ch.TakeTextLength())`, "TakeTextLength"}
             // The constructor path is held to the lattice too: a send-only handle
             // is not applicable to a `ChannelReader[T]` constructor parameter.
-            yield[]object{"a-send-only-receiver-is-not-applicable-to-a-reader-constructor", `package P
+            yield []object{"a-send-only-receiver-is-not-applicable-to-a-reader-constructor", `package P
 import System
 import Interop
 
@@ -499,7 +499,7 @@ Console.WriteLine(bad(chan[Pair](1)))`, "Source"}
             // The `object` overload on its own is still not applicable: nothing
             // here made a genuine `ChannelReader[object]` parameter reachable from
             // a `chan[Pair]`, so this stays exactly the GS0159 it was before.
-            yield[]object{"an-object-only-overload-is-still-not-applicable", `package P
+            yield []object{"an-object-only-overload-is-still-not-applicable", `package P
 import System
 import Interop
 
@@ -511,7 +511,7 @@ struct Pair {
 let ch = chan[Pair](1)
 Console.WriteLine(Overloaded.Pick[object](ch))`, "Pick"}
             // The fix widened a channel-shaped comparison, not member lookup.
-            yield[]object{"an-unrelated-extension-stays-member-not-found", `package P
+            yield []object{"an-unrelated-extension-stays-member-not-found", `package P
 import System
 import Interop
 
@@ -528,7 +528,7 @@ Console.WriteLine(ch.Unrelated())`, "Unrelated"}
             // generic parameter. So this call is refused exactly as it was before
             // the fix, by the same GS0159, and the erasure ambiguity never gets a
             // chance to pick it.
-            yield[]object{"a-genuine-object-reader-parameter-is-not-applicable", `package P
+            yield []object{"a-genuine-object-reader-parameter-is-not-applicable", `package P
 import System
 import Interop
 

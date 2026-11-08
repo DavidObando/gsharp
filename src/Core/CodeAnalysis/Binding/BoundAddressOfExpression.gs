@@ -49,6 +49,22 @@ class BoundAddressOfExpression : BoundExpression {
         get;
     }
 
+    // Syntax anchoring also stamps immediate-index addresses; keep escape classification separate.
+    internal var FixedBufferEscapeSyntax SyntaxNode?
+
+    // Retains fixed-buffer syntax across direct indexing in case a later suspension spills the pointer.
+    internal var FixedBufferSyntax SyntaxNode?
+
+    // Rebuild the operand without losing address permissions or fixed-buffer escape provenance.
+    internal func Update(operand BoundExpression) BoundAddressOfExpression -> if operand == Operand {
+        this
+    } else {
+        BoundAddressOfExpression(Syntax, operand, IsUnmanaged, IsReadOnly){
+            FixedBufferEscapeSyntax = this.FixedBufferEscapeSyntax,
+            FixedBufferSyntax = this.FixedBufferSyntax
+        }
+    }
+
     /// ```xmldoc
     /// <inheritdoc />
     /// ```

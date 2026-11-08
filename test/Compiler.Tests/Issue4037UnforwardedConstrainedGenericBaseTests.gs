@@ -376,7 +376,7 @@ public class Coupled<T, U>
         func UnforwardedConstraints() sequence[[]object] {
             // THE ISSUE'S OWN REPRO. Compiled clean on the parent; ILVerify
             // reported 1x UnsatisfiedMethodParentInst.
-            yield[]object{"the-issues-repro-an-unforwarded-generic-base", `package P
+            yield []object{"the-issues-repro-an-unforwarded-generic-base", `package P
 import System
 import HelperLib2
 
@@ -388,7 +388,7 @@ Console.WriteLine("x")`, "GS0580"}
             // (measured), and this spelling used to be a green row in
             // Issue4032ConstrainedImportedGenericBaseTests' open-instantiation
             // control.
-            yield[]object{"an-unforwarded-field-type-inside-a-generic-class", `package P
+            yield []object{"an-unforwarded-field-type-inside-a-generic-class", `package P
 import System
 import HelperLib2
 
@@ -399,7 +399,7 @@ class Holder[T] {
 Console.WriteLine("x")`, "GS0580"}
             // A LOCAL declaration inside a generic function. The other half of
             // that former control row.
-            yield[]object{"an-unforwarded-local-type-inside-a-generic-function", `package P
+            yield []object{"an-unforwarded-local-type-inside-a-generic-function", `package P
 import System
 import HelperLib2
 
@@ -412,7 +412,7 @@ func openLocal[T]() int32 {
 Console.WriteLine(openLocal[SchemeOptions]())`, "GS0580"}
             // A partially-forwarded constraint set: `SchemeOptions` is forwarded,
             // `new()` is not. The rule is per-constraint, not per-bound-kind.
-            yield[]object{"a-forwarded-base-bound-with-an-unforwarded-init-constraint", `package P
+            yield []object{"a-forwarded-base-bound-with-an-unforwarded-init-constraint", `package P
 import System
 import HelperLib2
 
@@ -422,7 +422,7 @@ class PartlyForwarded[T SchemeOptions] : HandlerNew[T] {
 Console.WriteLine("x")`, "GS0580"}
             // A SPECIAL constraint, so the message comes from the attribute mask
             // rather than from a bound type.
-            yield[]object{"an-unforwarded-class-constraint", `package P
+            yield []object{"an-unforwarded-class-constraint", `package P
 import System
 import HelperLib2
 
@@ -430,7 +430,7 @@ class UnforwardedClass[T] : ClassConstrained[T] {
 }
 
 Console.WriteLine("x")`, "GS0580"}
-            yield[]object{"an-unforwarded-struct-constraint", `package P
+            yield []object{"an-unforwarded-struct-constraint", `package P
 import System
 import HelperLib2
 
@@ -442,7 +442,7 @@ Console.WriteLine("x")`, "GS0580"}
             // NON-dependent one (`IDisposable`, not `IComparable<T>`): a bound
             // that mentions the definition's own parameter is #4031's shape and is
             // skipped by design — that skip has its own green row below.
-            yield[]object{"an-unforwarded-interface-constraint", `package P
+            yield []object{"an-unforwarded-interface-constraint", `package P
 import System
 import HelperLib2
 
@@ -453,7 +453,7 @@ Console.WriteLine("x")`, "GS0580"}
             // The DIRECT-CONSTRUCTION spelling, so the rule is not base-clause
             // only. `Handler[T]()` inside an unconstrained generic function is the
             // same open instantiation one syntax over.
-            yield[]object{"an-unforwarded-constructor-call-inside-a-generic-function", `package P
+            yield []object{"an-unforwarded-constructor-call-inside-a-generic-function", `package P
 import System
 import HelperLib2
 
@@ -467,7 +467,7 @@ Console.WriteLine(make[SchemeOptions]())`, "GS0580"}
             // itself the argument of an unconstrained generic, so the OUTER
             // construction is skipped (composite open shape) while the inner type
             // clause is asked. `csc` reports CS0314 on the inner one too.
-            yield[]object{"an-unforwarded-nested-type-argument", `package P
+            yield []object{"an-unforwarded-nested-type-argument", `package P
 import System
 import HelperLib2
 
@@ -484,7 +484,7 @@ Console.WriteLine("x")`, "GS0580"}
             // move it here. Its full matrix lives in
             // Issue4067UnforwardedGsDeclaredGenericBaseTests; it stays here as the
             // row this class's own Notes promised.
-            yield[]object{"issue-4067-a-gs-declared-constrained-generic-base", `package P
+            yield []object{"issue-4067-a-gs-declared-constrained-generic-base", `package P
 import System
 import HelperLib2
 
@@ -502,7 +502,7 @@ class Unf[T] : GsHandler[T] {
 Console.WriteLine("x")`, "GS0580"}
             // A generic CLASS's own method, so the offending parameter belongs to
             // the enclosing TYPE rather than to the function.
-            yield[]object{"an-unforwarded-parameter-of-the-enclosing-class", `package P
+            yield []object{"an-unforwarded-parameter-of-the-enclosing-class", `package P
 import System
 import HelperLib2
 
@@ -522,7 +522,7 @@ Console.WriteLine("x")`, "GS0580"}
         func ForwardedAndSkippedShapes() sequence[[]object] {
             // THE ISSUE'S CONTROL. Green before, green after — the row this change
             // must not disturb.
-            yield[]object{"the-issues-control-the-forwarded-base-still-verifies-and-runs", `package P
+            yield []object{"the-issues-control-the-forwarded-base-still-verifies-and-runs", `package P
 import System
 import HelperLib2
 
@@ -538,7 +538,7 @@ Console.WriteLine(f.Tag)`, []string{"t"}}
             // FORWARDED spelling of the G#-declared constrained generic base. It
             // was green before #4067 and is green after, which is the invariant
             // that fix must not break.
-            yield[]object{"issue-4067-the-forwarded-gs-declared-constrained-base", `package P
+            yield []object{"issue-4067-the-forwarded-gs-declared-constrained-base", `package P
 import System
 import HelperLib2
 
@@ -555,7 +555,7 @@ class Fwd[T SchemeOptions] : GsHandler[T] {
 
 Console.WriteLine(Fwd[SchemeOptions]().Tag)`, []string{"g"}}
             // Every OTHER open position, forwarded. `csc` accepts all of these.
-            yield[]object{"forwarded-field-local-parameter-and-construction", `package P
+            yield []object{"forwarded-field-local-parameter-and-construction", `package P
 import System
 import HelperLib2
 
@@ -583,7 +583,7 @@ Console.WriteLine(make[SchemeOptions]())
 let hd = Holder[SchemeOptions]()
 Console.WriteLine(hd.H == nil)`, []string{"1", "t", "t", "True"}}
             // The forwarded SPECIAL constraints.
-            yield[]object{"forwarded-special-constraints", `package P
+            yield []object{"forwarded-special-constraints", `package P
 import System
 import HelperLib2
 
@@ -598,7 +598,7 @@ Console.WriteLine(OkStruct[int32]().Tag)`, []string{"c", "v"}}
             // A STRONGER bound satisfies a weaker one: a class-typed bound proves
             // the parameter is a reference type, so it forwards `where T : class`
             // without an explicit `class` keyword. `csc` agrees.
-            yield[]object{"a-class-typed-bound-forwards-the-class-constraint", `package P
+            yield []object{"a-class-typed-bound-forwards-the-class-constraint", `package P
 import System
 import HelperLib2
 
@@ -615,7 +615,7 @@ Console.WriteLine(OkStronger[SchemeOptions]().Tag)`, []string{"c"}}
             // bound (read through its CLR type), a SAME-COMPILATION class bound
             // (read through its own interface list and imported base chain), and
             // an imported class bound implementing an IMPORTED interface.
-            yield[]object{"a-class-typed-bound-forwards-the-interfaces-that-class-implements", `package P
+            yield []object{"a-class-typed-bound-forwards-the-interfaces-that-class-implements", `package P
 import System
 import HelperLib2
 
@@ -654,7 +654,7 @@ Console.WriteLine(OkViaMarker[MarkerOptions]().Tag)`, []string{"i", "i", "m"}}
             // `ImplementedClrInterfaces` loop rather than its `ImportedBaseType`
             // fallback. Both are pinned here, alongside the reviewer's own shape.
             // `csc` accepts all four (measured).
-            yield[]object{"review-a-class-bound-forwards-an-interface-through-every-arm-of-the-walk", `package P
+            yield []object{"review-a-class-bound-forwards-an-interface-through-every-arm-of-the-walk", `package P
 import System
 import HelperLib2
 
@@ -683,7 +683,7 @@ Console.WriteLine(ViaUserMarker[MyMarker]().Tag)`, []string{"i", "i", "i", "m"}}
             // A forwarded bound onto a SAME-COMPILATION class. The bound has no
             // CLR type of its own during binding, so the walk has to read the
             // symbol's base chain.
-            yield[]object{"a-bound-onto-a-same-compilation-class-forwards-through-its-base-chain", `package P
+            yield []object{"a-bound-onto-a-same-compilation-class-forwards-through-its-base-chain", `package P
 import System
 import HelperLib2
 
@@ -697,7 +697,7 @@ Console.WriteLine(OkUser[MyOptions]().Tag)`, []string{"t"}}
             // THE UNCONSTRAINED DEFINITION. The commonest shape in the corpus:
             // an open instantiation of a generic with no bound at all must not
             // have acquired an answer.
-            yield[]object{"control-an-open-instantiation-of-an-unconstrained-generic", `package P
+            yield []object{"control-an-open-instantiation-of-an-unconstrained-generic", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
@@ -722,7 +722,7 @@ Console.WriteLine(each[string](b.Items))`, []string{"1"}}
             // wrong; it compiles, which is the pre-existing behaviour this change
             // deliberately does not alter. Pinned so a later fix sees a red row
             // rather than silence.)
-            yield[]object{"control-a-composite-open-shape-is-still-skipped", `package P
+            yield []object{"control-a-composite-open-shape-is-still-skipped", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
@@ -735,7 +735,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // A DEPENDENT INTERFACE bound (`where T : IComparable<T>`) is the same
             // skip one bound-kind over, and it is the shape every self-referential
             // constraint has. Pinned green so the skip is measured.
-            yield[]object{"control-a-dependent-interface-bound-is-not-asked", `package P
+            yield []object{"control-a-dependent-interface-bound-is-not-asked", `package P
 import System
 import HelperLib2
 
@@ -749,7 +749,7 @@ Console.WriteLine("compiled")`, []string{"compiled"}}
             // answering it needs symbol-aware substitution rather than the erased
             // vector. The rule skips such a position, so this compiles even
             // though the bound is not forwarded. Pinned so the skip is measured.
-            yield[]object{"control-a-dependent-bound-is-not-asked", `package P
+            yield []object{"control-a-dependent-bound-is-not-asked", `package P
 import System
 import System.Collections.Generic
 import HelperLib2
