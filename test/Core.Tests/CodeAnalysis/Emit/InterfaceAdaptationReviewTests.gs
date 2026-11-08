@@ -115,6 +115,43 @@ func Bad() { let value = adapt[Target](Source()) }`)
         Assert.Contains(result.Diagnostics, (diagnostic Diagnostic) -> diagnostic.Id == "GS0606")
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RichMethodDiagnosticsSurviveRepeatedBinding(useBodyCache bool) {
+        let tree = SyntaxTree.Parse(`package RichDiagnostics
+interface Reader { func Read() int32; }
+func Build() Reader {
+    return object : Reader {
+        func Read() int32 { let ignored = 0 }
+        func Other() int32 { let ignored = 1 }
+    }
+}`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let cache = if useBodyCache {
+            BoundBodyCache()
+        } else {
+            default(BoundBodyCache?)
+        }
+        for var i = 0; i < 3; i++ {
+            let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil, cache)
+            Assert.Equal(2, program.Diagnostics.Length)
+            Assert.Equal(
+                []string{"Read", "Other"},
+                program
+                    .Diagnostics
+                    .Select(
+                    func (diagnostic Diagnostic) string {
+                        Assert.Equal("GS0100", diagnostic.Id)
+                        return diagnostic.Location.Text!!.ToString(diagnostic.Location.Span)
+                    }
+                )
+                    .ToArray()
+            )
+        }
+    }
+
     @Fact
     func UserPropertyContractRequiresMatchingUnscopedRefMetadata() {
         let target = CreateRefProperty(unscoped: true)

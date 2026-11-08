@@ -246,6 +246,48 @@ func Main() {
     }
 
     @Fact
+    func OverriddenSourceMethodsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace OverrideAdapterContracts;
+public interface IReader { int Read(); }
+public interface IEcho { string Echo(string value); }`, "OverrideAdapterContracts")
+        let dll = fixture.Compile(`package OverrideAdapters
+import System
+import OverrideAdapterContracts
+interface Reader { func Read() int32; }
+interface Echo { func Echo(value string) string; }
+open class Base {
+    public open func Read() int32 -> 1
+}
+class Derived : Base {
+    public override func Read() int32 -> 2
+}
+open class GenericBase[T] {
+    public open func Echo(value T) T -> value
+}
+class GenericDerived : GenericBase[string] {
+    public override func Echo(value string) string -> "override:" + value
+}
+class Inherited : GenericBase[string] { }
+func Main() {
+    Console.WriteLine(adapt[Reader](Derived()).Read())
+    Console.WriteLine(adapt[IReader](Derived()).Read())
+    Console.WriteLine(adapt[Echo](GenericDerived()).Echo("local"))
+    Console.WriteLine(adapt[IEcho](GenericDerived()).Echo("imported"))
+    Console.WriteLine(adapt[Echo](Inherited()).Echo("inherited-local"))
+    Console.WriteLine(adapt[IEcho](Inherited()).Echo("inherited-imported"))
+}`, "override-adapters", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`2
+2
+override:local
+override:imported
+inherited-local
+inherited-imported
+`, fixture.Run(dll))
+    }
+
+    @Fact
     func UserTargetsRespectReadonlyImportedHandleMembers() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let contracts = fixture.CompileCSharp(`using System;

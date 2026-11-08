@@ -1217,6 +1217,7 @@ partial class Binder {
             baseParameters.Concat(snapshotParameters).ToImmutableArray()
         )
         let methodBodies = Dictionary[FunctionSymbol, BoundBlockStatement]()
+        let methodDiagnostics = ImmutableArray.CreateBuilder[Diagnostic]()
         for method in classSymbol.Methods {
             if method.IsAbstract || method.Declaration?.Body == nil {
                 continue
@@ -1246,7 +1247,9 @@ partial class Binder {
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration!!.Identifier.Location)
             }
             AnalyzeFunctionBody(body, lowered, method, child.Diagnostics, child.binderCtx.References)
-            Diagnostics.AddRange(child.Diagnostics.ToImmutableArray())
+            let bodyDiagnostics = child.Diagnostics.ToImmutableArray()
+            Diagnostics.AddRange(bodyDiagnostics)
+            methodDiagnostics.AddRange(bodyDiagnostics)
             methodBodies[method] = lowered
         }
         let captures = RichAnonymousCaptureCollector.Collect(methodBodies)
@@ -1386,7 +1389,12 @@ partial class Binder {
             referencedTypeParameters
         )
         UpdateInferredRichAnonymousReturn(syntax, classSymbol, constructedType)
-        let plan = RichAnonymousObjectPlan(captureDescriptors.ToImmutable(), referencedTypeParameters, methodBodies)
+        let plan = RichAnonymousObjectPlan(
+            captureDescriptors.ToImmutable(),
+            referencedTypeParameters,
+            methodBodies,
+            methodDiagnostics.ToImmutable()
+        )
         plans[planKey] = plan
         $scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan
         return BoundConstructorCallExpression(syntax, constructedType, arguments)
@@ -1397,6 +1405,7 @@ partial class Binder {
         classSymbol StructSymbol,
         plan RichAnonymousObjectPlan
     ) BoundExpression {
+        Diagnostics.AddRange(plan.MethodDiagnostics)
         let (_, classToOuterTypeParameters) = BuildRichTypeParameterMaps(classSymbol)
         let snapshotArguments = ImmutableArray.CreateBuilder[BoundExpression]()
         for member in syntax.Members.OfType[AnonymousClassMemberInitializerSyntax]() {
@@ -10914,9 +10923,15 @@ partial class Binder {
             }
             if sourceMemberType is StructSymbol sourceStruct {
                 let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
+                let effectiveMethods = TypeMemberModel.GetMethods(
+                    sourceStruct,
+                    name,
+                    MemberQuery.Instance(MemberKinds.Method)
+                )
+                    .ToHashSet()
                 for ancestor in sourceStruct.GetHierarchy() {
                     for method in ancestor.GetDeclaredInstanceMethods() {
-                        if method.Name == name && method.Accessibility == Accessibility.Public {
+                        if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
                             results.Add((ancestor, method))
                         }
                     }
