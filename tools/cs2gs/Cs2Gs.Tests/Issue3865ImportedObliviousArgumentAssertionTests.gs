@@ -52,6 +52,45 @@ open class Issue3865ImportedObliviousArgumentAssertionTests {
     @Theory
     @InlineData(NullableContextOptions.Enable)
     @InlineData(NullableContextOptions.Disable)
+    func ImportedObliviousLambdaReturn_ConvertedNilResult_RunsConversionOnce(nullableContext NullableContextOptions) {
+        const Library = `
+#nullable enable
+using System;
+namespace Imported {
+    public class Box {
+        public static int Calls;
+        public static implicit operator Box?(string value) { Calls++; return null; }
+    }
+#nullable disable
+    public static class CallbackSink {
+        public static bool Run(Func<Box> callback) => callback() == null;
+    }
+}`
+        const Source = `
+using System;
+using Imported;
+namespace Consumer {
+    public class Program {
+        public static void Main() {
+            Console.WriteLine(CallbackSink.Run(() => "x") + "|" + Box.Calls);
+        }
+    }
+}`
+        let (printed, image) = TranslateAgainstLibraryWithImage(
+            Library,
+            Source,
+            OutputKind.ConsoleApplication,
+            nullableContext: nullableContext
+        )
+        let (exit, stdout) = CompileAndRun(printed, image)
+        Assert.True(exit == 0, "Converted nullable result must not throw:\n" + stdout)
+        Assert.Equal("True|1", stdout.Trim())
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal)
+    }
+
+    @Theory
+    @InlineData(NullableContextOptions.Enable)
+    @InlineData(NullableContextOptions.Disable)
     func XunitObliviousLambdaReturn_ReflectionVoidResult_RunsWithoutAssertion(nullableContext NullableContextOptions) {
         const Source = `
 using System;

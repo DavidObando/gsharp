@@ -5850,7 +5850,8 @@ partial class CSharpToGSharpTranslator {
                 )
                 if convertsValue && !resultAcceptsNil && this.TargetWillRemainNonNullableReference(
                     targetType,
-                    targetSymbol
+                    targetSymbol,
+                    value
                 ) {
                     var resultType GTypeReference? = this.MapDelegateLikeReturnType(
                         conversionOperator,
