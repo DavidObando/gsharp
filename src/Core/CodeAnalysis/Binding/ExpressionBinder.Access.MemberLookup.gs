@@ -1903,6 +1903,8 @@ internal partial class ExpressionBinder {
             // one receiver position that takes no §4 check: the access is
             // guarded, so no coercion to non-null happens at all.
             underlying = platform.UnderlyingType
+        } else if receiverType is TypeParameterSymbol tp && !Binder.SatisfiesNotNullConstraint(tp) {
+            underlying = tp
         } else if receiverType == TypeSymbol.Null {
             // `nil?[i]` is statically nil.
             return BoundLiteralExpression(nil, nil)
@@ -2101,7 +2103,8 @@ internal partial class ExpressionBinder {
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
         var clrIndexerOutcome = ClrIndexerResolutionOutcome.NoneFound
-        if target.Type is TypeParameterSymbol tpIndexTarget {
+        if target.Type is TypeParameterSymbol tpIndexTarget &&
+            HasProvenNonNullTypeParameterReceiver(target, tpIndexTarget) {
             let clrIndexConstraint TypeSymbol? = tpIndexTarget.ClrInterfaceConstraint
             let clrConstraintType Type? = clrIndexConstraint?.ClrType
             if clrIndexConstraint != nil && clrConstraintType != nil {
@@ -3215,7 +3218,8 @@ internal partial class ExpressionBinder {
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
         var clrIndexerOutcome = ClrIndexerResolutionOutcome.NoneFound
-        if targetType is TypeParameterSymbol tpIndexTarget {
+        if targetType is TypeParameterSymbol tpIndexTarget &&
+            HasProvenNonNullTypeParameterReceiver(target, tpIndexTarget) {
             let clrIndexConstraint TypeSymbol? = tpIndexTarget.ClrInterfaceConstraint
             let clrConstraintType Type? = clrIndexConstraint?.ClrType
             if clrIndexConstraint != nil && clrConstraintType != nil {
@@ -4898,10 +4902,13 @@ internal partial class ExpressionBinder {
         receiver BoundExpression,
         ne NameExpressionSyntax
     ) BoundExpression? {
+        if !HasProvenNonNullTypeParameterReceiver(receiver, tpRecv) {
+            return nil
+        }
         let memberName = ne.IdentifierToken.ValueText
         // Class constraint (issue #1056 surfaced methods; this adds the rest):
         // fields and properties, walking the base chain of the constraint class.
-        if tpRecv.ClassConstraint is StructSymbol classConstraint {
+        if tpRecv.UnwrappedClassConstraintStruct is StructSymbol classConstraint {
             if TypeMemberModel.TryGetFieldIncludingInherited(
                 classConstraint,
                 memberName,
@@ -5359,7 +5366,7 @@ internal partial class ExpressionBinder {
                 refinedArgs.Length,
                 recoverMethodGroupSlots
             )
-            return MemberLookup.BuildSymbolicMethodTypeArgs(
+            let recovered = MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 default(ImmutableArray[TypeSymbol]),
                 refinedArgs,
@@ -5367,6 +5374,7 @@ internal partial class ExpressionBinder {
                 clrArgumentNames,
                 recoverMethodGroupSlots
             )
+            return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(constraintType, closed, recovered)
         }
         let resolution = ClrOverloadResolution.Resolve(
             candidates,

@@ -6271,11 +6271,10 @@ internal class MemberLookup {
             closedMethod MethodInfo?
         ) TypeSymbol? {
             if GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
-                imp.OpenDefinition == nil ||
-                imp
-                .TypeArguments
-                .IsDefaultOrEmpty ||
                 closedMethod == nil ||
+                closedMethod
+                .DeclaringType
+                ?.IsGenericType != true ||
                 !TryGetSymbolicDeclaringContext(
                 imp,
                 closedMethod.DeclaringType,
@@ -6335,11 +6334,10 @@ internal class MemberLookup {
         ) TypeSymbol? {
             if receiverType == nil ||
                 GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp ||
-                imp.OpenDefinition == nil ||
-                imp
-                .TypeArguments
-                .IsDefaultOrEmpty ||
                 closedMethod == nil ||
+                closedMethod
+                .DeclaringType
+                ?.IsGenericType != true ||
                 paramIndex < 0 ||
                 !TryGetSymbolicDeclaringContext(
                 imp,
@@ -6820,6 +6818,9 @@ internal class MemberLookup {
             if type is PlatformTypeSymbol platform {
                 return GetProjectionReceiverImportedType(platform.UnderlyingType)
             }
+            if type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable) {
+                return GetProjectionReceiverImportedType(nullable.UnderlyingType)
+            }
             let imported ImportedTypeSymbol? = GetImportedTypeSymbol(type)
             // Semantic aggregates retain their CLR shape under the same annotation wrapper.
             let receiverClr Type? = imported?.ClrType ?? (type as NullabilityAnnotatedTypeSymbol)?.ClrType
@@ -7047,17 +7048,35 @@ internal class MemberLookup {
             closedOrOpenMethod MethodInfo,
             recovered ImmutableArray[TypeSymbol?]
         ) ImmutableArray[TypeSymbol?] {
-            if recovered.IsDefaultOrEmpty ||
-                receiverType is not ImportedTypeSymbol symRecv ||
-                symRecv.OpenDefinition == nil ||
-                symRecv
-                .TypeArguments
-                .IsDefaultOrEmpty {
+            if (recovered.IsDefaultOrEmpty && closedOrOpenMethod.IsGenericMethodDefinition) || receiverType == nil {
+                return recovered
+            }
+            let symRecv = GetProjectionReceiverImportedType(receiverType)
+            var openDef Type? = nil
+            var recvTypeArgs = default(ImmutableArray[TypeSymbol])
+            if symRecv != nil {
+                if !TryGetSymbolicDeclaringContext(
+                    symRecv,
+                    closedOrOpenMethod.DeclaringType,
+                    out openDef,
+                    out recvTypeArgs
+                ) {
+                    return recovered
+                }
+            } else {
+                let recvClr = receiverType.ClrType
+                if recvClr == nil || !recvClr.IsGenericType || recvClr.IsGenericTypeDefinition {
+                    return recovered
+                }
+                openDef = recvClr.GetGenericTypeDefinition()
+                recvTypeArgs = receiverType.GetElementPositions()
+            }
+            if openDef == nil || !openDef.IsGenericTypeDefinition || recvTypeArgs.IsDefaultOrEmpty {
                 return recovered
             }
             if !ClrOverloadResolution.SatisfiesMethodConstraintsWithReceiver(
-                symRecv.OpenDefinition,
-                symRecv.TypeArguments,
+                openDef,
+                recvTypeArgs,
                 closedOrOpenMethod,
                 recovered
             ) {

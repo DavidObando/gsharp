@@ -13149,12 +13149,190 @@ partial class TypeParameterSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop SpanPlan int32 -> 1
+    internal override prop SpanPlan int32 -> 7
 
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override prop ChildCount int32 {
+    internal override func BuildUnsortedChildren() ImmutableArray[SyntaxNode] {
+        let builder = ImmutableArray.CreateBuilder[SyntaxNode]()
+        if IsPresent(VarianceModifier) {
+            builder.Add(VarianceModifier!!)
+        }
+        if IsPresent(Identifier) {
+            builder.Add(Identifier)
+        }
+        if IsPresent(Constraint) {
+            builder.Add(Constraint!!)
+        }
+        if IsPresent(ConstraintType) {
+            builder.Add(ConstraintType!!)
+        }
+        if IsPresent(ConstraintTypeArgumentOpenBracketToken) {
+            builder.Add(ConstraintTypeArgumentOpenBracketToken!!)
+        }
+        builder.AddRange(SeparatedItems(ConstraintTypeArguments))
+        if IsPresent(ConstraintTypeArgumentCloseBracketToken) {
+            builder.Add(ConstraintTypeArgumentCloseBracketToken!!)
+        }
+        if IsPresent(ClassConstraintKeyword) {
+            builder.Add(ClassConstraintKeyword!!)
+        }
+        if IsPresent(ClassConstraintQuestionToken) {
+            builder.Add(ClassConstraintQuestionToken!!)
+        }
+        if IsPresent(StructConstraintKeyword) {
+            builder.Add(StructConstraintKeyword!!)
+        }
+        if IsPresent(NotNullConstraintKeyword) {
+            builder.Add(NotNullConstraintKeyword!!)
+        }
+        if IsPresent(InitConstraintKeyword) {
+            builder.Add(InitConstraintKeyword!!)
+        }
+        if IsPresent(InitConstraintOpenParenToken) {
+            builder.Add(InitConstraintOpenParenToken!!)
+        }
+        if IsPresent(InitConstraintCloseParenToken) {
+            builder.Add(InitConstraintCloseParenToken!!)
+        }
+        if IsPresent(UnmanagedConstraintKeyword) {
+            builder.Add(UnmanagedConstraintKeyword!!)
+        }
+        return builder.ToImmutable()
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func PropertyOrderIsSourceOrder() bool {
+        var last = int32.MinValue
+        let node0 = VarianceModifier
+        if IsPresent(node0) {
+            let start0 = node0!!.Span.Start
+            if start0 < last {
+                return false
+            }
+            last = start0
+        }
+        let node1 = Identifier
+        if IsPresent(node1) {
+            let start1 = node1.Span.Start
+            if start1 < last {
+                return false
+            }
+            last = start1
+        }
+        let node2 = Constraint
+        if IsPresent(node2) {
+            let start2 = node2!!.Span.Start
+            if start2 < last {
+                return false
+            }
+            last = start2
+        }
+        let node3 = ConstraintType
+        if IsPresent(node3) {
+            let start3 = node3!!.Span.Start
+            if start3 < last {
+                return false
+            }
+            last = start3
+        }
+        let node4 = ConstraintTypeArgumentOpenBracketToken
+        if IsPresent(node4) {
+            let start4 = node4!!.Span.Start
+            if start4 < last {
+                return false
+            }
+            last = start4
+        }
+        for item5 in SeparatedItems(ConstraintTypeArguments) {
+            let start5 = item5.Span.Start
+            if start5 < last {
+                return false
+            }
+            last = start5
+        }
+        let node6 = ConstraintTypeArgumentCloseBracketToken
+        if IsPresent(node6) {
+            let start6 = node6!!.Span.Start
+            if start6 < last {
+                return false
+            }
+            last = start6
+        }
+        let node7 = ClassConstraintKeyword
+        if IsPresent(node7) {
+            let start7 = node7!!.Span.Start
+            if start7 < last {
+                return false
+            }
+            last = start7
+        }
+        let node8 = ClassConstraintQuestionToken
+        if IsPresent(node8) {
+            let start8 = node8!!.Span.Start
+            if start8 < last {
+                return false
+            }
+            last = start8
+        }
+        let node9 = StructConstraintKeyword
+        if IsPresent(node9) {
+            let start9 = node9!!.Span.Start
+            if start9 < last {
+                return false
+            }
+            last = start9
+        }
+        let node10 = NotNullConstraintKeyword
+        if IsPresent(node10) {
+            let start10 = node10!!.Span.Start
+            if start10 < last {
+                return false
+            }
+            last = start10
+        }
+        let node11 = InitConstraintKeyword
+        if IsPresent(node11) {
+            let start11 = node11!!.Span.Start
+            if start11 < last {
+                return false
+            }
+            last = start11
+        }
+        let node12 = InitConstraintOpenParenToken
+        if IsPresent(node12) {
+            let start12 = node12!!.Span.Start
+            if start12 < last {
+                return false
+            }
+            last = start12
+        }
+        let node13 = InitConstraintCloseParenToken
+        if IsPresent(node13) {
+            let start13 = node13!!.Span.Start
+            if start13 < last {
+                return false
+            }
+            last = start13
+        }
+        let node14 = UnmanagedConstraintKeyword
+        if IsPresent(node14) {
+            let start14 = node14!!.Span.Start
+            if start14 < last {
+                return false
+            }
+            last = start14
+        }
+        return true
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop PropertyChildCount int32 {
         get {
             var count = 0
             if IsPresent(VarianceModifier) {
@@ -13179,7 +13357,13 @@ partial class TypeParameterSyntax {
             if IsPresent(ClassConstraintKeyword) {
                 count++
             }
+            if IsPresent(ClassConstraintQuestionToken) {
+                count++
+            }
             if IsPresent(StructConstraintKeyword) {
+                count++
+            }
+            if IsPresent(NotNullConstraintKeyword) {
                 count++
             }
             if IsPresent(InitConstraintKeyword) {
@@ -13201,7 +13385,7 @@ partial class TypeParameterSyntax {
     /// ```xmldoc
     /// <inheritdoc />
     /// ```
-    internal override func GetChild(index int32) SyntaxNode {
+    internal override func PropertyChild(index int32) SyntaxNode {
         var remaining = index
         if remaining >= 0 {
             let child0 = VarianceModifier
@@ -13258,43 +13442,79 @@ partial class TypeParameterSyntax {
                 }
                 remaining--
             }
-            let child8 = StructConstraintKeyword
+            let child8 = ClassConstraintQuestionToken
             if IsPresent(child8) {
                 if remaining == 0 {
                     return child8!!
                 }
                 remaining--
             }
-            let child9 = InitConstraintKeyword
+            let child9 = StructConstraintKeyword
             if IsPresent(child9) {
                 if remaining == 0 {
                     return child9!!
                 }
                 remaining--
             }
-            let child10 = InitConstraintOpenParenToken
+            let child10 = NotNullConstraintKeyword
             if IsPresent(child10) {
                 if remaining == 0 {
                     return child10!!
                 }
                 remaining--
             }
-            let child11 = InitConstraintCloseParenToken
+            let child11 = InitConstraintKeyword
             if IsPresent(child11) {
                 if remaining == 0 {
                     return child11!!
                 }
                 remaining--
             }
-            let child12 = UnmanagedConstraintKeyword
+            let child12 = InitConstraintOpenParenToken
             if IsPresent(child12) {
                 if remaining == 0 {
                     return child12!!
                 }
                 remaining--
             }
+            let child13 = InitConstraintCloseParenToken
+            if IsPresent(child13) {
+                if remaining == 0 {
+                    return child13!!
+                }
+                remaining--
+            }
+            let child14 = UnmanagedConstraintKeyword
+            if IsPresent(child14) {
+                if remaining == 0 {
+                    return child14!!
+                }
+                remaining--
+            }
         }
         throw ArgumentOutOfRangeException(nameof(index))
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override prop ChildCount int32 {
+        get {
+            if InPlaceOrdered() {
+                return PropertyChildCount
+            }
+            return CachedChildren().Length
+        }
+    }
+
+    /// ```xmldoc
+    /// <inheritdoc />
+    /// ```
+    internal override func GetChild(index int32) SyntaxNode {
+        if InPlaceOrdered() {
+            return PropertyChild(index)
+        }
+        return ChildAt(CachedChildren(), index)
     }
 }
 

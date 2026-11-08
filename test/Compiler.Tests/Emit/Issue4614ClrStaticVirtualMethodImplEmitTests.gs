@@ -192,7 +192,12 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(1)
             )
-            metadata.AddGenericParameter(ifaceHandle, GenericParameterAttributes.None, metadata.GetOrAddString("T"), 0)
+            let ifaceTypeParam = metadata.AddGenericParameter(
+                ifaceHandle,
+                GenericParameterAttributes.None,
+                metadata.GetOrAddString("T"),
+                0
+            )
             let encodeRankOneNonSzArray = (typeEncoder SignatureTypeEncoder) -> {
                 typeEncoder.Array(
                     (element SignatureTypeEncoder) -> element.GenericTypeParameter(0),
@@ -332,10 +337,20 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(7)
             )
+            let nullableAttrByteCtor = metadata.AddMemberReference(
+                nullableAttrType,
+                metadata.GetOrAddString(".ctor"),
+                metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x05})
+            )
             let nullableAttrBytesCtor = metadata.AddMemberReference(
                 nullableAttrType,
                 metadata.GetOrAddString(".ctor"),
                 metadata.GetOrAddBlob([]uint8{0x20, 1, 0x01, 0x1D, 0x05})
+            )
+            metadata.AddCustomAttribute(
+                ifaceTypeParam,
+                nullableAttrByteCtor,
+                metadata.GetOrAddBlob([]uint8{1, 0, 2, 0, 0})
             )
             metadata.AddCustomAttribute(
                 nullableReturnParam,
@@ -350,11 +365,16 @@ Console.WriteLine("ran")`, appPath, "/target:exe")
                 MetadataTokens.FieldDefinitionHandle(1),
                 MetadataTokens.MethodDefinitionHandle(7)
             )
-            metadata.AddGenericParameter(
+            let boxTypeParam = metadata.AddGenericParameter(
                 boxTypeHandle,
                 GenericParameterAttributes.None,
                 metadata.GetOrAddString("T"),
                 0
+            )
+            metadata.AddCustomAttribute(
+                boxTypeParam,
+                nullableAttrByteCtor,
+                metadata.GetOrAddBlob([]uint8{1, 0, 2, 0, 0})
             )
             let ifaceTypeSpecBlob = BlobBuilder()
             BlobEncoder(ifaceTypeSpecBlob)

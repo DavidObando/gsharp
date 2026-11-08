@@ -205,7 +205,7 @@ public static class Probes
 import System
 import Interop
 
-func makeMap[K, V](entries map[K, V]) MapHolder[K, V] {
+func makeMap[K notnull, V](entries map[K, V]) MapHolder[K, V] {
     return MapHolder[K, V](entries)
 }
 
@@ -233,7 +233,7 @@ import System
 import System.Collections.Generic
 import Interop
 
-func makeMap[K, V](entries Dictionary[K, V]) MapHolder[K, V] {
+func makeMap[K notnull, V](entries Dictionary[K, V]) MapHolder[K, V] {
     return MapHolder[K, V](entries)
 }
 
@@ -286,7 +286,7 @@ Console.WriteLine(makeBig[string]((1, 2, 3, 4, 5, 6, 7, "tail")).Tag)`, []string
 import System
 import Interop
 
-func countMap[K, V](entries map[K, V]) string {
+func countMap[K notnull, V](entries map[K, V]) string {
     return Probes.CountEntries[K, V](entries)
 }
 
@@ -331,7 +331,7 @@ Console.WriteLine(closedTuple((4, "y")).Tag)`, []string{"map:3", "tuple:4:y"}}
 import System
 import Interop
 
-class Holder[K, V] : MapHolder[K, V] {
+class Holder[K notnull, V] : MapHolder[K, V] {
     init(entries map[K, V]) : base(entries) {
     }
 }
@@ -350,7 +350,7 @@ Console.WriteLine(Holder[string, int32](m).Tag)`, []string{"map:2"}}
 import System
 import Interop
 
-func makeMap[K, V](entries map[V, K]) MapHolder[K, V] {
+func makeMap[K notnull, V notnull](entries map[V, K]) MapHolder[K, V] {
     return MapHolder[K, V](entries)
 }
 

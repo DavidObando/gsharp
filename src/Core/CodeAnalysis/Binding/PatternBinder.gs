@@ -566,6 +566,7 @@ internal class PatternBinder {
                 bindingContext == PatternBindingContext.NegatedIsExpression
         )
         let variable = CreatePatternVariable(variableName, targetType, nameToken, isExpressionBinding)
+        variable.HasDefinitelyNonNullValue = true
         if bindingIdentifier != nil {
             if bindingContext == PatternBindingContext.Allowed {
                 if !Scope.TryDeclareVariable(variable) {
