@@ -1274,6 +1274,80 @@ class Container[Environment] : System.Collections.Generic.List[string] {
         Assert.DoesNotContain("type Environment", value, StringComparison.Ordinal)
     }
 
+    @Fact
+    func ComputeHover_ImportAliasCollidingWithSystemType_ResolvesAliasedNamespaceMember() {
+        const source = `package Repro
+
+import Environment = System.Text
+
+func Build() string {
+    let sb = Environment.StringBuilder("hi")
+    return sb.ToString()
+}
+`
+        let content = LanguageServerTestHelpers.Content(source)
+        let sbHover Hover? = HoverComputer.ComputeHover(
+            content,
+            LanguageServerTestHelpers.PositionOf(source, "StringBuilder")
+        )
+        Assert.NotNull(sbHover)
+        Assert.Contains("class System.Text.StringBuilder", sbHover!!.Contents.ToString(), StringComparison.Ordinal)
+    }
+
+    @Fact
+    func StructLiteralInitializer_ResolvesReferencesAndRenameOnConstructedType_NotEnclosingType() {
+        const source = `package Repro
+
+class Other {
+    var Value int32
+}
+
+class Box {
+    var Value int32
+
+    func Clone() Box {
+        let other = Other{Value: 2}
+        return Box{Value: other.Value}
+    }
+}
+`
+        let uri = DocumentUri.From("file:///test/repro.gs")!!
+        let content = LanguageServerTestHelpers.Content(source)
+        let boxValuePos = LanguageServerTestHelpers.PositionOf(source, "Value", 1)
+        let refs = ReferencesComputer.ComputeReferences(uri, content, boxValuePos, includeDeclaration: true)
+        Assert.Equal(2, refs.Count)
+
+        let edit = RenameComputer.ComputeRename(uri, content, boxValuePos, "Count")
+        Assert.NotNull(edit)
+        let changes = edit!!.Changes[uri].ToList()
+        Assert.Equal(2, changes.Count)
+
+        let otherInitPos = LanguageServerTestHelpers.PositionOf(source, "Value", 2)
+        let boxInitPos = LanguageServerTestHelpers.PositionOf(source, "Value", 3)
+        Assert.Contains(
+            changes,
+            (e GSharp.LanguageServer.Protocol.TextEdit) -> e
+                .Range
+                .Start
+                .Line == boxInitPos.Line &&
+                e
+                .Range
+                .Start
+                .Character == boxInitPos.Character
+        )
+        Assert.DoesNotContain(
+            changes,
+            (e GSharp.LanguageServer.Protocol.TextEdit) -> e
+                .Range
+                .Start
+                .Line == otherInitPos.Line &&
+                e
+                .Range
+                .Start
+                .Character == otherInitPos.Character
+        )
+    }
+
     shared {
         private func CreateReferencePackResolver() ReferenceResolver {
             let TryParseVersion = func (s string) Version? {

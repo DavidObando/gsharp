@@ -258,7 +258,7 @@ shared class SemanticLookup {
             // type and look the member up on it. This runs *before* the by-name fallbacks
             // so a member access never accidentally binds to a same-named local or
             // global (e.g. `person.Name` must never resolve to a top-level `Name`).
-            let asMember Symbol? = this.ResolveAsMemberAccess(token)
+            let asMember Symbol? = this.ResolveAsMemberAccess(token) ?? this.ResolveInitializerMember(token)
             if asMember != nil {
                 return asMember
             }
@@ -582,6 +582,40 @@ shared class SemanticLookup {
             return nil
         }
 
+        private func ResolveInitializerMember(token SyntaxToken) Symbol? {
+            if token?.SyntaxTree == nil || token.Kind != SyntaxKind.IdentifierToken {
+                return nil
+            }
+            let tree = token.SyntaxTree
+            switch token.Parent {
+                case pi is PropertyInitializerSyntax when TokenMatches(pi.PropertyIdentifier, token) {
+                    if pi.Parent is ObjectCreationExpressionSyntax{Target: {} target} {
+                        let receiverType = this.ResolveReceiverTypeSymbol(tree, target)
+                        return LookupTypeMember(receiverType, pi.PropertyIdentifier.Text)
+                    }
+                }
+                case fi is FieldInitializerSyntax when TokenMatches(fi.FieldIdentifier, token) {
+                    switch fi.Parent {
+                        case structLiteral is StructLiteralExpressionSyntax {
+                            let receiverType = this.ResolveReceiverTypeSymbol(tree, structLiteral)
+                            return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                        }
+                        case withExpr is WithExpressionSyntax {
+                            let receiverType = this.ResolveReceiverTypeSymbol(tree, withExpr.Receiver)
+                            return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                        }
+                        case memberElem is MemberCollectionElementSyntax when memberElem.Parent is CollectionInitializerExpressionSyntax collection {
+                            if SemanticLookup.GetInitializerTarget(collection) is {} target {
+                                let receiverType = this.ResolveReceiverTypeSymbol(tree, target)
+                                return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                            }
+                        }
+                    }
+                }
+            }
+            return nil
+        }
+
         private func GetAccessorsForTree(tree SyntaxTree)[]AccessorExpressionSyntax {
             // The cache covers every tree currently in the compilation; trees that arrive
             // here from outside the compilation (a stale DocumentContent) fall back to a
@@ -630,6 +664,9 @@ shared class SemanticLookup {
                 }
                 case call is CallExpressionSyntax {
                     return AsTypeSymbol(this.Resolve(call.Identifier))
+                }
+                case structLiteral is StructLiteralExpressionSyntax {
+                    return AsTypeSymbol(this.Resolve(structLiteral.TypeIdentifier))
                 }
                 case nested is AccessorExpressionSyntax {
                     let outerType TypeSymbol? = this.ResolveReceiverTypeSymbol(tree, nested.LeftPart)
@@ -1200,6 +1237,7 @@ shared class SemanticLookup {
         }
         var currentType Type? = nil
         var namespacePrefix = string.Empty
+        let resolver = compilation.References ?? ReferenceResolver.Default()
         for var i = 0; i < segments.Count; i++ {
             let (segName, segArity) = segments[i]
             let mangledSeg = if segArity > 0 {
@@ -1218,6 +1256,17 @@ shared class SemanticLookup {
                 }
                 currentType = nested
                 continue
+            }
+            if string.IsNullOrEmpty(namespacePrefix) && segArity == 0 {
+                let expanded = ExpandImportAlias(tree, segName)
+                if !string.Equals(expanded, segName, StringComparison.Ordinal) {
+                    if resolver.TryResolveType(expanded, out var aliasedType) {
+                        currentType = aliasedType
+                    } else {
+                        namespacePrefix = expanded
+                    }
+                    continue
+                }
             }
             let candidatePath = if string.IsNullOrEmpty(namespacePrefix) {
                 mangledSeg
@@ -1250,7 +1299,7 @@ shared class SemanticLookup {
                     return nil
                 }
                 namespacePrefix = if string.IsNullOrEmpty(namespacePrefix) {
-                    ExpandImportAlias(tree, segName)
+                    segName
                 } else {
                     "$namespacePrefix.$segName"
                 }
