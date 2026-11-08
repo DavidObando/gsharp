@@ -7843,7 +7843,7 @@ partial class CSharpToGSharpTranslator {
         /// ((cref:IDiscardSymbol)) rather than a real variable/field named
         /// `_` that happens to be in scope. A real `_` binding is a normal
         /// assignment target, not a discard, and must not be dropped.
-        /// @param identifier The `_` identifier on the assignment's left side.
+        /// @param identifier The `_` identifier to classify.
         /// @returns `true` when [`identifier`](paramref) is a genuine discard.
         private func IsTrueDiscard(identifier IdentifierNameSyntax) bool {
             let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol

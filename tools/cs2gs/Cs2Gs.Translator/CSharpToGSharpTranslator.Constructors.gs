@@ -968,7 +968,7 @@ partial class CSharpToGSharpTranslator {
                 default(GExpression?)
             }
             return Parameter(
-                MapParameterName(symbol, fallbackNode),
+                this.EmittedName(symbol, symbol.Name),
                 type,
                 variadic,
                 refKind,
@@ -1044,16 +1044,6 @@ partial class CSharpToGSharpTranslator {
             }
             return attributes
         }
-
-        // Issue #3467 / #4307: `EmittedNameAllocator` keeps `_` for unreferenced
-        // source `_` parameters and imported metadata `_` parameters, and renames
-        // a single referenced source `_` parameter to `underscore` (`underscore_2`,
-        // etc. on collision) across its declaration, body references, and named
-        // arguments.
-        private func MapParameterName(
-            symbol IParameterSymbol,
-            fallbackNode Microsoft.CodeAnalysis.SyntaxNode?
-        ) string? -> this.EmittedName(symbol, symbol.Name)
 
         /// Computes the G# default-value expression for an optional C# parameter,
         /// or `null` when the parameter is required or its default cannot be
@@ -3171,7 +3161,7 @@ partial class CSharpToGSharpTranslator {
                     !this.IsSymbolReassigned(symbol, bodyOwner) {
                     continue
                 }
-                let name string? = MapParameterName(symbol, parameter)
+                let name string? = this.EmittedName(symbol, symbol.Name)
                 shadows.Add(LocalDeclarationStatement(BindingKind.Var, name, type: nil, IdentifierExpression(name)))
             }
             if shadows.Count == 0 {
