@@ -3096,7 +3096,35 @@ internal partial class ExpressionBinder {
             let userParameterTypes = TypeMemberModel
                 .GetMethods(collectionType, "Add", MemberQuery.Instance(MemberKinds.Method))
                 .Where((method FunctionSymbol) -> method.Parameters.Length == 1)
-                .Select((method FunctionSymbol) -> method.Parameters[0].Type)
+                .Select(
+                (method FunctionSymbol) -> {
+                    let parameterType = method.Parameters[0].Type
+                    if collectionType is StructSymbol collectionStruct {
+                        let methodOwner = if method.ReceiverType is StructSymbol declaredReceiver {
+                            TypeMemberModel.ResolveStaticMemberOwner(collectionStruct, declaredReceiver)
+                        } else {
+                            collectionStruct
+                        }
+                        return methodOwner.SubstituteMemberType(parameterType) ?? parameterType
+                    }
+                    if collectionType is InterfaceSymbol collectionInterface {
+                        let interfaceOwner = if method.ReceiverType is InterfaceSymbol declaredInterface {
+                            let declaredDefinition = declaredInterface.Definition ?? declaredInterface
+                            collectionInterface.SelfAndAllBaseInterfaces().FirstOrDefault(
+                                (candidate InterfaceSymbol) -> object.ReferenceEquals(
+                                    candidate.Definition ?? candidate,
+                                    declaredDefinition
+                                )
+                            ) ??
+                                collectionInterface
+                        } else {
+                            collectionInterface
+                        }
+                        return interfaceOwner.SubstituteMemberType(parameterType)
+                    }
+                    return parameterType
+                }
+            )
                 .Distinct()
                 .ToArray()
             if userParameterTypes.Length == 1 {

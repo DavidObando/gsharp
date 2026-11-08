@@ -4694,13 +4694,13 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         let expressionElement = cast[ExpressionElementSyntax](element)
                         let operationElementType ITypeSymbol? = collectionOperation?.Elements[i].Type
-                        let addParameterType ITypeSymbol? = this.GetCollectionAddParameterType(
+                        let addParameter IParameterSymbol? = this.GetCollectionAddParameter(
                             collection,
                             target,
                             operationElementType ?? elementTypeSymbol,
-                            expressionElement.Expression,
-                            elementTypeSymbol
+                            expressionElement.Expression
                         )
+                        let addParameterType ITypeSymbol? = addParameter?.Type
                         let boundElementType ITypeSymbol? = if addParameterType != nil {
                             if elementTypeSymbol != nil && SymbolEqualityComparer.Default.Equals(
                                 addParameterType,
@@ -4724,6 +4724,12 @@ partial class CSharpToGSharpTranslator {
                         } else {
                             elementType
                         }
+                        if addParameter != nil {
+                            boundElementRef = this.PromoteIfUsedAsNullable(
+                                boundElementRef,
+                                addParameter.OriginalDefinition
+                            )
+                        }
                         boundElementRef = this.PromoteObliviousArrayElement(
                             boundElementRef,
                             boundElementType,
@@ -4734,7 +4740,8 @@ partial class CSharpToGSharpTranslator {
                                 this.CoerceCollectionElement(
                                     expressionElement.Expression,
                                     boundElementRef,
-                                    boundElementType
+                                    boundElementType,
+                                    addParameter
                                 )
                             )
                         )
@@ -4827,7 +4834,8 @@ partial class CSharpToGSharpTranslator {
         private func CoerceCollectionElement(
             element ExpressionSyntax,
             elementType GTypeReference?,
-            targetElementSymbol ITypeSymbol?
+            targetElementSymbol ITypeSymbol?,
+            targetParameterSymbol IParameterSymbol? = nil
         ) GExpression? {
             var targetElementSymbol = targetElementSymbol
             if elementType?.IsNullable == true &&
@@ -4859,10 +4867,18 @@ partial class CSharpToGSharpTranslator {
                 element,
                 translated,
                 targetElementSymbol ?? convertedSymbol,
-                targetSymbol: nil,
+                targetSymbol: targetParameterSymbol,
+                includePromotedValue: targetParameterSymbol != nil,
                 reportedTarget: collectionType,
                 reportedSlotType: targetElementSymbol
             )
+            if this.GetUserDefinedConversionInputOperator(
+                element,
+                targetElementSymbol ?? convertedSymbol,
+                out _
+            ) != nil {
+                return translated
+            }
             translated = this.AssertFlowNarrowedNullableReference(element, translated, elementType)
             if elementType?.IsNullable != true &&
                 IsNullOrSuppressedNull(element) &&
@@ -4870,7 +4886,9 @@ partial class CSharpToGSharpTranslator {
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
-                .Annotated {
+                .Annotated &&
+                this
+                .TargetWillRemainNonNullableReference(targetElementSymbol, targetParameterSymbol, element) {
                 // C# permits this warning-level write. A typed default retains
                 // the target's static type and the nil value without `!!`.
                 return DefaultValueExpression(elementType)
@@ -4883,6 +4901,7 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
+                this.TargetWillRemainNonNullableReference(targetElementSymbol, targetParameterSymbol, element) &&
                 elementInfo
                 .Nullability
                 .FlowState != Microsoft
@@ -4952,24 +4971,23 @@ partial class CSharpToGSharpTranslator {
             return NamedTypeReference("object")
         }
 
-        /// Issue #4525: a constructible collection's elements are bound through
-        /// its `Add` method, so a nullable `Add(T?)` parameter keeps a
-        /// legitimately null element from being asserted. Roslyn does not expose
-        /// the bound Add method, and C# overload resolution (hiding, generic
-        /// inference, extension methods, candidate sets spanning the hierarchy) is
-        /// not modeled. The helper is therefore fail-safe: the nullable parameter
-        /// is used only when exactly one accessible, non-generic, instance Add
-        /// exists with no extension Add in scope. Any other shape with a nullable
-        /// or default element reports Unsupported instead of guessing.
-        /// @returns The nullable Add parameter type, or null when the element type stands.
-        private func GetCollectionAddParameterType(
+        /// Issue #4525 / #4573: a constructible collection's elements are bound
+        /// through its `Add` method, so the selected `Add` parameter governs
+        /// element nullability and bridging. Roslyn does not expose the bound
+        /// `Add` method on `ICollectionExpressionOperation`, so candidates are
+        /// filtered by expression-aware implicit convertibility from the actual
+        /// element (and its managed-reference projection) when no extension or
+        /// generic `Add` exists in scope. Any ambiguous or generic/extension
+        /// shape with a nullable or default element reports Unsupported instead
+        /// of guessing.
+        /// @returns The selected `Add` parameter symbol, or null when the element type stands.
+        private func GetCollectionAddParameter(
             collection CollectionExpressionSyntax,
             target ITypeSymbol?,
             elementType ITypeSymbol?,
-            element ExpressionSyntax? = nil,
-            projectedElementType ITypeSymbol? = nil
-        ) ITypeSymbol? {
-            if elementType == nil || target == nil {
+            element ExpressionSyntax? = nil
+        ) IParameterSymbol? {
+            if (elementType == nil && element == nil) || target == nil {
                 return nil
             }
             let nullableElement = collection.Elements.Any(
@@ -5033,55 +5051,47 @@ partial class CSharpToGSharpTranslator {
             if !hasExtensionAdd && !candidates.Any((candidate IMethodSymbol) -> candidate.IsGenericMethod) {
                 if candidates.Count == 1 {
                     let singleParameterType = candidates[0].Parameters[0].Type
-                    if SymbolEqualityComparer.Default.Equals(singleParameterType, elementType) ||
-                        (
-                        projectedElementType != nil && SymbolEqualityComparer.Default.Equals(
-                            singleParameterType,
-                            projectedElementType
-                        )
-                    ) ||
-                        (
-                        element != nil &&
-                            IsNullOrDefaultLiteral(element) &&
-                            (
-                            singleParameterType.IsReferenceType ||
-                                singleParameterType
-                                .OriginalDefinition
-                                .SpecialType == SpecialType.System_Nullable_T
-                        )
-                    ) ||
-                        this
-                        .context
-                        .Compilation
-                        .ClassifyConversion(elementType, singleParameterType)
-                        .IsImplicit {
+                    if this.IsCollectionAddParameterApplicable(singleParameterType, element, elementType) {
                         selectedAdd = candidates[0]
                     }
                 } else if candidates.Count > 1 {
-                    let applicable = candidates.Where(
-                        (candidate IMethodSymbol) -> {
-                            let paramType = candidate.Parameters[0].Type
-                            if element != nil && IsNullOrDefaultLiteral(element) {
-                                return paramType.IsReferenceType ||
-                                    paramType
-                                    .OriginalDefinition
-                                    .SpecialType == SpecialType.System_Nullable_T
-                            }
-                            return SymbolEqualityComparer.Default.Equals(paramType, elementType) ||
-                                (
-                                projectedElementType != nil && SymbolEqualityComparer.Default.Equals(
-                                    paramType,
-                                    projectedElementType
-                                )
-                            ) ||
-                                this
-                                .context
-                                .Compilation
-                                .ClassifyConversion(elementType, paramType)
-                                .IsImplicit
-                        }
+                    var applicable = candidates.Where(
+                        (candidate IMethodSymbol) -> this.IsCollectionAddParameterApplicable(
+                            candidate.Parameters[0].Type,
+                            element,
+                            elementType
+                        )
                     )
                         .ToList()
+                    if applicable.Count > 1 && element != nil {
+                        if this.context.GetTypeInfo(element).Type is {} exactElementType {
+                            let exactMatches = applicable.Where(
+                                (candidate IMethodSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate.Parameters[0].Type,
+                                    exactElementType
+                                )
+                            )
+                                .ToList()
+                            if exactMatches.Count == 1 {
+                                applicable = exactMatches
+                            }
+                        }
+                        if applicable.Count > 1 {
+                            let standardMatches = applicable.Where(
+                                (candidate IMethodSymbol) -> {
+                                    let conversion = this
+                                        .context
+                                        .SemanticModel
+                                        .ClassifyConversion(element, candidate.Parameters[0].Type)
+                                    return conversion.IsImplicit && !conversion.IsUserDefined
+                                }
+                            )
+                                .ToList()
+                            if standardMatches.Count == 1 {
+                                applicable = standardMatches
+                            }
+                        }
+                    }
                     if applicable.Count == 1 {
                         selectedAdd = applicable[0]
                     }
@@ -5096,7 +5106,49 @@ partial class CSharpToGSharpTranslator {
                 }
                 return nil
             }
-            return selectedAdd.Parameters[0].Type
+            return selectedAdd.Parameters[0]
+        }
+
+        private func IsCollectionAddParameterApplicable(
+            parameterType ITypeSymbol,
+            element ExpressionSyntax?,
+            elementType ITypeSymbol?
+        ) bool {
+            if element != nil {
+                if this.context.SemanticModel.ClassifyConversion(element, parameterType).IsImplicit {
+                    return true
+                }
+                if this.GetManagedReferenceArrayProjectedArgumentType(element) is {} projectedArgumentType &&
+                    (
+                    SymbolEqualityComparer.Default.Equals(parameterType, projectedArgumentType) ||
+                        this
+                        .context
+                        .Compilation
+                        .ClassifyConversion(projectedArgumentType, parameterType)
+                        .IsImplicit
+                ) {
+                    return true
+                }
+                let actualElementType = this.context.GetTypeInfo(element).Type
+                if actualElementType != nil {
+                    return SymbolEqualityComparer.Default.Equals(parameterType, actualElementType) ||
+                        this
+                        .context
+                        .Compilation
+                        .ClassifyConversion(actualElementType, parameterType)
+                        .IsImplicit
+                }
+                return false
+            }
+            return elementType != nil &&
+                (
+                SymbolEqualityComparer.Default.Equals(parameterType, elementType) ||
+                    this
+                    .context
+                    .Compilation
+                    .ClassifyConversion(elementType, parameterType)
+                    .IsImplicit
+            )
         }
 
         private func GetManagedReferenceArrayProjectedCollectionType(
