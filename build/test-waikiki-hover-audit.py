@@ -9,8 +9,11 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH_ROOT = ROOT / "out" / "test-waikiki-hover-audit"
@@ -259,6 +262,46 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
                 os.environ.pop("GITHUB_TOKEN", None)
             else:
                 os.environ["GITHUB_TOKEN"] = old_token
+
+    def test_run_audit_removes_stale_artifacts_before_subprocesses(self) -> None:
+        out_dir = SCRATCH_ROOT / "reused-out"
+        corpus_dir = SCRATCH_ROOT / "reused-corpus"
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+        self.write_valid_artifacts(out_dir)
+
+        observed_before_commands: list[bool] = []
+
+        def fake_run_command(cmd: list[str], **_kwargs: object) -> None:
+            observed_before_commands.append(any((out_dir / name).exists() for name in audit.REQUIRED_ARTIFACTS))
+
+        with patch.object(audit, "run_command", side_effect=fake_run_command):
+            with self.assertRaisesRegex(audit.AuditVerificationError, "missing required audit artifact"):
+                audit.run_audit(corpus_dir, out_dir)
+        self.assertEqual(observed_before_commands, [False, False, False])
+
+    def test_run_command_terminates_descendant_process_tree_on_timeout(self) -> None:
+        child_pid_file = SCRATCH_ROOT / "child.pid"
+        helper_code = (
+            "import pathlib, subprocess, sys, time; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid), encoding='utf-8'); "
+            "time.sleep(60)"
+        )
+        with self.assertRaises(subprocess.TimeoutExpired):
+            audit.run_command([sys.executable, "-c", helper_code], timeout_seconds=0.4)
+        self.assertTrue(child_pid_file.is_file())
+        child_pid = int(child_pid_file.read_text(encoding="utf-8").strip())
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                break
+            time.sleep(0.05)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
 
 if __name__ == "__main__":

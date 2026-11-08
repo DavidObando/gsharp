@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -300,11 +301,66 @@ def stage_verified_artifacts(
         raise
 
 
+def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Terminate a timed-out process and all of its descendants on POSIX and Windows."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        try:
+            process.kill()
+        except OSError:
+            pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+
+def run_command(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: float = 900,
+) -> None:
+    """Execute a subprocess in its own session/process group and terminate its tree on timeout."""
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd) if cwd is not None else None,
+        "env": env,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        terminate_process_tree(process)
+        process.wait()
+        raise
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd)
+
+
 def run_audit(corpus_dir: Path, out_dir: Path, restore_source: str | None = None, timeout_seconds: int = 900) -> dict[str, Any]:
     """Build the pinned Waikiki corpus, execute the G# headless hover audit, and verify artifacts."""
     corpus_dir = corpus_dir.resolve()
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    for name in REQUIRED_ARTIFACTS:
+        stale_artifact = out_dir / name
+        if stale_artifact.exists():
+            stale_artifact.unlink()
     env = isolated_environment(out_dir / "env-scratch")
     env["GSHARP_WAIKIKI_CORPUS_ROOT"] = str(corpus_dir)
     env["GSHARP_WAIKIKI_AUDIT_OUT"] = str(out_dir)
@@ -312,7 +368,7 @@ def run_audit(corpus_dir: Path, out_dir: Path, restore_source: str | None = None
     restore_cmd = ["dotnet", "restore", str(corpus_dir / "Waikiki.slnx")]
     if restore_source:
         restore_cmd.extend(["--source", restore_source])
-    subprocess.run(restore_cmd, env=env, check=True, timeout=timeout_seconds)
+    run_command(restore_cmd, env=env, timeout_seconds=timeout_seconds)
 
     build_cmd = [
         "dotnet",
@@ -323,7 +379,7 @@ def run_audit(corpus_dir: Path, out_dir: Path, restore_source: str | None = None
         "--no-restore",
         "-graph",
     ]
-    subprocess.run(build_cmd, env=env, check=True, timeout=timeout_seconds)
+    run_command(build_cmd, env=env, timeout_seconds=timeout_seconds)
 
     test_cmd = [
         "dotnet",
@@ -336,11 +392,10 @@ def run_audit(corpus_dir: Path, out_dir: Path, restore_source: str | None = None
         "--filter",
         "FullyQualifiedName~WaikikiHoverAuditTests.PinnedWaikikiCorpus_FullHeadlessAudit",
     ]
-    subprocess.run(test_cmd, cwd=ROOT, env=env, check=True, timeout=timeout_seconds)
+    run_command(test_cmd, cwd=ROOT, env=env, timeout_seconds=timeout_seconds)
 
     scratch_dir = out_dir / "env-scratch"
     if scratch_dir.exists():
-        import shutil
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
     step_summary = Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None

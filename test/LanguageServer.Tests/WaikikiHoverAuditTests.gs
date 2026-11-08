@@ -241,6 +241,41 @@ open class WaikikiHoverAuditTests {
             Assert.Equal("MissingSourceDefinition", mutantMissingDefinition?.Kind)
             Assert.True(mutantMissingDefinition?.IsUnreviewed == true)
 
+            let nonOracleInteriorFailures = List[AuditFailureRecord]()
+            let nonOracleHover = Hover{
+                Contents: MarkedStringsOrMarkupContent(
+                    MarkupContent{Kind: MarkupKind.Markdown, Value: "```gsharp\nstring\n```"}
+                ),
+                Range: GSharp.LanguageServer.Protocol.Range(Position(48, 15), Position(48, 25))
+            }
+            RecordInteriorMismatchIfUnrecorded(
+                "Consumer.gs:49:16:\"generated\"",
+                "LiteralExpressionSyntax",
+                nonOracleHover,
+                nil,
+                interiorMatches: false,
+                alreadyRecorded: false,
+                Array.Empty[ReviewedFailure](),
+                HashSet[string](StringComparer.Ordinal),
+                nonOracleInteriorFailures
+            )
+            let recordedNonOracle = Assert.Single(nonOracleInteriorFailures)
+            Assert.Equal("InteriorHoverMismatch", recordedNonOracle.Kind)
+            Assert.True(recordedNonOracle.IsUnreviewed)
+
+            RecordInteriorMismatchIfUnrecorded(
+                "Consumer.gs:27:27:Calls",
+                "IndexedMemberAccess",
+                nonOracleHover,
+                nil,
+                interiorMatches: false,
+                alreadyRecorded: true,
+                Array.Empty[ReviewedFailure](),
+                HashSet[string](StringComparer.Ordinal),
+                nonOracleInteriorFailures
+            )
+            Assert.Single(nonOracleInteriorFailures)
+
             let matchedReviewed = HashSet[string](StringComparer.Ordinal)
             let passingWithStaleExpectation = EvaluateTargetCheck(
                 "Consumer.gs:32:29:ToString",
@@ -703,6 +738,8 @@ open class WaikikiHoverAuditTests {
     shared {
         internal const PinnedWaikikiCommit string = "ec66d0bfaa39583cd11c66095f2748342dc9e8f6"
         internal const PinnedWaikikiSdkVersion string = "0.5.26"
+        private const DefaultRpcTimeoutSeconds int32 = 30
+        private const DefaultRpcBatchTimeoutSeconds int32 = 120
 
         internal func ResolveConfiguredWaikikiCorpusRoot(configuredRoot string?) string? {
             if string.IsNullOrWhiteSpace(configuredRoot) {
@@ -1161,7 +1198,8 @@ open class WaikikiHoverAuditTests {
                 using let initCaps = JsonDocument.Parse(
                     "{\"textDocument\":{\"diagnostic\":{}},\"workspace\":{\"diagnostics\":{\"refreshSupport\":true}}}"
                 )
-                let _ = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
+                let _ = await InvokeRpcWithDeadlineAsync[InitializeResult](
+                    clientRpc,
                     "initialize",
                     InitializeParams{
                         RootPath: corpusRoot,
@@ -1169,7 +1207,7 @@ open class WaikikiHoverAuditTests {
                         Capabilities: initCaps.RootElement.Clone()
                     }
                 )
-                await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                await NotifyRpcWithDeadlineAsync(clientRpc, "initialized", AuditEmptyRpcParams())
                 discoveryScheduled = true
                 await discoveryDone.Task.WaitAsync(TimeSpan.FromSeconds(120))
 
@@ -1304,13 +1342,17 @@ open class WaikikiHoverAuditTests {
                         var fileOracleTargets = 0
                         var fileHovers = 0
 
-                        await clientRpc.NotifyWithParameterObjectAsync(
+                        await NotifyRpcWithDeadlineAsync(
+                            clientRpc,
                             "textDocument/didOpen",
                             DidOpenTextDocumentParams{
                                 TextDocument: TextDocumentItem{Uri: uri, LanguageId: "gsharp", Version: 1, Text: text}
                             }
                         )
                         try {
+                            using let fileRpcCts = CancellationTokenSource(
+                                TimeSpan.FromSeconds(DefaultRpcBatchTimeoutSeconds)
+                            )
                             let startRanges = [orderedTokens.Count]GSharp.LanguageServer.Protocol.Range
                             let startTasks = [orderedTokens.Count]Task[Hover?]
                             let interiorTasks = [orderedTokens.Count]Task[Hover?]?
@@ -1320,18 +1362,22 @@ open class WaikikiHoverAuditTests {
                                 startRanges[idx] = startRange
                                 startTasks[idx] = clientRpc.InvokeWithParameterObjectAsync[Hover?](
                                     "textDocument/hover",
-                                    HoverParams{TextDocument: docId, Position: startRange.Start}
+                                    HoverParams{TextDocument: docId, Position: startRange.Start},
+                                    fileRpcCts.Token
                                 )
                                 if tok.Span.Length >= 2 && tok.Kind != SyntaxKind.InterpolatedStringToken {
                                     let interiorPos = SemanticLookup.ToRange(tree.Text, TextSpan(tok.Span.Start + 1, 0))
                                         .Start
                                     interiorTasks[idx] = clientRpc.InvokeWithParameterObjectAsync[Hover?](
                                         "textDocument/hover",
-                                        HoverParams{TextDocument: docId, Position: interiorPos}
+                                        HoverParams{TextDocument: docId, Position: interiorPos},
+                                        fileRpcCts.Token
                                     )
                                 }
                             }
-                            await Task.WhenAll(startTasks)
+                            await Task.WhenAll(startTasks).WaitAsync(
+                                TimeSpan.FromSeconds(DefaultRpcBatchTimeoutSeconds)
+                            )
 
                             for var idx = 0; idx < orderedTokens.Count; idx++ {
                                 let tok = orderedTokens[idx]
@@ -1339,15 +1385,21 @@ open class WaikikiHoverAuditTests {
                                 let line1 = startRange.Start.Line + 1
                                 let col1 = startRange.Start.Character + 1
                                 let targetId = "$relativePath:$line1:$col1:${tok.Text}"
-                                let hover = await startTasks[idx]
+                                let role = ClassifyTokenRole(tok, indexedMemberSpans)
+                                let hover = await startTasks[idx].WaitAsync(
+                                    TimeSpan.FromSeconds(DefaultRpcTimeoutSeconds)
+                                )
                                 fileChecks++
                                 totalChecks++
 
                                 var interiorMatches = true
+                                var interiorHover Hover? = nil
                                 if interiorTasks[idx] != nil {
                                     fileChecks++
                                     totalChecks++
-                                    let interiorHover = await interiorTasks[idx]!!
+                                    interiorHover = await interiorTasks[idx]!!.WaitAsync(
+                                        TimeSpan.FromSeconds(DefaultRpcTimeoutSeconds)
+                                    )
                                     if ExtractSignature(hover) != ExtractSignature(interiorHover) ||
                                         !RangesEqual(hover?.Range, interiorHover?.Range) {
                                         interiorMatches = false
@@ -1356,6 +1408,7 @@ open class WaikikiHoverAuditTests {
                                 }
 
                                 var rangeMatches = true
+                                var recordedInteriorMismatch = false
                                 let actualSig = ExtractSignature(hover)
                                 if hover != nil {
                                     fileHovers++
@@ -1364,7 +1417,7 @@ open class WaikikiHoverAuditTests {
                                         rangeMatches = false
                                         let rangeFailure = EvaluateTargetCheck(
                                             targetId,
-                                            ClassifyTokenRole(tok, indexedMemberSpans),
+                                            role,
                                             FormatRange(startRange),
                                             FormatRange(hover.Range),
                                             rangeMatches: false,
@@ -1375,6 +1428,9 @@ open class WaikikiHoverAuditTests {
                                         )
                                         if rangeFailure != nil {
                                             failures.Add(rangeFailure)
+                                            if rangeFailure.Kind == "InteriorHoverMismatch" {
+                                                recordedInteriorMismatch = true
+                                            }
                                         }
                                     }
                                     if IsPlaceholderTypeSignature(actualSig) {
@@ -1383,7 +1439,6 @@ open class WaikikiHoverAuditTests {
                                 }
 
                                 if tok.Kind == SyntaxKind.IdentifierToken {
-                                    let role = ClassifyTokenRole(tok, indexedMemberSpans)
                                     let declSym = GetDeclaredSymbolIfIdentifier(coreModel, tok)
                                     let refSym = coreModel.GetSymbolInfo(tok).Symbol
                                     let sym = declSym ?? refSym
@@ -1416,6 +1471,9 @@ open class WaikikiHoverAuditTests {
                                             oracleMatched++
                                         } else {
                                             failures.Add(outcome)
+                                            if outcome.Kind == "InteriorHoverMismatch" {
+                                                recordedInteriorMismatch = true
+                                            }
                                         }
                                     } else if hover == nil && IsEligibleUnboundIdentifier(tok) {
                                         let gapKey = "$targetId|${tok.Parent?.GetType().Name ?? "none"}"
@@ -1460,9 +1518,22 @@ open class WaikikiHoverAuditTests {
                                         }
                                     }
                                 }
+
+                                RecordInteriorMismatchIfUnrecorded(
+                                    targetId,
+                                    role,
+                                    hover,
+                                    interiorHover,
+                                    interiorMatches,
+                                    recordedInteriorMismatch,
+                                    reviewedFailureList,
+                                    matchedReviewedFailures,
+                                    failures
+                                )
                             }
                         } finally {
-                            await clientRpc.NotifyWithParameterObjectAsync(
+                            await NotifyRpcWithDeadlineAsync(
+                                clientRpc,
                                 "textDocument/didClose",
                                 DidCloseTextDocumentParams{TextDocument: docId}
                             )
@@ -1482,7 +1553,7 @@ open class WaikikiHoverAuditTests {
                     }
                 }
 
-                await clientRpc.InvokeAsync[object]("shutdown")
+                await InvokeShutdownWithDeadlineAsync(clientRpc)
                 shutdownSent = true
                 var staleExpectationCount = 0
                 for reviewed in reviewedFailureList {
@@ -1598,6 +1669,66 @@ open class WaikikiHoverAuditTests {
             return AuditFailureRecord(targetId, role, kind, "", true, expected, actual)
         }
 
+        internal func RecordInteriorMismatchIfUnrecorded(
+            targetId string,
+            role string,
+            startHover Hover?,
+            interiorHover Hover?,
+            interiorMatches bool,
+            alreadyRecorded bool,
+            reviewed[]ReviewedFailure,
+            matchedReviewed HashSet[string],
+            failures List[AuditFailureRecord]
+        ) {
+            if interiorMatches || alreadyRecorded {
+                return
+            }
+            let expected = "${ExtractSignature(startHover)}@${FormatRange(startHover?.Range)}"
+            let actual = "${ExtractSignature(interiorHover)}@${FormatRange(interiorHover?.Range)}"
+            for item in reviewed {
+                if item.TargetId == targetId &&
+                    item.Kind == "InteriorHoverMismatch" &&
+                    item.Expected == expected &&
+                    item.Actual == actual {
+                    matchedReviewed.Add(targetId)
+                    failures.Add(
+                        AuditFailureRecord(targetId, role, "InteriorHoverMismatch", item.Issue, false, expected, actual)
+                    )
+                    return
+                }
+            }
+            failures.Add(AuditFailureRecord(targetId, role, "InteriorHoverMismatch", "", true, expected, actual))
+        }
+
+        private async func InvokeRpcWithDeadlineAsync[T](
+            clientRpc JsonRpc,
+            method string,
+            argument object?,
+            timeoutSeconds int32 = 30
+        ) T {
+            using let cts = CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds))
+            return await clientRpc.InvokeWithParameterObjectAsync[T](method, argument, cts.Token).WaitAsync(
+                TimeSpan.FromSeconds(timeoutSeconds)
+            )
+        }
+
+        private async func NotifyRpcWithDeadlineAsync(
+            clientRpc JsonRpc,
+            method string,
+            argument object?,
+            timeoutSeconds int32 = 30
+        ) {
+            await clientRpc.NotifyWithParameterObjectAsync(method, argument).WaitAsync(
+                TimeSpan.FromSeconds(timeoutSeconds)
+            )
+        }
+
+        private async func InvokeShutdownWithDeadlineAsync(clientRpc JsonRpc, timeoutSeconds int32 = 30) {
+            using let cts = CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds))
+            let _ = await clientRpc.InvokeWithCancellationAsync[object]("shutdown", Array.Empty[object?](), cts.Token)
+                .WaitAsync(TimeSpan.FromSeconds(timeoutSeconds))
+        }
+
         private async func VerifyLifecyclePhasesOverRpcAsync(
             workspaceRoot string,
             targetFilePath string,
@@ -1664,11 +1795,13 @@ open class WaikikiHoverAuditTests {
                     using let caps = JsonDocument.Parse(
                         "{\"textDocument\":{\"diagnostic\":{}},\"workspace\":{\"diagnostics\":{\"refreshSupport\":true}}}"
                     )
-                    let _ = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
+                    let _ = await InvokeRpcWithDeadlineAsync[InitializeResult](
+                        clientRpc,
                         "initialize",
                         InitializeParams{RootPath: workspaceRoot, Capabilities: caps.RootElement.Clone()}
                     )
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didOpen",
                         DidOpenTextDocumentParams{
                             TextDocument: TextDocumentItem{
@@ -1679,7 +1812,8 @@ open class WaikikiHoverAuditTests {
                             }
                         }
                     )
-                    let preDiscoveryDiag = await clientRpc.InvokeWithParameterObjectAsync[FullDocumentDiagnosticReport](
+                    let preDiscoveryDiag = await InvokeRpcWithDeadlineAsync[FullDocumentDiagnosticReport](
+                        clientRpc,
                         "textDocument/diagnostic",
                         DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: canonicalUri}}
                     )
@@ -1687,7 +1821,7 @@ open class WaikikiHoverAuditTests {
                     Assert.Empty(preDiscoveryDiag.Items)
                     Assert.Null(workspace.GetProjectForFile(targetFilePath))
 
-                    await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                    await NotifyRpcWithDeadlineAsync(clientRpc, "initialized", AuditEmptyRpcParams())
                     discoveryScheduled = true
                     await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(30))
                     proceedDiscovery.TrySetResult(true)
@@ -1708,7 +1842,7 @@ open class WaikikiHoverAuditTests {
                         indexedArrayPropName,
                         expectedIndexedArrayPropHover
                     )
-                    await clientRpc.InvokeAsync[object]("shutdown")
+                    await InvokeShutdownWithDeadlineAsync(clientRpc)
                     shutdownSent = true
                 } finally {
                     proceedDiscovery.TrySetResult(true)
@@ -1766,15 +1900,17 @@ open class WaikikiHoverAuditTests {
                     using let caps = JsonDocument.Parse(
                         "{\"textDocument\":{\"diagnostic\":{}},\"workspace\":{\"diagnostics\":{\"refreshSupport\":true}}}"
                     )
-                    let _ = await clientRpc.InvokeWithParameterObjectAsync[InitializeResult](
+                    let _ = await InvokeRpcWithDeadlineAsync[InitializeResult](
+                        clientRpc,
                         "initialize",
                         InitializeParams{RootPath: workspaceRoot, Capabilities: caps.RootElement.Clone()}
                     )
-                    await clientRpc.NotifyWithParameterObjectAsync("initialized", AuditEmptyRpcParams())
+                    await NotifyRpcWithDeadlineAsync(clientRpc, "initialized", AuditEmptyRpcParams())
                     discoveryScheduled = true
                     await discoveryFinished.Task.WaitAsync(TimeSpan.FromSeconds(120))
 
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didOpen",
                         DidOpenTextDocumentParams{
                             TextDocument: TextDocumentItem{
@@ -1802,11 +1938,13 @@ open class WaikikiHoverAuditTests {
                     )
 
                     // Reopen document and apply repeated body-only edits (#5025).
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didClose",
                         DidCloseTextDocumentParams{TextDocument: TextDocumentIdentifier{Uri: activeUri}}
                     )
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didOpen",
                         DidOpenTextDocumentParams{
                             TextDocument: TextDocumentItem{
@@ -1827,7 +1965,8 @@ open class WaikikiHoverAuditTests {
                     }
                     var version = 3
                     for edited in bodyEdits {
-                        await clientRpc.NotifyWithParameterObjectAsync(
+                        await NotifyRpcWithDeadlineAsync(
+                            clientRpc,
                             "textDocument/didChange",
                             DidChangeTextDocumentParams{
                                 TextDocument: VersionedTextDocumentIdentifier{Uri: activeUri, Version: version++},
@@ -1856,7 +1995,8 @@ open class WaikikiHoverAuditTests {
 
                     // Full-rebind diagnostic control after body-only edit checks pass.
                     let fullRebindSource = originalSource + "\nfunc AuditFullRebindControl() int32 -> 1\n"
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didChange",
                         DidChangeTextDocumentParams{
                             TextDocument: VersionedTextDocumentIdentifier{Uri: activeUri, Version: version++},
@@ -1882,7 +2022,8 @@ open class WaikikiHoverAuditTests {
                     )
                     Assert.NotSame(initialScope, project.GetCompilation().GlobalScope)
 
-                    await clientRpc.NotifyWithParameterObjectAsync(
+                    await NotifyRpcWithDeadlineAsync(
+                        clientRpc,
                         "textDocument/didChange",
                         DidChangeTextDocumentParams{
                             TextDocument: VersionedTextDocumentIdentifier{Uri: activeUri, Version: version++},
@@ -1891,7 +2032,7 @@ open class WaikikiHoverAuditTests {
                             }
                         }
                     )
-                    await clientRpc.InvokeAsync[object]("shutdown")
+                    await InvokeShutdownWithDeadlineAsync(clientRpc)
                     shutdownSent = true
                 } finally {
                     if !shutdownSent {
@@ -1920,7 +2061,8 @@ open class WaikikiHoverAuditTests {
             indexedArrayPropName string,
             expectedIndexedArrayPropHover string
         ) {
-            let diagReport = await clientRpc.InvokeWithParameterObjectAsync[FullDocumentDiagnosticReport](
+            let diagReport = await InvokeRpcWithDeadlineAsync[FullDocumentDiagnosticReport](
+                clientRpc,
                 "textDocument/diagnostic",
                 DocumentDiagnosticParams{TextDocument: TextDocumentIdentifier{Uri: uri}}
             )
@@ -1929,7 +2071,8 @@ open class WaikikiHoverAuditTests {
 
             let localPos = LanguageServerTestHelpers.PositionOf(source, "let " + localSymbolName + " =", 0)
             let localIdPos = Position(localPos.Line, localPos.Character + 4)
-            let localHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
+            let localHover = await InvokeRpcWithDeadlineAsync[Hover?](
+                clientRpc,
                 "textDocument/hover",
                 HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: localIdPos}
             )
@@ -1939,7 +2082,8 @@ open class WaikikiHoverAuditTests {
 
             let guardPos = LanguageServerTestHelpers.PositionOf(source, "guard let " + guardSymbolName + " =", 0)
             let guardIdPos = Position(guardPos.Line, guardPos.Character + 10)
-            let guardHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
+            let guardHover = await InvokeRpcWithDeadlineAsync[Hover?](
+                clientRpc,
                 "textDocument/hover",
                 HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: guardIdPos}
             )
@@ -1948,7 +2092,8 @@ open class WaikikiHoverAuditTests {
 
             let guardCallPos = LanguageServerTestHelpers.PositionOf(source, guardSymbolName + ".LoadAsync()", 0)
             let guardMethodPos = Position(guardCallPos.Line, guardCallPos.Character + guardSymbolName.Length + 1)
-            let guardCallHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
+            let guardCallHover = await InvokeRpcWithDeadlineAsync[Hover?](
+                clientRpc,
                 "textDocument/hover",
                 HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: guardMethodPos}
             )
@@ -1956,14 +2101,16 @@ open class WaikikiHoverAuditTests {
             Assert.Equal(expectedGuardCallHover, ExtractSignature(guardCallHover))
 
             let indexedPropPos = LanguageServerTestHelpers.PositionOf(source, indexedPropName + "[0]", 0)
-            let indexedPropHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
+            let indexedPropHover = await InvokeRpcWithDeadlineAsync[Hover?](
+                clientRpc,
                 "textDocument/hover",
                 HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: indexedPropPos}
             )
             Assert.NotNull(indexedPropHover)
             Assert.Equal(expectedIndexedPropHover, ExtractSignature(indexedPropHover))
 
-            let indexedPropDefs = await clientRpc.InvokeWithParameterObjectAsync[IReadOnlyList[Location]](
+            let indexedPropDefs = await InvokeRpcWithDeadlineAsync[IReadOnlyList[Location]](
+                clientRpc,
                 "textDocument/definition",
                 DefinitionParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: indexedPropPos}
             )
@@ -1971,7 +2118,8 @@ open class WaikikiHoverAuditTests {
             Assert.True(LocationsMatchExpectedDeclaration(expectedIndexedPropDeclLoc, indexedPropDefs[0]))
 
             let indexedArrayPos = LanguageServerTestHelpers.PositionOf(source, indexedArrayPropName + "[0]", 0)
-            let indexedArrayHover = await clientRpc.InvokeWithParameterObjectAsync[Hover?](
+            let indexedArrayHover = await InvokeRpcWithDeadlineAsync[Hover?](
+                clientRpc,
                 "textDocument/hover",
                 HoverParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: indexedArrayPos}
             )
@@ -2166,7 +2314,8 @@ class Consumer {
             compilation Compilation,
             symbol Symbol
         ) bool {
-            let actualLocs = await clientRpc.InvokeWithParameterObjectAsync[IReadOnlyList[Location]](
+            let actualLocs = await InvokeRpcWithDeadlineAsync[IReadOnlyList[Location]](
+                clientRpc,
                 "textDocument/definition",
                 DefinitionParams{TextDocument: TextDocumentIdentifier{Uri: uri}, Position: position}
             )
