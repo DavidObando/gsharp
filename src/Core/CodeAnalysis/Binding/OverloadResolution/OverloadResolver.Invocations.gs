@@ -622,6 +622,9 @@ internal partial class OverloadResolver {
                 default(ExpressionSyntax?)
             }
             let argumentLocation = argumentSyntax?.Location ?? syntax.Identifier.Location
+            if parameter.RefKind == RefKind.None && parameter.Type is PointerTypeSymbol {
+                binderCtx.RecordPointerEscapedArgument(argument)
+            }
             if parameter.RefKind != RefKind.None || argumentSyntax is RefArgumentExpressionSyntax {
                 var argumentRefKind = if argumentSyntax is RefArgumentExpressionSyntax refArgument {
                     getRefKindFromModifier(refArgument.RefKindModifier)

@@ -239,10 +239,26 @@ func Pick(left ` + "$leftType" + `, right ` + "$rightType" + `) { var rejected =
         Output string,
         Stdout string
     ) {
-        let compiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+        let siblingCompiler = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+        let compiler = if File.Exists(siblingCompiler) {
+            siblingCompiler
+        } else {
+            Path.Combine(AppContext.BaseDirectory, "gsc.dll")
+        }
         Assert.True(File.Exists(compiler), "Own-checkout gsc must be built.")
         LogHash(compiler)
-        let arguments = List[string]{compiler, "/target:exe", "/targetframework:net10.0", "/out:" + outputPath}
+        let arguments = List[string]()
+        let gscRuntimeConfig = Path.ChangeExtension(compiler, ".runtimeconfig.json")
+        let testRuntimeConfig = Path.ChangeExtension(
+            typeof(Issue4768ArrayCoalescingEmitTests).Assembly.Location,
+            ".runtimeconfig.json"
+        )
+        if !File.Exists(gscRuntimeConfig) && File.Exists(testRuntimeConfig) {
+            arguments.Add("exec")
+            arguments.Add("--runtimeconfig")
+            arguments.Add(testRuntimeConfig)
+        }
+        arguments.AddRange([]string{compiler, "/target:exe", "/targetframework:net10.0", "/out:" + outputPath})
         arguments.AddRange(RuntimeReferences().Concat(extras).Distinct().Select((path string) -> ("/r:" + path)))
         arguments.Add(source)
         this.output.WriteLine("Real driver command: dotnet " + string.Join(' ', arguments))

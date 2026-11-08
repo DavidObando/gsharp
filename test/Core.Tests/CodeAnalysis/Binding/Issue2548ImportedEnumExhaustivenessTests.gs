@@ -56,7 +56,7 @@ func Main() {
             "Issue2548.Models",
             StringComparison.Ordinal
         ) {
-            loadContext.LoadFromAssemblyPath(libraryPath)
+            loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
         } else {
             default(Assembly?)
         }

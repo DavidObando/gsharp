@@ -328,6 +328,81 @@ func Main() {
         Assert.Empty(ProgramLambdaMethodNames(reader))
     }
 
+    /// Issue #4908: non-capturing lambdas hosted on `<lambda_host_*>` cache
+    /// their delegate in a static field (`<>9__cached`) and reuse both the host
+    /// instance and the delegate across repeated evaluations.
+    @Fact
+    func Issue4908_NonCapturingLambdas_CacheDelegateAcrossRepeatedEvaluations() {
+        let source = `package P4908
+
+import System
+import System.Collections.Generic
+
+delegate IntOp(x int32) int32;
+
+data struct Gate(Priority int32) { }
+
+class Holder[T] {
+    shared {
+        func MakeFunc() (int32) -> int32 {
+            return (x int32) -> x + 1
+        }
+
+        func MakeComparison() Comparison[Gate] {
+            return (a Gate, b Gate) -> a.Priority.CompareTo(b.Priority)
+        }
+
+        func MakePredicate() Predicate[T] {
+            return (item T) -> item != nil
+        }
+
+        func MakeNamed() IntOp {
+            return (x int32) -> x * 2
+        }
+
+        func MakeGenericFunc() Func[T, T] {
+            return (item T) -> item
+        }
+
+        func MakeGenericAction() Action[T] {
+            return (_ T) -> { }
+        }
+    }
+}
+
+func Main() {
+    let f1 = Holder[string].MakeFunc()
+    let f2 = Holder[string].MakeFunc()
+    Console.WriteLine("func=" + object.ReferenceEquals(f1, f2).ToString() + ":" + f1(41).ToString())
+
+    let c1 = Holder[string].MakeComparison()
+    let c2 = Holder[string].MakeComparison()
+    Console.WriteLine("cmp=" + object.ReferenceEquals(c1, c2).ToString() + ":" + c1(Gate(1), Gate(2)).ToString())
+
+    let p1 = Holder[string].MakePredicate()
+    let p2 = Holder[string].MakePredicate()
+    Console.WriteLine("pred=" + object.ReferenceEquals(p1, p2).ToString() + ":" + p1("ok").ToString())
+
+    let n1 = Holder[string].MakeNamed()
+    let n2 = Holder[string].MakeNamed()
+    Console.WriteLine("named=" + object.ReferenceEquals(n1, n2).ToString() + ":" + n1(21).ToString())
+
+    let gf1 = Holder[string].MakeGenericFunc()
+    let gf2 = Holder[string].MakeGenericFunc()
+    let ga1 = Holder[string].MakeGenericAction()
+    let ga2 = Holder[string].MakeGenericAction()
+    Console.WriteLine(
+        "gen=" + object.ReferenceEquals(gf1, gf2).ToString() + ":" +
+        object.ReferenceEquals(ga1, ga2).ToString() + ":" + gf1("ok")
+    )
+}`
+        let lines = CompileVerifyAndRun(source, out _)
+        Assert.Equal(
+            []string{"func=True:42", "cmp=True:-1", "pred=True:True", "named=True:42", "gen=True:True:ok"},
+            lines
+        )
+    }
+
     shared {
         /// Returns the generic-parameter count of the single synthesized
         /// zero-capture lambda host nested inside [`typeName`](paramref).

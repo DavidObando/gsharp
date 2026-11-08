@@ -4861,7 +4861,7 @@ internal partial class DeclarationBinder {
                 if declaredInterface?.IsInterface != true {
                     continue
                 }
-                let interfaces = List[Type]{declaredInterface}
+                let interfaces = List[Type]{declaredInterface!!}
                 interfaces.AddRange(declaredInterface!!.GetInterfaces())
                 for clrInterface in interfaces {
                     let containingType = if object.ReferenceEquals(clrInterface, declaredInterface) {

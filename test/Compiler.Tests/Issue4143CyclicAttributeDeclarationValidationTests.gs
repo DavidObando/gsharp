@@ -129,12 +129,27 @@ class BoxedAttribute(Value Holder) : Attribute {
         }
 
         private func RunGscOutOfProcess(srcPath string, outPath string)(ExitCode int32, Combined string) {
-            let gscPath = Path.Combine(AppContext.BaseDirectory, "gsc.dll")
+            let siblingGsc = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Compiler", "gsc.dll"))
+            let gscPath = if File.Exists(siblingGsc) {
+                siblingGsc
+            } else {
+                Path.Combine(AppContext.BaseDirectory, "gsc.dll")
+            }
             Assert.True(File.Exists(gscPath), "gsc.dll not found at '$gscPath'")
             let psi = ProcessStartInfo("dotnet"){
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false
+            }
+            let gscRuntimeConfig = Path.ChangeExtension(gscPath, ".runtimeconfig.json")
+            let testRuntimeConfig = Path.ChangeExtension(
+                typeof(Issue4143CyclicAttributeDeclarationValidationTests).Assembly.Location,
+                ".runtimeconfig.json"
+            )
+            if !File.Exists(gscRuntimeConfig) && File.Exists(testRuntimeConfig) {
+                psi.ArgumentList.Add("exec")
+                psi.ArgumentList.Add("--runtimeconfig")
+                psi.ArgumentList.Add(testRuntimeConfig)
             }
             psi.ArgumentList.Add(gscPath)
             psi.ArgumentList.Add("/out:" + outPath)

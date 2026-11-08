@@ -468,6 +468,10 @@ internal shared class IlVerifier {
     }
 
     internal func FindRepoRoot() string {
+        if RepositoryRootMarker.Locate(Path.GetDirectoryName(typeof(IlVerifier).Assembly.Location)) is {} root &&
+            File.Exists(Path.Combine(root, ".config", "dotnet-tools.json")) {
+            return root
+        }
         // Walk up from this assembly's location until we find a directory
         // containing `.config/dotnet-tools.json`. This keeps tool discovery
         // working regardless of the runner's current directory.

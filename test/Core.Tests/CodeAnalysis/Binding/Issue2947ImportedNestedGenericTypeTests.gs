@@ -65,7 +65,7 @@ func Take[T]() {
                     compilation
                 )
             }
-            let _ = Assembly.LoadFrom(libraryPath)
+            let _ = Assembly.Load(File.ReadAllBytes(libraryPath))
             let runtimeCompilation = Compilation(SyntaxTree.Parse(SourceText.From(`package consumer
 
 struct Holder[T] {
@@ -87,9 +87,9 @@ struct Holder[T] {
                 runtimeErrors.Select((diagnostic Diagnostic) -> diagnostic.Message)
             )
         } finally {
-            try {
+            if Directory.Exists(directory) {
                 Directory.Delete(directory, recursive: true)
-            } catch { }
+            }
         }
     }
 

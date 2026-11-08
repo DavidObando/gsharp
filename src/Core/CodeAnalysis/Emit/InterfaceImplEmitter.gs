@@ -583,7 +583,7 @@ internal class InterfaceImplEmitter {
             if declaredInterface?.IsInterface != true {
                 continue
             }
-            let interfaces = List[Type]{declaredInterface}
+            let interfaces = List[Type]{declaredInterface!!}
             interfaces.AddRange(declaredInterface!!.GetInterfaces())
             for clrInterface in interfaces {
                 for slotEvent in clrInterface.GetEvents(
@@ -868,7 +868,7 @@ internal class InterfaceImplEmitter {
             if declaredInterface?.IsInterface != true {
                 continue
             }
-            let interfaces = List[Type]{declaredInterface}
+            let interfaces = List[Type]{declaredInterface!!}
             interfaces.AddRange(declaredInterface!!.GetInterfaces())
             for clrInterface in interfaces {
                 for slotEvent in clrInterface.GetEvents(

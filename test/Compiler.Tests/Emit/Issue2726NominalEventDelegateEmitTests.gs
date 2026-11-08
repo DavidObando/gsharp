@@ -466,13 +466,13 @@ class PerJobDownloadSettings : IDownloadSettings {
 
         private func LoadConsumer(artifacts CrossAssemblyArtifacts) LoadedConsumer {
             let context = AssemblyLoadContext("Issue2726-" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            let contract = context.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.MigratedPath)))
             context.Resolving += (_ AssemblyLoadContext, name AssemblyName) -> if name.Name == "Oahu.Core" {
-                context.LoadFromAssemblyPath(artifacts.MigratedPath)
+                contract
             } else {
                 default(Assembly?)
             }
-            let contract = context.LoadFromAssemblyPath(artifacts.MigratedPath)
-            let consumer = context.LoadFromAssemblyPath(artifacts.ConsumerPath)
+            let consumer = context.LoadFromStream(MemoryStream(File.ReadAllBytes(artifacts.ConsumerPath)))
             return LoadedConsumer(context, contract, consumer)
         }
 

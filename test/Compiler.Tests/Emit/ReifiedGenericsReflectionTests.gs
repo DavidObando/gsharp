@@ -576,12 +576,11 @@ Console.WriteLine(Twice[string]("a", func(s string) string { return s + s }))`)
             }
             Assert.True(compileExit == 0, "compile failed ($compileExit): $compileOut$compileErr")
             IlVerifier.Verify(outPath)
-            // Load in a fresh, collectible AssemblyLoadContext so each test
-            // sees a fresh metadata graph. The context is not Dispose-able
-            // on the runtime targeted here, so we explicitly Unload() and
-            // rely on the test harness's per-test isolation.
-            let ctx = AssemblyLoadContext(name: "gs_reified_reflect_" + Guid.NewGuid().ToString(), isCollectible: true)
-            return ctx.LoadFromAssemblyPath(outPath)
+            try {
+                return EmittedFixture.Load(outPath)
+            } finally {
+                Directory.Delete(tempDir, recursive: true)
+            }
         }
 
         private func FindUserType(asm Assembly, ns string, name string) Type? {

@@ -48,8 +48,8 @@ func Run() string -> Profile("account").Render()`
         IlVerifier.Verify(consumerPath, additionalReferences: []string{libraryPath})
         let loadContext = AssemblyLoadContext("Issue2731", isCollectible: true)
         try {
-            let _ = loadContext.LoadFromAssemblyPath(libraryPath)
-            let consumer = loadContext.LoadFromAssemblyPath(consumerPath)
+            let _ = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(libraryPath)))
+            let consumer = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
             let run MethodInfo? = consumer
                 .GetTypes()
                 .Single((type Type) -> type.Name == "<Program>")

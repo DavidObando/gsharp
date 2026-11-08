@@ -721,8 +721,7 @@ public class Demo
     }
 
     /// gsc iterates a single-dimensional array and a `string` by index, which runs no user code, also with a typed
-    /// loop variable that widens, wraps or boxes the element, with a tuple-target loop over value tuples (cs2gs emits
-    /// only the names, so a typed target converts nothing in the G#) and with a deconstruction of a record into
+    /// loop variable that widens, wraps or boxes the element, with an inferred tuple-target loop and a record into
     /// discards only, which reads no member (ADR-0213 table T5). A loop that holds a
     /// `while` loop, and not a `for ... in`, keeps the fact too. The reads stay bare.
     @Fact
@@ -763,7 +762,6 @@ public class Demo
         foreach (int? item in items) n += 1;
         foreach (object item in items) n += 1;
         foreach (var (a, b) in pairs) n += s.Length;
-        foreach ((Wrapper w, int m) in pairs) n += 1;
         foreach (var (_, _) in points) n += 1;
         foreach ((Wrapper _, int _) in points) n += 1;
         return s.Length + n + (int)sum;

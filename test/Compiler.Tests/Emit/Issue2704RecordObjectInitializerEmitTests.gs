@@ -69,7 +69,7 @@ Console.WriteLine(item.Narrators[0])`
         IlVerifier.Verify(result.OutputPath)
         let loadContext = AssemblyLoadContext("issue2704-" + Guid.NewGuid().ToString(), isCollectible: true)
         try {
-            let assembly = loadContext.LoadFromAssemblyPath(result.OutputPath)
+            let assembly = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(result.OutputPath)))
             let itemType = assembly.GetType("Oahu.Cli.App.Models.LibraryItem", throwOnError: true)!!
             for name in[]string{"Asin", "Title", "Authors", "Narrators"} {
                 let property = itemType.GetProperty(name)!!

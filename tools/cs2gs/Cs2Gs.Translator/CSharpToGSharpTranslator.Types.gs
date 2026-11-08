@@ -1908,16 +1908,6 @@ partial class CSharpToGSharpTranslator {
         ) {
             switch Unparenthesize(variable) {
                 case tuple is TupleExpressionSyntax {
-                    let hasNestedDeconstruction = tuple
-                        .DescendantNodes()
-                        .OfType[ParenthesizedVariableDesignationSyntax]()
-                        .Any() ||
-                        tuple
-                        .Arguments
-                        .Any(
-                        (argument ArgumentSyntax) -> Unparenthesize(argument.Expression) is TupleExpressionSyntax
-                    ) ||
-                        this.RecordDeconstructionRunsUserCode(deconstruction)
                     for var i = 0; i < tuple.Arguments.Count; i++ {
                         this.CollectForEachTupleArgumentTarget(
                             tuple.Arguments[i].Expression,
@@ -1925,7 +1915,6 @@ partial class CSharpToGSharpTranslator {
                             extractions,
                             conversions,
                             this.NestedDeconstructionInfo(deconstruction, i),
-                            hasNestedDeconstruction,
                             this.DeconstructionOutputType(deconstruction, i, receiverType),
                             this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
@@ -1936,6 +1925,7 @@ partial class CSharpToGSharpTranslator {
                         declaration.Designation,
                         names,
                         extractions,
+                        conversions,
                         deconstruction,
                         declaration.Type.IsVar,
                         receiverType
@@ -1959,7 +1949,6 @@ partial class CSharpToGSharpTranslator {
             extractions List[GStatement],
             conversions List[GStatement],
             deconstruction DeconstructionInfo,
-            hasNestedDeconstruction bool,
             receiverType ITypeSymbol? = nil,
             emittedReceiverType GTypeReference? = nil
         ) {
@@ -1972,65 +1961,7 @@ partial class CSharpToGSharpTranslator {
                 case declaration is DeclarationExpressionSyntax {
                     switch declaration.Designation {
                         case single is SingleVariableDesignationSyntax {
-                            if !declaration.Type.IsVar && this.context.GetDeclaredSymbol(
-                                single
-                            ) is ILocalSymbol local &&
-                                this.TryGetDeconstructionSlotInfo(
-                                declaration,
-                                out var slotConversion,
-                                out var slotSourceType
-                            ) &&
-                                !slotConversion.IsIdentity &&
-                                (
-                                hasNestedDeconstruction ||
-                                    slotConversion.IsTupleConversion ||
-                                    local.Type is INamedTypeSymbol{IsTupleType: true}
-                            ) {
-                                let carrier = this.AllocateDeconstructionTempName(declaration)
-                                names.Add(carrier)
-                                let targetTypeSymbol ITypeSymbol = if this
-                                    .state
-                                    .ManagedReferenceArrayNullable
-                                    .ManagedReferenceArrayProjectedLocalType
-                                    .TryGetValue(local, out var projectedLocalType) &&
-                                    projectedLocalType != nil {
-                                    projectedLocalType
-                                } else {
-                                    local.Type
-                                }
-                                var mappedType GTypeReference? = this.typeMapper.Map(
-                                    targetTypeSymbol,
-                                    this.context,
-                                    declaration.Type.GetLocation()
-                                )
-                                mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
-                                if this.state.NullableForEachBindings.Contains(local) {
-                                    mappedType = MakeNullable(mappedType)
-                                }
-                                let carrierExpr = cast[GExpression](IdentifierExpression(carrier))
-                                let initializerExpr = this.BuildConvertedDeconstructionValue(
-                                    carrierExpr,
-                                    slotSourceType,
-                                    targetTypeSymbol,
-                                    mappedType,
-                                    slotConversion,
-                                    declaration.Type.GetLocation()
-                                )
-                                conversions.Add(
-                                    LocalDeclarationStatement(
-                                        if this.IsLocalReassigned(local) {
-                                            BindingKind.Var
-                                        } else {
-                                            BindingKind.Let
-                                        },
-                                        this.EmittedName(single, single.Identifier),
-                                        mappedType,
-                                        initializer: initializerExpr
-                                    )
-                                )
-                            } else {
-                                names.Add(this.EmittedName(single, single.Identifier)!!)
-                            }
+                            this.CollectForEachLeafTarget(single, declaration.Type.IsVar, names, conversions)
                         }
                         case DiscardDesignationSyntax {
                             names.Add("_")
@@ -2046,7 +1977,8 @@ partial class CSharpToGSharpTranslator {
                                 deconstruction,
                                 declaration.Type.IsVar,
                                 receiverType,
-                                emittedReceiverType
+                                emittedReceiverType,
+                                conversions: conversions
                             )
                         }
                     }
@@ -2063,7 +1995,6 @@ partial class CSharpToGSharpTranslator {
                             nestedExtractions,
                             conversions,
                             this.NestedDeconstructionInfo(deconstruction, i),
-                            hasNestedDeconstruction: true,
                             this.DeconstructionOutputType(deconstruction, i, receiverType),
                             this.MapDeconstructionOutputType(deconstruction, i, receiverType)
                         )
@@ -2089,17 +2020,157 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func CollectForEachLeafTarget(
+            single SingleVariableDesignationSyntax,
+            inferredType bool,
+            names List[string],
+            conversions List[GStatement]
+        ) {
+            let local = this.context.GetDeclaredSymbol(single) as ILocalSymbol
+            let hasSlot = this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType)
+            let loop = single.Ancestors().OfType[ForEachVariableStatementSyntax]().FirstOrDefault()
+            let capturedRead = if loop != nil {
+                loop
+                    .Statement
+                    .DescendantNodesAndSelf()
+                    .OfType[IdentifierNameSyntax]()
+                    .FirstOrDefault(
+                    (read IdentifierNameSyntax) -> FindNestedFunction(read, loop.Statement) != nil && this.BindsTo(
+                        read,
+                        local
+                    )
+                )
+            } else {
+                default(IdentifierNameSyntax?)
+            }
+            let captured = capturedRead != nil
+            if local == nil ||
+                (
+                (!hasSlot || conversion.IsIdentity) &&
+                    (
+                    inferredType || sourceType == nil || SymbolEqualityComparer.IncludeNullability.Equals(
+                        local.Type,
+                        sourceType
+                    )
+                ) &&
+                    !this.IsLocalReassigned(local) &&
+                    !captured &&
+                    !(inferredType && this.InferredLocalDefaultRequiresTypedDeclaration(local))
+            ) {
+                names.Add(this.EmittedName(single, single.Identifier)!!)
+                return
+            }
+            // Bind the C# target inside the body, after extraction and before user statements.
+            let carrier = this.AllocateDeconstructionTempName(single)
+            names.Add(carrier)
+            let targetType = if this
+                .state
+                .ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedLocalType
+                .TryGetValue(local, out var projectedType) &&
+                projectedType != nil {
+                projectedType
+            } else {
+                local.Type
+            }
+            var mappedType = this.typeMapper.Map(targetType, this.context, single.GetLocation())
+            mappedType = this.PromoteIfUsedAsNullable(mappedType, local)
+            if this
+                .state
+                .NullableForEachBindings
+                .Contains(local) ||
+                (
+                (!hasSlot || conversion.IsIdentity) &&
+                    (
+                    this.IsTranslatorWidenedDeclaration(local) ||
+                        (
+                        capturedRead != nil && ObliviousNullabilityAnalyzer.IsDeconstructedForEachElementTainted(
+                            this.context.Compilation,
+                            capturedRead,
+                            this.context.SemanticModel,
+                            this.context.SiblingCompilations
+                        )
+                    )
+                )
+            ) {
+                mappedType = MakeNullable(mappedType)
+            }
+            if captured &&
+                inferredType &&
+                hasSlot &&
+                conversion.IsIdentity &&
+                !this
+                .InferredLocalDefaultRequiresTypedDeclaration(local) {
+                // Inferred captures retain platform and widened element types without a new coercion.
+                mappedType = nil
+            }
+            let value = cast[GExpression](IdentifierExpression(carrier))
+            conversions.Add(
+                LocalDeclarationStatement(
+                    if this.IsLocalReassigned(local) {
+                        BindingKind.Var
+                    } else {
+                        BindingKind.Let
+                    },
+                    this.EmittedName(single, single.Identifier),
+                    mappedType,
+                    initializer: if hasSlot && !conversion.IsIdentity {
+                        this.BuildConvertedDeconstructionValue(
+                            value,
+                            sourceType,
+                            targetType,
+                            mappedType,
+                            conversion,
+                            single.GetLocation()
+                        )
+                    } else {
+                        value
+                    }
+                )
+            )
+        }
+
+        private func ForEachLeafConversionsRunUserCode(loop ForEachVariableStatementSyntax) bool {
+            for single in loop.Variable.DescendantNodesAndSelf().OfType[SingleVariableDesignationSyntax]() {
+                if this.context.GetDeclaredSymbol(single) is not ILocalSymbol local ||
+                    !this.TryGetDeconstructionSlotInfo(single, out var conversion, out var sourceType) ||
+                    conversion.IsIdentity {
+                    continue
+                }
+                if conversion.IsUserDefined ||
+                    (
+                    conversion.IsTupleConversion && this.TupleConversionRequiresExplicitLowering(sourceType, local.Type)
+                ) {
+                    return true
+                }
+                // The region scanner counts emitted numeric conversion syntax as a call too.
+                let lowered = this.BuildConvertedDeconstructionValue(
+                    IdentifierExpression("_"),
+                    sourceType,
+                    local.Type,
+                    nil,
+                    conversion,
+                    single.GetLocation()
+                )
+                if lowered is ConversionExpression or IfExpression {
+                    return true
+                }
+            }
+            return false
+        }
+
         private func CollectForEachDesignationTargets(
             designation VariableDesignationSyntax,
             names List[string],
             extractions List[GStatement],
+            conversions List[GStatement],
             deconstruction DeconstructionInfo,
             inferredType bool,
             receiverType ITypeSymbol?
         ) {
             switch designation {
                 case single is SingleVariableDesignationSyntax {
-                    names.Add(this.EmittedName(single, single.Identifier)!!)
+                    this.CollectForEachLeafTarget(single, inferredType, names, conversions)
                 }
                 case DiscardDesignationSyntax {
                     names.Add("_")
@@ -2109,7 +2180,7 @@ partial class CSharpToGSharpTranslator {
                         let child = parenthesized.Variables[i]
                         switch child {
                             case single is SingleVariableDesignationSyntax {
-                                names.Add(this.EmittedName(single, single.Identifier)!!)
+                                this.CollectForEachLeafTarget(single, inferredType, names, conversions)
                             }
                             case DiscardDesignationSyntax {
                                 names.Add("_")
@@ -2125,7 +2196,8 @@ partial class CSharpToGSharpTranslator {
                                     this.NestedDeconstructionInfo(deconstruction, i),
                                     inferredType,
                                     this.DeconstructionOutputType(deconstruction, i, receiverType),
-                                    this.MapDeconstructionOutputType(deconstruction, i, receiverType)
+                                    this.MapDeconstructionOutputType(deconstruction, i, receiverType),
+                                    conversions: conversions
                                 )
                             }
                         }

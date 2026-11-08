@@ -260,18 +260,20 @@ namespace Lib2389
             try {
                 let libraryLoadContext = AssemblyLoadContext(assemblyName + "-Lib", isCollectible: true)
                 try {
-                    libraryLoadContext.LoadFromAssemblyPath(libraryPath)
+                    let libraryAssembly = libraryLoadContext.LoadFromStream(
+                        MemoryStream(File.ReadAllBytes(libraryPath))
+                    )
                     let libraryAssemblyName = Path.GetFileNameWithoutExtension(libraryPath)
                     loadContext.Resolving += (ctx AssemblyLoadContext, name AssemblyName) -> if string.Equals(
                         name.Name,
                         libraryAssemblyName,
                         StringComparison.Ordinal
                     ) {
-                        libraryLoadContext.LoadFromAssemblyPath(libraryPath)
+                        libraryAssembly
                     } else {
                         default(Assembly?)
                     }
-                    let asm = loadContext.LoadFromAssemblyPath(consumerPath)
+                    let asm = loadContext.LoadFromStream(MemoryStream(File.ReadAllBytes(consumerPath)))
                     let entry MethodInfo? = asm.EntryPoint
                     Assert.NotNull(entry)
                     let stdout = Console.Out

@@ -3609,16 +3609,32 @@ internal partial class StatementBinder {
         // external at the region entry, so a call in the region can reach a closure.
         if effects.ContainsUnknownKind || effects.ContainsPointerWrite {
             externalCallableAliases.Clear()
-        } else if externalCallableAliases.Count > 0 {
-            if resolved.Roots.Count > 0 {
-                externalCallableAliases.RemoveWhere(
-                    (alias VariableSymbol) -> resolved.Roots.Any(
-                        (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
+            binderCtx.NonNullByRefVariables.Clear()
+        } else {
+            if externalCallableAliases.Count > 0 {
+                if resolved.Roots.Count > 0 {
+                    externalCallableAliases.RemoveWhere(
+                        (alias VariableSymbol) -> resolved.Roots.Any(
+                            (written VariableSymbol) -> SameRoot(written, alias) || MayShareStorage(written, alias)
+                        )
                     )
-                )
+                }
+                if RegionRunsCode(effects, resolved) {
+                    externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
+                }
             }
-            if RegionRunsCode(effects, resolved) {
-                externalCallableAliases.RemoveWhere(NamesClosureAssignedStorage)
+            if binderCtx.NonNullByRefVariables.Count > 0 {
+                if resolved.Roots.Count > 0 {
+                    binderCtx.NonNullByRefVariables.RemoveWhere(
+                        (variable VariableSymbol) -> resolved.Roots.Any(
+                            (written VariableSymbol) -> SameRoot(written, variable) ||
+                                MayShareStorage(written, variable)
+                        )
+                    )
+                }
+                if RegionRunsCode(effects, resolved) {
+                    binderCtx.NonNullByRefVariables.RemoveWhere(NamesClosureAssignedStorage)
+                }
             }
         }
         SyncExpressionCallableAliasesNow()

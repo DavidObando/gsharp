@@ -444,6 +444,13 @@ func F() int32 {
         }
 
         private func LocateSamplesDirectory() string? {
+            let configured string? = Environment.GetEnvironmentVariable(TestSource.SourceRootEnvironmentVariable)
+            if !string.IsNullOrWhiteSpace(configured) {
+                let candidate = Path.Combine(Path.GetFullPath(configured), "samples")
+                if Directory.Exists(candidate) {
+                    return candidate
+                }
+            }
             var dir DirectoryInfo? = DirectoryInfo(
                 Path.GetDirectoryName(typeof(Issue1675SyntaxNodeChildEnumerationTests).Assembly.Location)!!
             )

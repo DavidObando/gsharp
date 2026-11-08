@@ -468,6 +468,28 @@ def accepted_test_adapter(path: Path, allowed_hashes: set[str]) -> str:
     return actual
 
 
+def locked_package_destination_paths(rel_parts: tuple[str, ...]) -> set[str]:
+    if not rel_parts:
+        return set()
+    folded = tuple(part.casefold() for part in rel_parts)
+    destinations = {"/".join(folded)}
+    if len(folded) >= 3 and folded[0] in {"lib", "ref"}:
+        destinations.add("/".join(folded[2:]))
+    elif len(folded) >= 5 and folded[0] == "runtimes" and folded[2] in {"lib", "nativeassets"}:
+        destinations.add("/".join(folded[4:]))
+    elif len(folded) >= 4 and folded[0] == "runtimes" and folded[2] == "native":
+        destinations.add("/".join(folded[3:]))
+    elif len(folded) >= 4 and folded[0] == "contentfiles":
+        destinations.add("/".join(folded[3:]))
+    elif len(folded) >= 2 and folded[0] in {"build", "buildtransitive", "buildmultitargeting"}:
+        destinations.add("/".join(folded[1:]))
+        if len(folded) >= 3:
+            destinations.add("/".join(folded[2:]))
+        if len(folded) >= 4:
+            destinations.add("/".join(folded[3:]))
+    return {item for item in destinations if item}
+
+
 def validate_vstest_extensions(
     root: Path, allowed_hashes: set[str], package_root: Path | None = None,
     allowed_test_host_hashes: set[str] = ALLOWED_TEST_HOST_HASHES,
@@ -499,11 +521,45 @@ def validate_vstest_extensions(
     for path in package_files:
         package_by_name.setdefault(path.name.casefold(), set()).add(
             sha256_file(path))
+    locked_package_names: set[str] = set()
+    locked_package_by_dest: dict[str, set[str]] = {}
+    if package_root is not None and package_root.is_dir():
+        for package_id_root in package_root.iterdir():
+            if (not package_id_root.is_dir()
+                    or package_id_root.name.casefold() == SDK_ID.casefold()):
+                continue
+            for version in package_id_root.iterdir():
+                if not version.is_dir():
+                    continue
+                for path in version.rglob("*"):
+                    if path.is_file():
+                        digest = sha256_file(path)
+                        locked_package_names.add(path.name.casefold())
+                        rel_parts = path.relative_to(version).parts
+                        for dest_rel in locked_package_destination_paths(rel_parts):
+                            locked_package_by_dest.setdefault(
+                                dest_rel, set()).add(digest)
+    output_directories = {
+        marker.parent
+        for marker in root.rglob("*")
+        if marker.is_file()
+        and (marker.name.casefold() == "testhost.dll"
+             or marker.name.casefold().endswith(".deps.json"))
+    } or {root}
     testhost_directories: set[Path] = set()
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         name = path.name.casefold()
+        enclosing_outputs = [
+            directory for directory in output_directories
+            if directory == path.parent or directory in path.parents
+        ]
+        output_dir = (
+            max(enclosing_outputs, key=lambda d: len(d.parts))
+            if enclosing_outputs else root
+        )
+        dest_rel = path.relative_to(output_dir).as_posix().casefold()
         if name in APPROVED_TEST_ADAPTER_CLOSURE:
             accepted_test_adapter(path, allowed_hashes)
         elif name.endswith("testadapter.dll"):
@@ -526,6 +582,11 @@ def validate_vstest_extensions(
         )):
             raise CertificationError(
                 f"project-supplied VSTest extension is unsupported: {path}")
+        if (dest_rel in locked_package_by_dest
+                or name in locked_package_names):
+            if sha256_file(path) not in locked_package_by_dest.get(dest_rel, set()):
+                raise CertificationError(
+                    f"test output package asset differs from the locked package: {path}")
     for directory in testhost_directories:
         deps = directory / "testhost.deps.json"
         runtimeconfig = directory / "testhost.runtimeconfig.json"
@@ -1604,6 +1665,7 @@ class Controller:
         self.accepted_build_outputs: dict[str, dict[str, dict[str, str]]] = {}
         self.accepted_output_roots: dict[str, set[Path]] = {}
         self.toolchain_manifests: dict[str, list[FileIdentity]] = {}
+        self.probed_project_references: dict[tuple[str, str], list[str]] = {}
         self.receipts: list[tuple[Path, str]] = []
         self.receipt_expectations: dict[str, dict[str, Any]] = {}
 
@@ -2344,7 +2406,62 @@ class Controller:
         return value
 
     @staticmethod
-    def project_reference_closure(tree: Path, project: Path) -> set[str]:
+    def _extract_evaluated_project_references(
+        tree: Path, project_path: Path, evaluated: dict[str, Any],
+    ) -> list[str]:
+        references: list[str] = []
+        for item in evaluated.get("Items", {}).get("ProjectReference", []):
+            value = item.get("FullPath") or item.get("Identity")
+            if not value:
+                continue
+            candidate = Path(str(value).replace("\\", "/"))
+            if not candidate.is_absolute():
+                candidate = project_path.parent / candidate
+            target = Path(os.path.normpath(candidate))
+            try:
+                references.append(target.relative_to(tree).as_posix())
+            except ValueError:
+                continue
+        return references
+
+    @staticmethod
+    def project_reference_closure(
+        tree: Path, project: Path,
+        evaluate: Any = None,
+    ) -> set[str]:
+        tree = Path(os.path.normpath(tree))
+        if evaluate is None:
+            dotnet = shutil.which("dotnet") or "dotnet"
+
+            def default_evaluate(relative: str) -> list[str]:
+                path = tree / relative
+                if not path.is_file():
+                    return []
+                inspect_project_xml(tree, path)
+                command = [
+                    dotnet, "msbuild", relative, "-nologo",
+                    "-getItem:ProjectReference",
+                    msbuild_property_arg("GsharpRepoRoot", str(tree)),
+                    "-nodeReuse:false",
+                ]
+                result = subprocess.run(
+                    command, cwd=tree, capture_output=True, check=False)
+                if result.returncode != 0:
+                    raise CertificationError(
+                        f"MSBuild ProjectReference probe failed for {relative}: "
+                        + result.stdout.decode(errors="replace")
+                        + result.stderr.decode(errors="replace"))
+                try:
+                    evaluated = json.loads(result.stdout)
+                except json.JSONDecodeError as error:
+                    raise CertificationError(
+                        f"invalid MSBuild ProjectReference evaluation for {relative}: {error}"
+                    ) from error
+                return Controller._extract_evaluated_project_references(
+                    tree, path, evaluated)
+
+            evaluate = default_evaluate
+
         seen: set[str] = set()
         pending = [project.as_posix()]
         while pending:
@@ -2355,44 +2472,10 @@ class Controller:
             path = tree / relative
             if not path.is_file():
                 continue
-            try:
-                root = ET.parse(path).getroot()
-            except ET.ParseError:
-                continue
-            for element in root.iter():
-                if element.tag.rsplit("}", 1)[-1] != "ProjectReference":
-                    continue
-                include = element.get("Include")
-                if not include:
-                    continue
-                if include.startswith("@("):
-                    # Item transform such as @(GsharpRepl->'...Filename.gsproj'):
-                    # expand from the repository's build/*.props definitions.
-                    name = re.match(r"@\((\w+)", include)
-                    suffix = ".gsproj" if ".gsproj'" in include else None
-                    if name is None:
-                        continue
-                    for props in sorted((tree / "build").glob("*.props")):
-                        text = props.read_text(encoding="utf-8", errors="replace")
-                        for match in re.finditer(
-                                r'<' + re.escape(name.group(1))
-                                + r'\s+Include="\$\(GsharpRepoRoot\)/([^"]+)"', text):
-                            candidate = Path(match.group(1))
-                            if suffix:
-                                candidate = candidate.with_suffix(suffix)
-                            pending.append(candidate.as_posix())
-                    continue
-                if "$(" in include:
-                    continue
-                target = Path(os.path.normpath(
-                    (path.parent / include.replace("\\", "/"))))
-                try:
-                    pending.append(target.relative_to(tree).as_posix())
-                except ValueError:
-                    continue
+            pending.extend(evaluate(relative))
         return seen
 
-    def properties(self, stage: str, project: Path) -> dict[str, str]:
+    def base_properties(self, stage: str, project: Path) -> dict[str, str]:
         key = project_key(project)
         output = self.writable(stage, "out")
         obj = self.writable(stage, "obj") / key
@@ -2442,16 +2525,6 @@ class Controller:
                 "GsharpNoChannelsRuntime": "true",
                 "GsharpNoValuesRuntime": "true",
             })
-        # A project that reaches a runtime producer through ProjectReference must
-        # not also take the toolchain copy through the SDK's implicit reference:
-        # RAR keeps whichever copy it sees, so the resolved input set would
-        # change once the producer output exists. Freeze on the producer.
-        reached = self.project_reference_closure(
-            self.stage1 if stage == "stage-1" else self.stage2, project)
-        if any(item.endswith("Gsharp.Runtime.Channels.gsproj") for item in reached):
-            properties["GsharpNoChannelsRuntime"] = "true"
-        if any(item.endswith("Gsharp.Runtime.Values.gsproj") for item in reached):
-            properties["GsharpNoValuesRuntime"] = "true"
         if relative.endswith((
                 "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.gsproj",
                 "src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.gsproj",
@@ -2459,6 +2532,66 @@ class Controller:
             properties["GenerateDependencyFile"] = "false"
         if relative.endswith("src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj"):
             properties["GsharpNoExtensions"] = "true"
+        return properties
+
+    def probe_project_references(
+        self, stage: str, tree: Path, relative: str,
+    ) -> list[str]:
+        cache_key = (stage, relative)
+        if cache_key in self.probed_project_references:
+            return self.probed_project_references[cache_key]
+        path = tree / relative
+        if not path.is_file():
+            self.probed_project_references[cache_key] = []
+            return []
+        inspect_project_xml(tree, path)
+        properties = self.base_properties(stage, Path(relative))
+        property_args = [
+            msbuild_property_arg(name, value)
+            for name, value in sorted(properties.items())
+        ]
+        env, writable = self.environment(stage)
+        obj = Path(properties["BaseIntermediateOutputPath"])
+        writable = [*writable, obj]
+        read_only = [
+            self.writable(stage, "packages"),
+            self.writable(stage, "out"),
+        ]
+        command = [
+            str(self.stage_dotnet(stage) / "dotnet"), "msbuild", relative, "-nologo",
+            "-getItem:ProjectReference", *property_args, "-nodeReuse:false",
+        ]
+        graph_hint = sha256_bytes(json.dumps({
+            "project": relative, "properties": properties,
+        }, sort_keys=True).encode())
+        suffix = sha256_bytes(relative.encode())[:8]
+        evaluated_bytes = self.command_stdout(
+            stage, f"graph-probe-refs-{suffix}", tree, command,
+            graph_hint, writable, env, read_only)
+        try:
+            evaluated = json.loads(evaluated_bytes)
+        except json.JSONDecodeError as error:
+            raise CertificationError(
+                f"invalid MSBuild ProjectReference evaluation for {relative}: {error}"
+            ) from error
+        references = self._extract_evaluated_project_references(tree, path, evaluated)
+        self.probed_project_references[cache_key] = references
+        return references
+
+    def properties(self, stage: str, project: Path) -> dict[str, str]:
+        properties = self.base_properties(stage, project)
+        # A project that reaches a runtime producer through ProjectReference must
+        # not also take the toolchain copy through the SDK's implicit reference:
+        # RAR keeps whichever copy it sees, so the resolved input set would
+        # change once the producer output exists. Freeze on the producer.
+        tree = self.stage1 if stage == "stage-1" else self.stage2
+        reached = self.project_reference_closure(
+            tree, project,
+            lambda rel: self.probe_project_references(stage, tree, rel))
+        if any(item.endswith("Gsharp.Runtime.Channels.gsproj") for item in reached):
+            properties["GsharpNoChannelsRuntime"] = "true"
+        if any(item.endswith("Gsharp.Runtime.Values.gsproj") for item in reached):
+            properties["GsharpNoValuesRuntime"] = "true"
         return properties
 
     def evaluate_one(

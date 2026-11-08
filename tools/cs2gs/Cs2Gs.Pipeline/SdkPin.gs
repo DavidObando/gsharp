@@ -480,7 +480,7 @@ internal shared class SdkPin {
 
     private func SdkName(sdk string) string -> sdk.Trim().Split('/')[0].Trim()
 
-    private func IsTemplatePayload(path string, root string) bool {
+    internal func IsTemplatePayload(path string, root string) bool {
         for var directory DirectoryInfo? = FileInfo(path).Directory; directory != nil; directory = directory!!.Parent {
             if File.Exists(Path.Combine(directory.FullName, ".template.config", "template.json")) {
                 return true
