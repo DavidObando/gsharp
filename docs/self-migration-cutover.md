@@ -258,8 +258,10 @@ name parity against the tag's last C# nightly TRX files, the stage-2 job.
 those `.cs` files are gone from the tree, so the PR CI must check out the final C# commit (the
 `v0.4.NNNN` tag, or `cs2gs/csharp-0.4`) into a second directory and export that variable, or the
 tests must be rewritten or retired first (gate criterion 9). Do not rely on the migrated tree
-providing them. The checkout alone is not enough: the variable also locates the built toolchain, so the
-cut-over `build.yml` builds the checked-out C# solution before the `Cs2Gs.Tests` shards run.
+providing them. At the cut-over, `CS2GS_TEST_SOURCE_ROOT` also had to hold `out/bin/<Config>/nupkgs`
+until `GsharpTestProjectRunner` was updated (#4896) to fall back to the running G# checkout's built
+packages when `CS2GS_TEST_SOURCE_ROOT` is an unbuilt C# source checkout (restored for MSBuildWorkspace
+package resolution, without a C# build).
 
 ## Rollback
 

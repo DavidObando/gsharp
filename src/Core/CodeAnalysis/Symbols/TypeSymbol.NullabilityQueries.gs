@@ -206,7 +206,7 @@ open partial class TypeSymbol : Symbol {
     }
 
     shared {
-        /// An eight-argument `ValueTuple`/`Tuple` nests elements eight
+        /// An eight-argument `ValueTuple` nests elements eight
         /// onward in its `TRest` argument. (cref:TupleTypeSymbol) — what
         /// (cref:FromClrType) builds — is already flat (issue #2750), so the
         /// other representations splice their rest in too: the positions of a
@@ -223,7 +223,7 @@ open partial class TypeSymbol : Symbol {
             } else {
                 shape.GetGenericTypeDefinition()
             }
-            if definition.FullName is not("System.ValueTuple`8" or "System.Tuple`8") {
+            if definition.FullName != "System.ValueTuple`8" {
                 return positions
             }
             // Only a canonical rest — itself a tuple — nests elements. A
@@ -245,12 +245,7 @@ open partial class TypeSymbol : Symbol {
                         restGeneric.GetGenericTypeDefinition()
                     }
                 ).FullName is {} restName &&
-                    (
-                    restName.StartsWith("System.ValueTuple`", StringComparison.Ordinal) || restName.StartsWith(
-                        "System.Tuple`",
-                        StringComparison.Ordinal
-                    )
-                )
+                    restName.StartsWith("System.ValueTuple`", StringComparison.Ordinal)
             )
             return if restIsTuple {
                 positions.RemoveAt(7).AddRange(rest.GetElementPositions())

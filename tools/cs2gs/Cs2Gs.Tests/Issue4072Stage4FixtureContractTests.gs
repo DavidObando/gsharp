@@ -177,4 +177,44 @@ open class Issue4072Stage4FixtureContractTests {
             Directory.Delete(artifactRoot, recursive: true)
         }
     }
+
+    @Fact
+    func UnbuiltConfiguredSourceRoot_FallsBackToAssemblyRepoRootForLocalPackages() {
+        let assemblyRoot string? = GsharpTestProjectRunner.FindAssemblyRepoRoot()
+        Assert.NotNull(assemblyRoot)
+        let assemblySdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(assemblyRoot, "Release")
+        if assemblySdk == nil {
+            return
+        }
+        let sourceRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "issue4896-unbuilt-source-root",
+            Guid.NewGuid().ToString("N")
+        )
+        Directory.CreateDirectory(sourceRoot)
+        let originalSourceRoot string? = Environment.GetEnvironmentVariable(
+            GsharpTestProjectRunner.SourceRootEnvironmentVariable
+        )
+        try {
+            Environment.SetEnvironmentVariable(GsharpTestProjectRunner.SourceRootEnvironmentVariable, sourceRoot)
+            let resolvedRoot = GsharpTestProjectRunner.FindRepoRoot()
+            Assert.Equal(CanonicalRootPath.Resolve(sourceRoot), resolvedRoot)
+            let fallbackSdk = GsharpTestProjectRunner.ResolveLocalSdkPackage(resolvedRoot, "Release")
+            Assert.NotNull(fallbackSdk)
+            Assert.Equal(assemblySdk.Version, fallbackSdk!!.Version)
+            let exactPath = GsharpTestProjectRunner.FindLocalPackageVersion(
+                resolvedRoot,
+                "Gsharp.NET.Sdk",
+                assemblySdk.Version,
+                "Release"
+            )
+            Assert.Equal(assemblySdk.NupkgPath, exactPath)
+        } finally {
+            Environment.SetEnvironmentVariable(
+                GsharpTestProjectRunner.SourceRootEnvironmentVariable,
+                originalSourceRoot
+            )
+            Directory.Delete(sourceRoot, recursive: true)
+        }
+    }
 }

@@ -319,21 +319,31 @@ namespace Demo
             File.Exists(sdkPackage),
             "Building the cs2gs tool package must produce the same-version Gsharp.NET.Sdk package: " + cs2gs!!.Version
         )
-        let workDir = Path.Combine(repoRoot, "issue-2819-package-smoke", Guid.NewGuid().ToString("N"))
+        let workDir = Path.Combine(AppContext.BaseDirectory, "issue-2819-package-smoke", Guid.NewGuid().ToString("N"))
         let feedDir = Path.Combine(workDir, "out", "bin", "Release", "nupkgs")
         let packagesDir = Path.Combine(workDir, "packages")
         let toolDir = Path.Combine(workDir, "tool")
         Directory.CreateDirectory(feedDir)
         Directory.CreateDirectory(packagesDir)
         Directory.CreateDirectory(toolDir)
-        GsharpTestProjectRunner.WriteIsolationBoundary(workDir)
-        File.WriteAllText(Path.Combine(workDir, "GSharp.sln"), string.Empty)
-        let packedTool = Path.Combine(feedDir, Path.GetFileName(cs2gs!!.NupkgPath))
-        let packedSdk = Path.Combine(feedDir, Path.GetFileName(sdkPackage))
-        File.Copy(cs2gs!!.NupkgPath, packedTool)
-        File.Copy(sdkPackage, packedSdk)
-        let nugetConfig = Path.Combine(workDir, "nuget.config")
-        File.WriteAllText(nugetConfig, (`<?xml version="1.0" encoding="utf-8"?>
+        try {
+            GsharpTestProjectRunner.WriteIsolationBoundary(workDir)
+            File.WriteAllText(Path.Combine(workDir, "GSharp.sln"), string.Empty)
+            let packedTool = Path.Combine(feedDir, Path.GetFileName(cs2gs!!.NupkgPath))
+            let packedSdk = Path.Combine(feedDir, Path.GetFileName(sdkPackage))
+            File.Copy(cs2gs!!.NupkgPath, packedTool)
+            File.Copy(sdkPackage, packedSdk)
+            let sdkSourceDir = Path.GetDirectoryName(sdkPackage)
+            if sdkSourceDir != nil {
+                for sibling in Directory.EnumerateFiles(
+                    sdkSourceDir,
+                    "Gsharp.NET.Sdk.Compiler.*." + cs2gs!!.Version + ".nupkg"
+                ) {
+                    File.Copy(sibling, Path.Combine(feedDir, Path.GetFileName(sibling)), overwrite: true)
+                }
+            }
+            let nugetConfig = Path.Combine(workDir, "nuget.config")
+            File.WriteAllText(nugetConfig, (`<?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
@@ -343,21 +353,21 @@ namespace Demo
     <add key="globalPackagesFolder" value="` + "${SecurityElement.Escape(packagesDir)}" + `" />
   </config>
 </configuration>`))
-        let sdkExtractDir = Path.Combine(workDir, "sdk")
-        ZipFile.ExtractToDirectory(packedSdk, sdkExtractDir)
-        let packedGsc = Path.Combine(sdkExtractDir, "tools", "compiler", "gsc.dll")
-        Assert.True(File.Exists(packedGsc), "Packed SDK must contain tools/compiler/gsc.dll.")
-        let sourceDir = Path.Combine(workDir, "source")
-        let translatedDir = Path.Combine(workDir, "translated")
-        let artifactsDir = Path.Combine(workDir, "artifacts")
-        Directory.CreateDirectory(sourceDir)
-        File.WriteAllText(Path.Combine(sourceDir, "Repro.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
+            let sdkExtractDir = Path.Combine(workDir, "sdk")
+            ZipFile.ExtractToDirectory(packedSdk, sdkExtractDir)
+            let packedGsc = Path.Combine(sdkExtractDir, "tools", "compiler", "gsc.dll")
+            Assert.True(File.Exists(packedGsc), "Packed SDK must contain tools/compiler/gsc.dll.")
+            let sourceDir = Path.Combine(workDir, "source")
+            let translatedDir = Path.Combine(workDir, "translated")
+            let artifactsDir = Path.Combine(workDir, "artifacts")
+            Directory.CreateDirectory(sourceDir)
+            File.WriteAllText(Path.Combine(sourceDir, "Repro.csproj"), `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 </Project>`)
-        File.WriteAllText(Path.Combine(sourceDir, "Repro.cs"), `
+            File.WriteAllText(Path.Combine(sourceDir, "Repro.cs"), `
 #nullable enable
 namespace Demo
 {
@@ -369,89 +379,97 @@ namespace Demo
             G() is { } values && values.Length > 0 ? values[0] : null;
     }
 }`)
-        let environment = Dictionary[string, string]{
-            ["DOTNET_CLI_HOME"] = Path.Combine(workDir, ".dotnet"),
-            ["GSHARP_SKIP_ILVERIFY"] = "1",
-            ["NUGET_PACKAGES"] = packagesDir
-        }
-        Directory.CreateDirectory(environment["DOTNET_CLI_HOME"])
-        let install = RunProcess(
-            "dotnet",
-            []string{
-                "tool",
-                "install",
-                "Gsharp.Cs2Gs",
-                "--tool-path",
-                toolDir,
-                "--version",
-                cs2gs!!.Version,
-                "--configfile",
-                nugetConfig
-            },
-            workDir,
-            environment
-        )
-        Assert.True(install.Exit == 0, "Installing exact cs2gs nupkg failed:\n" + install.Output)
-        let cs2gsCommand = Path.Combine(
-            toolDir,
-            if OperatingSystem.IsWindows() {
-                "cs2gs.exe"
-            } else {
-                "cs2gs"
+            let environment = Dictionary[string, string]{
+                [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = string.Empty,
+                ["DOTNET_CLI_HOME"] = Path.Combine(workDir, ".dotnet"),
+                ["GSHARP_SKIP_ILVERIFY"] = "1",
+                ["NUGET_PACKAGES"] = packagesDir
             }
-        )
-        Assert.True(File.Exists(cs2gsCommand), "Installed cs2gs command was not found: " + cs2gsCommand)
-        let migration = RunProcess(
-            cs2gsCommand,
-            []string{
-                "migrate",
-                "--corpus",
-                sourceDir,
-                "--out",
+            Directory.CreateDirectory(environment["DOTNET_CLI_HOME"])
+            let gitInit = RunProcess("git", []string{"init", "--quiet"}, sourceDir, environment)
+            Assert.True(gitInit.Exit == 0, "git init in fixture sourceDir failed:\n" + gitInit.Output)
+            let install = RunProcess(
+                "dotnet",
+                []string{
+                    "tool",
+                    "install",
+                    "Gsharp.Cs2Gs",
+                    "--tool-path",
+                    toolDir,
+                    "--version",
+                    cs2gs!!.Version,
+                    "--configfile",
+                    nugetConfig
+                },
+                workDir,
+                environment
+            )
+            Assert.True(install.Exit == 0, "Installing exact cs2gs nupkg failed:\n" + install.Output)
+            let cs2gsCommand = Path.Combine(
+                toolDir,
+                if OperatingSystem.IsWindows() {
+                    "cs2gs.exe"
+                } else {
+                    "cs2gs"
+                }
+            )
+            Assert.True(File.Exists(cs2gsCommand), "Installed cs2gs command was not found: " + cs2gsCommand)
+            let migration = RunProcess(
+                cs2gsCommand,
+                []string{
+                    "migrate",
+                    "--corpus",
+                    sourceDir,
+                    "--out",
+                    translatedDir,
+                    "--artifacts",
+                    artifactsDir,
+                    "--config",
+                    "Release",
+                    "--no-via-sdk",
+                    "--gsc",
+                    packedGsc
+                },
+                workDir,
+                environment
+            )
+            Assert.True(migration.Exit == 0, "Packed cs2gs migration failed:\n" + migration.Output)
+            let translatedSource = Path.Combine(translatedDir, "Repro.gs")
+            Assert.True(File.Exists(translatedSource), "Packed cs2gs did not emit Repro.gs.")
+            Assert.Contains(
+                "if G() is {} values && values.Length > 0 {",
+                File.ReadAllText(translatedSource),
+                StringComparison.Ordinal
+            )
+            let translatedProject = Path.Combine(translatedDir, "Repro.gsproj")
+            Assert.True(File.Exists(translatedProject), "Packed cs2gs did not emit Repro.gsproj.")
+            Assert.Contains(
+                "Gsharp.NET.Sdk/" + cs2gs!!.Version,
+                File.ReadAllText(translatedProject),
+                StringComparison.Ordinal
+            )
+            let build = RunProcess(
+                "dotnet",
+                []string{
+                    "build",
+                    translatedProject,
+                    "-c",
+                    "Release",
+                    "--nologo",
+                    "-p:RestoreConfigFile=" + nugetConfig,
+                    "-p:RestorePackagesPath=" + packagesDir,
+                    "-p:RestoreNoCache=true"
+                },
                 translatedDir,
-                "--artifacts",
-                artifactsDir,
-                "--config",
-                "Release",
-                "--no-via-sdk",
-                "--gsc",
-                packedGsc
-            },
-            workDir,
-            environment
-        )
-        Assert.True(migration.Exit == 0, "Packed cs2gs migration failed:\n" + migration.Output)
-        let translatedSource = Path.Combine(translatedDir, "Repro.gs")
-        Assert.True(File.Exists(translatedSource), "Packed cs2gs did not emit Repro.gs.")
-        Assert.Contains(
-            "if G() is {} values && values.Length > 0 {",
-            File.ReadAllText(translatedSource),
-            StringComparison.Ordinal
-        )
-        let translatedProject = Path.Combine(translatedDir, "Repro.gsproj")
-        Assert.True(File.Exists(translatedProject), "Packed cs2gs did not emit Repro.gsproj.")
-        Assert.Contains(
-            "Gsharp.NET.Sdk/" + cs2gs!!.Version,
-            File.ReadAllText(translatedProject),
-            StringComparison.Ordinal
-        )
-        let build = RunProcess(
-            "dotnet",
-            []string{
-                "build",
-                translatedProject,
-                "-c",
-                "Release",
-                "--nologo",
-                "-p:RestoreConfigFile=" + nugetConfig,
-                "-p:RestorePackagesPath=" + packagesDir,
-                "-p:RestoreNoCache=true"
-            },
-            translatedDir,
-            environment
-        )
-        Assert.True(build.Exit == 0, "Exact same-version packed SDK must compile packed cs2gs output:\n" + build.Output)
-        Directory.Delete(workDir, recursive: true)
+                environment
+            )
+            Assert.True(
+                build.Exit == 0,
+                "Exact same-version packed SDK must compile packed cs2gs output:\n" + build.Output
+            )
+        } finally {
+            Directory.Delete(workDir, recursive: true)
+        }
     }
 
     // ADR-0166 / issue #3409: `recv is T t` is a native declaration pattern —
@@ -631,23 +649,10 @@ Printed:
             return printed
         }
 
-        private func ResolveLocalCs2GsPackage(repoRoot string)(NupkgPath string, Version string)? {
-            let nupkgDir = Path.Combine(repoRoot, "out", "bin", "Release", "nupkgs")
-            if !Directory.Exists(nupkgDir) {
-                return nil
-            }
-            const Prefix = "Gsharp.Cs2Gs."
-            const Suffix = ".nupkg"
-            var best(NupkgPath string, Version string)? = nil
-            for file in Directory.EnumerateFiles(nupkgDir, Prefix + "*" + Suffix) {
-                let name = Path.GetFileName(file)
-                let version = name.Substring(Prefix.Length, name.Length - Prefix.Length - Suffix.Length)
-                if best == nil || GsharpTestProjectRunner.CompareVersions(version, best!!.Version) > 0 {
-                    best = (file, version)
-                }
-            }
-            return best
-        }
+        private func ResolveLocalCs2GsPackage(repoRoot string)(
+            NupkgPath string,
+            Version string
+        )? -> GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, "Gsharp.Cs2Gs", "Release")
 
         private func RunProcess(
             fileName string,

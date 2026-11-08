@@ -75,7 +75,12 @@ class Issue4545ManagedArrayProjectionSelfMigrationTests {
         Assert.True(recordArguments > recordTypeParameters)
         Assert.Contains("NullableTypeSymbolSlots(method.TypeArguments.Length)", invocations, StringComparison.Ordinal)
         Assert.Contains("ifmember==nil", invocations, StringComparison.Ordinal)
-        Assert.Contains("RecordContainingTypeArgument(", invocations, StringComparison.Ordinal)
+        Assert.True(
+            invocations.Contains("RecordContainingTypeArgument(", StringComparison.Ordinal) || invocations.Contains(
+                "RecordContainingTypeArguments(",
+                StringComparison.Ordinal
+            )
+        )
         Assert.Contains("lettupleElement", invocations, StringComparison.Ordinal)
         Assert.DoesNotContain(
             "RecordContainingTypeArgument(member.ContainingType",

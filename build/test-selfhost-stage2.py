@@ -11,6 +11,7 @@ import hmac
 import json
 import os
 import shutil
+import tarfile
 import tempfile
 import struct
 import subprocess
@@ -125,16 +126,19 @@ static class Program
         cls.fixture = project / "bin" / "Release" / "net10.0" / "Fixture.dll"
         cls.mutants = ARTIFACTS / "mutants"
         cls.mutants.mkdir()
+        helper_script = ARTIFACTS / "PeBodyMutations.cs"
+        shutil.copy2(REPO / "build" / "selfhost" / "PeBodyMutations.cs", helper_script)
+        helper_env = {**os.environ, "NuGetAudit": "false", "TreatWarningsAsErrors": "false"}
         helper = subprocess.run(
-            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+            ["dotnet", "run", str(helper_script),
              "--", str(cls.fixture), str(cls.mutants)],
-            cwd=REPO, text=True, capture_output=True)
+            cwd=REPO, text=True, capture_output=True, env=helper_env)
         if helper.returncode != 0:
             raise RuntimeError(helper.stdout + helper.stderr)
         helper = subprocess.run(
-            ["dotnet", "run", str(REPO / "build" / "selfhost" / "PeBodyMutations.cs"),
+            ["dotnet", "run", str(helper_script),
              "--", str(cls.fixture), str(cls.mutants), "--runtime-header"],
-            cwd=REPO, text=True, capture_output=True)
+            cwd=REPO, text=True, capture_output=True, env=helper_env)
         if helper.returncode != 0:
             raise RuntimeError(helper.stdout + helper.stderr)
 
@@ -1480,6 +1484,8 @@ class ControllerBoundaryTests(unittest.TestCase):
                 remove_tree(self.root / "work")
 
     def test_sandbox_hides_secrets_caller_siblings_controller_and_network(self) -> None:
+        if shutil.which("bwrap", path=os.defpath) is None:
+            self.skipTest("bubblewrap is not installed")
         tree = self.tree()
         writable = self.root / "allowed"
         caller = self.root / "caller-tree" / "secret"
@@ -2016,6 +2022,55 @@ class ToolchainManifestTests(unittest.TestCase):
         rejected = run_driver("--verify-directory-manifest", self.root, manifest)
         self.assertEqual(2, rejected.returncode)
         self.assertIn("directory manifest changed", rejected.stderr)
+
+    def test_verify_dotnet_archive_extracts_verified_toolchain_and_rejects_tampering(self) -> None:
+        staging = self.root / "sdk-staging"
+        (staging / "host").mkdir(parents=True)
+        (staging / "shared").mkdir(parents=True)
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks").mkdir(parents=True)
+        (staging / "packs").mkdir(parents=True)
+        (staging / "metadata").mkdir(parents=True)
+        (staging / "dotnet").write_bytes(b"#!/bin/sh\nexit 0\n")
+        (staging / "dotnet").chmod(0o755)
+        (staging / "host" / "fxr.dll").write_bytes(b"fxr")
+        (staging / "shared" / "core.dll").write_bytes(b"core")
+        (staging / "sdk" / stage2.TRUSTED_DOTNET_SDK_VERSION / "Sdks" / "marker.txt").write_bytes(b"sdk")
+        (staging / "packs" / "ref.dll").write_bytes(b"packs")
+        (staging / "metadata" / "ignored.txt").write_bytes(b"ignored")
+        archive_path = self.root / "dotnet-sdk.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as archive:
+            for item in sorted(staging.rglob("*")):
+                archive.add(item, arcname=item.relative_to(staging).as_posix(), recursive=False)
+        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        extracted = self.root / "extracted"
+        valid = run_driver("--verify-dotnet-archive", archive_path, digest, extracted)
+        self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
+        payload = json.loads(valid.stdout)
+        self.assertEqual(str(extracted.resolve() / "dotnet"), payload["dotnet"])
+        self.assertEqual(0o755, (extracted / "dotnet").stat().st_mode & 0o777)
+        self.assertFalse((extracted / "metadata").exists())
+
+        wrong_hash = "0" * 64
+        rejected = run_driver("--verify-dotnet-archive", archive_path, wrong_hash, self.root / "bad-extract")
+        self.assertEqual(2, rejected.returncode)
+        self.assertIn("dotnet archive hash is not in the approved set", rejected.stderr)
+
+    def test_freeze_migrated_tree_preserves_modes_and_detects_post_freeze_mutations(self) -> None:
+        migrated = self.root / "migrated"
+        (migrated / "src").mkdir(parents=True)
+        (migrated / "src" / "App.gs").write_text("package app\n", encoding="utf-8")
+        script = migrated / "build.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o755)
+        snapshot = self.root / "snapshot"
+        manifest, identity = stage2.freeze_migrated_tree(migrated, snapshot)
+        self.assertEqual(2, len(manifest))
+        self.assertIn("migratedTreeSha256", identity)
+        self.assertEqual(0o555, (snapshot / "build.sh").stat().st_mode & 0o777)
+        stage2.verify_migrated_caller_unchanged(migrated, manifest)
+        (migrated / "src" / "App.gs").write_text("package tampered\n", encoding="utf-8")
+        with self.assertRaises(stage2.CertificationError):
+            stage2.verify_migrated_caller_unchanged(migrated, manifest)
 
 
 class PostSetupMutationTests(unittest.TestCase):

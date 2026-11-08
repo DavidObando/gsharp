@@ -329,17 +329,8 @@ internal shared class NullabilityImportRule {
                     TypeArgumentKind.Unknown
                 }
             }
-            case tuple is TupleTypeSymbol {
-                // A G# tuple is a ValueTuple, and a symbolic one has no
-                // ClrType to say so. But issue #1922 also maps the reference
-                // type `System.Tuple<…>` onto TupleTypeSymbol, and that one is
-                // a reference position — its ClrType is the authority when
-                // there is one.
-                return if tuple.ClrType is {IsValueType: false} {
-                    TypeArgumentKind.Reference
-                } else {
-                    TypeArgumentKind.Value
-                }
+            case TupleTypeSymbol {
+                return TypeArgumentKind.Value
             }
             case PointerTypeSymbol, FunctionPointerTypeSymbol {
                 // Pointers are not reference types (issue #2176).

@@ -14501,7 +14501,7 @@ partial class Binder {
                 return positions
             }
             let defName = clr.GetGenericTypeDefinition().FullName
-            if defName is not("System.ValueTuple`8" or "System.Tuple`8") {
+            if defName != "System.ValueTuple`8" {
                 return positions
             }
             return PackTupleClrSlotArguments(clr, positions, 0)

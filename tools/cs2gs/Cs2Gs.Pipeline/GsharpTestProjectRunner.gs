@@ -195,14 +195,16 @@ open class GsharpTestProjectRunner {
             } else {
                 []string{config!!, "Release", "Debug"}
             }
-            for cfg in configs.Distinct(StringComparer.Ordinal) {
-                let nupkgDir = Path.Combine(repoRoot, "out", "bin", cfg, "nupkgs")
-                if !Directory.Exists(nupkgDir) {
-                    continue
-                }
-                let best = ResolveNewestPackage(nupkgDir, packageId)
-                if best != nil {
-                    return best
+            for root in CandidatePackageRoots(repoRoot) {
+                for cfg in configs.Distinct(StringComparer.Ordinal) {
+                    let nupkgDir = Path.Combine(root, "out", "bin", cfg, "nupkgs")
+                    if !Directory.Exists(nupkgDir) {
+                        continue
+                    }
+                    let best = ResolveNewestPackage(nupkgDir, packageId)
+                    if best != nil {
+                        return best
+                    }
                 }
             }
             return nil
@@ -229,12 +231,14 @@ open class GsharpTestProjectRunner {
             }
             let fileName = packageId + "." + version + ".nupkg"
             let directories = List[string]()
-            for cfg in[]string{config!!, "Release", "Debug"} {
-                if !string.IsNullOrEmpty(cfg) {
-                    directories.Add(Path.Combine(repoRoot, "out", "bin", cfg, "nupkgs"))
+            for root in CandidatePackageRoots(repoRoot) {
+                for cfg in[]string{config!!, "Release", "Debug"} {
+                    if !string.IsNullOrEmpty(cfg) {
+                        directories.Add(Path.Combine(root, "out", "bin", cfg, "nupkgs"))
+                    }
                 }
+                directories.Add(Path.Combine(root, ".nugs"))
             }
-            directories.Add(Path.Combine(repoRoot, ".nugs"))
             for directory in directories.Distinct(StringComparer.Ordinal) {
                 let candidate = Path.Combine(directory, fileName)
                 if File.Exists(candidate) {
@@ -242,6 +246,37 @@ open class GsharpTestProjectRunner {
                 }
             }
             return nil
+        }
+
+        private func CandidatePackageRoots(repoRoot string) sequence[string] {
+            yield repoRoot
+            let configuredRoot string? = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable)
+            if string.IsNullOrWhiteSpace(configuredRoot) {
+                yield break
+            }
+            var resolvedConfigured string? = nil
+            try {
+                resolvedConfigured = ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory)
+            } catch (DirectoryNotFoundException) {
+                yield break
+            }
+            let canonicalRepoRoot string? = CanonicalRootPath.Resolve(Path.GetFullPath(repoRoot))
+            if !string.Equals(canonicalRepoRoot, resolvedConfigured, StringComparison.Ordinal) {
+                yield break
+            }
+            let assemblyRoot string? = FindAssemblyRepoRoot()
+            if !string.IsNullOrEmpty(assemblyRoot) && !string.Equals(
+                CanonicalRootPath.Resolve(Path.GetFullPath(assemblyRoot!!)),
+                canonicalRepoRoot,
+                StringComparison.Ordinal
+            ) {
+                yield assemblyRoot!!
+            }
+        }
+
+        internal func FindAssemblyRepoRoot() string? {
+            let location = typeof(GsharpTestProjectRunner).Assembly.Location
+            return FindRepoRootAbove(Path.GetDirectoryName(location)) ?? FindRepoRootAbove(Environment.CurrentDirectory)
         }
 
         internal func ResolveNewestSdkPackage(directory string)(
