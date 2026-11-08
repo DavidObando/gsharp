@@ -176,6 +176,42 @@ Console.WriteLine(list[1])`
         )
     }
 
+    @Fact
+    func ConstructedAndInheritedGenericCollectionSpread_UsesSubstitutedAddParameterType() {
+        const Source = `package Issue3096.GenericUserCollectionSpread
+
+import System
+import System.Collections
+import System.Collections.Generic
+
+open class BaseBag[T] : IEnumerable[string?] {
+    public let Items List[T] = List[T]()
+    public func Add(item T) {
+        Items.Add(item)
+    }
+    public func GetEnumerator() IEnumerator[string?] -> List[string?]().GetEnumerator()
+    func (IEnumerable) GetEnumerator() IEnumerator -> List[string?]().GetEnumerator()
+}
+
+class DerivedBag[U] : BaseBag[U] {
+}
+
+class IntBag : BaseBag[int32] {
+}
+
+let b1 = BaseBag[int32](){ ...[]int32{1, 2} }
+let b2 = DerivedBag[string](){ ...[]string{"a", "b"} }
+let b3 = IntBag(){ ...[]int32{3, 4} }
+
+Console.WriteLine("${b1.Items.Count}:${b1.Items[0]},${b1.Items[1]}")
+Console.WriteLine("${b2.Items.Count}:${b2.Items[0]},${b2.Items[1]}")
+Console.WriteLine("${b3.Items.Count}:${b3.Items[0]},${b3.Items[1]}")`
+        Assert.Equal(
+            "2:1,2${Environment.NewLine}2:a,b${Environment.NewLine}2:3,4${Environment.NewLine}",
+            CompileVerifyAndRun(Source)
+        )
+    }
+
     shared {
         private func CompileVerifyAndRun(source string) string {
             let directory = Directory.CreateTempSubdirectory("gs_issue3096_").FullName
