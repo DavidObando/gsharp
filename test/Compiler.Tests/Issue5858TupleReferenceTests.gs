@@ -2,24 +2,39 @@ package GSharp.Compiler.Tests
 
 import GSharp.Tests
 import System
+import System.Collections.Generic
 import System.Reflection
 import System.Text
 import Xunit
 
 class Issue5858TupleReferenceTests {
-    @Fact
-    func NarrowedObjectField_TupleReferenceAddressesTheBoxedValue() {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func NarrowedObjectField_TupleReferenceAddressesTheBoxedValue(nullable bool, wrapped bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
+        let fieldType = if nullable {
+            "object?"
+        } else {
+            "object"
+        }
+        let selected = if wrapped {
+            "({ let marker = 0\nh.Value }).Item1"
+        } else {
+            "h.Value.Item1"
+        }
         let dll = fixture.Compile(`package BoxedTuple5858
 import System
 class Holder {
-    let Value object
+    let Value ` + fieldType + `
     init(value object) { Value = value }
 }
 class Reader { shared {
 func Read(h Holder) string {
     if h.Value is ValueTuple[string, int32] {
-        let ref readonly alias string = h.Value.Item1
+        let ref readonly alias string = ` + selected + `
         return alias
     }
     return "wrong"
@@ -37,26 +52,31 @@ func Main() {
         let assemblies = EmittedFixture.LoadTogether(dll, consumer)
         let method = assemblies[0].GetType("BoxedTuple5858.Reader")!!.GetMethod("Read")!!
         let code = method.GetMethodBody()!!.GetILAsByteArray()!!
-        Assert.Equal(45, code.Length)
-        for offset in[]int32{2, 21} {
+        let prefixSize = if wrapped {
+            2
+        } else {
+            0
+        }
+        Assert.Equal(45 + prefixSize, code.Length)
+        for offset in[]int32{2, 21 + prefixSize} {
             let field = method.Module.ResolveField(BitConverter.ToInt32(code, offset))!!
             Assert.Equal("Value", field.Name)
             Assert.Equal(typeof(object), field.FieldType)
         }
-        for offset in[]int32{7, 26} {
+        for offset in[]int32{7, 26 + prefixSize} {
             Assert.Equal(
                 typeof(ValueTuple[string, int32]),
                 method.Module.ResolveType(BitConverter.ToInt32(code, offset))
             )
         }
-        let leaf = method.Module.ResolveField(BitConverter.ToInt32(code, 31))!!
+        let leaf = method.Module.ResolveField(BitConverter.ToInt32(code, 31 + prefixSize))!!
         Assert.Equal("Item1", leaf.Name)
         Assert.Equal(typeof(ValueTuple[string, int32]), leaf.DeclaringType)
-        Assert.Equal("wrong", method.Module.ResolveString(BitConverter.ToInt32(code, 40)))
-        for offset in[]int32{2, 7, 21, 26, 31, 40} {
+        Assert.Equal("wrong", method.Module.ResolveString(BitConverter.ToInt32(code, 40 + prefixSize)))
+        for offset in[]int32{2, 7, 21 + prefixSize, 26 + prefixSize, 31 + prefixSize, 40 + prefixSize} {
             Array.Clear(code, offset, 4)
         }
-        Assert.Equal(
+        let expected = List[uint8](
             []uint8{
                 0x02,
                 0x7b,
@@ -103,9 +123,13 @@ func Main() {
                 0,
                 0,
                 0x2a
-            },
-            code
+            }
         )
+        if wrapped {
+            expected[15] = 0x16
+            expected.InsertRange(19, []uint8{0x16, 0x0b})
+        }
+        Assert.Equal(expected.ToArray(), code)
         Assert.Equal("keep", assemblies[1].GetType("Consumer")!!.GetMethod("Run")!!.Invoke(nil, nil))
         Assert.Equal(Encoding.UTF8.GetBytes("keep\n"), fixture.RunBytes(dll))
     }

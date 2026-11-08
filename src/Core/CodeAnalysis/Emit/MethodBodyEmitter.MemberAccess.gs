@@ -2023,9 +2023,14 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitExplicitFieldReceiver(receiver BoundExpression) {
+        if receiver is BoundBlockExpression block {
+            this.EmitBlockExpressionPrefix(block)
+            this.EmitExplicitFieldReceiver(block.Expression)
+            return
+        }
         let storage = SideEffectSpiller.GetReceiverStorageView(receiver)
         if ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) && Binder.IsReferenceTypeForConstraint(
-            storage.Type
+            storage.Type.StripToBareShape()
         ) {
             this.EmitExpression(storage)
             this.il.OpCode(ILOpCode.Unbox)
