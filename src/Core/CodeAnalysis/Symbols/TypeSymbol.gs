@@ -1315,7 +1315,8 @@ open partial class TypeSymbol : Symbol {
         func RequiresSymbolicProjection(type TypeSymbol) bool -> ContainsTypeParameter(type) ||
             ContainsSameCompilationUserType(type) ||
             ContainsReferenceNullableAnnotation(type) ||
-            ContainsFunctionPointer(type)
+            ContainsFunctionPointer(type) ||
+            FunctionTypeSymbol.ContainsOptionalContract(type)
 
         internal func ContainsFunctionPointer(type TypeSymbol) bool {
             var visited HashSet[TypeSymbol]? = nil

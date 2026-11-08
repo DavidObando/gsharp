@@ -1384,6 +1384,7 @@ Named arguments can omit optional slots.
 A written function type, such as `(int32) -> int32`, has no defaults and requires its full argument list.
 Conversion to that type discards inferred defaults.
 Reassignment to an inferred optional function value must preserve its optional slots and default values.
+Writable containers preserve optional contracts invariantly; widen individual function values rather than create a writable default-free alias.
 
 Expression-tree parameters can use `map[K,V]`, including in-scope generic arguments. The parameter retains its `Dictionary[K,V]` runtime identity. A map literal outside the tree can supply an argument when the compiled tree runs. Map literals inside the tree remain unsupported.
 

@@ -8,6 +8,84 @@ import System.Linq
 import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
+    @Fact
+    func Review2NumericReturnAdapterRetainsTheOptionalContract() {
+        let result = EmittedOracle.Evaluate(`var f = func(x int32 = 7) int64 { return int64(x) }
+f = func(x int32 = 7) int32 { return x }
+f()`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(7L, result.Value)
+    }
+
+    @Theory
+    @InlineData("float64", "d")
+    @InlineData("float32", "f")
+    func Review2FloatingZeroDefaultsCompareByRepresentation(type string, suffix string) {
+        let declaration = "var f = (x " + type + " = 0" + suffix + ") -> 1" + suffix + " / x\n"
+        let valid = EmittedOracle.Evaluate(declaration + "f()")
+        Assert.Empty(valid.Diagnostics)
+        Assert.Equal(
+            if type == "float64" {
+                object(float64.PositiveInfinity)
+            } else {
+                object(float32.PositiveInfinity)
+            },
+            valid.Value
+        )
+        let result = EmittedOracle.Evaluate(
+            declaration + "f = (x " + type + " = -0" + suffix + ") -> 1" + suffix + " / x"
+        )
+        Assert.Contains(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0155" && d.Location.StartLine == 1)
+    }
+
+    @Fact
+    func Review2GenericBaseProjectionRetainsExactCallableArguments() {
+        let declarations = `open class Base[T] {
+    var Value T
+    init(value T) { Value = value }
+}
+class Derived[T, U] : Base[T] {
+    init(value T) : base(value) { }
+}
+func MakeBase[T](value T) Base[T] -> Base[T](value)
+func MakeDerived[T, U](value T, tag U) Derived[T, U] -> Derived[T, U](value)
+let f = (x int32 = 7) -> x
+var value = MakeBase(f)
+`
+        let valid = EmittedOracle.Evaluate(declarations + "value = MakeDerived(f, 0)\nvalue.Value(3)")
+        Assert.Empty(valid.Diagnostics)
+        Assert.Equal(3, valid.Value)
+        let invalid = EmittedOracle.Evaluate(declarations + "let g = (x int32 = 9) -> x\nvalue = MakeDerived(g, 0)")
+        Assert.Contains(
+            invalid.Diagnostics,
+            (d Diagnostic) -> (d.Id == "GS0155" || d.Id == "GS0490") && d.Location.StartLine == 12
+        )
+    }
+
+    @Theory
+    @InlineData(
+        "func One[T](value T) []T -> []T{value}",
+        "let items = One(f)\nlet alias = cast[[]((int32) -> int32)](items)",
+        "GS0155",
+        4
+    )
+    @InlineData(
+        "func One[T](value T) List[T] -> List[T]{value}",
+        "let items = One(f)\nlet alias = cast[List[(int32) -> int32]](items)",
+        "GS0155",
+        4
+    )
+    @InlineData("func Replace(ref value (int32) -> int32) { value = (x int32 = 9) -> x }", "Replace(&f)", "GS0154", 3)
+    func Review2WritableAliasesCannotEraseOptionalContracts(declarations string, body string, id string, line int32) {
+        let valid = EmittedOracle.Evaluate("let f = (x int32 = 7) -> x\ncast[(int32) -> int32](f)(3)")
+        Assert.Empty(valid.Diagnostics)
+        Assert.Equal(3, valid.Value)
+        let invalid = EmittedOracle.Evaluate(
+            "import System.Collections.Generic\n" + declarations + "\nvar f = (x int32 = 7) -> x\n" + body
+        )
+        Assert.Contains(invalid.Diagnostics, (d Diagnostic) -> d.Id == id && d.Location.StartLine == line)
+    }
+
     @Theory
     @InlineData("let f = func(x int32 = 7) int32 { return x }\nf()", 7)
     @InlineData("(func(x int32 = 7) int32 { return x })()", 7)

@@ -2019,6 +2019,7 @@ internal class LambdaBinder {
             targetFunctionType.IsVariadic,
             adapterDelegateReturnType
         )
+            .WithParameters(adapterParameters.ToImmutable())
         let adapterFunction = FunctionSymbol(
             "<lambda_erased${Interlocked.Increment(&binderCtx.SyntheticLocalCounter)}>",
             adapterParameters.ToImmutable(),

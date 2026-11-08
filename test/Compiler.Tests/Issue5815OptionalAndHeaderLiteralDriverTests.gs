@@ -6,6 +6,19 @@ import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
     @Fact
+    func Review2NumericAdapterVerifiesAndInvokesTheDeclaredDefault() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package Adapter5815
+import System
+var f = func(x int32 = 7) int64 { return int64(x) }
+f = func(x int32 = 7) int32 { return x }
+Console.Write(f())
+`, "adapter", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("7"), fixture.RunBytes(dll))
+    }
+
+    @Fact
     func ReviewUnsignedBoundarySuffixesVerifyAndExecute() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let dll = fixture.Compile(`package Unsigned5872

@@ -299,6 +299,7 @@ The inferred contract belongs to the static type, not the current delegate objec
 Reassignment must retain the same optional slots and default values.
 The compiler rejects a replacement with different defaults or required slots.
 Widen the variable to a written function type to permit those replacements; supply all arguments through that type.
+Writable container positions keep optional contracts invariant; a widening conversion must not create an unchecked writable alias.
 
 ## References
 

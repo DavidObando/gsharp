@@ -82,15 +82,23 @@ class FunctionTypeSymbol : TypeSymbol {
             let supplied = source.Parameters[i]
             if target.HasExplicitDefaultValue != supplied.HasExplicitDefaultValue ||
                 (
-                target.HasExplicitDefaultValue && !object.Equals(
-                    target.ExplicitDefaultValue,
-                    supplied.ExplicitDefaultValue
-                )
+                target.HasExplicitDefaultValue &&
+                    !DefaultValuesEqual(target.ExplicitDefaultValue, supplied.ExplicitDefaultValue)
             ) {
                 return false
             }
         }
         return true
+    }
+
+    private func DefaultValuesEqual(left object?, right object?) bool {
+        if left is float64 leftDouble && right is float64 rightDouble {
+            return BitConverter.DoubleToInt64Bits(leftDouble) == BitConverter.DoubleToInt64Bits(rightDouble)
+        }
+        if left is float32 leftSingle && right is float32 rightSingle {
+            return BitConverter.SingleToInt32Bits(leftSingle) == BitConverter.SingleToInt32Bits(rightSingle)
+        }
+        return object.Equals(left, right)
     }
 
     /// Gets the per-parameter variadic flags (ADR-0102 follow-up / issue #818).
@@ -119,6 +127,9 @@ class FunctionTypeSymbol : TypeSymbol {
 
     shared {
         internal func ContainsOptionalContract(type TypeSymbol) bool {
+            if type is ByRefTypeSymbol byRef {
+                return ContainsOptionalContract(byRef.PointeeType)
+            }
             if type.StripToBareShape() is FunctionTypeSymbol function && !function.Parameters.IsDefaultOrEmpty {
                 return true
             }
@@ -128,38 +139,6 @@ class FunctionTypeSymbol : TypeSymbol {
                 }
             }
             return false
-        }
-
-        internal func HaveCompatibleOptionalContracts(source TypeSymbol, target TypeSymbol) bool {
-            if object.ReferenceEquals(source, target) ||
-                source == TypeSymbol.Null ||
-                source == TypeSymbol.Error ||
-                target == TypeSymbol.Error {
-                return true
-            }
-            if target.StripToBareShape() is FunctionTypeSymbol targetFunction &&
-                !targetFunction
-                .Parameters
-                .IsDefaultOrEmpty {
-                if source.StripToBareShape() is not FunctionTypeSymbol sourceFunction ||
-                    !targetFunction.AcceptsOptionalContract(sourceFunction) {
-                    return false
-                }
-            }
-            let targetElements = target.GetElementPositions()
-            if targetElements.IsDefaultOrEmpty {
-                return true
-            }
-            let sourceElements = source.GetElementPositions()
-            if sourceElements.Length != targetElements.Length {
-                return !ContainsOptionalContract(target)
-            }
-            for var i = 0; i < targetElements.Length; i++ {
-                if !HaveCompatibleOptionalContracts(sourceElements[i], targetElements[i]) {
-                    return false
-                }
-            }
-            return true
         }
 
         private let Cache ConcurrentDictionary[string, FunctionTypeSymbol] = ConcurrentDictionary[
