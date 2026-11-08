@@ -2898,6 +2898,22 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func SerializeDelegateStatesKey(states HashSet[int32]) string -> string.Join(
+            ",",
+            states.OrderBy((s int32) -> s)
+        )
+
+        private func DelegateStorageSymbolMatches(left ExpressionSyntax?, right ExpressionSyntax?) bool {
+            let unwrappedLeft = Unwrap(left)
+            let unwrappedRight = Unwrap(right)
+            if unwrappedLeft is ElementAccessExpressionSyntax || unwrappedRight is ElementAccessExpressionSyntax {
+                return unwrappedLeft is ElementAccessExpressionSyntax && unwrappedRight is ElementAccessExpressionSyntax
+            }
+            let leftSymbol = this.GetNormalizedDelegateStorageSymbol(unwrappedLeft)
+            let rightSymbol = this.GetNormalizedDelegateStorageSymbol(unwrappedRight)
+            return leftSymbol != nil && SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol)
+        }
+
         private func ApplyLocalDelegateReachingOperation(
             operation IOperation,
             local ILocalSymbol,
@@ -2911,13 +2927,15 @@ partial class CSharpToGSharpTranslator {
             visitedStorage HashSet[string]? = nil,
             callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)]? = nil,
             completedQueries Dictionary[string, HashSet[int32]]? = nil,
-            cycleFlags List[bool]? = nil
+            cycleFlags List[bool]? = nil,
+            usedCallerContextFlags List[bool]? = nil
         ) HashSet[int32] {
             var states = states
             let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
             let activeStorage = visitedStorage ?? HashSet[string](StringComparer.Ordinal)
             let activeCompleted = completedQueries ?? Dictionary[string, HashSet[int32]](StringComparer.Ordinal)
             let activeCycleFlags = cycleFlags ?? List[bool]()
+            let activeCallerContextFlags = usedCallerContextFlags ?? List[bool]()
             for node in EagerExecutionNodes(operation.Syntax)
                 .Where(
                 (candidate SyntaxNode) -> (
@@ -2939,6 +2957,7 @@ partial class CSharpToGSharpTranslator {
                     SymbolEqualityComparer
                     .Default
                     .Equals(this.context.SemanticModel.GetDeclaredSymbol(declarator), local) {
+                    activeCallerContextFlags.Add(true)
                     states = if declarator.Initializer is not{} initializer {
                         HashSet[int32]{0}
                     } else {
@@ -2961,6 +2980,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 if node is AssignmentExpressionSyntax assignment && this.BindsTo(assignment.Left, local) {
+                    activeCallerContextFlags.Add(true)
                     let next = HashSet[int32]()
                     for state in states {
                         for rightCount in this.DelegateAssignmentValueAnonymousFunctionCounts(
@@ -3011,7 +3031,8 @@ partial class CSharpToGSharpTranslator {
                         activeStorage,
                         callerChain,
                         activeCompleted,
-                        activeCycleFlags
+                        activeCycleFlags,
+                        activeCallerContextFlags
                     )
                 }
             }
@@ -3115,7 +3136,8 @@ partial class CSharpToGSharpTranslator {
             invocation InvocationExpressionSyntax,
             enclosingExecutable SyntaxNode?,
             out isDynamicOrAmbiguous bool,
-            out mayDispatchDynamically bool
+            out mayDispatchDynamically bool,
+            usedCallerContextFlags List[bool]? = nil
         ) IReadOnlyList[SyntaxNode] {
             isDynamicOrAmbiguous = true
             mayDispatchDynamically = false
@@ -3138,6 +3160,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 return directDeclarations
             }
+            usedCallerContextFlags?.Add(true)
             var target ExpressionSyntax? = invocation.Expression
             if target is MemberAccessExpressionSyntax invoke && invoke.Name.Identifier.ValueText == "Invoke" {
                 target = invoke.Expression
@@ -3201,8 +3224,10 @@ partial class CSharpToGSharpTranslator {
             visitedStorage HashSet[string],
             callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)]?,
             completedQueries Dictionary[string, HashSet[int32]],
-            cycleFlags List[bool]
+            cycleFlags List[bool],
+            usedCallerContextFlags List[bool]? = nil
         ) HashSet[int32] {
+            let activeCallerContextFlags = usedCallerContextFlags ?? List[bool]()
             let localSyntaxTree = local.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree
             if localSyntaxTree == nil || !this.context.Compilation.ContainsSyntaxTree(localSyntaxTree) {
                 return states
@@ -3211,7 +3236,8 @@ partial class CSharpToGSharpTranslator {
                 invocation,
                 enclosingExecutable,
                 out var isDynamicOrAmbiguous,
-                out _
+                out _,
+                activeCallerContextFlags
             )
             if targets.Count == 0 {
                 return states
@@ -3224,8 +3250,10 @@ partial class CSharpToGSharpTranslator {
                 invocation
             )
             if nextCallerChain.Count > 6 {
+                activeCallerContextFlags.Add(true)
                 return HashSet[int32]{0, 1, 2}
             }
+            let localLocation = local.Locations.FirstOrDefault()?.SourceSpan.Start ?? -1
             for declaration in targets {
                 if (
                     declaration is not LocalFunctionStatementSyntax &&
@@ -3250,6 +3278,26 @@ partial class CSharpToGSharpTranslator {
                     cycleFlags.Add(true)
                     continue
                 }
+                let statesKey = SerializeDelegateStatesKey(currentStates)
+                let callerIndependentKey = "$declCallKey:local:$localLocation:$statesKey:$isDynamicOrAmbiguous"
+                if completedQueries.TryGetValue(callerIndependentKey, out var memoizedStates) {
+                    currentStates = HashSet[int32](memoizedStates)
+                    continue
+                }
+                let exactKey = this.BuildDelegateQueryCacheKey(
+                    callerIndependentKey,
+                    storageUsePosition,
+                    anonymousFunction,
+                    localFunction,
+                    nextCallerChain
+                )
+                if exactKey.Length > 0 && completedQueries.TryGetValue(exactKey, out var exactStates) {
+                    activeCallerContextFlags.Add(true)
+                    currentStates = HashSet[int32](exactStates)
+                    continue
+                }
+                let cycleCountBefore = cycleFlags.Count
+                let callerContextCountBefore = activeCallerContextFlags.Count
                 let body SyntaxNode? = switch declaration {
                     case LocalFunctionStatementSyntax{Body: {} b}: cast[SyntaxNode](b)
                     case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
@@ -3262,6 +3310,7 @@ partial class CSharpToGSharpTranslator {
                     ) ||
                         candidate is InvocationExpressionSyntax
                 ) {
+                    completedQueries[callerIndependentKey] = HashSet[int32](currentStates)
                     continue
                 }
                 var calleeGraph ControlFlowGraph?
@@ -3297,7 +3346,8 @@ partial class CSharpToGSharpTranslator {
                                 visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 completedQueries: completedQueries,
-                                cycleFlags: cycleFlags
+                                cycleFlags: cycleFlags,
+                                usedCallerContextFlags: activeCallerContextFlags
                             )
                         }
                         if block.BranchValue is {} branchValue {
@@ -3313,7 +3363,8 @@ partial class CSharpToGSharpTranslator {
                                 visitedStorage: nextVisitedStorage,
                                 callerChain: nextCallerChain,
                                 completedQueries: completedQueries,
-                                cycleFlags: cycleFlags
+                                cycleFlags: cycleFlags,
+                                usedCallerContextFlags: activeCallerContextFlags
                             )
                         }
                         if !computedOutputs.TryGetValue(block, out var previous) || !previous.SetEquals(blockStates) {
@@ -3333,6 +3384,13 @@ partial class CSharpToGSharpTranslator {
                         currentStates = mergedStates
                     } else {
                         currentStates = exitStates
+                    }
+                }
+                if cycleFlags.Count == cycleCountBefore {
+                    if activeCallerContextFlags.Count == callerContextCountBefore {
+                        completedQueries[callerIndependentKey] = HashSet[int32](currentStates)
+                    } else if exactKey.Length > 0 {
+                        completedQueries[exactKey] = HashSet[int32](currentStates)
                     }
                 }
             }
@@ -3403,13 +3461,15 @@ partial class CSharpToGSharpTranslator {
             receiverOverride ExpressionSyntax? = nil,
             completedQueries Dictionary[string, HashSet[int32]]? = nil,
             cycleFlags List[bool]? = nil,
-            calleeContext(Declaration SyntaxNode, CallSite InvocationExpressionSyntax)? = nil
+            calleeContext(Declaration SyntaxNode, CallSite InvocationExpressionSyntax)? = nil,
+            usedCallerContextFlags List[bool]? = nil
         ) HashSet[int32] {
             var states = states
             let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
             let activeStorage = visitedStorage ?? HashSet[string](StringComparer.Ordinal)
             let activeCompleted = completedQueries ?? Dictionary[string, HashSet[int32]](StringComparer.Ordinal)
             let activeCycleFlags = cycleFlags ?? List[bool]()
+            let activeCallerContextFlags = usedCallerContextFlags ?? List[bool]()
             let opaqueStorage = this.IsOpaqueDelegateStorage(storage)
             for node in EagerExecutionNodes(operation.Syntax)
                 .Where(
@@ -3423,6 +3483,10 @@ partial class CSharpToGSharpTranslator {
                 .OrderBy((candidate SyntaxNode) -> candidate.Span.End)
                 .ThenByDescending((candidate SyntaxNode) -> candidate.SpanStart) {
                 if node is AssignmentExpressionSyntax assignment {
+                    if !this.DelegateStorageSymbolMatches(assignment.Left, storage) {
+                        continue
+                    }
+                    activeCallerContextFlags.Add(true)
                     var leftReceiverOverride ExpressionSyntax? = nil
                     let matchesStorage = if calleeContext is {} activeCallee {
                         this.TryMapStorageReceiverToCallSite(
@@ -3527,7 +3591,8 @@ partial class CSharpToGSharpTranslator {
                         callerChain,
                         receiverOverride,
                         activeCompleted,
-                        activeCycleFlags
+                        activeCycleFlags,
+                        activeCallerContextFlags
                     )
                 }
             }
@@ -3547,13 +3612,16 @@ partial class CSharpToGSharpTranslator {
             callerChain IReadOnlyList[(Executable SyntaxNode?, CallPosition int32, CallSite ExpressionSyntax?)]?,
             receiverOverride ExpressionSyntax?,
             completedQueries Dictionary[string, HashSet[int32]],
-            cycleFlags List[bool]
+            cycleFlags List[bool],
+            usedCallerContextFlags List[bool]? = nil
         ) HashSet[int32] {
+            let activeCallerContextFlags = usedCallerContextFlags ?? List[bool]()
             let targets = this.GetInvokedCallableTargets(
                 invocation,
                 enclosingExecutable,
                 out var isDynamicOrAmbiguous,
-                out var mayDispatchDynamically
+                out var mayDispatchDynamically,
+                activeCallerContextFlags
             )
             if mayDispatchDynamically {
                 return HashSet[int32]{0, 1, 2}
@@ -3569,8 +3637,16 @@ partial class CSharpToGSharpTranslator {
                 invocation
             )
             if nextCallerChain.Count > 6 {
+                activeCallerContextFlags.Add(true)
                 return HashSet[int32]{0, 1, 2}
             }
+            let receiverKey = this.GetDelegateReceiverCycleKey(receiverOverride, storageUsePosition)
+            let storageKey = this.GetDelegateStorageCycleKey(
+                storage,
+                FindEnclosingExecutable(storage),
+                receiverOverride,
+                storageUsePosition
+            )
             for declaration in targets {
                 if !this.context.Compilation.ContainsSyntaxTree(declaration.SyntaxTree) {
                     continue
@@ -3591,6 +3667,26 @@ partial class CSharpToGSharpTranslator {
                     cycleFlags.Add(true)
                     continue
                 }
+                let statesKey = SerializeDelegateStatesKey(currentStates)
+                let callerIndependentKey = "$declCallKey:$storageKey:$receiverKey:$statesKey:$isDynamicOrAmbiguous"
+                if completedQueries.TryGetValue(callerIndependentKey, out var memoizedStates) {
+                    currentStates = HashSet[int32](memoizedStates)
+                    continue
+                }
+                let exactKey = this.BuildDelegateQueryCacheKey(
+                    callerIndependentKey,
+                    storageUsePosition,
+                    anonymousFunction,
+                    localFunction,
+                    nextCallerChain
+                )
+                if exactKey.Length > 0 && completedQueries.TryGetValue(exactKey, out var exactStates) {
+                    activeCallerContextFlags.Add(true)
+                    currentStates = HashSet[int32](exactStates)
+                    continue
+                }
+                let cycleCountBefore = cycleFlags.Count
+                let callerContextCountBefore = activeCallerContextFlags.Count
                 let body SyntaxNode? = switch declaration {
                     case LocalFunctionStatementSyntax{Body: {} b}: cast[SyntaxNode](b)
                     case LocalFunctionStatementSyntax{ExpressionBody: {Expression: {} e}}: cast[SyntaxNode](e)
@@ -3603,6 +3699,7 @@ partial class CSharpToGSharpTranslator {
                     (candidate SyntaxNode) -> candidate is AssignmentExpressionSyntax ||
                         candidate is InvocationExpressionSyntax
                 ) {
+                    completedQueries[callerIndependentKey] = HashSet[int32](currentStates)
                     continue
                 }
                 var calleeGraph ControlFlowGraph?
@@ -3640,7 +3737,8 @@ partial class CSharpToGSharpTranslator {
                                 receiverOverride: receiverOverride,
                                 completedQueries: completedQueries,
                                 cycleFlags: cycleFlags,
-                                calleeContext: (declaration, invocation)
+                                calleeContext: (declaration, invocation),
+                                usedCallerContextFlags: activeCallerContextFlags
                             )
                         }
                         if block.BranchValue is {} branchValue {
@@ -3658,7 +3756,8 @@ partial class CSharpToGSharpTranslator {
                                 receiverOverride: receiverOverride,
                                 completedQueries: completedQueries,
                                 cycleFlags: cycleFlags,
-                                calleeContext: (declaration, invocation)
+                                calleeContext: (declaration, invocation),
+                                usedCallerContextFlags: activeCallerContextFlags
                             )
                         }
                         if !computedOutputs.TryGetValue(block, out var previous) || !previous.SetEquals(blockStates) {
@@ -3678,6 +3777,13 @@ partial class CSharpToGSharpTranslator {
                         currentStates = mergedStates
                     } else {
                         currentStates = exitStates
+                    }
+                }
+                if cycleFlags.Count == cycleCountBefore {
+                    if activeCallerContextFlags.Count == callerContextCountBefore {
+                        completedQueries[callerIndependentKey] = HashSet[int32](currentStates)
+                    } else if exactKey.Length > 0 {
+                        completedQueries[exactKey] = HashSet[int32](currentStates)
                     }
                 }
             }
