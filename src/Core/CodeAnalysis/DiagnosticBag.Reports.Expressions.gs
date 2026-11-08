@@ -634,11 +634,24 @@ partial class DiagnosticBag : IEnumerable[Diagnostic] {
     /// @param location The text location where the error was found.
     /// @param memberName The accessed member.
     /// @param receiverName The nullable receiver spelling.
-    func ReportUnableToFindMember(location TextLocation, memberName string, receiverName string) -> Report(
-        location,
-        DiagnosticDescriptors.UnableToFindMember,
-        "Cannot access member $memberName because receiver '$receiverName' may be nil. Use '?.' for null-safe access, '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
-    )
+    /// @param allowNullConditional Whether `?.` is valid for this access shape.
+    func ReportUnableToFindMember(
+        location TextLocation,
+        memberName string,
+        receiverName string,
+        allowNullConditional bool = true
+    ) {
+        let advice = if allowNullConditional {
+            "Use '?.' for null-safe access, '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
+        } else {
+            "Use '!!' to assert non-nil, or narrow it with 'if let' or a nil check."
+        }
+        Report(
+            location,
+            DiagnosticDescriptors.UnableToFindMember,
+            "Cannot access member $memberName because receiver '$receiverName' may be nil. $advice"
+        )
+    }
 
     /// GS0503: Reports a direct call through a nullable delegate receiver without a valid narrowing.
     /// @param location The nullable receiver location.

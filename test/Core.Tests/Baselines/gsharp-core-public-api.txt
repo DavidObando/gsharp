@@ -3747,7 +3747,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportTypeParameterVariancePositionViolation(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeParameterName, String declaredVariance, String usedPosition)
   method public Void ReportUnableToFindFunction(GSharp.Core.CodeAnalysis.Text.TextLocation location, String functionName, String receiverName)
   method public Void ReportUnableToFindFunction(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
-  method public Void ReportUnableToFindMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String receiverName)
+  method public Void ReportUnableToFindMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String memberName, String receiverName, Boolean allowNullConditional = true)
   method public Void ReportUnableToFindMember(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)
   method public Void ReportUnableToFindQualifiedType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String typeName, String prefix, Boolean isPackage)
   method public Void ReportUnableToFindType(GSharp.Core.CodeAnalysis.Text.TextLocation location, String text)

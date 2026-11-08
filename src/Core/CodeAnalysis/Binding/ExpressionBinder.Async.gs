@@ -886,7 +886,8 @@ internal partial class ExpressionBinder {
                             NilableMemberAccessKind.CompoundWriteOrEventAdd
                         } else {
                             NilableMemberAccessKind.CompoundWriteOrEventRemove
-                        }
+                        },
+                        compoundSyntax: syntax
                     )
                     return BoundErrorExpression(nil)
                 }
