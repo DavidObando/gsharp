@@ -38,11 +38,14 @@ class Issue3772MirrorFidelityTests : IDisposable {
         let destination = Path.Combine(this.root, "destination")
         let extensionsDirectory = Path.Combine(source, "src", "Sdk", "Gsharp.Extensions")
         let syncDirectory = Path.Combine(extensionsDirectory, "Sync")
+        let otherDirectory = Path.Combine(source, "src", "Other")
         Directory.CreateDirectory(syncDirectory)
+        Directory.CreateDirectory(otherDirectory)
         Directory.CreateDirectory(Path.Combine(source, "src", "Compiler"))
         File.WriteAllText(Path.Combine(source, "src", "Compiler", "Compiler.csproj"), "<Project />")
         File.WriteAllText(Path.Combine(extensionsDirectory, "Optional.gs"), "func none() {}")
         File.WriteAllText(Path.Combine(syncDirectory, "Sync.gs"), "class SyncMap[K, V any] {\n}\n")
+        File.WriteAllText(Path.Combine(otherDirectory, "Sync.gs"), "class SyncMap[K, V any] {\n}\n")
         File.WriteAllText(Path.Combine(extensionsDirectory, "Gsharp.Extensions.csproj"), `<Project>
   <!-- keep me -->
   <PropertyGroup>
@@ -97,6 +100,13 @@ class Issue3772MirrorFidelityTests : IDisposable {
         Assert.Equal("$$(OutputPath)/$$(AssemblyName).xml", document.Descendants("DocumentationFile").Single().Value)
         let mirroredSync = Path.Combine(destination, "src", "Sdk", "Gsharp.Extensions", "Sync", "Sync.gs")
         Assert.Contains("class SyncMap[K notnull, V any] {", File.ReadAllText(mirroredSync), StringComparison.Ordinal)
+        let mirroredOtherSync = Path.Combine(destination, "src", "Other", "Sync.gs")
+        Assert.Contains("class SyncMap[K, V any] {", File.ReadAllText(mirroredOtherSync), StringComparison.Ordinal)
+        Assert.DoesNotContain(
+            "class SyncMap[K notnull, V any] {",
+            File.ReadAllText(mirroredOtherSync),
+            StringComparison.Ordinal
+        )
     }
 
     /// An excluded project whose C# sources were left untranslated stays out of

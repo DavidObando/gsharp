@@ -5019,10 +5019,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 let levelCandidates = List[IMethodSymbol]()
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
-                    if add.IsStatic ||
-                        add
-                        .Parameters
-                        .Length != 1 ||
+                    if add.IsStatic || !this.IsCallableWithSingleCollectionElement(add) ||
                         !this
                         .context
                         .Compilation
@@ -5034,13 +5031,7 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     let effectiveAdd = overridesByBase.GetValueOrDefault(add, add)
-                    if !candidates.Any(
-                        (seen IMethodSymbol) -> !effectiveAdd.IsGenericMethod &&
-                            !seen.IsGenericMethod &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(seen.Parameters[0].Type, effectiveAdd.Parameters[0].Type)
-                    ) {
+                    if !candidates.Any((seen IMethodSymbol) -> this.SameCollectionAddSignature(seen, effectiveAdd)) {
                         candidates.Add(effectiveAdd)
                         levelCandidates.Add(effectiveAdd)
                     }
@@ -5061,7 +5052,9 @@ partial class CSharpToGSharpTranslator {
                 .OfType[IMethodSymbol]()
                 .Any((method IMethodSymbol) -> method.MethodKind == MethodKind.ReducedExtension)
             var selectedAdd IMethodSymbol? = nil
-            if !hasExtensionAdd && !candidates.Any((candidate IMethodSymbol) -> candidate.IsGenericMethod) {
+            if !hasExtensionAdd && !candidates.Any(
+                (candidate IMethodSymbol) -> candidate.IsGenericMethod || candidate.Parameters[0].IsParams
+            ) {
                 for levelCandidates in candidatesByLevel {
                     var applicable = levelCandidates.Where(
                         (candidate IMethodSymbol) -> this.IsCollectionAddParameterApplicable(
@@ -5083,7 +5076,7 @@ partial class CSharpToGSharpTranslator {
                                 )
                             )
                                 .ToList()
-                            if exactMatches.Count == 1 {
+                            if exactMatches.Count > 0 {
                                 applicable = exactMatches
                             }
                         }
@@ -5098,8 +5091,25 @@ partial class CSharpToGSharpTranslator {
                                 )
                             )
                                 .ToList()
-                            if specificMatches.Count == 1 {
+                            if specificMatches.Count > 0 {
                                 applicable = specificMatches
+                            }
+                        }
+                        if applicable.Count > 1 {
+                            let firstType = applicable[0].Parameters[0].Type
+                            if applicable.All(
+                                (candidate IMethodSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate.Parameters[0].Type,
+                                    firstType
+                                )
+                            ) {
+                                let exactArityMatches = applicable.Where(
+                                    (candidate IMethodSymbol) -> candidate.Parameters.Length == 1
+                                )
+                                    .ToList()
+                                if exactArityMatches.Count == 1 {
+                                    applicable = exactArityMatches
+                                }
                             }
                         }
                     }
@@ -5119,6 +5129,55 @@ partial class CSharpToGSharpTranslator {
                 return nil
             }
             return selectedAdd.Parameters[0]
+        }
+
+        private func IsCallableWithSingleCollectionElement(method IMethodSymbol) bool {
+            if method.Parameters.Length == 0 {
+                return false
+            }
+            let firstRefKind = method.Parameters[0].RefKind
+            if firstRefKind == Microsoft
+                .CodeAnalysis
+                .RefKind
+                .Ref ||
+                firstRefKind == Microsoft
+                .CodeAnalysis
+                .RefKind
+                .Out {
+                return false
+            }
+            for var i = 1; i < method.Parameters.Length; i++ {
+                let parameter = method.Parameters[i]
+                if !parameter.IsOptional && !parameter.IsParams {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func SameCollectionAddSignature(left IMethodSymbol, right IMethodSymbol) bool {
+            if left.IsGenericMethod != right.IsGenericMethod ||
+                left
+                .TypeParameters
+                .Length != right
+                .TypeParameters
+                .Length ||
+                left
+                .Parameters
+                .Length != right
+                .Parameters
+                .Length {
+                return false
+            }
+            for var i = 0; i < left.Parameters.Length; i++ {
+                if left.Parameters[i].RefKind != right.Parameters[i].RefKind || !SymbolEqualityComparer.Default.Equals(
+                    left.Parameters[i].Type,
+                    right.Parameters[i].Type
+                ) {
+                    return false
+                }
+            }
+            return true
         }
 
         private func IsBetterCollectionAddConversionTarget(

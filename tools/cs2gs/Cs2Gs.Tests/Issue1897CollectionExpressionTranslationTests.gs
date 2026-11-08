@@ -367,6 +367,29 @@ namespace Corpus.Issue4573
         public void Add(object? item) => Items.Add(item?.ToString() ?? "derived-null-object");
     }
 
+    public class DerivedOptionalNullableObjectBag : BaseNonNullStringBag
+    {
+        public void Add(object? item, bool trace = false) => Items.Add((item?.ToString() ?? "derived-optional-null") + (trace ? "!" : ""));
+    }
+
+    public class RefStringOrNullableObjectBag : IEnumerable<object?>
+    {
+        public readonly List<string> Items = new();
+        public void Add(ref string item) => Items.Add(item);
+        public void Add(object? item) => Items.Add(item?.ToString() ?? "ref-skipped-null-object");
+        public IEnumerator<object?> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class GenericAddSpreadBag : IEnumerable<int>
+    {
+        public readonly List<string> Items = new();
+        public void Add<T>(T item) => Items.Add(item?.ToString() ?? "null");
+        public void Add(string item) => Items.Add("str:" + item);
+        public IEnumerator<int> GetEnumerator() { yield break; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     public class ByteOrObjectBag : IEnumerable<byte>
     {
         public readonly List<byte> Items = new();
@@ -428,6 +451,24 @@ namespace Corpus.Issue4573
             return bag;
         }
 
+        public static DerivedOptionalNullableObjectBag MakeDerivedOptionalNullableObject(string? derivedOptionalInput)
+        {
+            DerivedOptionalNullableObjectBag bag = [derivedOptionalInput];
+            return bag;
+        }
+
+        public static RefStringOrNullableObjectBag MakeRefStringOrNullableObject(string? refSkippedInput)
+        {
+            RefStringOrNullableObjectBag bag = [refSkippedInput];
+            return bag;
+        }
+
+        public static GenericAddSpreadBag MakeGenericAddSpread(int[] spreadInts)
+        {
+            GenericAddSpreadBag bag = [..spreadInts];
+            return bag;
+        }
+
         public static string Run()
         {
             var allowNullBag = MakeAllowNullFromWidenedArray();
@@ -438,6 +479,9 @@ namespace Corpus.Issue4573
             var intOrNonNullStringBag = MakeIntOrNonNullString("present");
             var convertibleBag = MakeIntEnumerableWithConvertibleString(null);
             var derivedObjectBag = MakeDerivedNullableObject(null);
+            var derivedOptionalBag = MakeDerivedOptionalNullableObject(null);
+            var refSkippedBag = MakeRefStringOrNullableObject(null);
+            var genericSpreadBag = MakeGenericAddSpread(new[] { 7 });
             return string.Join(
                 ",",
                 allowNullBag.Items[0],
@@ -447,7 +491,10 @@ namespace Corpus.Issue4573
                 intOrNullableStringBag.Items[0],
                 intOrNonNullStringBag.Items[0],
                 convertibleBag.Items[0],
-                derivedObjectBag.Items[0]
+                derivedObjectBag.Items[0],
+                derivedOptionalBag.Items[0],
+                refSkippedBag.Items[0],
+                genericSpreadBag.Items[0]
             );
         }
     }
@@ -460,12 +507,14 @@ namespace Corpus.Issue4573
         Assert.Contains("nonNullStringInput!!", rendered, StringComparison.Ordinal)
         Assert.DoesNotContain("convertibleInput!!", rendered, StringComparison.Ordinal)
         Assert.DoesNotContain("derivedObjectInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("derivedOptionalInput!!", rendered, StringComparison.Ordinal)
+        Assert.DoesNotContain("refSkippedInput!!", rendered, StringComparison.Ordinal)
         AssertRoundTripParses(rendered)
         let runtimeResult = EmittedOracle.Evaluate(rendered + "\nProbe.Run()")
         Assert.Empty(runtimeResult.Diagnostics)
         Assert.Null(runtimeResult.UnhandledException)
         Assert.Equal(
-            "allow-null,from-null,0,0,null-string,present,null-convertible,derived-null-object",
+            "allow-null,from-null,0,0,null-string,present,null-convertible,derived-null-object,derived-optional-null,ref-skipped-null-object,7",
             runtimeResult.Value
         )
 

@@ -7260,6 +7260,7 @@ internal class ConversionClassifier {
         ) bool {
             literal = nil
             if !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(expression.Type, out _) ||
+                MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(expression.Type, out _) ||
                 !LambdaBinder.TryGetFunctionLiteral(expression, out var candidate) ||
                 candidate == nil ||
                 !candidate.DeferredExpressionTreeReturnValidation {

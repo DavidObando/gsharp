@@ -482,6 +482,28 @@ data struct Card5883 {
 }
 func TakeNode5883(f Func[Node5883]?) int32 -> f!!().Id
 func Run() int32 -> TakeNode5883(cast[object](() -> Card5883{Id: 3}))`, "cast[object](() -> Card5883{Id: 3})", "GS0154")
+            yield Row("expr-tree-cast-lambda-not-rebound-as-delegate-5883", `class Node5883 {
+    var Id int32 = 1
+}
+data struct Card5883 {
+    var Id int32 = 2
+    func Build() Node5883 -> Node5883{Id: Id}
+    func operator implicit (c Card5883) Node5883 -> c.Build()
+}
+func Run() int32 {
+    let f Func[Node5883]? = cast[Expression[Func[Card5883]]](() -> Card5883{Id: 3})
+    return f!!().Id
+}`, "cast[Expression[Func[Card5883]]](() -> Card5883{Id: 3})", "GS0155")
+            yield Row("expr-tree-cast-lambda-overload-rejected-5883", `class Node5883 {
+    var Id int32 = 1
+}
+data struct Card5883 {
+    var Id int32 = 2
+    func Build() Node5883 -> Node5883{Id: Id}
+    func operator implicit (c Card5883) Node5883 -> c.Build()
+}
+func TakeNode5883(f Func[Node5883]?) int32 -> f!!().Id
+func Run() int32 -> TakeNode5883(cast[Expression[Func[Card5883]]](() -> Card5883{Id: 3}))`, "cast[Expression[Func[Card5883]]](() -> Card5883{Id: 3})", "GS0154")
         }
 
         func AcceptedRows() sequence[[]object] {

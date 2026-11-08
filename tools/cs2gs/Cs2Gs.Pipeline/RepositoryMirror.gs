@@ -523,7 +523,12 @@ internal shared class RepositoryMirror {
                 return
             }
         }
-        if fileName.Equals("Sync.gs", StringComparison.OrdinalIgnoreCase) {
+        let normalizedSource = source.Replace('\\', '/')
+        if fileName.Equals("Sync.gs", StringComparison.OrdinalIgnoreCase) &&
+            (
+            normalizedSource.EndsWith("/Gsharp.Extensions/Sync/Sync.gs", StringComparison.OrdinalIgnoreCase) ||
+                normalizedSource.Equals("Gsharp.Extensions/Sync/Sync.gs", StringComparison.OrdinalIgnoreCase)
+        ) {
             content = File.ReadAllText(source)
             let rewritten = content.Replace(
                 "class SyncMap[K, V any] {",
