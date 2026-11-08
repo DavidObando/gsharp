@@ -1041,7 +1041,63 @@ public class C
         TranslationTestValidation.AssertBinds(printed)
     }
 
+    @Fact
+    func UnderscoreParameter_NamedArgumentsAgreeWithDeclarationAndPreserveImportedMetadataNames() {
+        let external = CompileExternalReference(`
+public static class ExternalUnderscore
+{
+    public static int Imported(int _) => _ + 10;
+}
+`)
+        let printed = Translate(`using System;
+
+public class C
+{
+    public int Unreferenced(int _) => 7;
+
+    public int Referenced(int _) => _ + 20;
+
+    public int Run() => Unreferenced(_: 1) + Referenced(_: 2) + ExternalUnderscore.Imported(_: 3);
+}`, external)
+        Assert.Contains("func Unreferenced(_ int32) int32 -> 7", printed, StringComparison.Ordinal)
+        Assert.Contains("func Referenced(underscore int32) int32 -> underscore + 20", printed, StringComparison.Ordinal)
+        Assert.Contains("Unreferenced(_: 1)", printed, StringComparison.Ordinal)
+        Assert.Contains("Referenced(underscore: 2)", printed, StringComparison.Ordinal)
+        Assert.Contains("ExternalUnderscore.Imported(_: 3)", printed, StringComparison.Ordinal)
+        Assert.DoesNotContain("__underscore", printed, StringComparison.Ordinal)
+
+        let sourceOnly = Translate(`using System;
+
+public class C
+{
+    public int Unreferenced(int _) => 7;
+
+    public int Referenced(int _) => _ + 20;
+
+    public int Run() => Unreferenced(_: 1) + Referenced(_: 2);
+}`)
+        LocalFunctionHoistTranslationTests.CompileAndRun(sourceOnly, "Console.WriteLine(C().Run())", "29")
+    }
+
     shared {
+        private func CompileExternalReference(source string) MetadataReference {
+            let project = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", source)})
+            Assert.True(
+                project.BoundWithoutErrors,
+                "External snippet should bind with no C# errors: " + string.Join(
+                    Environment.NewLine,
+                    project.ErrorDiagnostics
+                )
+            )
+            using let stream = System.IO.MemoryStream()
+            let emit = project.Compilation.Emit(stream)
+            Assert.True(
+                emit.Success,
+                "External snippet should emit: " + string.Join(Environment.NewLine, emit.Diagnostics)
+            )
+            return MetadataReference.CreateFromImage(stream.ToArray())
+        }
+
         private func Translate(source string, additionalReferences ...MetadataReference) string {
             let references IReadOnlyList[MetadataReference]? = if additionalReferences.Length == 0 {
                 default(List[MetadataReference]?)

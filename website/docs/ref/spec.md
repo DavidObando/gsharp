@@ -53,16 +53,16 @@ letter     = unicode_letter | "_" .
 The reserved keywords are:
 
 ```text
-as async await break case catch chan class const continue default defer do else enum fallthrough false finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range rethrow return scope sealed select sequence struct suspend switch throw true try using var while
+as async await break case catch chan class const continue default defer do else enum fallthrough false finally for func go goto guard if import interface internal is let lock map nil open operator override package private protected public range rethrow return scope sealed select sequence struct suspend switch throw true try using var while yield
 ```
 
 Several words are contextual rather than reserved: they retain identifier status except in the specific grammar contexts described below. Examples include:
 
 ```text
-add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not notnull object or out params partial prop raise ref remove scoped set shared sizeof stackalloc this type typeof unchecked unmanaged unsafe when with yield
+add and base checked convenience data deinit delegate event explicit fixed get implicit in init inline make nameof not notnull object or out params partial prop raise ref remove scoped set shared sizeof stackalloc this type typeof unchecked unmanaged unsafe when with
 ```
 
-Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partial`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `yield`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling (`new` is therefore no longer a constraint keyword), and `notnull` is a contextual generic-constraint keyword (`[T notnull]`). The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. `checked` and `unchecked` are contextual overflow-context markers, recognised as the block/expression forms only when immediately followed by `{` or `(` respectively. `lock` is a reserved keyword, not contextual. The legacy `record` contextual keyword was removed; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
+Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partial`, `shared`, `convenience`, and `deinit` introduce or modify members; `get`, `set`, `add`, `remove`, and `raise` name accessors; `in`, `out`, `ref`, `scoped`, and `params` modify parameters; `explicit` and `implicit` mark conversion operators; `and`, `or`, and `not` combine patterns; `this` and `base` reference the receiver; `when` guards a `catch`/`case`; and `make`, `with`, `typeof`, and `nameof` are expression forms. The `init` parameterless-constructor constraint (`[T init()]`) was renamed from the former `new()` spelling (`new` is therefore no longer a constraint keyword), and `notnull` is a contextual generic-constraint keyword (`[T notnull]`). The unsafe/low-level words `unsafe`, `fixed`, `stackalloc`, and `unmanaged` are contextual (for example `stackalloc` is recognised only in the `stackalloc [` shape) and otherwise remain ordinary identifiers. `checked` and `unchecked` are contextual overflow-context markers, recognised as the block/expression forms only when immediately followed by `{` or `(` respectively. `lock` is a reserved keyword, not contextual. The legacy `record` contextual keyword was removed; the lexer still recognises it so the parser can emit the GS0307 migration diagnostic (`use data struct` / `data class`).
 
 ### Operators and punctuation
 
@@ -2330,7 +2330,7 @@ CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'
 
 ### Return and yield
 
-`return` may have no expression, one expression, or a comma-separated expression list, which is represented as a tuple literal. In a `ref`-returning function (`func f(...) ref T`), the return statement form is `return ref <lvalue>` — plain `return expr` reports `GS0252`, and a non-lvalue operand reports `GS0253`. `yield expr` is contextual and valid in iterator functions returning `sequence[T]` or async sequence forms as appropriate.
+`return` may have no expression, one expression, or a comma-separated expression list, which is represented as a tuple literal. In a `ref`-returning function (`func f(...) ref T`), the return statement form is `return ref <lvalue>` — plain `return expr` reports `GS0252`, and a non-lvalue operand reports `GS0253`. `yield` is a reserved keyword (`yield expr` and `yield break`) valid in iterator functions returning `sequence[T]` or async sequence forms as appropriate; use `$yield` to declare or reference an identifier whose CLR name is `yield`.
 
 ### Defer and using
 

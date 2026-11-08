@@ -101,10 +101,13 @@ internal class EmittedNameAllocator {
             // neighbor. Locals and other body-scoped names without a CLR
             // metadata slot keep the #3461 rename below, where readability wins.
             let sourceName = SourceName(symbol)
-            // Issue #4307: a referenced C# parameter literally spelled `_` renames to
-            // `underscore`, disambiguating to `underscore_2`, `underscore_3`, etc. when
+            // Issue #4307: a referenced source C# parameter literally spelled `_` renames
+            // to `underscore`, disambiguating to `underscore_2`, `underscore_3`, etc. when
             // `underscore` is already occupied in the enclosing method/member scope.
-            if symbol is IParameterSymbol{Name: "_"} underscoreParameter {
+            // Unreferenced source `_` parameters and imported metadata `_` parameters keep `_`.
+            if symbol is IParameterSymbol{Name: "_"} underscoreParameter && this.ShouldRenameUnderscoreParameter(
+                underscoreParameter
+            ) {
                 let taken = HashSet[string](
                     this.GetUnderscoreParameterScopeNames(underscoreParameter),
                     StringComparer.Ordinal
@@ -398,6 +401,86 @@ internal class EmittedNameAllocator {
         let result = names.ToArray()
         this.methodScopeNames[method] = result
         return result
+    }
+
+    private func ShouldRenameUnderscoreParameter(parameter IParameterSymbol) bool {
+        let implParameter IParameterSymbol? = switch parameter.ContainingSymbol {
+            case method is IMethodSymbol when method.PartialImplementationPart is {} implMethod &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal < implMethod
+                .Parameters
+                .Length &&
+                implMethod
+                .Parameters[parameter.Ordinal]
+                .Name == "_": implMethod.Parameters[parameter.Ordinal]
+            case property is IPropertySymbol when property.PartialImplementationPart is {} implProperty &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal < implProperty
+                .Parameters
+                .Length &&
+                implProperty
+                .Parameters[parameter.Ordinal]
+                .Name == "_": implProperty.Parameters[parameter.Ordinal]
+            default: nil
+        }
+        let references = parameter
+            .DeclaringSyntaxReferences
+            .AsEnumerable()
+            .Concat(implParameter?.DeclaringSyntaxReferences.AsEnumerable() ?? Enumerable.Empty[SyntaxReference]())
+        for reference in references {
+            if reference.GetSyntax() is not Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax underscoreParameter {
+                continue
+            }
+            let underscoreCount = switch underscoreParameter.Parent {
+                case parameterList is ParameterListSyntax: parameterList.Parameters.Count(
+                    (p Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax) -> p.Identifier.ValueText == "_"
+                )
+                case bracketedList is BracketedParameterListSyntax: bracketedList.Parameters.Count(
+                    (p Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax) -> p.Identifier.ValueText == "_"
+                )
+                default: 1
+            }
+            if underscoreCount > 1 {
+                return false
+            }
+            let body Microsoft.CodeAnalysis.SyntaxNode? = underscoreParameter.Ancestors().FirstOrDefault(
+                (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is AnonymousFunctionExpressionSyntax ||
+                    ancestor is LocalFunctionStatementSyntax ||
+                    ancestor is BaseMethodDeclarationSyntax ||
+                    ancestor is BasePropertyDeclarationSyntax ||
+                    ancestor is TypeDeclarationSyntax
+            )
+            if body == nil {
+                continue
+            }
+            let model = this.compilation.GetSemanticModel(body.SyntaxTree)
+            let referenced = body
+                .DescendantNodes()
+                .OfType[IdentifierNameSyntax]()
+                .Any(
+                (identifier IdentifierNameSyntax) -> identifier
+                    .Identifier
+                    .ValueText == "_" &&
+                    identifier.Parent is not Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .NameColonSyntax &&
+                    (
+                    SymbolEqualityComparer.Default.Equals(model.GetSymbolInfo(identifier).Symbol, parameter) ||
+                        (
+                        implParameter != nil && SymbolEqualityComparer.Default.Equals(
+                            model.GetSymbolInfo(identifier).Symbol,
+                            implParameter
+                        )
+                    )
+                )
+            )
+            if referenced {
+                return true
+            }
+        }
+        return false
     }
 
     private func GetUnderscoreParameterScopeNames(parameter IParameterSymbol) IReadOnlyCollection[string] {
@@ -811,11 +894,36 @@ internal class EmittedNameAllocator {
         }
 
         private func Canonical(symbol ISymbol?) ISymbol? -> switch symbol {
+            case parameter is IParameterSymbol: CanonicalParameter(parameter.OriginalDefinition)
             case method is IMethodSymbol: cast[ISymbol]((method.PartialDefinitionPart ?? method).OriginalDefinition)
             case property is IPropertySymbol: cast[ISymbol](property.OriginalDefinition)
             case event is IEventSymbol: cast[ISymbol](event.OriginalDefinition)
             case type is INamedTypeSymbol: cast[ISymbol](type.OriginalDefinition)
             default: symbol
+        }
+
+        private func CanonicalParameter(parameter IParameterSymbol) ISymbol {
+            if parameter.ContainingSymbol is IMethodSymbol{PartialDefinitionPart: {} defMethod} &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal < defMethod
+                .Parameters
+                .Length &&
+                defMethod
+                .Parameters[parameter.Ordinal]
+                .Name == parameter.Name {
+                return defMethod.OriginalDefinition.Parameters[parameter.Ordinal]
+            }
+            if parameter.ContainingSymbol is IPropertySymbol{PartialDefinitionPart: {} defProperty} &&
+                parameter.Ordinal >= 0 &&
+                parameter.Ordinal < defProperty
+                .Parameters
+                .Length &&
+                defProperty
+                .Parameters[parameter.Ordinal]
+                .Name == parameter.Name {
+                return defProperty.OriginalDefinition.Parameters[parameter.Ordinal]
+            }
+            return parameter
         }
 
         private func SourceName(symbol ISymbol?) string {
