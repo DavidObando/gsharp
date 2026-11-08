@@ -7,6 +7,109 @@ import System.Text
 import Xunit
 
 class Issue5858TupleReferenceTests {
+    @Fact
+    func NarrowedObjectField_TupleReferenceAddressesTheBoxedValue() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package BoxedTuple5858
+import System
+class Holder {
+    let Value object
+    init(value object) { Value = value }
+}
+class Reader { shared {
+func Read(h Holder) string {
+    if h.Value is ValueTuple[string, int32] {
+        let ref readonly alias string = h.Value.Item1
+        return alias
+    }
+    return "wrong"
+}
+} }
+func Main() {
+    var row (string, int32) = ("keep", 1)
+    Console.WriteLine(Reader.Read(Holder(row)))
+}`, "BoxedTuple5858", executable: true)
+        let consumer = fixture.CompileCSharp(`public static class Consumer {
+    public static string Run() => BoxedTuple5858.Reader.Read(new BoxedTuple5858.Holder(("keep", 1)));
+}`, "BoxedTuple5858Consumer", dll)
+        // ILVerify rejects unbox followed by ldflda; ECMA-335 III.1.8.1.2.2 permits this projection.
+        IlVerifier.Verify(consumer, []string{dll})
+        let assemblies = EmittedFixture.LoadTogether(dll, consumer)
+        let method = assemblies[0].GetType("BoxedTuple5858.Reader")!!.GetMethod("Read")!!
+        let code = method.GetMethodBody()!!.GetILAsByteArray()!!
+        Assert.Equal(45, code.Length)
+        for offset in[]int32{2, 21} {
+            let field = method.Module.ResolveField(BitConverter.ToInt32(code, offset))!!
+            Assert.Equal("Value", field.Name)
+            Assert.Equal(typeof(object), field.FieldType)
+        }
+        for offset in[]int32{7, 26} {
+            Assert.Equal(
+                typeof(ValueTuple[string, int32]),
+                method.Module.ResolveType(BitConverter.ToInt32(code, offset))
+            )
+        }
+        let leaf = method.Module.ResolveField(BitConverter.ToInt32(code, 31))!!
+        Assert.Equal("Item1", leaf.Name)
+        Assert.Equal(typeof(ValueTuple[string, int32]), leaf.DeclaringType)
+        Assert.Equal("wrong", method.Module.ResolveString(BitConverter.ToInt32(code, 40)))
+        for offset in[]int32{2, 7, 21, 26, 31, 40} {
+            Array.Clear(code, offset, 4)
+        }
+        Assert.Equal(
+            []uint8{
+                0x02,
+                0x7b,
+                0,
+                0,
+                0,
+                0,
+                0x75,
+                0,
+                0,
+                0,
+                0,
+                0x14,
+                0xfe,
+                0x03,
+                0x39,
+                0x14,
+                0,
+                0,
+                0,
+                0x02,
+                0x7b,
+                0,
+                0,
+                0,
+                0,
+                0x79,
+                0,
+                0,
+                0,
+                0,
+                0x7c,
+                0,
+                0,
+                0,
+                0,
+                0x0a,
+                0x06,
+                0x50,
+                0x2a,
+                0x72,
+                0,
+                0,
+                0,
+                0,
+                0x2a
+            },
+            code
+        )
+        Assert.Equal("keep", assemblies[1].GetType("Consumer")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        Assert.Equal(Encoding.UTF8.GetBytes("keep\n"), fixture.RunBytes(dll))
+    }
+
     @Theory
     @InlineData(false)
     @InlineData(true)

@@ -16,6 +16,52 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Fact
+    func SuppressedNestedTupleReceiver_ForwardsItsNullableLeafToTheAlias() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code) Inner, int Flag) row = ((null, 1), 2);
+    private static string Read() {
+        ref string alias = ref row.Inner!.Text;
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("ref alias string? = row.Inner.Text", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleValuedRefAlias_SharesNullableLeavesWithItsStorage(nested bool) {
+        let tuple = if nested {
+            "((string Text, int Code) Inner, int Flag)"
+        } else {
+            "(string Text, int Code)"
+        }
+        let initial = if nested {
+            "((\"x\", 1), 2)"
+        } else {
+            "(\"x\", 1)"
+        }
+        let storage = if nested {
+            "row.Inner"
+        } else {
+            "row"
+        }
+        let source = `public static class Obj {
+    private static ` + tuple + ` row = ` + initial + `;
+    public static string Run() {
+        ref (string? Text, int Code) alias = ref ` + storage + `;
+        return alias.Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
     @Theory
     @InlineData("row.Text!")
     @InlineData("(row.Text!)")

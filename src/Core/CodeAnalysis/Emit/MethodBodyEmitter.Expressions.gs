@@ -1991,7 +1991,7 @@ internal partial class MethodBodyEmitter {
     private func EmitTupleReceiver(receiver BoundExpression, addressOnly bool) {
         if addressOnly {
             // An explicit reference must retain the receiver's storage, never a defensive copy.
-            this.EmitAddressOf(BoundAddressOfExpression(nil, receiver))
+            this.EmitExplicitFieldReceiver(receiver)
         } else {
             this.EmitInstanceReceiver(receiver)
         }

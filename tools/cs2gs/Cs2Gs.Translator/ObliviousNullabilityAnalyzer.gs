@@ -5222,15 +5222,67 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) {
         for node in root.DescendantNodes() {
             switch node {
-                case reference is RefExpressionSyntax when RefStorageTarget(reference, model) is {} target &&
-                    TryResolveTupleElementSource(
-                    reference.Expression,
-                    model,
-                    out var source,
-                    unwrapSuppressions: true
-                ) {
+                case reference is RefExpressionSyntax when RefStorageTarget(reference, model) is {} target {
+                    var sourceSymbol ISymbol?
+                    var sourceType ITypeSymbol?
+                    var sourcePath string
+                    if TryResolveTupleElementSource(
+                        reference.Expression,
+                        model,
+                        out var source,
+                        unwrapSuppressions: true
+                    ) {
+                        sourceSymbol = source.ContractSymbol
+                        sourcePath = source.ContractPath
+                        sourceType = TuplePositionType(sourceSymbol, sourcePath)
+                    } else if TryResolveTupleSource(
+                        Unwrap(reference.Expression, unwrapSuppressions: true),
+                        model,
+                        out sourceSymbol,
+                        out var rootTuple
+                    ) {
+                        sourcePath = string.Empty
+                        sourceType = rootTuple
+                    } else {
+                        break
+                    }
+                    let targetType = SymbolValueType(target)
+                    if targetType is INamedTypeSymbol{IsTupleType: true} targetTuple &&
+                        sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
+                        targetTuple
+                        .TupleElements
+                        .Length == sourceTuple
+                        .TupleElements
+                        .Length {
+                        AddTupleShapeEdges(
+                            target,
+                            targetTuple,
+                            string.Empty,
+                            sourceSymbol,
+                            sourceTuple,
+                            sourcePath,
+                            tupleTainted,
+                            tupleEdges
+                        )
+                        AddTupleShapeEdges(
+                            sourceSymbol,
+                            sourceTuple,
+                            sourcePath,
+                            target,
+                            targetTuple,
+                            string.Empty,
+                            tupleTainted,
+                            tupleEdges
+                        )
+                        break
+                    }
+                    if sourcePath.Length == 0 {
+                        break
+                    }
+                    source = TupleElementKey(sourceSymbol, sourcePath)
+                    scalarTupleEdges.Add((target, source))
                     tupleScalarEdges.Add((source, target))
-                    if IsDeclaredNullablePosition(SymbolValueType(target)) {
+                    if IsDeclaredNullablePosition(targetType) {
                         tupleTainted.Add(source)
                     }
                 }

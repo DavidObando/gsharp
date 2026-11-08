@@ -15,9 +15,11 @@ class Issue5858TupleReferenceTests {
     @InlineData("(Text string, Code int32)", "(\"x\", 1)", "Text")
     @InlineData("(Inner (Text string, Code int32), Flag bool)", "((\"x\", 1), true)", "Inner.Text")
     func TupleElementAlias_SharesStorageWithItsAggregateRoot(type string, value string, member string) {
-        let compilation = Compilation(SyntaxTree.Parse(
-            "func Probe() {\nvar row " + type + " = " + value + "\nvar ref alias = row." + member + "\n}"
-        ))
+        let compilation = Compilation(
+            SyntaxTree.Parse(
+                "func Probe() {\nvar row " + type + " = " + value + "\nvar ref alias = row." + member + "\n}"
+            )
+        )
         let program = compilation.BoundProgram
         Assert.Empty(program.Diagnostics)
         let function = compilation.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Probe")

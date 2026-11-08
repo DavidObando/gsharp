@@ -2023,6 +2023,15 @@ internal partial class MethodBodyEmitter {
     }
 
     private func EmitExplicitFieldReceiver(receiver BoundExpression) {
+        let storage = SideEffectSpiller.GetReceiverStorageView(receiver)
+        if ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) && Binder.IsReferenceTypeForConstraint(
+            storage.Type
+        ) {
+            this.EmitExpression(storage)
+            this.il.OpCode(ILOpCode.Unbox)
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(receiver.Type))
+            return
+        }
         if Binder.IsReferenceTypeForConstraint(receiver.Type) || !ExpressionBinder.IsLvalue(receiver) {
             this.EmitInstanceReceiver(receiver, isReadOnlyCall: true)
         } else {
