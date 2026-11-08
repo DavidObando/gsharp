@@ -66,11 +66,15 @@ unsafe func ExerciseAssignments(holes []object?, h Holder, c MovableClassBuffer)
     c.WriteBare(() -> CollectIndex(holes, 2), () -> CollectByte(holes, int8(33)))
     var sink = int8(0)
     h.B.Name[CollectIndex(holes, 3)], sink = CollectByte(holes, int8(44)), CollectByte(holes, int8(55))
+    let flag = false
+    h.B.Name[{ if flag { return } CollectIndex(holes, 4) }] = { if flag { return } CollectByte(holes, int8(66)) }
+    let read4 = h.B.Name[{ if flag { return } CollectIndex(holes, 4) }]
     Console.WriteLine(int32(h.B.Name[0]))
     Console.WriteLine(int32(h.B.Name[1]))
     Console.WriteLine(c.ReadBare(2))
     Console.WriteLine(int32(h.B.Name[3]))
     Console.WriteLine(int32(sink))
+    Console.WriteLine(int32(read4))
 }
 
 unsafe func run() {
@@ -119,7 +123,7 @@ run()`
 
             }
         }
-        Assert.Equal(Lines("11", "22", "33", "44", "55"), CompileAndRun(source))
+        Assert.Equal(Lines("11", "22", "33", "44", "55", "66"), CompileAndRun(source))
     }
 
     @Theory
@@ -131,6 +135,9 @@ run()`
     @InlineData("let p *int8 = MakeBone().Name\n    await System.Threading.Tasks.Task.Yield()\n    return int32(p[0])")
     @InlineData("h.B.Name[await NextIndex()] = int8(1)\n    return 0")
     @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
+    @InlineData("var sink = int8(0)\n    h.B.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    sink, h.B.Name[0] = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    b.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
     func AwaitingIndexBufferPointer_DriverRejectsUnpinnedDecay(statement string) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let source = BoneInfoPrelude + `func MakeBone() BoneInfo -> BoneInfo{}

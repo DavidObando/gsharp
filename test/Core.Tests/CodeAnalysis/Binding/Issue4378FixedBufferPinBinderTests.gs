@@ -38,6 +38,9 @@ open class Issue4378FixedBufferPinBinderTests {
     @InlineData("h.B.Name[0] = await NextByte()\n    return 0")
     @InlineData("h.B.Name[await NextIndex()] += int8(1)\n    return 0")
     @InlineData("h.B.Name[0] += await NextByte()\n    return 0")
+    @InlineData("var sink = int8(0)\n    h.B.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    sink, h.B.Name[0] = await NextByte(), int8(2)\n    return int32(sink)")
+    @InlineData("var sink = int8(0)\n    b.Name[0], sink = await NextByte(), int8(2)\n    return int32(sink)")
     func AwaitingIndexBufferPointer_ReportsGS0638(statement string) {
         let source = Prelude + `func MakeBone() Bone -> Bone{}
 async func NextIndex() int32 {
@@ -55,6 +58,17 @@ unsafe async func f(h Holder, b Bone) int32 {
         Assert.Equal("GS0638", error.Id)
         Assert.Equal(source.LastIndexOf("Name", StringComparison.Ordinal), error.Location.Span.Start)
         Assert.Equal("Name", error.Location.Text!!.ToString(error.Location.Span))
+    }
+
+    @Fact
+    func SynchronousControlFlowIndex_AllowsDirectBufferAccess() {
+        let source = Prelude + `unsafe func readAndWrite(h Holder, flag bool) int32 {
+    h.B.Name[{ if flag { return 10 } 0 }] = { if flag { return int8(20) } int8(42) }
+    var sink = int8(0)
+    h.B.Name[{ if flag { return 30 } 1 }], sink = int8(7), int8(8)
+    return int32(h.B.Name[{ if flag { return int8(40) } 0 }] + h.B.Name[1] + sink)
+}`
+        AssertNoErrors(source)
     }
 
     @Theory

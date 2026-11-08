@@ -7198,10 +7198,17 @@ internal partial class ExpressionBinder {
                 ContainsFixedBufferPointer(conditional.WhenFalse)
             case binary is BoundBinaryExpression: ContainsFixedBufferPointer(binary.Left) ||
                 ContainsFixedBufferPointer(binary.Right)
-            case conversion is BoundConversionExpression: TryGetFixedBufferFieldAccess(conversion, out _) ||
+            case conversion is BoundConversionExpression: (
+                TryGetFixedBufferFieldAccess(conversion, out var bufferAccess) && !StatementBinder.IsFixedVariable(
+                    bufferAccess,
+                    (_ VariableSymbol) -> true,
+                    allowTemporaryValues: false
+                )
+            ) ||
                 ContainsFixedBufferPointer(conversion.Expression)
             case variable is BoundVariableExpression{Variable: LocalVariableSymbol{IsManagedPointerSlot: true}}: true
-            default: TryGetFixedBufferFieldAccess(expression, out _)
+            default: TryGetFixedBufferFieldAccess(expression, out var defaultAccess) &&
+                !StatementBinder.IsFixedVariable(defaultAccess, (_ VariableSymbol) -> true, allowTemporaryValues: false)
         }
     }
 }
