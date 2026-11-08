@@ -1059,7 +1059,10 @@ partial class Binder {
         if !plans.TryGetValue(planKey, out var existing) {
             let _ = $scope.GetLatestRichAnonymousObjectPlans().TryGetValue(classSymbol, out existing)
         }
-        if existing != nil {
+        // Rebind methods that require synthesized types and bodies from the current binding.
+        if existing != nil && !classSymbol.Methods.Any(
+            (method FunctionSymbol) -> method.Declaration?.Body is {} body && ContainsSyntheticBodySideEffects(body)
+        ) {
             return BindRichAnonymousObjectFromPlan(syntax, classSymbol, existing)
         }
         let (outerToClassTypeParameters, classToOuterTypeParameters) = BuildRichTypeParameterMaps(classSymbol)
@@ -10909,12 +10912,18 @@ partial class Binder {
         private func GetUserSourceAdapterMethods(sourceMemberType TypeSymbol, name string) ImmutableArray[
             (Owner TypeSymbol, Method FunctionSymbol)
         ] {
+            let effectiveMethods = TypeMemberModel.GetMethods(
+                sourceMemberType,
+                name,
+                MemberQuery.Instance(MemberKinds.Method)
+            )
+                .ToHashSet()
             if sourceMemberType is InterfaceSymbol sourceInterface {
                 let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
                 for iface in sourceInterface.SelfAndAllBaseInterfaces() {
                     iface.EnsureMembersResolved()
                     for method in iface.Methods {
-                        if method.Name == name && method.Accessibility == Accessibility.Public {
+                        if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
                             results.Add((iface, method))
                         }
                     }
@@ -10923,12 +10932,6 @@ partial class Binder {
             }
             if sourceMemberType is StructSymbol sourceStruct {
                 let results = ImmutableArray.CreateBuilder[(Owner TypeSymbol, Method FunctionSymbol)]()
-                let effectiveMethods = TypeMemberModel.GetMethods(
-                    sourceStruct,
-                    name,
-                    MemberQuery.Instance(MemberKinds.Method)
-                )
-                    .ToHashSet()
                 for ancestor in sourceStruct.GetHierarchy() {
                     for method in ancestor.GetDeclaredInstanceMethods() {
                         if effectiveMethods.Contains(method) && method.Accessibility == Accessibility.Public {
@@ -11440,8 +11443,20 @@ partial class Binder {
             source ParameterInfo
         ) bool -> AdapterParameterMetadataSupported(target) &&
             AdapterParameterMetadataSupported(source) &&
-            HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source) &&
-            IsAdapterScoped(target) == IsAdapterScoped(source) &&
+            (
+            // Parameter ref-safety defaults do not apply to return metadata.
+            if target.Position < 0 {
+                HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source) &&
+                    IsAdapterScoped(target) == IsAdapterScoped(source)
+            } else {
+                RefCapabilities.ImportedParameterContractsMatch(
+                    target,
+                    ClrNullability.GetParameterTypeSymbol(target),
+                    source,
+                    ClrNullability.GetParameterTypeSymbol(source)
+                )
+            }
+        ) &&
             AdapterModifierSequenceMatches(target.GetRequiredCustomModifiers(), source.GetRequiredCustomModifiers()) &&
             AdapterModifierSequenceMatches(target.GetOptionalCustomModifiers(), source.GetOptionalCustomModifiers())
 

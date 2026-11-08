@@ -338,6 +338,41 @@ func Bad() {
     }
 
     @Fact
+    func RedeclaredInheritedInterfaceMethodsAdaptToLocalAndImportedTargets() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace InheritedAdapterContracts;
+public interface IReader { int Read(); }
+public interface IEcho { string Echo(string value); }`, "InheritedAdapterContracts")
+        let dll = fixture.Compile(`package InheritedAdapters
+import System
+import InheritedAdapterContracts
+interface Reader { func Read() int32; }
+interface IBaseReader { func Read() int32; }
+interface ILeftReader : IBaseReader { func Read() int32; }
+interface IRightReader : IBaseReader { func Read() int32; }
+interface IDiamondReader : ILeftReader, IRightReader { }
+class Source : IDiamondReader { public func Read() int32 -> 7 }
+interface Echo { func Echo(value string) string; }
+interface IBaseEcho[T] { func Echo(value T) T; }
+interface IChildEcho[T] : IBaseEcho[T] { func Echo(value T) T; }
+class GenericSource : IChildEcho[string] { public func Echo(value string) string -> value }
+func Main() {
+    let source IDiamondReader = Source()
+    Console.WriteLine(adapt[Reader](source).Read())
+    Console.WriteLine(adapt[IReader](source).Read())
+    let generic IChildEcho[string] = GenericSource()
+    Console.WriteLine(adapt[Echo](generic).Echo("generic-local"))
+    Console.WriteLine(adapt[IEcho](generic).Echo("generic-imported"))
+}`, "inherited-adapters", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(dll, []string{contracts})
+        Assert.Equal(`7
+7
+generic-local
+generic-imported
+`, fixture.Run(dll))
+    }
+
+    @Fact
     func UserStaticVirtualPropertiesAreNotInstanceAdapterSlots() {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let (code, output) = fixture.TryCompile(`package InvalidUserStaticAdapterProperty

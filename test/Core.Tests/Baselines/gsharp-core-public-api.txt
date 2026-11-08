@@ -3563,6 +3563,7 @@ type sealed class GSharp.Core.CodeAnalysis.DiagnosticBag : System.Object, System
   method public Void ReportMissingDocumentation(GSharp.Core.CodeAnalysis.Text.TextLocation location, String symbolName)
   method public Void ReportMissingOverride(GSharp.Core.CodeAnalysis.Text.TextLocation location, String baseTypeName, String methodName)
   method public Void ReportMissingReturnExpression(GSharp.Core.CodeAnalysis.Text.TextLocation location, GSharp.Core.CodeAnalysis.Symbols.TypeSymbol returnType)
+  method public Void ReportMovableFixedBufferRequiresFixed(GSharp.Core.CodeAnalysis.Text.TextLocation location, String bufferName)
   method public Void ReportMultiAssignmentMismatch(GSharp.Core.CodeAnalysis.Text.TextLocation location, Int32 targetCount, Int32 valueCount)
   method public Void ReportMultiCharCharLiteral(GSharp.Core.CodeAnalysis.Text.TextLocation location)
   method public Void ReportMultipleConstructorsUnsupported(GSharp.Core.CodeAnalysis.Text.TextLocation location, String className)

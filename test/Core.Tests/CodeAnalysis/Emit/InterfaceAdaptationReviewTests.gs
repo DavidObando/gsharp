@@ -7,6 +7,7 @@ package GSharp.Core.Tests.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
@@ -159,6 +160,67 @@ func Build() Reader {
         Assert.False(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source))
         source.GetterSymbol?.MarkUnscopedRef()
         Assert.True(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RichMethodAdapterSynthesisSurvivesRepeatedBindingAndEmission(useBodyCache bool) {
+        let tree = SyntaxTree.Parse(`package RichAdapterRetention
+interface Reader { func Read() int32; }
+class Source(Value int32) { public func Read() int32 -> Value }
+func Build(value int32) Reader {
+    return object : Reader {
+        func Read() int32 -> adapt[Reader](Source(value)).Read()
+    }
+}
+public func Run() int32 {
+    let plain = adapt[Reader](Source(7))
+    return Build(6).Read() + plain.Read()
+}`)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let cache = if useBodyCache {
+            BoundBodyCache()
+        } else {
+            default(BoundBodyCache?)
+        }
+        var previousBytes = Array.Empty[uint8]()
+        for var i = 0; i < 3; i++ {
+            let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil, cache)
+            Assert.Empty(program.Diagnostics)
+            let adapters = program
+                .Structs
+                .Where((type StructSymbol) -> type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+                .ToArray()
+            Assert.Equal(2, adapters.Length)
+            let methods = adapters.SelectMany(
+                func (type StructSymbol) IEnumerable[FunctionSymbol] {
+                    return type.Methods
+                }
+            )
+                .ToArray()
+            Assert.Equal(2, methods.Length)
+            for method in methods {
+                Assert.True(program.Functions.ContainsKey(method), method.Name)
+            }
+            using let pe = MemoryStream()
+            ReflectionMetadataEmitter.Emit(program, pe)
+            let bytes = pe.ToArray()
+            if i > 0 {
+                Assert.Equal(previousBytes, bytes)
+            }
+            previousBytes = bytes
+            pe.Position = 0
+            let context = AssemblyLoadContext("RichAdapterRetention-" + i.ToString(), isCollectible: true)
+            try {
+                let assembly = context.LoadFromStream(pe)
+                let programType = Assert.Single(assembly.GetTypes(), (type Type) -> type.Name == "<Program>")
+                Assert.Equal(13, programType.GetMethod("Run")!!.Invoke(nil, nil))
+            } finally {
+                context.Unload()
+            }
+        }
     }
 
     @Fact
