@@ -22,6 +22,31 @@ import Xunit
 
 class InterfaceAdaptationReviewTests {
     @Theory
+    @InlineData(`interface ILeft { func Read() int32; }
+interface IRight { func Read() int32; }
+interface IBoth : ILeft, IRight { }`)
+    @InlineData(`interface IGeneric[T, Unused] { func Read() T; }
+interface IBoth : IGeneric[int32, string], IGeneric[int32, bool] { }`)
+    @InlineData(`interface IRoot { func Read() int32; }
+interface ILeft : IRoot { func Read() int32; }
+interface IRight : IRoot { func Read() int32; }
+interface IBoth : ILeft, IRight { }`)
+    func IndependentInheritedInterfaceSlotsDiagnoseAmbiguity(interfaces string) {
+        let source = "package IndependentSlots\n" + interfaces + `
+interface Reader { func Read() int32; }
+func Bad(source IBoth) Reader { return adapt[Reader](source) }`
+        let tree = SyntaxTree.Parse(source)
+        let global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree))
+        Assert.Empty(global.Diagnostics)
+        let program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: nil)
+        let diagnostic = Assert.Single(program.Diagnostics)
+        Assert.Equal("GS0606", diagnostic.Id)
+        Assert.Contains("ambiguous", diagnostic.Message)
+        Assert.Equal(source.IndexOf("adapt", StringComparison.Ordinal), diagnostic.Location.Span.Start)
+        Assert.Equal("adapt[Reader](source)", diagnostic.Location.Text!!.ToString(diagnostic.Location.Span))
+    }
+
+    @Theory
     @InlineData("int32", "ref int32")
     @InlineData("ref int32", "ref readonly int32")
     @InlineData("string", "string?")

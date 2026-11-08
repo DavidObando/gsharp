@@ -3384,22 +3384,29 @@ partial class Binder {
                         method.ExplicitInterfaceClauseTarget != nil {
                         continue
                     }
-                    let contract = GetUserAdapterMethodContract(iface, method)
-                    // Compare full interface contracts instead of overload identity alone.
-                    if !results.Any(
-                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> BoundScope.FunctionSignaturesEqual(
+                    if results.Any(
+                        (candidate(Owner TypeSymbol, Method FunctionSymbol)) -> UserInterfaceAdapterMethodHides(
+                            cast[InterfaceSymbol](candidate.Owner),
                             candidate.Method,
+                            iface,
                             method
-                        ) &&
-                            MethodContractsMatch(
-                            GetUserAdapterMethodContract(cast[InterfaceSymbol](candidate.Owner), candidate.Method),
-                            method,
-                            iface
-                        ) &&
-                            MethodContractsMatch(contract, candidate.Method, candidate.Owner)
+                        )
                     ) {
-                        results.Add((iface, method))
+                        continue
                     }
+                    // A base can precede its redeclaration through another inheritance branch.
+                    for var i = results.Count - 1; i >= 0; i-- {
+                        let candidate = results[i]
+                        if UserInterfaceAdapterMethodHides(
+                            iface,
+                            method,
+                            cast[InterfaceSymbol](candidate.Owner),
+                            candidate.Method
+                        ) {
+                            results.RemoveAt(i)
+                        }
+                    }
+                    results.Add((iface, method))
                 }
             }
             return results.ToImmutable()
@@ -3426,6 +3433,24 @@ partial class Binder {
             .Where((candidate FunctionSymbol) -> candidate.Accessibility == Accessibility.Public)
             .Select((candidate FunctionSymbol) -> (candidate.ContainingType ?? sourceMemberType, candidate))
             .ToImmutableArray()
+    }
+
+    private func UserInterfaceAdapterMethodHides(
+        owner InterfaceSymbol,
+        method FunctionSymbol,
+        inheritedOwner InterfaceSymbol,
+        inheritedMethod FunctionSymbol
+    ) bool {
+        if object.ReferenceEquals(owner, inheritedOwner) {
+            return object.ReferenceEquals(method, inheritedMethod)
+        }
+        // Equal contracts on unrelated constructed owners retain independent dispatch slots (ADR-0189).
+        return owner.SelfAndAllBaseInterfaces().Any(
+            (ancestor InterfaceSymbol) -> object.ReferenceEquals(ancestor, inheritedOwner)
+        ) &&
+            BoundScope.FunctionSignaturesEqual(method, inheritedMethod) &&
+            MethodContractsMatch(GetUserAdapterMethodContract(owner, method), inheritedMethod, inheritedOwner) &&
+            MethodContractsMatch(GetUserAdapterMethodContract(inheritedOwner, inheritedMethod), method, owner)
     }
 
     private func MethodContractsMatch(

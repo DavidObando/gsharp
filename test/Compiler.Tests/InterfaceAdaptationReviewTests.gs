@@ -348,28 +348,124 @@ import System
 import InheritedAdapterContracts
 interface Reader { func Read() int32; }
 interface IBaseReader { func Read() int32; }
-interface ILeftReader : IBaseReader { func Read() int32; }
-interface IRightReader : IBaseReader { func Read() int32; }
+interface ILeftReader : IBaseReader { }
+interface IRightReader : IBaseReader { }
 interface IDiamondReader : ILeftReader, IRightReader { }
 class Source : IDiamondReader { public func Read() int32 -> 7 }
+interface IDerivedReader : IBaseReader { func Read() int32; }
+interface IBaseFirstReader : IBaseReader, IDerivedReader { }
+class RedeclaredSource : IBaseFirstReader {
+    func (IBaseReader) Read() int32 -> 11
+    func (IDerivedReader) Read() int32 -> 23
+}
 interface Echo { func Echo(value string) string; }
 interface IBaseEcho[T] { func Echo(value T) T; }
 interface IChildEcho[T] : IBaseEcho[T] { func Echo(value T) T; }
-class GenericSource : IChildEcho[string] { public func Echo(value string) string -> value }
+interface IBaseFirstEcho[T] : IBaseEcho[T], IChildEcho[T] { }
+class GenericSource : IBaseFirstEcho[string] {
+    func (IBaseEcho[string]) Echo(value string) string -> "base:" + value
+    func (IChildEcho[string]) Echo(value string) string -> "child:" + value
+}
+interface ILeftEcho[T] : IBaseEcho[T] { }
+interface IRightEcho[T] : IBaseEcho[T] { }
+interface IDiamondEcho[T] : ILeftEcho[T], IRightEcho[T] { }
+class GenericDiamondSource : IDiamondEcho[string] {
+    public func Echo(value string) string -> "diamond:" + value
+}
 func Main() {
     let source IDiamondReader = Source()
     Console.WriteLine(adapt[Reader](source).Read())
     Console.WriteLine(adapt[IReader](source).Read())
+    let redeclared IBaseFirstReader = RedeclaredSource()
+    let baseReader IBaseReader = redeclared
+    Console.WriteLine(baseReader.Read())
+    Console.WriteLine(adapt[Reader](redeclared).Read())
+    Console.WriteLine(adapt[IReader](redeclared).Read())
+    let derived IDerivedReader = redeclared
+    Console.WriteLine(adapt[Reader](derived).Read())
     let generic IChildEcho[string] = GenericSource()
     Console.WriteLine(adapt[Echo](generic).Echo("generic-local"))
     Console.WriteLine(adapt[IEcho](generic).Echo("generic-imported"))
+    let baseFirst IBaseFirstEcho[string] = GenericSource()
+    Console.WriteLine(adapt[Echo](baseFirst).Echo("base-first-local"))
+    Console.WriteLine(adapt[IEcho](baseFirst).Echo("base-first-imported"))
+    let diamond IDiamondEcho[string] = GenericDiamondSource()
+    Console.WriteLine(adapt[Echo](diamond).Echo("local"))
+    Console.WriteLine(adapt[IEcho](diamond).Echo("imported"))
 }`, "inherited-adapters", executable: true, "/r:" + contracts)
         IlVerifier.Verify(dll, []string{contracts})
         Assert.Equal(`7
 7
-generic-local
-generic-imported
+11
+23
+23
+23
+child:generic-local
+child:generic-imported
+child:base-first-local
+child:base-first-imported
+diamond:local
+diamond:imported
 `, fixture.Run(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func IndependentInheritedInterfaceSlotsRejectAdaptationWithDistinctImplementations(generic bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let contracts = fixture.CompileCSharp(`namespace IndependentSlotContracts;
+public interface IImportedReader { int Read(); }`, "IndependentSlotContracts")
+        let interfaces = if generic {
+            `interface IGeneric[T, Unused] { func Read() T; }
+interface IBoth : IGeneric[int32, string], IGeneric[int32, bool] { }
+class Source : IBoth {
+    func (IGeneric[int32, string]) Read() int32 -> 11
+    func (IGeneric[int32, bool]) Read() int32 -> 22
+}`
+        } else {
+            `interface ILeft { func Read() int32; }
+interface IRight { func Read() int32; }
+interface IBoth : ILeft, IRight { }
+class Source : IBoth {
+    func (ILeft) Read() int32 -> 11
+    func (IRight) Read() int32 -> 22
+}`
+        }
+        let left = if generic {
+            "IGeneric[int32, string]"
+        } else {
+            "ILeft"
+        }
+        let right = if generic {
+            "IGeneric[int32, bool]"
+        } else {
+            "IRight"
+        }
+        let prefix = `package IndependentSlotConsumer
+import System
+import IndependentSlotContracts
+interface Reader { func Read() int32; }
+` + interfaces
+        let control = fixture.Compile(prefix + `
+func Main() {
+    let both IBoth = Source()
+    let left ` + left + ` = both
+    let right ` + right + ` = both
+    Console.WriteLine(left.Read())
+    Console.WriteLine(right.Read())
+}`, "independent-slot-control", executable: true, "/r:" + contracts)
+        IlVerifier.Verify(control, []string{contracts})
+        Assert.Equal("11\n22\n", fixture.Run(control))
+        let (code, output) = fixture.TryCompile(prefix + `
+func Main() {
+    let both IBoth = Source()
+    let local = adapt[Reader](both)
+    let imported = adapt[IImportedReader](both)
+}`, "independent-slot-adapter", executable: true, "/r:" + contracts)
+        Assert.NotEqual(0, code)
+        Assert.Equal(2, output.Split("error GS0606:").Length - 1)
+        Assert.Equal(2, output.Split("is ambiguous").Length - 1)
     }
 
     @Fact
