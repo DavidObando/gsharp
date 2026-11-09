@@ -333,7 +333,7 @@ internal partial class OverloadResolver {
         return BoundFunctionPointerInvocationExpression(syntax, pointer, finalArguments, functionPointerType)
     }
 
-    private func TryBindFunctionTypeArguments(
+    internal func TryBindFunctionTypeArguments(
         calleeName string,
         functionType FunctionTypeSymbol,
         syntax CallExpressionSyntax,

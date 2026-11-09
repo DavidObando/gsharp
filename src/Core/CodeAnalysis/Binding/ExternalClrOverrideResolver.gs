@@ -883,23 +883,37 @@ internal shared class ExternalClrOverrideResolver {
         return !type.IsGenericType && string.Equals(type.FullName, expectedName, StringComparison.Ordinal)
     }
 
-    private func ReturnNullabilityConforms(contract TypeSymbol, implementation TypeSymbol) bool {
+    private func ReturnNullabilityConforms(
+        contract TypeSymbol,
+        implementation TypeSymbol,
+        invariant bool = false
+    ) bool {
         if contract.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
-            implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable {
+            implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
+            (
+            invariant &&
+                contract.ReferenceNullability == ReferenceNullabilityKind.Nullable &&
+                implementation.ReferenceNullability == ReferenceNullabilityKind.NotNull
+        ) {
             return false
         }
         let valueShape = GetReturnValueShape(contract)
-        let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out var isValueTask)
-        // Preserve semantic positions while recognizing tuple values through storage and async-result carriers.
-        if !TupleTypeSymbol.TryGetTupleShape(valueShape, out _) && !isTask {
-            return true
-        }
+        let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out _)
+        let isTuple = TupleTypeSymbol.TryGetTupleShape(valueShape, out _)
         let contractPositions = contract.GetElementPositions()
         if contractPositions.IsDefaultOrEmpty {
             return true
         }
-        let implementationPositions = if isTask {
-            GetTaskResultPositions(implementation, isValueTask)
+        let implementationPositions = if !isTuple && Conversion.TryProjectTypeArgumentsToSupertype(
+            implementation,
+            contract,
+            out var projected,
+            out _,
+            includeAllPositions: true
+        ) {
+            projected
+        } else if !isTuple {
+            GetReturnTypeArgumentPositions(valueShape, implementation)
         } else {
             implementation.GetElementPositions()
         }
@@ -907,7 +921,24 @@ internal shared class ExternalClrOverrideResolver {
             return false
         }
         for var i = 0; i < contractPositions.Length; i++ {
-            if !ReturnNullabilityConforms(contractPositions[i], implementationPositions[i]) {
+            // Mutable storage requires matching stated contracts; oblivious positions remain flexible.
+            let variance = if invariant {
+                TypeParameterVariance.None
+            } else if isTask {
+                TypeParameterVariance.Out
+            } else {
+                Conversion.GetPositionVariance(valueShape, i)
+            }
+            let compatible = if variance == TypeParameterVariance.In {
+                ReturnNullabilityConforms(implementationPositions[i], contractPositions[i])
+            } else {
+                ReturnNullabilityConforms(
+                    contractPositions[i],
+                    implementationPositions[i],
+                    invariant: variance == TypeParameterVariance.None
+                )
+            }
+            if !compatible {
                 return false
             }
         }
@@ -922,34 +953,27 @@ internal shared class ExternalClrOverrideResolver {
         return shape
     }
 
-    private func GetTaskResultPositions(implementation TypeSymbol, isValueTask bool) ImmutableArray[TypeSymbol] {
-        if AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(
-            GetReturnValueShape(implementation),
-            out _,
-            out var implementationIsValueTask
-        ) &&
-            implementationIsValueTask == isValueTask {
+    private func GetReturnTypeArgumentPositions(contractShape TypeSymbol, implementation TypeSymbol) ImmutableArray[
+        TypeSymbol
+    ] {
+        if contractShape.ClrType is not{IsGenericType: true} contractClr {
             return implementation.GetElementPositions()
         }
-        var receiver = implementation
-        while receiver.ReferenceNullability is ReferenceNullabilityKind.Nullable or ReferenceNullabilityKind.Platform {
-            receiver = TypeSymbol.GetWrappedTypes(receiver).Single()
-        }
-        let imported = MemberLookup.GetProjectionReceiverImportedType(receiver)
-        let taskDefinition = if isValueTask {
-            typeof(System.Threading.Tasks.ValueTask[_])
+        let imported = MemberLookup.GetProjectionReceiverImportedType(implementation)
+        let definition = if contractClr.IsGenericTypeDefinition {
+            contractClr
         } else {
-            typeof(System.Threading.Tasks.Task[_])
+            contractClr.GetGenericTypeDefinition()
         }
         return if imported != nil && MemberLookup.TryGetSymbolicDeclaringContext(
             imported,
-            taskDefinition,
+            definition,
             out _,
             out var arguments
         ) {
             arguments
         } else {
-            ImmutableArray[TypeSymbol].Empty
+            implementation.GetElementPositions()
         }
     }
 

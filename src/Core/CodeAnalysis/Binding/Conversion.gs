@@ -394,7 +394,7 @@ class Conversion {
                 return !invariant || !FunctionTypeSymbol.ContainsOptionalContract(source)
             }
             var sourceElements = source.GetElementPositions()
-            if TryProjectPlatformArgumentsToSupertype(
+            if TryProjectTypeArgumentsToSupertype(
                 source,
                 target,
                 out var projected,
@@ -412,7 +412,7 @@ class Conversion {
                 let variance = if invariant {
                     TypeParameterVariance.None
                 } else {
-                    OptionalContractPositionVariance(targetShape, i)
+                    GetPositionVariance(targetShape, i)
                 }
                 let compatible = if variance == TypeParameterVariance.In {
                     HaveCompatibleOptionalContracts(targetElements[i], sourceElements[i])
@@ -523,7 +523,7 @@ class Conversion {
             )
         }
 
-        private func OptionalContractPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
+        internal func GetPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
             let target = UnwrapNullableForVariance(target) ?? target
             if target is FunctionTypeSymbol function {
                 if index < function
@@ -546,7 +546,13 @@ class Conversion {
             if TupleTypeSymbol.TryGetTupleShape(target, out _) {
                 return TypeParameterVariance.Out
             }
-            if target is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol or MapTypeSymbol {
+            if target is SliceTypeSymbol or
+                ArrayTypeSymbol or
+                RectangularArrayTypeSymbol or
+                MapTypeSymbol ||
+                target
+                .ClrType
+                ?.IsArray == true {
                 return TypeParameterVariance.None
             }
             if NativeSliceTypes.TryGetElement(target, out _, out var isReadOnly) {
@@ -662,7 +668,7 @@ class Conversion {
             // and variant projections were already decided by the mismatch arm.
             if !(from is NullableTypeSymbol) &&
                 !(from is PlatformTypeSymbol) &&
-                TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
+                TryProjectTypeArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
                 !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) &&
                 projectedArguments.Length == targetArguments
                 .Length {
@@ -4349,7 +4355,7 @@ class Conversion {
             // A projection onto the source's own definition that yields the same argument pairs
             // as the same-shape comparison below is decided there, so each pair is related once.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
-                TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
+                TryProjectTypeArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
                 (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) &&
                 !IsSameShapeComparison(from, to, projected, supertypeArguments) {
                 var hasIllegalProjection = false
@@ -4854,7 +4860,7 @@ class Conversion {
         /// supertype (an implemented CLR interface or an imported base class)
         /// onto [`to`](paramref). The supertype either IS the target's
         /// definition, or reaches it through its own CLR hierarchy, which the
-        /// imported arm of (cref:TryProjectPlatformArgumentsToSupertype)
+        /// imported arm of (cref:TryProjectTypeArgumentsToSupertype)
         /// walks; an imported symbol is never a same-compilation one, so that
         /// recursion is one level.
         /// @param implemented The substituted imported supertype.
@@ -4871,7 +4877,8 @@ class Conversion {
             targetArguments ImmutableArray[TypeSymbol],
             out projected ImmutableArray[TypeSymbol],
             out projectedTargetArguments ImmutableArray[TypeSymbol],
-            includeCallableContracts bool = false
+            includeCallableContracts bool = false,
+            includeAllPositions bool = false
         ) bool {
             projectedTargetArguments = targetArguments
             if TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr) &&
@@ -4893,12 +4900,13 @@ class Conversion {
             projected = ImmutableArray[TypeSymbol].Empty
             return !(implemented is StructSymbol) &&
                 !(implemented is InterfaceSymbol) &&
-                TryProjectPlatformArgumentsToSupertype(
+                TryProjectTypeArgumentsToSupertype(
                 implemented,
                 to,
                 out projected,
                 out projectedTargetArguments,
-                includeCallableContracts
+                includeCallableContracts,
+                includeAllPositions
             )
         }
 
@@ -4929,13 +4937,16 @@ class Conversion {
         /// @param to The conversion target.
         /// @param projected The source's arguments at the target's definition.
         /// @param targetArguments The target's arguments.
+        /// @param includeCallableContracts Include inferred optional callable contracts.
+        /// @param includeAllPositions Project stated-nullability positions even when no platform or optional contract exists.
         /// @returns `true` when a projection was found.
-        private func TryProjectPlatformArgumentsToSupertype(
+        internal func TryProjectTypeArgumentsToSupertype(
             from TypeSymbol?,
             to TypeSymbol?,
             out projected ImmutableArray[TypeSymbol],
             out targetArguments ImmutableArray[TypeSymbol],
-            includeCallableContracts bool = false
+            includeCallableContracts bool = false,
+            includeAllPositions bool = false
         ) bool {
             var from = from
             var to = to
@@ -4946,7 +4957,7 @@ class Conversion {
             if from == nil || to == nil || IsValueTypeLikeFrom(to) {
                 return false
             }
-            if includeCallableContracts && to is InterfaceSymbol targetInterface {
+            if (includeCallableContracts || includeAllPositions) && to is InterfaceSymbol targetInterface {
                 for candidate in GetSourceInterfaceHierarchy(from) {
                     if object.ReferenceEquals(
                         candidate.Definition ?? candidate,
@@ -4968,7 +4979,8 @@ class Conversion {
                     TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected) &&
                     projected.Length == effectiveTargetArguments.Length &&
                     (
-                    AnyContainsPlatformType(projected) ||
+                    includeAllPositions ||
+                        AnyContainsPlatformType(projected) ||
                         AnyContainsPlatformType(effectiveTargetArguments) ||
                         (
                         includeCallableContracts &&
@@ -4994,14 +5006,15 @@ class Conversion {
                 targetClr.GetGenericTypeDefinition()
             }
             let positions = from.GetElementPositions()
-            if positions.IsDefaultOrEmpty {
+            if positions.IsDefaultOrEmpty && !includeAllPositions {
                 return false
             }
             // Hot path: ordinary generic upcasts carry no platform position, so
             // decline before any hierarchy walk. The vectors are checked rather
             // than the outer types, because a flags-annotated array hides its
             // element from the outer-type test.
-            if !AnyContainsPlatformType(positions) &&
+            if !includeAllPositions &&
+                !AnyContainsPlatformType(positions) &&
                 !AnyContainsPlatformType(targetArguments) &&
                 (
                 !includeCallableContracts ||
@@ -5027,7 +5040,8 @@ class Conversion {
                             targetArguments,
                             out projected,
                             out var interfaceTargetArguments,
-                            includeCallableContracts
+                            includeCallableContracts,
+                            includeAllPositions
                         ) {
                             targetArguments = interfaceTargetArguments
                             return true
@@ -5062,7 +5076,8 @@ class Conversion {
                             targetArguments,
                             out projected,
                             out var classTargetArguments,
-                            includeCallableContracts
+                            includeCallableContracts,
+                            includeAllPositions
                         ) {
                             targetArguments = classTargetArguments
                             return true
@@ -5079,7 +5094,8 @@ class Conversion {
                                     targetArguments,
                                     out projected,
                                     out var interfaceTargetArguments,
-                                    includeCallableContracts
+                                    includeCallableContracts,
+                                    includeAllPositions
                                 ) {
                                     targetArguments = interfaceTargetArguments
                                     return true
@@ -5090,14 +5106,20 @@ class Conversion {
                 }
                 return false
             }
-            let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) ||
-                ((from is NullabilityAnnotatedTypeSymbol and {ClrType: {IsSZArray: true}}))
+            let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) || from.ClrType?.IsSZArray == true
             if sourceIsArray {
                 if targetArguments.Length == 1 && positions.Length == 1 && IsArrayElementInterface(targetDefinition) {
                     projected = positions
                     return true
                 }
                 return false
+            }
+            // Preserve nullability stated on imported base and interface type arguments.
+            if includeAllPositions && MemberLookup.GetProjectionReceiverImportedType(from) is {} importedReceiver &&
+                MemberLookup
+                .TryGetSymbolicDeclaringContext(importedReceiver, targetDefinition, out _, out var declaredArguments) {
+                projected = declaredArguments
+                return projected.Length == targetArguments.Length
             }
             let sourceClr = if from is ImportedTypeSymbol{OpenDefinition: {} importedOpen} {
                 importedOpen
