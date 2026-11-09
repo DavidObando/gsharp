@@ -424,7 +424,13 @@ func LazyModel(seed NamedType) int32 {
         let first NamedType? = nil
         first ?? seed
     }
-    return model.Arity + blockModel.Arity
+    var deferModel NamedType? = nil
+    deferModel = {
+        defer Console.WriteLine("cleanup")
+        let first NamedType? = nil
+        first ?? seed
+    }
+    return model.Arity + blockModel.Arity + deferModel.Arity
 }
 
 let underlying = NamedType{Arity: 7}
@@ -434,7 +440,7 @@ Console.WriteLine(Normalize(underlying))
 Console.WriteLine(LazyModel(underlying))
 `)
         Assert.Empty(positive.Diagnostics)
-        Assert.Equal("14\n14\n14\n", positive.Output.ReplaceLineEndings("\n"))
+        Assert.Equal("14\n14\ncleanup\n21\n", positive.Output.ReplaceLineEndings("\n"))
 
         let nullableFallback = Evaluate(`
 class NamedType {
@@ -489,6 +495,28 @@ class C {
 }
 `)
         Assert.Contains(explicitNullableCastBlock.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+
+        let explicitNullableCastDeferBlock = Evaluate(`
+import System
+class NamedType {
+    prop TupleUnderlyingType NamedType? -> nil
+    prop Arity int32 -> 1
+}
+class C {
+    func F(value object) int32 {
+        var named NamedType? = value as NamedType
+        if named == nil {
+            return 0
+        }
+        named = cast[NamedType?]({
+            defer Console.WriteLine("cleanup")
+            named.TupleUnderlyingType ?? named
+        })
+        return named.Arity
+    }
+}
+`)
+        Assert.Contains(explicitNullableCastDeferBlock.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
 
         let platformCoalesceFallback = Evaluate(`
 @Oblivious

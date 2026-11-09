@@ -255,6 +255,17 @@ internal partial class ExpressionBinder {
         }
         var current = boundExpression
         while current is BoundBlockExpression block {
+            if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                resultLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                DelegateRefKindUtilities.TryFindCleanupBlockResultInitializer(
+                block.Statements,
+                resultLocal
+            ) is {} initExpr {
+                current = initExpr
+                continue
+            }
             current = block.Expression
         }
         if current is BoundConversionExpression{
