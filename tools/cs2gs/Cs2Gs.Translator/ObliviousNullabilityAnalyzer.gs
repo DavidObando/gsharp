@@ -5689,17 +5689,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                 return
             }
         }
-        let source ISymbol? = switch value {
-            case _ is InvocationExpressionSyntax or
-                _ is IdentifierNameSyntax or
-                _ is MemberAccessExpressionSyntax: model
-                .GetSymbolInfo(value!!).Symbol
-            default: default(ISymbol?)
-        }
-        if source == nil {
+        if !TryResolveTupleContainerSource(value, model, out var source, out var sourceType, out var sourcePrefix) {
             return
         }
-        let sourceSlots = NestedTupleSlots(SymbolValueType(source))
+        let sourceSlots = NestedTupleSlots(sourceType, sourcePrefix)
         if sourceSlots.Count != targetSlots.Count {
             return
         }
@@ -6154,30 +6147,6 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
-    private func TryResolveTupleSource(
-        expression ExpressionSyntax?,
-        model SemanticModel?,
-        out symbol ISymbol?,
-        out tupleType INamedTypeSymbol?
-    ) bool {
-        var expression = expression
-        expression = UnwrapTupleValue(expression)
-        symbol = switch expression {
-            case invocation is InvocationExpressionSyntax: model.GetSymbolInfo(invocation).Symbol
-            case _ is IdentifierNameSyntax or
-                _ is MemberAccessExpressionSyntax or
-                _ is ElementAccessExpressionSyntax: model
-                .GetSymbolInfo(expression!!).Symbol
-            default: default(ISymbol?)
-        }
-        if TryGetTupleType(symbol, out tupleType) {
-            return true
-        }
-        symbol = nil
-        tupleType = nil
-        return false
-    }
-
     private func CollectRefTupleStorage(
         target ISymbol?,
         expression ExpressionSyntax,
@@ -6304,11 +6273,37 @@ internal shared class ObliviousNullabilityAnalyzer {
         out prefix string,
         unwrapSuppressions bool = false
     ) bool {
+        if TryResolveTupleContainerSource(
+            expression,
+            model,
+            out symbol,
+            out var storageType,
+            out prefix,
+            unwrapSuppressions
+        ) &&
+            storageType is INamedTypeSymbol{IsTupleType: true} tuple {
+            tupleType = tuple
+            return true
+        }
+        symbol = nil
+        tupleType = nil
+        prefix = string.Empty
+        return false
+    }
+
+    private func TryResolveTupleContainerSource(
+        expression ExpressionSyntax?,
+        model SemanticModel?,
+        out symbol ISymbol?,
+        out storageType ITypeSymbol?,
+        out prefix string,
+        unwrapSuppressions bool = false
+    ) bool {
         var expression = expression
         prefix = string.Empty
         if model == nil {
             symbol = nil
-            tupleType = nil
+            storageType = nil
             return false
         }
         expression = UnwrapTupleValue(expression)
@@ -6316,11 +6311,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             expression = Unwrap(expression, unwrapSuppressions: true)
         }
         if TryResolveTupleElementSource(expression, model, out var projected, unwrapSuppressions) &&
-            TuplePositionType(projected.ContractSymbol, projected.ContractPath) is INamedTypeSymbol{
-            IsTupleType: true
-        } projectedTuple {
+            TuplePositionType(projected.ContractSymbol, projected.ContractPath) is ITypeSymbol projectedType {
             symbol = projected.ContractSymbol
-            tupleType = projectedTuple
+            storageType = projectedType
             prefix = projected.ContractPath
             return true
         }
@@ -6342,13 +6335,23 @@ internal shared class ObliviousNullabilityAnalyzer {
                 type = array.ElementType
                 prefix = AppendTuplePath(prefix, 0)
             }
-            if owner != nil && type is INamedTypeSymbol{IsTupleType: true} tuple {
+            if owner != nil && type != nil {
                 symbol = owner
-                tupleType = tuple
+                storageType = type
                 return true
             }
         }
-        return TryResolveTupleSource(expression, model, out symbol, out tupleType)
+        prefix = string.Empty
+        symbol = switch expression {
+            case _ is InvocationExpressionSyntax or
+                _ is IdentifierNameSyntax or
+                _ is MemberAccessExpressionSyntax or
+                _ is ElementAccessExpressionSyntax: model
+                .GetSymbolInfo(expression!!).Symbol
+            default: default(ISymbol?)
+        }
+        storageType = SymbolValueType(symbol)
+        return symbol != nil && storageType != nil
     }
 
     private func TryResolveTupleElementSource(
@@ -6496,20 +6499,15 @@ internal shared class ObliviousNullabilityAnalyzer {
         return -1
     }
 
-    private func TryGetTupleType(symbol ISymbol?, out tupleType INamedTypeSymbol?) bool {
-        tupleType = SymbolValueType(symbol) as INamedTypeSymbol
-        return tupleType != nil && tupleType.IsTupleType == true
-    }
-
     /// Issue #3641: tuple slots reachable through arrays, generic arguments, and tuple elements.
     /// Paths follow the type mapper's array, generic-argument, and tuple-element positions.
     /// Bare root tuples are excluded because they already own the empty-prefix key.
     /// @param type The declared type to scan.
     /// @returns The nested tuple slots, outermost type argument first.
-    private func NestedTupleSlots(type ITypeSymbol?) List[(Path string, Tuple INamedTypeSymbol)] {
+    private func NestedTupleSlots(type ITypeSymbol?, prefix string = "") List[(Path string, Tuple INamedTypeSymbol)] {
         let slots = List[(Path string, Tuple INamedTypeSymbol)]()
         if type is IArrayTypeSymbol || type is INamedTypeSymbol named && !named.IsTupleType {
-            CollectNestedTupleSlots(type, string.Empty, slots)
+            CollectNestedTupleSlots(type, prefix, slots)
         }
         return slots
     }
@@ -7524,12 +7522,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let firstSlots = NestedTupleSlots(firstType)
-        let secondSlots = NestedTupleSlots(secondType)
+        let secondSlots = NestedTupleSlots(secondType, secondPrefix)
         if firstType is INamedTypeSymbol{IsTupleType: true} firstTuple {
             CollectNestedTupleSlots(firstTuple, string.Empty, firstSlots)
         }
         if secondType is INamedTypeSymbol{IsTupleType: true} secondTuple {
-            CollectNestedTupleSlots(secondTuple, string.Empty, secondSlots)
+            CollectNestedTupleSlots(secondTuple, secondPrefix, secondSlots)
         }
         if firstSlots.Count == 0 || firstSlots.Count != secondSlots.Count {
             return
@@ -7540,13 +7538,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for var i = 0; i < firstSlots.Count; i++ {
-            let secondPath = if secondPrefix.Length == 0 {
-                secondSlots[i].Path
-            } else if secondSlots[i].Path.Length == 0 {
-                secondPrefix
-            } else {
-                secondPrefix + "." + secondSlots[i].Path
-            }
+            let secondPath = secondSlots[i].Path
             if bidirectional {
                 AddTupleShapeEdges(
                     first,

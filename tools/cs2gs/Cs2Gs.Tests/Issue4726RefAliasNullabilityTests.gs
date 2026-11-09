@@ -19,6 +19,29 @@ class Issue4726RefAliasNullabilityTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func TupleProjectedContainerReturn_CarriesItsOwningLeafContract(copy bool) {
+        let result = if copy {
+            "var result = state.Rows; return result;"
+        } else {
+            "return state.Rows;"
+        }
+        let source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    private static (string Text, int Code)[] Read() {
+        ref string alias = ref state.Rows[0].Text;
+        alias = null;
+        ` + result + `
+    }
+    public static string Run() => Read()[0].Code.ToString();
+}`
+        let printed = Translate(source)
+        Assert.Contains("func Read() [](Text string?, Code int32)", printed)
+        AssertParity(source, printed, "1")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func TupleRefConstructorArgument_SharesItsFixedNullableContract(targetTyped bool) {
         let creation = if targetTyped {
             "new(ref row.Text)"
