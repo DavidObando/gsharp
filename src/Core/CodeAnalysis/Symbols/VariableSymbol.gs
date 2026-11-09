@@ -9,6 +9,8 @@ import System.Collections.Immutable
 
 /// Represents a variable symbol in the language.
 abstract class VariableSymbol : Symbol {
+    private var declaringSyntax SyntaxNode?
+
     /// Initializes a new instance of the (cref:VariableSymbol) class.
     /// @param name The variable's name.
     /// @param isReadOnly Whether it's read-only or not.
@@ -21,7 +23,7 @@ abstract class VariableSymbol : Symbol {
     init(name string, isReadOnly bool, type TypeSymbol, declaringSyntax SyntaxNode? = nil) : base(name) {
         IsReadOnly = isReadOnly
         Type = type
-        DeclaringSyntax = declaringSyntax
+        this.declaringSyntax = declaringSyntax
     }
 
     /// Gets a value indicating whether it's read-only or not.
@@ -40,8 +42,12 @@ abstract class VariableSymbol : Symbol {
     /// has no source-level declaration. Consumed by the Portable PDB emitter
     /// to anchor `LocalVariable` rows and (for hoisted async/iterator
     /// state-machine locals) the hoisted-local-scope `CustomDebugInformation`.
-    prop DeclaringSyntax SyntaxNode? {
-        get;
+    prop DeclaringSyntax SyntaxNode? -> declaringSyntax
+
+    /// Re-points this variable symbol at the corresponding declaration syntax in a re-parsed tree (#5904).
+    /// @param declaringSyntax The declaration syntax in the re-parsed tree.
+    internal func RepointDeclaration(declaringSyntax SyntaxNode?) {
+        this.declaringSyntax = declaringSyntax
     }
 
     /// ```xmldoc

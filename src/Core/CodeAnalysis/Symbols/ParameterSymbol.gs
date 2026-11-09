@@ -6,6 +6,9 @@ package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Syntax
+import System
+import System.Collections.Generic
+import System.Collections.Immutable
 
 internal enum ParameterRefScope {
     Caller,
@@ -257,4 +260,54 @@ class ParameterSymbol : LocalVariableSymbol {
         (!TypeSymbol.IsByRefLike(Type) && !TypeSymbol.IsByRefLike(other.Type)) ||
             GetEffectiveValueScope() == other.GetEffectiveValueScope()
     )
+
+    shared {
+        /// Re-points parameter symbols at the matching parameter syntax nodes in a re-parsed tree (#5904).
+        /// @param parameters The parameter symbols to re-point.
+        /// @param syntaxParameters The parameter syntax list in the re-parsed tree.
+        /// @param receiver The optional receiver parameter syntax in the re-parsed tree.
+        internal func RepointDeclarations(
+            parameters ImmutableArray[ParameterSymbol],
+            syntaxParameters SeparatedSyntaxList[ParameterSyntax],
+            receiver ParameterSyntax? = nil
+        ) {
+            if parameters.IsDefaultOrEmpty {
+                return
+            }
+            let seenNames = HashSet[string](StringComparer.Ordinal)
+            var index = 0
+            if receiver != nil {
+                if receiver.Identifier is {IsMissing: false} receiverId {
+                    seenNames.Add(receiverId.ValueText)
+                }
+                if index < parameters.Length {
+                    let target SyntaxNode? = if parameters[index].DeclaringSyntax is SyntaxToken {
+                        receiver.Identifier
+                    } else {
+                        receiver
+                    }
+                    parameters[index].RepointDeclaration(target)
+                    index++
+                }
+            }
+            for syntaxParam in syntaxParameters {
+                if syntaxParam.Identifier is not{} identifier {
+                    continue
+                }
+                let name = identifier.ValueText
+                if name != "_" && !seenNames.Add(name) {
+                    continue
+                }
+                if index < parameters.Length {
+                    let target SyntaxNode? = if parameters[index].DeclaringSyntax is ParameterSyntax {
+                        syntaxParam
+                    } else {
+                        identifier
+                    }
+                    parameters[index].RepointDeclaration(target)
+                    index++
+                }
+            }
+        }
+    }
 }

@@ -6,10 +6,12 @@ package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Binding
+import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Emit
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
 import GSharp.Core.CodeAnalysis.Text
+import System
 import System.Collections.Immutable
 import System.IO
 import System.Linq
@@ -670,6 +672,115 @@ func Helper() int32 {
 }
 var x = Helper()`)
         Assert.False(IncrementalGlobalScopeReuse.TryRepointBodyOnlyEdit(scope_, fileA, editedA))
+    }
+
+    @Fact
+    func Issue5904_BodyOnlyEdit_RepointsParametersAndPrivateMethods_InSemanticModel() {
+        const template = `package P
+import System
+
+class TrackInfo {
+    var Title string = ""
+}
+
+class Id3Reader {
+    private func ApplyInstance(info TrackInfo, prefix string) {
+        let label = prefix
+        info.Title = label
+    }
+
+    prop this[idx int32] int32 {
+        get {
+            return idx + %SHIFT%
+        }
+    }
+
+    shared {
+        private func ParseTag(header []uint8, info TrackInfo) {
+            let major = int32(header[0]) + %SHIFT%
+            if major > 0 {
+                info.Title = "ok"
+            }
+        }
+    }
+}
+
+class YotoApiException : Exception {
+    init(statusCode int32, body string) : base("Yoto API returned HTTP ${statusCode}: ${body}") {
+        StatusCode = statusCode + %SHIFT%
+        Body = body
+    }
+
+    prop StatusCode int32 {
+        get;
+        init;
+    }
+
+    prop Body string {
+        get;
+        init;
+    }
+}
+
+class PrimaryBox(seed int32) {
+    func Read() int32 {
+        return seed + %SHIFT%
+    }
+}
+
+delegate Callback(item int32) int32;
+
+func (r TrackInfo) Describe(suffix string) string {
+    return r.Title + suffix
+}
+`
+        let original = Parse("Repro.gs", template.Replace("%SHIFT%", "0"))
+        let editedText = template.Replace("%SHIFT%", "100\n            // shifted")
+        let edited = Parse("Repro.gs", editedText)
+        let before = Compilation(original){IncrementalBodyReuse = true}
+        let _ = before.GetSemanticModel(original).GetDiagnostics()
+        let after = before.ReplaceSyntaxTree(original, edited)
+        Assert.Same(before.GlobalScope, after.GlobalScope)
+
+        let reader = after.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "Id3Reader")
+        let applyInstance = reader.Methods.Single((m FunctionSymbol) -> m.Name == "ApplyInstance")
+        let parseTag = reader.StaticMethods.Single((m FunctionSymbol) -> m.Name == "ParseTag")
+        let indexer = reader.Properties.Single((p PropertySymbol) -> p.IsIndexer)
+        let yoto = after.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "YotoApiException")
+        let ctor = yoto.ExplicitConstructors.Single()
+        let primaryBox = after.GlobalScope.Structs.Single((s StructSymbol) -> s.Name == "PrimaryBox")
+        let callback = after.GlobalScope.Delegates.Single((d DelegateTypeSymbol) -> d.Name == "Callback")
+        let describe = after.GlobalScope.Functions.Single((f FunctionSymbol) -> f.Name == "Describe")
+
+        Assert.Same(edited, applyInstance.Declaration!!.SyntaxTree)
+        Assert.Same(edited, parseTag.Declaration!!.SyntaxTree)
+        Assert.Same(edited, ctor.Declaration!!.SyntaxTree)
+        for parameter in applyInstance
+            .Parameters
+            .Concat(parseTag.Parameters)
+            .Concat(indexer.Parameters)
+            .Concat(ctor.Parameters)
+            .Concat(primaryBox.PrimaryConstructorParameters)
+            .Concat(callback.Parameters)
+            .Concat(describe.Parameters) {
+            Assert.NotNull(parameter.DeclaringSyntax)
+            Assert.Same(edited, parameter.DeclaringSyntax!!.SyntaxTree)
+        }
+
+        let model = after.GetSemanticModel(edited)
+        let instanceAssignPos = editedText.IndexOf("info.Title = label", StringComparison.Ordinal)
+        let sharedAssignPos = editedText.IndexOf("info.Title = \"ok\"", StringComparison.Ordinal)
+        let sharedMajorPos = editedText.IndexOf("if major > 0", StringComparison.Ordinal) + 3
+        let baseStatusCodePos = editedText.IndexOf("$${statusCode}", StringComparison.Ordinal) + 2
+        let baseBodyPos = editedText.IndexOf("$${body}", StringComparison.Ordinal) + 2
+        let indexerPos = editedText.IndexOf("return idx +", StringComparison.Ordinal) + 7
+
+        Assert.Same(applyInstance.Parameters[0], Assert.Single(model.LookupSymbols(instanceAssignPos, "info")))
+        Assert.Same(parseTag.Parameters[1], Assert.Single(model.LookupSymbols(sharedAssignPos, "info")))
+        Assert.Equal("major", Assert.Single(model.LookupSymbols(sharedMajorPos, "major")).Name)
+        Assert.Same(ctor.Parameters[0], Assert.Single(model.LookupSymbols(baseStatusCodePos, "statusCode")))
+        Assert.Same(ctor.Parameters[1], Assert.Single(model.LookupSymbols(baseBodyPos, "body")))
+        Assert.Same(indexer.Parameters[0], Assert.Single(model.LookupSymbols(indexerPos, "idx")))
     }
 
     shared {

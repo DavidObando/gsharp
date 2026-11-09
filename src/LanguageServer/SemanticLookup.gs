@@ -29,6 +29,7 @@ shared class SemanticLookup {
         init() {
             Accessors = List[AccessorExpressionSyntax]()
             FieldAssignments = List[FieldAssignmentExpressionSyntax]()
+            MemberFieldAssignments = List[MemberFieldAssignmentExpressionSyntax]()
             TypeAliasDeclarations = List[TypeAliasDeclarationSyntax]()
             TopLevelFunctions = List[FunctionDeclarationSyntax]()
             VariableIdentifiers = List[SyntaxToken]()
@@ -46,6 +47,10 @@ shared class SemanticLookup {
         }
 
         prop FieldAssignments List[FieldAssignmentExpressionSyntax] {
+            get;
+        }
+
+        prop MemberFieldAssignments List[MemberFieldAssignmentExpressionSyntax] {
             get;
         }
 
@@ -109,6 +114,8 @@ shared class SemanticLookup {
 
         private var cachedFieldAssignmentsByTree Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax]
 
+        private var cachedMemberFieldAssignmentsByTree Dictionary[SyntaxTree, []MemberFieldAssignmentExpressionSyntax]
+
         // (file, span) of every member-access identifier and field-assignment identifier. Resolve
         // runs ResolveAsMemberAccess + IsRightOfMemberAccess for *every* token; without this set
         // each non-member token (the vast majority) still scanned its file's accessors twice. An
@@ -123,6 +130,11 @@ shared class SemanticLookup {
         private var fieldAssignmentsByTokenSpan Dictionary[
             (string, int32, int32),
             List[FieldAssignmentExpressionSyntax]
+        ]
+
+        private var memberFieldAssignmentsByTokenSpan Dictionary[
+            (string, int32, int32),
+            List[MemberFieldAssignmentExpressionSyntax]
         ]
 
         internal init(
@@ -155,12 +167,19 @@ shared class SemanticLookup {
             this.cachedFieldAssignmentsByTree = Dictionary[SyntaxTree, []FieldAssignmentExpressionSyntax](
                 treeArray.Length
             )
+            this.cachedMemberFieldAssignmentsByTree = Dictionary[SyntaxTree, []MemberFieldAssignmentExpressionSyntax](
+                treeArray.Length
+            )
             this.memberAccessTokenSpans = HashSet[(string, int32, int32)]()
             this.fieldAssignmentTokenSpans = HashSet[(string, int32, int32)]()
             this.accessorsByTokenSpan = Dictionary[(string, int32, int32), List[AccessorExpressionSyntax]]()
             this.fieldAssignmentsByTokenSpan = Dictionary[
                 (string, int32, int32),
                 List[FieldAssignmentExpressionSyntax]
+            ]()
+            this.memberFieldAssignmentsByTokenSpan = Dictionary[
+                (string, int32, int32),
+                List[MemberFieldAssignmentExpressionSyntax]
             ]()
             for var i = 0; i < treeArray.Length; i++ {
                 let tree = treeArray[i]
@@ -172,6 +191,7 @@ shared class SemanticLookup {
                 let sortedAccessors = bucket.Accessors.OrderBy((a AccessorExpressionSyntax) -> a.Span.Length).ToArray()
                 this.cachedAccessorsByTree[tree] = sortedAccessors
                 this.cachedFieldAssignmentsByTree[tree] = bucket.FieldAssignments.ToArray()
+                this.cachedMemberFieldAssignmentsByTree[tree] = bucket.MemberFieldAssignments.ToArray()
                 for accessor in sortedAccessors {
                     for memberToken in EnumerateAccessorMemberTokens(accessor.RightPart) {
                         let key = SpanKey(memberToken)
@@ -194,6 +214,17 @@ shared class SemanticLookup {
                             this.fieldAssignmentsByTokenSpan[key] = assignList
                         }
                         assignList.Add(assign)
+                    }
+                }
+                for memberAssign in bucket.MemberFieldAssignments {
+                    let key = SpanKey(memberAssign.FieldIdentifier)
+                    if (key != nil) {
+                        this.fieldAssignmentTokenSpans.Add(key)
+                        if !this.memberFieldAssignmentsByTokenSpan.TryGetValue(key, out var memberAssignList) {
+                            memberAssignList = List[MemberFieldAssignmentExpressionSyntax]()
+                            this.memberFieldAssignmentsByTokenSpan[key] = memberAssignList
+                        }
+                        memberAssignList.Add(memberAssign)
                     }
                 }
             }
@@ -227,12 +258,39 @@ shared class SemanticLookup {
             // type and look the member up on it. This runs *before* the by-name fallbacks
             // so a member access never accidentally binds to a same-named local or
             // global (e.g. `person.Name` must never resolve to a top-level `Name`).
-            let asMember Symbol? = this.ResolveAsMemberAccess(token)
+            let asMember Symbol? = this.ResolveAsMemberAccess(token) ?? this.ResolveInitializerMember(token)
             if asMember != nil {
                 return asMember
             }
             if IsRightOfMemberAccess(token) {
                 // Token is clearly a member name; do not fall through to by-name lookups.
+                return nil
+            }
+            if IsUnqualifiedTypeParameterPosition(token) {
+                let enclosingTypeParam Symbol? = this.ResolveEnclosingTypeParameter(token)
+                if enclosingTypeParam != nil {
+                    return enclosingTypeParam
+                }
+            }
+            if IsStrictTypePosition(token) && !IsUnqualifiedTypeParameterPosition(token) {
+                return if this.globals.TryGetValue(token.Text, out var strictTypeGlobal) {
+                    strictTypeGlobal
+                } else {
+                    ResolvePrimitiveOrImportedType(token.Text)
+                }
+            }
+            if (
+                (token.Parent is CallExpressionSyntax call && TokenMatches(call.Identifier, token)) ||
+                    (token.Parent is StructLiteralExpressionSyntax sl && TokenMatches(sl.TypeIdentifier, token))
+            ) &&
+                token.SyntaxTree != nil &&
+                !this
+                .globals
+                .ContainsKey(token.Text) && SemanticLookup.ResolveImportedClrType(
+                token.SyntaxTree,
+                this.compilation,
+                token
+            ) != nil {
                 return nil
             }
             // A simple name the binder left no answer for (an assignment target, a name in
@@ -242,11 +300,51 @@ shared class SemanticLookup {
             if named != nil {
                 return named
             }
+            if BoundSemantics.GetImportedSymbol(this.compilation, token) == nil &&
+                IsPotentialTypeExpressionPosition(token) {
+                let typeParamFallback Symbol? = this.ResolveEnclosingTypeParameter(token)
+                if typeParamFallback != nil {
+                    return typeParamFallback
+                }
+            }
             return if this.globals.TryGetValue(token.Text, out var global) {
                 global
             } else {
                 ResolvePrimitiveOrImportedType(token.Text)
             }
+        }
+
+        private func ResolveEnclosingTypeParameter(token SyntaxToken) Symbol? {
+            var current SyntaxNode? = token.Parent
+            while current != nil {
+                let typeParamList TypeParameterListSyntax? = switch current {
+                    case fn is FunctionDeclarationSyntax: fn.TypeParameterList
+                    case vd is VariableDeclarationSyntax: vd.TypeParameterList
+                    case sd is StructDeclarationSyntax: sd.TypeParameterList
+                    case id is InterfaceDeclarationSyntax: id.TypeParameterList
+                    case dd is DelegateDeclarationSyntax: dd.TypeParameterList
+                    default: default(TypeParameterListSyntax?)
+                }
+                if typeParamList != nil {
+                    for tp in typeParamList.Parameters {
+                        if !tp.Identifier.IsMissing && string.Equals(
+                            tp.Identifier.ValueText,
+                            token.ValueText,
+                            StringComparison.Ordinal
+                        ) {
+                            if this.declarations.TryGetValue(tp.Identifier, out var declared) {
+                                return declared
+                            }
+                            let key = SpanKey(tp.Identifier)
+                            if (key != nil) && this.declarationsBySpan.TryGetValue(key!!, out var bySpan) {
+                                return bySpan
+                            }
+                        }
+                    }
+                }
+                current = current.Parent
+            }
+            return nil
         }
 
         /// Returns one instance per member declaration, so references compare a
@@ -352,6 +450,20 @@ shared class SemanticLookup {
             // member identifier of an AccessorExpressionSyntax or the field identifier of a
             // FieldAssignmentExpressionSyntax is treated as a member name, and must not be
             // resolved by name as a local or global. Backed by the precomputed O(1) span sets.
+            switch token.Parent {
+                case fa is FieldAssignmentExpressionSyntax when TokenMatches(fa.FieldIdentifier, token) {
+                    return true
+                }
+                case mfa is MemberFieldAssignmentExpressionSyntax when TokenMatches(mfa.FieldIdentifier, token) {
+                    return true
+                }
+                case pi is PropertyInitializerSyntax when TokenMatches(pi.PropertyIdentifier, token) {
+                    return true
+                }
+                case fi is FieldInitializerSyntax when TokenMatches(fi.FieldIdentifier, token) {
+                    return true
+                }
+            }
             let spanKey = SpanKey(token)
             if !(spanKey != nil) {
                 return false
@@ -444,6 +556,63 @@ shared class SemanticLookup {
                     return member
                 }
             }
+            let candidateMemberAssignments IEnumerable[MemberFieldAssignmentExpressionSyntax] = if this
+                .cachedMemberFieldAssignmentsByTree
+                .ContainsKey(tree) {
+                if this.memberFieldAssignmentsByTokenSpan.TryGetValue(spanKey, out var indexedMemberAssignments) {
+                    cast[IEnumerable[MemberFieldAssignmentExpressionSyntax]](indexedMemberAssignments)
+                } else {
+                    cast[IEnumerable[MemberFieldAssignmentExpressionSyntax]](
+                        Array.Empty[MemberFieldAssignmentExpressionSyntax]()
+                    )
+                }
+            } else {
+                this.GetMemberFieldAssignmentsForTree(tree)
+            }
+            for memberAssign in candidateMemberAssignments {
+                if !TokenMatches(memberAssign.FieldIdentifier, token) {
+                    continue
+                }
+                let receiverType = this.ResolveReceiverTypeSymbol(tree, memberAssign.Receiver)
+                let member Symbol? = LookupTypeMember(receiverType, memberAssign.FieldIdentifier.Text)
+                if member != nil {
+                    return member
+                }
+            }
+            return nil
+        }
+
+        private func ResolveInitializerMember(token SyntaxToken) Symbol? {
+            if token?.SyntaxTree == nil || token.Kind != SyntaxKind.IdentifierToken {
+                return nil
+            }
+            let tree = token.SyntaxTree
+            switch token.Parent {
+                case pi is PropertyInitializerSyntax when TokenMatches(pi.PropertyIdentifier, token) {
+                    if pi.Parent is ObjectCreationExpressionSyntax{Target: {} target} {
+                        let receiverType = this.ResolveReceiverTypeSymbol(tree, target)
+                        return LookupTypeMember(receiverType, pi.PropertyIdentifier.Text)
+                    }
+                }
+                case fi is FieldInitializerSyntax when TokenMatches(fi.FieldIdentifier, token) {
+                    switch fi.Parent {
+                        case structLiteral is StructLiteralExpressionSyntax {
+                            let receiverType = this.ResolveReceiverTypeSymbol(tree, structLiteral)
+                            return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                        }
+                        case withExpr is WithExpressionSyntax {
+                            let receiverType = this.ResolveReceiverTypeSymbol(tree, withExpr.Receiver)
+                            return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                        }
+                        case memberElem is MemberCollectionElementSyntax when memberElem.Parent is CollectionInitializerExpressionSyntax collection {
+                            if SemanticLookup.GetInitializerTarget(collection) is {} target {
+                                let receiverType = this.ResolveReceiverTypeSymbol(tree, target)
+                                return LookupTypeMember(receiverType, fi.FieldIdentifier.Text)
+                            }
+                        }
+                    }
+                }
+            }
             return nil
         }
 
@@ -463,6 +632,14 @@ shared class SemanticLookup {
                 cached
             } else {
                 FindNodes[FieldAssignmentExpressionSyntax](tree.Root).ToArray()
+            }
+        }
+
+        private func GetMemberFieldAssignmentsForTree(tree SyntaxTree)[]MemberFieldAssignmentExpressionSyntax {
+            return if this.cachedMemberFieldAssignmentsByTree.TryGetValue(tree, out var cached) {
+                cached
+            } else {
+                FindNodes[MemberFieldAssignmentExpressionSyntax](tree.Root).ToArray()
             }
         }
 
@@ -487,6 +664,9 @@ shared class SemanticLookup {
                 }
                 case call is CallExpressionSyntax {
                     return AsTypeSymbol(this.Resolve(call.Identifier))
+                }
+                case structLiteral is StructLiteralExpressionSyntax {
+                    return AsTypeSymbol(this.Resolve(structLiteral.TypeIdentifier))
                 }
                 case nested is AccessorExpressionSyntax {
                     let outerType TypeSymbol? = this.ResolveReceiverTypeSymbol(tree, nested.LeftPart)
@@ -524,6 +704,74 @@ shared class SemanticLookup {
         }
 
         shared {
+            internal func IsStrictTypePosition(token SyntaxToken) bool {
+                var current SyntaxNode? = token.Parent
+                while current != nil {
+                    if current is TypeClauseSyntax or TypeParameterSyntax or TypeArgumentListSyntax {
+                        return true
+                    }
+                    if current is StructDeclarationSyntax structDecl && structDecl.BaseTypeClauses.Any(
+                        (c TypeClauseSyntax) -> c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End
+                    ) {
+                        return true
+                    }
+                    if current is StatementSyntax or ExpressionSyntax or MemberSyntax {
+                        return false
+                    }
+                    current = current.Parent
+                }
+                return false
+            }
+
+            private func IsUnqualifiedTypeParameterPosition(token SyntaxToken) bool {
+                if token.Parent is TypeParameterSyntax tp {
+                    return TokenMatches(tp.Identifier, token) ||
+                        (
+                        TokenMatches(tp.Constraint, token) && tp.ConstraintType == nil && !tp.HasConstraintTypeArguments
+                    )
+                }
+                var clause TypeClauseSyntax? = token.Parent as TypeClauseSyntax
+                if clause == nil && token.Parent is StructDeclarationSyntax structDecl {
+                    clause = structDecl.BaseTypeClauses.FirstOrDefault(
+                        (c TypeClauseSyntax) -> c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End
+                    )
+                }
+                if clause != nil {
+                    return !clause.HasQualifier && !clause.HasTypeArguments && TokenMatches(clause.Identifier, token)
+                }
+                return false
+            }
+
+            internal func IsTypeArgumentIndexToken(token SyntaxToken) bool {
+                if token.Parent is not NameExpressionSyntax ne || !TokenMatches(ne.IdentifierToken, token) {
+                    return false
+                }
+                if ne.Parent is IndexExpressionSyntax idx && idx.Indices.Contains(ne) {
+                    return (idx.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, idx)) ||
+                        (
+                        idx.Parent is MemberFieldAssignmentExpressionSyntax mfa && object.ReferenceEquals(
+                            mfa.Receiver,
+                            idx
+                        )
+                    )
+                }
+                return false
+            }
+
+            private func IsPotentialTypeExpressionPosition(token SyntaxToken) bool {
+                if IsTypeArgumentIndexToken(token) {
+                    return true
+                }
+                if token.Parent is NameExpressionSyntax ne && TokenMatches(ne.IdentifierToken, token) {
+                    return ne.Parent is AccessorExpressionSyntax acc && object.ReferenceEquals(acc.LeftPart, ne) &&
+                        acc.Parent is not AccessorExpressionSyntax
+                }
+                if token.Parent is FieldAssignmentExpressionSyntax fa && TokenMatches(fa.Receiver, token) {
+                    return true
+                }
+                return false
+            }
+
             private func NormalizeForReferences(symbol Symbol?) Symbol? -> switch symbol {
                 case s is StructSymbol: cast[Symbol](s.Definition ?? s)
                 case e is EnumSymbol: cast[Symbol](e.Definition ?? e)
@@ -543,8 +791,24 @@ shared class SemanticLookup {
                     case name is NameExpressionSyntax {
                         yield name.IdentifierToken
                     }
+                    case genericName is GenericNameExpressionSyntax {
+                        yield genericName.Identifier
+                    }
                     case call is CallExpressionSyntax {
                         yield call.Identifier
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax {
+                        yield structLiteral.TypeIdentifier
+                    }
+                    case objectCreation is ObjectCreationExpressionSyntax when objectCreation.Target != nil {
+                        for t in EnumerateAccessorMemberTokens(objectCreation.Target!!) {
+                            yield t
+                        }
+                    }
+                    case collectionInit is CollectionInitializerExpressionSyntax when collectionInit.Target != nil {
+                        for t in EnumerateAccessorMemberTokens(collectionInit.Target!!) {
+                            yield t
+                        }
                     }
                     case index is IndexExpressionSyntax {
                         for t in EnumerateAccessorMemberTokens(index.Target) {
@@ -562,7 +826,7 @@ shared class SemanticLookup {
                 }
             }
 
-            private func TokenMatches(candidate SyntaxToken?, token SyntaxToken?) bool {
+            internal func TokenMatches(candidate SyntaxToken?, token SyntaxToken?) bool {
                 if object.ReferenceEquals(candidate, token) {
                     return true
                 }
@@ -586,8 +850,17 @@ shared class SemanticLookup {
                     case name is NameExpressionSyntax {
                         return TokenMatches(name.IdentifierToken, token)
                     }
+                    case genericName is GenericNameExpressionSyntax {
+                        return TokenMatches(genericName.Identifier, token)
+                    }
+                    case index is IndexExpressionSyntax {
+                        return AccessorRightContainsMemberToken(index.Target, token)
+                    }
                     case call is CallExpressionSyntax {
                         return TokenMatches(call.Identifier, token)
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax {
+                        return TokenMatches(structLiteral.TypeIdentifier, token)
                     }
                     case nested is AccessorExpressionSyntax {
                         return AccessorRightContainsMemberToken(nested.LeftPart, token) ||
@@ -615,9 +888,32 @@ shared class SemanticLookup {
                         memberName = name.IdentifierToken.Text
                         return true
                     }
+                    case genericName is GenericNameExpressionSyntax when TokenMatches(genericName.Identifier, token) {
+                        receiverExpression = receiver
+                        memberName = genericName.Identifier.Text
+                        return true
+                    }
+                    case index is IndexExpressionSyntax {
+                        return TryDriveAccessorTarget(
+                            tree,
+                            index.Target,
+                            receiver,
+                            token,
+                            out receiverExpression,
+                            out memberName
+                        )
+                    }
                     case call is CallExpressionSyntax when TokenMatches(call.Identifier, token) {
                         receiverExpression = receiver
                         memberName = call.Identifier.Text
+                        return true
+                    }
+                    case structLiteral is StructLiteralExpressionSyntax when TokenMatches(
+                        structLiteral.TypeIdentifier,
+                        token
+                    ) {
+                        receiverExpression = receiver
+                        memberName = structLiteral.TypeIdentifier.Text
                         return true
                     }
                     case nested is AccessorExpressionSyntax {
@@ -669,10 +965,31 @@ shared class SemanticLookup {
             }
 
             private func LookupTypeMember(receiverType TypeSymbol?, memberName string) Symbol? {
-                return if receiverType == nil {
+                var unwrapped = receiverType
+                while unwrapped != nil {
+                    if unwrapped is NullableTypeSymbol nullable {
+                        unwrapped = nullable.UnderlyingType
+                    } else if unwrapped is PlatformTypeSymbol platform {
+                        unwrapped = platform.UnderlyingType
+                    } else {
+                        break
+                    }
+                }
+                if unwrapped is TypeParameterSymbol tp {
+                    if tp.InterfaceConstraint != nil {
+                        let ifaceMember = LookupTypeMember(tp.InterfaceConstraint, memberName)
+                        if ifaceMember != nil {
+                            return ifaceMember
+                        }
+                    }
+                    if tp.ClassConstraint != nil {
+                        return LookupTypeMember(tp.ClassConstraint, memberName)
+                    }
+                }
+                return if unwrapped == nil {
                     default(Symbol?)
                 } else {
-                    TypeMemberModel.LookupMember(receiverType, memberName, MemberQuery.All)
+                    TypeMemberModel.LookupMember(unwrapped, memberName, MemberQuery.All)
                 }
             }
         }
@@ -770,6 +1087,20 @@ shared class SemanticLookup {
             for var i = interpUpper; i >= 0; i = parents[i] {
                 best = ConsiderTokenAt(best, interpolatedTokens[i], position)
             }
+        }
+        // Issue #5899: do not match the adjacent token when the caret sits on a dropped grouping parenthesis.
+        if best != nil &&
+            best
+            .Span
+            .End == position &&
+            best
+            .Span
+            .Start < position &&
+            position < tree
+            .Text
+            .Length &&
+            (tree.Text[position] == '(' || tree.Text[position] == ')') {
+            return nil
         }
         return best
     }
@@ -873,6 +1204,307 @@ shared class SemanticLookup {
         }
         let model = BuildModel(compilation)
         let _ = model.GetReferences(TypeSymbol.Void)
+    }
+
+    /// Resolves [`token`](paramref) to an imported CLR (cref:Type) (#5900).
+    func ResolveImportedClrType(
+        tree SyntaxTree,
+        compilation Compilation,
+        token SyntaxToken?,
+        includeAttributeSuffixFallback bool = false
+    ) Type? {
+        if token == nil || token.Kind != SyntaxKind.IdentifierToken || string.IsNullOrEmpty(token.Text) {
+            return nil
+        }
+        let segments = ExtractQualifiedTypeSegments(token)
+        if segments.Count == 0 {
+            return ResolveImportedClrType(tree, compilation, token.Text, includeAttributeSuffixFallback)
+        }
+        if segments.Count == 1 {
+            let (name, arity) = segments[0]
+            if arity > 0 {
+                let genericMatch = ResolveImportedClrType(
+                    tree,
+                    compilation,
+                    "$name`$arity",
+                    includeAttributeSuffixFallback
+                )
+                if genericMatch != nil {
+                    return genericMatch
+                }
+            }
+            return ResolveImportedClrType(tree, compilation, name, includeAttributeSuffixFallback)
+        }
+        var currentType Type? = nil
+        var namespacePrefix = string.Empty
+        let resolver = compilation.References ?? ReferenceResolver.Default()
+        for var i = 0; i < segments.Count; i++ {
+            let (segName, segArity) = segments[i]
+            let mangledSeg = if segArity > 0 {
+                "$segName`$segArity"
+            } else {
+                segName
+            }
+            let isLast = i == segments.Count - 1
+            if currentType != nil {
+                var nested Type? = currentType.GetNestedType(mangledSeg, BindingFlags.Public | BindingFlags.NonPublic)
+                if nested == nil && segArity > 0 {
+                    nested = currentType.GetNestedType(segName, BindingFlags.Public | BindingFlags.NonPublic)
+                }
+                if nested == nil {
+                    return nil
+                }
+                currentType = nested
+                continue
+            }
+            if string.IsNullOrEmpty(namespacePrefix) && segArity == 0 {
+                let expanded = ExpandImportAlias(tree, segName)
+                if !string.Equals(expanded, segName, StringComparison.Ordinal) {
+                    if resolver.TryResolveType(expanded, out var aliasedType) {
+                        currentType = aliasedType
+                    } else {
+                        namespacePrefix = expanded
+                    }
+                    continue
+                }
+            }
+            let candidatePath = if string.IsNullOrEmpty(namespacePrefix) {
+                mangledSeg
+            } else {
+                "$namespacePrefix.$mangledSeg"
+            }
+            var resolved Type? = ResolveImportedClrType(
+                tree,
+                compilation,
+                candidatePath,
+                includeAttributeSuffixFallback: isLast && includeAttributeSuffixFallback
+            )
+            if resolved == nil && segArity > 0 {
+                let unmangledPath = if string.IsNullOrEmpty(namespacePrefix) {
+                    segName
+                } else {
+                    "$namespacePrefix.$segName"
+                }
+                resolved = ResolveImportedClrType(
+                    tree,
+                    compilation,
+                    unmangledPath,
+                    includeAttributeSuffixFallback: isLast && includeAttributeSuffixFallback
+                )
+            }
+            if resolved != nil {
+                currentType = resolved
+            } else {
+                if segArity > 0 {
+                    return nil
+                }
+                namespacePrefix = if string.IsNullOrEmpty(namespacePrefix) {
+                    segName
+                } else {
+                    "$namespacePrefix.$segName"
+                }
+            }
+        }
+        return currentType
+    }
+
+    private func ExpandImportAlias(tree SyntaxTree, name string) string {
+        for import_ in tree.Root.Members.OfType[ImportSyntax]() {
+            if import_.AliasIdentifier != nil && import_.AliasIdentifier!!.Text == name {
+                let aliased = string.Join(".", import_.Identifiers.Select((i SyntaxToken) -> i.Text))
+                if !string.IsNullOrEmpty(aliased) {
+                    return aliased
+                }
+            }
+        }
+        return name
+    }
+
+    private func ExtractQualifiedTypeSegments(token SyntaxToken) List[(Name string, Arity int32)] {
+        let segments = List[(Name string, Arity int32)]()
+        var enclosingTypeClause TypeClauseSyntax? = token.Parent as TypeClauseSyntax
+        if enclosingTypeClause == nil && token.Parent is StructDeclarationSyntax structDecl {
+            enclosingTypeClause = structDecl.BaseTypeClauses.FirstOrDefault(
+                (c TypeClauseSyntax) -> c.Span.Start <= token.Span.Start && token.Span.End <= c.Span.End
+            )
+        }
+        if enclosingTypeClause is {} typeClause {
+            if SemanticModel.TokenMatches(typeClause.Identifier, token) {
+                segments.Add((token.Text, typeClause.GetSegmentTypeArguments(0)?.Count ?? 0))
+                return segments
+            }
+            for var i = 0; i < typeClause.QualifierIdentifierTokens.Length; i++ {
+                if SemanticModel.TokenMatches(typeClause.QualifierIdentifierTokens[i], token) {
+                    if typeClause.Identifier != nil {
+                        segments.Add((typeClause.Identifier!!.Text, typeClause.GetSegmentTypeArguments(0)?.Count ?? 0))
+                    }
+                    for var j = 0; j <= i; j++ {
+                        segments.Add(
+                            (
+                                typeClause.QualifierIdentifierTokens[j].Text,
+                                typeClause.GetSegmentTypeArguments(j + 1)?.Count ?? 0
+                            )
+                        )
+                    }
+                    return segments
+                }
+            }
+        }
+        if token.Parent is TypeParameterSyntax typeParam && SemanticModel.TokenMatches(typeParam.Constraint, token) {
+            segments.Add((token.Text, typeParam.ConstraintTypeArguments?.Count ?? 0))
+            return segments
+        }
+        if TryGetExpressionSegmentForToken(token, out var segNode, out var segName, out var segArity) &&
+            segNode != nil &&
+            segName != nil {
+            var root ExpressionSyntax = segNode
+            while root.Parent is AccessorExpressionSyntax acc &&
+                !acc.IsNullConditional &&
+                (object.ReferenceEquals(acc.LeftPart, root) || object.ReferenceEquals(acc.RightPart, root)) {
+                root = acc
+            }
+            if object.ReferenceEquals(root, segNode) {
+                segments.Add((segName, segArity))
+                return segments
+            }
+            if TryCollectAccessorSegmentsUpTo(root, segNode, segments, out var reachedTarget) && reachedTarget {
+                return segments
+            }
+            segments.Clear()
+            segments.Add((segName, segArity))
+        }
+        return segments
+    }
+
+    private func TryGetExpressionSegmentForToken(
+        token SyntaxToken,
+        out segmentNode ExpressionSyntax?,
+        out name string?,
+        out arity int32
+    ) bool {
+        segmentNode = nil
+        name = nil
+        arity = 0
+        switch token.Parent {
+            case call is CallExpressionSyntax when SemanticModel.TokenMatches(call.Identifier, token) {
+                arity = call.TypeArgumentList?.Arguments.Count ?? 0
+                name = token.Text
+                segmentNode = if call.Parent is ObjectCreationExpressionSyntax oc && object.ReferenceEquals(
+                    oc.Target,
+                    call
+                ) {
+                    cast[ExpressionSyntax](oc)
+                } else if call.Parent is CollectionInitializerExpressionSyntax ci && object.ReferenceEquals(
+                    ci.Target,
+                    call
+                ) {
+                    cast[ExpressionSyntax](ci)
+                } else {
+                    cast[ExpressionSyntax](call)
+                }
+                return true
+            }
+            case gn is GenericNameExpressionSyntax when SemanticModel.TokenMatches(gn.Identifier, token) {
+                arity = gn.TypeArgumentList.Arguments.Count
+                name = token.Text
+                segmentNode = gn
+                return true
+            }
+            case sl is StructLiteralExpressionSyntax when SemanticModel.TokenMatches(sl.TypeIdentifier, token) {
+                arity = sl.TypeArgumentList?.Arguments.Count ?? 0
+                name = token.Text
+                segmentNode = sl
+                return true
+            }
+            case ne is NameExpressionSyntax when SemanticModel.TokenMatches(ne.IdentifierToken, token) {
+                name = token.Text
+                if ne.Parent is IndexExpressionSyntax idx && object.ReferenceEquals(idx.Target, ne) {
+                    arity = idx.Indices.Count
+                    segmentNode = idx
+                    return true
+                }
+                segmentNode = ne
+                return true
+            }
+            default {
+                return false
+            }
+        }
+    }
+
+    private func TryCollectAccessorSegmentsUpTo(
+        current ExpressionSyntax,
+        target ExpressionSyntax,
+        segments List[(Name string, Arity int32)],
+        out reachedTarget bool
+    ) bool {
+        reachedTarget = false
+        if object.ReferenceEquals(current, target) {
+            if !TryGetExpressionSegmentInfo(current, out var name, out var arity) || name == nil {
+                return false
+            }
+            segments.Add((name, arity))
+            reachedTarget = true
+            return true
+        }
+        if current is AccessorExpressionSyntax acc && !acc.IsNullConditional {
+            if !TryCollectAccessorSegmentsUpTo(acc.LeftPart, target, segments, out reachedTarget) {
+                return false
+            }
+            if reachedTarget {
+                return true
+            }
+            return TryCollectAccessorSegmentsUpTo(acc.RightPart, target, segments, out reachedTarget)
+        }
+        if !TryGetExpressionSegmentInfo(current, out var leafName, out var leafArity) || leafName == nil {
+            return false
+        }
+        segments.Add((leafName, leafArity))
+        return true
+    }
+
+    private func TryGetExpressionSegmentInfo(expression ExpressionSyntax, out name string?, out arity int32) bool {
+        name = nil
+        arity = 0
+        switch expression {
+            case ne is NameExpressionSyntax {
+                name = ne.IdentifierToken.Text
+                return !string.IsNullOrEmpty(name)
+            }
+            case gn is GenericNameExpressionSyntax {
+                name = gn.Identifier.Text
+                arity = gn.TypeArgumentList.Arguments.Count
+                return !string.IsNullOrEmpty(name)
+            }
+            case idx is IndexExpressionSyntax when idx.Target is NameExpressionSyntax targetName {
+                name = targetName.IdentifierToken.Text
+                arity = idx.Indices.Count
+                return !string.IsNullOrEmpty(name)
+            }
+            case call is CallExpressionSyntax {
+                name = call.Identifier.Text
+                arity = call.TypeArgumentList?.Arguments.Count ?? 0
+                return !string.IsNullOrEmpty(name)
+            }
+            case oc is ObjectCreationExpressionSyntax when oc.Target is CallExpressionSyntax ocCall {
+                name = ocCall.Identifier.Text
+                arity = ocCall.TypeArgumentList?.Arguments.Count ?? 0
+                return !string.IsNullOrEmpty(name)
+            }
+            case ci is CollectionInitializerExpressionSyntax when ci.Target is CallExpressionSyntax ciCall {
+                name = ciCall.Identifier.Text
+                arity = ciCall.TypeArgumentList?.Arguments.Count ?? 0
+                return !string.IsNullOrEmpty(name)
+            }
+            case sl is StructLiteralExpressionSyntax {
+                name = sl.TypeIdentifier.Text
+                arity = sl.TypeArgumentList?.Arguments.Count ?? 0
+                return !string.IsNullOrEmpty(name)
+            }
+            default {
+                return false
+            }
+        }
     }
 
     /// Resolves a bare type name (e.g. `Console`) to a CLR (cref:Type)
@@ -1116,9 +1748,14 @@ shared class SemanticLookup {
                 continue
             }
             for identifier in bucketsByTree[tree].VariableIdentifiers {
-                if coreModel.GetDeclaredSymbol(identifier, ct) is GlobalVariableSymbol variable {
+                let declaredSymbol = coreModel.GetDeclaredSymbol(identifier, ct)
+                if declaredSymbol is GlobalVariableSymbol variable {
                     globals[variable.Name] = variable
                     declarations[identifier] = variable
+                }
+                if identifier.Parent is VariableDeclarationSyntax{TypeParameterList: {} localTypeParams} localDecl &&
+                    coreModel.GetDeclaredSymbol(localDecl, ct) is FunctionSymbol localFunction {
+                    MapTypeParameters(localTypeParams, localFunction.TypeParameters, declarations)
                 }
             }
         }
@@ -1136,6 +1773,11 @@ shared class SemanticLookup {
                         globals[function.Name] = function
                         if function.Declaration != nil {
                             declarations[function.Declaration!!.Identifier] = function
+                            MapTypeParameters(
+                                function.Declaration!!.TypeParameterList,
+                                function.TypeParameters,
+                                declarations
+                            )
                             MapParameters(
                                 function.Declaration!!.Parameters.ToArray(),
                                 function.Parameters,
@@ -1178,6 +1820,7 @@ shared class SemanticLookup {
                 if !structSyntax.Identifier.IsMissing {
                     declarations[structSyntax.Identifier] = aggregate
                 }
+                MapTypeParameters(structSyntax.TypeParameterList, aggregate.TypeParameters, declarations)
                 if !seenStructs.Add(aggregate) {
                     continue
                 }
@@ -1205,12 +1848,14 @@ shared class SemanticLookup {
                 if !ifaceSyntax.Identifier.IsMissing {
                     declarations[ifaceSyntax.Identifier] = iface
                 }
+                MapTypeParameters(ifaceSyntax.TypeParameterList, iface.TypeParameters, declarations)
                 if !seenInterfaces.Add(iface) {
                     continue
                 }
                 globals[iface.Name] = iface
                 if iface.Declaration != nil {
                     declarations[iface.Declaration.Identifier] = iface
+                    MapTypeParameters(iface.Declaration.TypeParameterList, iface.TypeParameters, declarations)
                     for method in iface
                         .Methods
                         .Concat(iface.StaticMethods)
@@ -1220,6 +1865,7 @@ shared class SemanticLookup {
                             if !methodDecl.Identifier.IsMissing {
                                 declarations[methodDecl.Identifier] = method
                             }
+                            MapTypeParameters(methodDecl.TypeParameterList, method.TypeParameters, declarations)
                             MapParameters(methodDecl.Parameters.ToArray(), method.Parameters, declarations)
                         }
                     }
@@ -1267,6 +1913,10 @@ shared class SemanticLookup {
             for delegateSyntax in bucketsByTree[tree].DelegateDeclarations {
                 if coreModel.GetDeclaredSymbol(delegateSyntax, ct) is DelegateTypeSymbol delegateSymbol {
                     globals[delegateSymbol.Name] = delegateSymbol
+                    if !delegateSyntax.Identifier.IsMissing {
+                        declarations[delegateSyntax.Identifier] = delegateSymbol
+                    }
+                    MapTypeParameters(delegateSyntax.TypeParameterList, delegateSymbol.TypeParameters, declarations)
                 }
             }
             for enumSyntax in bucketsByTree[tree].EnumDeclarations {
@@ -1307,6 +1957,7 @@ shared class SemanticLookup {
         globals[aggregate.Name] = aggregate
         if aggregate.Declaration != nil {
             declarations[aggregate.Declaration!!.Identifier] = aggregate
+            MapTypeParameters(aggregate.Declaration!!.TypeParameterList, aggregate.TypeParameters, declarations)
             for field in aggregate.Fields.Concat(aggregate.StaticFields).Concat(aggregate.ConstFields) {
                 if field.Declaration is FieldDeclarationSyntax{Identifier: {IsMissing: false} fieldIdentifier} {
                     declarations[fieldIdentifier] = field
@@ -1332,6 +1983,7 @@ shared class SemanticLookup {
                     if !method.Declaration!!.Identifier.IsMissing {
                         declarations[method.Declaration!!.Identifier] = method
                     }
+                    MapTypeParameters(method.Declaration!!.TypeParameterList, method.TypeParameters, declarations)
                     MapParameters(method.Declaration!!.Parameters.ToArray(), method.Parameters, declarations)
                 }
             }
@@ -1339,6 +1991,23 @@ shared class SemanticLookup {
                 if constructor.Declaration != nil {
                     MapParameters(constructor.Declaration!!.Parameters.ToArray(), constructor.Parameters, declarations)
                 }
+            }
+        }
+    }
+
+    private func MapTypeParameters(
+        syntaxList TypeParameterListSyntax?,
+        typeParameters ImmutableArray[TypeParameterSymbol],
+        declarations Dictionary[SyntaxToken, Symbol]
+    ) {
+        if syntaxList == nil || typeParameters.IsDefaultOrEmpty {
+            return
+        }
+        let parameters = syntaxList.Parameters
+        for var i = 0; i < parameters.Count && i < typeParameters.Length; i++ {
+            let id = parameters[i].Identifier
+            if !id.IsMissing {
+                declarations[id] = typeParameters[i]
             }
         }
     }
@@ -1417,6 +2086,9 @@ shared class SemanticLookup {
             }
             case fa is FieldAssignmentExpressionSyntax {
                 buckets.FieldAssignments.Add(fa)
+            }
+            case mfa is MemberFieldAssignmentExpressionSyntax {
+                buckets.MemberFieldAssignments.Add(mfa)
             }
             case ta is TypeAliasDeclarationSyntax {
                 buckets.TypeAliasDeclarations.Add(ta)

@@ -47,6 +47,7 @@ HARNESS = {
     "selfhost-bench": ["build/test-selfhost-bench.py", "build/selfhost-bench.py",
                        "build/test-compiler-bench.py", "build/compiler-bench.py"],
     "comment-checker": ["build/test-check-comment-only-diff.py", "build/check-comment-only-diff.py"],
+    "waikiki-hover-audit": ["build/test-waikiki-hover-audit.py", "build/waikiki-hover-audit.py"],
 }
 BUILD_JOBS = {
     "build", "fixpoint", "discover-tests", "tests", "test-partition", "harness", "e2e",
@@ -176,6 +177,8 @@ def select(paths, event, projects=None, go_exists=None):
             suites.update(SUITES[key] for key in ("formatting", "language-server", "interpreter", "cs2gs"))
             suites.add(GENERATOR)
             jobs.add("cs2gs-corpus")
+        if "language-server" in areas:
+            harnesses.add("waikiki-hover-audit")
         if areas.intersection({"language-server", "formatting"}):
             suites.add(SUITES["interpreter"])
             jobs.update(EDITOR_JOBS)

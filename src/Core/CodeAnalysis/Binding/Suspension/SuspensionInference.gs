@@ -104,11 +104,11 @@ internal shared class SuspensionInference {
                 if own.HasDirectPoint || own.Callees.Any((callee FunctionSymbol) -> callee.IsSuspending) {
                     var hasRefKindParameter = false
                     for parameter in function.Parameters {
-                        if parameter.RefKind == RefKind.None || parameter.DeclaringSyntax == nil {
+                        if parameter.RefKind == RefKind.None || parameter.DeclaringSyntax is not{} declaringSyntax {
                             continue
                         }
                         bag.ReportRefKindOnAsyncOrIterator(
-                            parameter.DeclaringSyntax.Location,
+                            declaringSyntax.Location,
                             parameter.Name,
                             "newly inferred suspending"
                         )
