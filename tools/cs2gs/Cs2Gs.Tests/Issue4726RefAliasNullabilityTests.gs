@@ -17,6 +17,24 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Theory
+    @InlineData("state.Inner!.Rows[0].Text")
+    @InlineData("(state.Inner!).Rows[0].Text")
+    func SuppressedProjectedArrayRefAlias_RetainsTheOwningDeclaration(storage string) {
+        let source = `public static class Obj {
+    private static (((string Text, int Code)[] Rows, int Marker) Inner, int Flag) state =
+        ((new[] { ("x", 1) }, 2), 3);
+    private static string Read() {
+        ref string? alias = ref ` + storage + `;
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
     @InlineData(false)
     @InlineData(true)
     func ArrayTupleElementReturn_CarriesItsOwningLeafContract(copy bool) {

@@ -6190,7 +6190,14 @@ internal shared class ObliviousNullabilityAnalyzer {
             sourceSymbol = source.ContractSymbol
             sourcePath = source.ContractPath
             sourceType = TuplePositionType(sourceSymbol, sourcePath)
-        } else if TryResolveTupleStorageSource(storage, model, out sourceSymbol, out var rootTuple, out sourcePath) {
+        } else if TryResolveTupleStorageSource(
+            storage,
+            model,
+            out sourceSymbol,
+            out var rootTuple,
+            out sourcePath,
+            unwrapSuppressions: true
+        ) {
             sourceType = rootTuple
         } else {
             if !isOutput && targetType?.IsReferenceType == true {
@@ -6262,7 +6269,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel?,
         out symbol ISymbol?,
         out tupleType INamedTypeSymbol?,
-        out prefix string
+        out prefix string,
+        unwrapSuppressions bool = false
     ) bool {
         var expression = expression
         prefix = string.Empty
@@ -6272,7 +6280,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             return false
         }
         expression = UnwrapTupleValue(expression)
-        if TryResolveTupleElementSource(expression, model, out var projected) &&
+        if unwrapSuppressions && expression != nil {
+            expression = Unwrap(expression, unwrapSuppressions: true)
+        }
+        if TryResolveTupleElementSource(expression, model, out var projected, unwrapSuppressions) &&
             TuplePositionType(projected.ContractSymbol, projected.ContractPath) is INamedTypeSymbol{
             IsTupleType: true
         } projectedTuple {
@@ -6288,9 +6299,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             var type = SymbolValueType(owner)
             var receiver ExpressionSyntax = access
             for var i = 0; i < depth && receiver is ElementAccessExpressionSyntax element; i++ {
-                receiver = Unwrap(element.Expression, unwrapSuppressions: true)
+                receiver = Unwrap(element.Expression, unwrapSuppressions)
             }
-            if TryResolveTupleElementSource(receiver, model, out var parent) {
+            if TryResolveTupleElementSource(receiver, model, out var parent, unwrapSuppressions) {
                 owner = parent.ContractSymbol
                 prefix = parent.ContractPath
                 type = TuplePositionType(owner, prefix)
@@ -6336,7 +6347,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     source = TupleElementKey(parent.ContractSymbol, AppendTuplePath(parent.ContractPath, index))
                     return true
                 }
-                if TryResolveTupleStorageSource(receiver, model, out var symbol, out _, out var prefix) {
+                if TryResolveTupleStorageSource(
+                    receiver,
+                    model,
+                    out var symbol,
+                    out _,
+                    out var prefix,
+                    unwrapSuppressions
+                ) {
                     source = TupleElementKey(symbol, AppendTuplePath(prefix, index))
                     return true
                 }
