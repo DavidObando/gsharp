@@ -1344,6 +1344,8 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   Null-pattern provenance follows defaults, null-preserving conversions, and `const` declarations inside the region.
   The consumer checks null preservation for each source-to-target conversion through `Conversion.PreservesNull`.
   Reference casts, nullable lifts and boxing preserve null. Constructing a string from a null character array does not.
+  Constant folding checks the bound source type with the same query before converting an internal null carrier.
+  An unmodelled conversion that changes null to a value does not fold; a reference `const` initializer reports `GS0376`.
   Defaults use the shared `Conversion.IsNullDefault` query. An `Enum` constraint does not prove a reference-type default.
   Type clauses naming in-scope generic parameters stay unresolved instead of selecting same-named global types.
   Nullable null constants retain their provenance but use typed local storage instead of literal inlining.

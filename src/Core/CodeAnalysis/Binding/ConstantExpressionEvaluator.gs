@@ -174,8 +174,17 @@ internal shared class ConstantExpressionEvaluator {
                 return TryBuildConstant(constantValue, fieldAccess.Type, out built)
             }
             case conversion is BoundConversionExpression {
-                return TryBuild(conversion.Expression, out var operand) &&
-                    TryConvert(operand!!, conversion.Type, conversion.IsChecked, out built)
+                if !TryBuild(conversion.Expression, out var operand) {
+                    return false
+                }
+                // Null carriers do not retain the source type needed to select the emitted conversion.
+                if (!operand.Type.IsValueType || NullableLifting.IsValueTypeNullableClr(operand.Type)) &&
+                    !Conversion.PreservesNull(conversion.Expression.Type, conversion.Type) &&
+                    TryInvoke(operand, out var value) &&
+                    value == nil {
+                    return false
+                }
+                return TryConvert(operand, conversion.Type, conversion.IsChecked, out built)
             }
             case call is BoundImportedCallExpression when call
                 .Function

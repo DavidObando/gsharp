@@ -11,6 +11,30 @@ import Xunit
 
 class Issue5879RegionNullAndSwitchGuardTests {
     @Theory
+    @InlineData("cast[string](cast[[]?char](cast[object?](default(int32?))))")
+    @InlineData(
+        "cast[string](cast[[]?char](cast[object?](default(int32?))) ?? cast[[]?char](cast[object?](default(int32?))))"
+    )
+    func Driver_NullCarrierCannotReplaceNonNullPreservingConversion(initializer string) {
+        let source = `import System
+func Probe() int32 {
+    const S = INITIALIZER
+    return if S == nil { -1 } else { 2 }
+}
+Console.WriteLine(Probe())
+`.Replace("INITIALIZER", initializer)
+        let driver = Issue5470And5657RegionWalkerTests()
+        driver.EveryProbe_MatchesExpectedResult("null_carrier_const", source, "GS0376@3:15", "reject", "")
+        driver.EveryProbe_MatchesExpectedResult(
+            "null_carrier_runtime",
+            source.Replace("const S", "let S").Replace("S == nil", "S.Length != 0"),
+            "",
+            "run",
+            "2"
+        )
+    }
+
+    @Theory
     @MemberData("Rows")
     func Driver_ValidatesRegionEffects(name string, source string, rejected bool) {
         var diagnostics = ""
