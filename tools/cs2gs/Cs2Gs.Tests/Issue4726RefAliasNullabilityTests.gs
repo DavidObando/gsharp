@@ -67,6 +67,43 @@ public static class Obj {
         AssertParity(source, Translate(source), "1")
     }
 
+    @Theory
+    @InlineData("list")
+    @InlineData("array")
+    @InlineData("single-list")
+    func Issue5868_TemporaryNestedContainers_PreserveCSharpOutput(shape string) {
+        let type = if shape == "array" {
+            "List<(string, int)>[]"
+        } else {
+            "List<List<(string, int)>>"
+        }
+        let count = if shape == "array" {
+            "Length"
+        } else {
+            "Count"
+        }
+        let second = if shape == "single-list" {
+            ""
+        } else {
+            ", new List<(string, int)> { (\"abc\", 1) }"
+        }
+        let source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() => new ` + type + ` {
+        new List<(string, int)> { (null!, 0) }` + second + `
+    }.` + count + `.ToString();
+}`
+        AssertParity(
+            source,
+            Translate(source),
+            if shape == "single-list" {
+                "1"
+            } else {
+                "2"
+            }
+        )
+    }
+
     @Fact
     func Issue5868_IndexerTupleKey_ConstructionAlonePreservesCSharpOutput() {
         const source = `using System.Collections.Generic;
@@ -105,6 +142,11 @@ public static class Obj {
     @InlineData("jagged-array")
     @InlineData("array-of-lists")
     @InlineData("interface-dictionary")
+    @InlineData("interface-array")
+    @InlineData("interface-implicit-array")
+    @InlineData("nested-lists")
+    @InlineData("list-of-arrays")
+    @InlineData("dictionary-of-lists")
     @InlineData("parenthesized-null")
     @InlineData("target-typed")
     @InlineData("nested")
@@ -122,6 +164,11 @@ public static class Obj {
             case "jagged-array": "new[] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
             case "array-of-lists": "new[] { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
             case "interface-dictionary": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
+            case "interface-array": "new (string, int)[] { (null!, 0), (\"abc\", 1) }"
+            case "interface-implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
+            case "nested-lists": "new List<List<(string, int)>> { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "list-of-arrays": "new List<(string, int)[]> { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
+            case "dictionary-of-lists": "new Dictionary<int, List<(string, int)>> { { 0, new List<(string, int)> { (null!, 0) } }, { 1, new List<(string, int)> { (\"abc\", 1) } } }"
             case "parenthesized-null": "new List<(string, int)> { ((null!), 0), (\"abc\", 1) }"
             case "target-typed": "new() { (null!, 0), (\"abc\", 1) }"
             case "nested": "new List<((string, int), int)> { ((null!, 0), 1), ((\"abc\", 1), 2) }"
@@ -132,16 +179,22 @@ public static class Obj {
             case "target-typed": "List<(string, int)>"
             case "bare-array": "(string, int)[]"
             case "interface-dictionary": "IEnumerable<KeyValuePair<int, (string, int)>>"
+            case "interface-array": "IEnumerable<(string, int)>"
+            case "interface-implicit-array": "IReadOnlyList<(string, int)>"
             default: "var"
         }
         let collection = switch shape {
-            case "dictionary-add" or "dictionary-index": "items.Values"
+            case "dictionary-add" or "dictionary-index" or "dictionary-of-lists": "items.Values"
             case "dictionary-key" or "dictionary-index-key": "items.Keys"
             default: "items"
         }
         let leaf = switch shape {
             case "nested": "row.Item1.Item1"
-            case "jagged-array" or "array-of-lists": "row[0].Item1"
+            case "jagged-array" or
+                "array-of-lists" or
+                "nested-lists" or
+                "list-of-arrays" or
+                "dictionary-of-lists": "row[0].Item1"
             case "interface-dictionary": "row.Value.Item1"
             default: "row.Item1"
         }

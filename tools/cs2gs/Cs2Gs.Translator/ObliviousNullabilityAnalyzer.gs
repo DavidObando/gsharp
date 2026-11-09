@@ -5823,13 +5823,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
-    // Issue #3641: pairs the nested tuple slots of the target's declared type
-    // with those of the source's, positionally and only when both sides expose
-    // the same number of slots with the same element arity. That keeps the
-    // pairing sound across the covariant hand-offs the shape actually uses
-    // (`List<T>` returned as `IReadOnlyList<T>`, passed as `IEnumerable<T>`)
-    // without inventing a second cross-signature keying model: each side keeps
-    // the element path of ITS OWN rendered type.
+    // Collect constructions in their own shape, then project evidence into the destination's generic view.
     private func CollectNestedTupleValueFlow(
         target ISymbol,
         targetType ITypeSymbol?,
@@ -5896,6 +5890,58 @@ internal shared class ObliviousNullabilityAnalyzer {
             case array is ImplicitArrayCreationExpressionSyntax: array.Initializer
             case bare is InitializerExpressionSyntax: bare
             default: default(InitializerExpressionSyntax?)
+        }
+        let valueType = model.GetTypeInfo(value!!).Type
+        if initializer != nil && valueType != nil && !SymbolEqualityComparer.Default.Equals(valueType, targetType) {
+            let direct = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
+            let edges = List[(Target TupleElementKey, Source TupleElementKey)]()
+            let scalarEdges = List[(Target TupleElementKey, Source ISymbol)]()
+            CollectDeclarationTupleFlow(valueType, valueType, value, model, direct, edges, scalarEdges)
+            for slot in targetSlots {
+                let relativePath = if prefix.Length == 0 {
+                    slot.Path
+                } else {
+                    slot.Path.Substring(prefix.Length + 1)
+                }
+                if !TryProjectTupleSlot(valueType, targetType, relativePath, out var projected) {
+                    continue
+                }
+                let sourcePrefix = if projected.Length == 0 {
+                    ""
+                } else {
+                    projected + "."
+                }
+                let MapKey = func (key TupleElementKey) TupleElementKey? {
+                    if !key.ContractPath.StartsWith(sourcePrefix, StringComparison.Ordinal) {
+                        return nil
+                    }
+                    let leaf = key.ContractPath.Substring(sourcePrefix.Length)
+                    return TupleElementKey(
+                        target,
+                        if slot.Path.Length == 0 {
+                            leaf
+                        } else {
+                            slot.Path + "." + leaf
+                        }
+                    )
+                }
+                for key in direct {
+                    if MapKey(key) is {} mapped {
+                        tupleTainted.Add(mapped)
+                    }
+                }
+                for (key, source) in edges {
+                    if MapKey(key) is {} mapped {
+                        tupleEdges.Add((mapped, source))
+                    }
+                }
+                for (key, source) in scalarEdges {
+                    if MapKey(key) is {} mapped {
+                        tupleScalarEdges.Add((mapped, source))
+                    }
+                }
+            }
+            return
         }
         if initializer != nil && targetType is IArrayTypeSymbol arrayType {
             for element in InitializerLeaves(initializer) {
