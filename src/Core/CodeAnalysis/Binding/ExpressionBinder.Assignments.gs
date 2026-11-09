@@ -225,7 +225,21 @@ internal partial class ExpressionBinder {
             local.IsScoped = true
             local.HoldsScopedManagedReference = true
         }
-        return BoundAssignmentExpression(nil, variable, convertedExpression, boundExpression.Type)
+        return BoundAssignmentExpression(nil, variable, convertedExpression, GetAssignedValueType(boundExpression))
+    }
+
+    private func GetAssignedValueType(boundExpression BoundExpression) TypeSymbol {
+        var current = boundExpression
+        while current is BoundBlockExpression block {
+            current = block.Expression
+        }
+        if current is BoundConversionExpression{
+            Syntax: not CallExpressionSyntax,
+            Expression: BoundBinaryExpression{Op: {Kind: BoundBinaryOperatorKind.NullCoalesce}} coalesce
+        } {
+            return coalesce.Type
+        }
+        return current.Type
     }
 
     /// Issue #1316 / #2410: binds the RHS of a simple assignment, threading
