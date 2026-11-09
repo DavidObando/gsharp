@@ -65,6 +65,16 @@ open partial class SyntaxToken : SyntaxNode {
     /// using (cref:Text) for source fidelity.
     prop ValueText string -> Value as string ?? Text
 
+    /// Gets whether this decimal `L` token can only occur directly under unary minus.
+    internal prop RequiresInt64Negation bool -> Kind == SyntaxKind.NumberToken &&
+        Value is uint64 magnitude &&
+        magnitude == uint64(int64.MaxValue) +
+        1UL &&
+        Text.Length > 1 &&
+        Text[Text.Length - 2] != 'U' &&
+        Text[Text.Length - 2] != 'u' &&
+        (Text[Text.Length - 1] == 'L' || Text[Text.Length - 1] == 'l')
+
     /// Gets the text span associated to the token.
     /// @remarks Issue #5277: a synthesized token (see (cref:IsSynthesized)) has text but is not
     /// written in source, so its span is zero-width at (cref:Position). It then never overlaps the

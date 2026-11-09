@@ -1798,6 +1798,10 @@ class Lexer {
         }
         if suffixType == TypeSymbol.Int64 {
             if parsed > uint64(int64.MaxValue) {
+                // The parser permits the decimal signed boundary only directly under unary minus.
+                if radix == 10 && parsed == uint64(int64.MaxValue) + 1UL {
+                    return parsed
+                }
                 ReportOverflow(fullText, spanStart, spanLength, TypeSymbol.Int64)
                 return 0L
             }
