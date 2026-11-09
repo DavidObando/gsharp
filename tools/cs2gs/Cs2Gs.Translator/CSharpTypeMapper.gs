@@ -4027,7 +4027,7 @@ class CSharpTypeMapper {
             return mapped
         }
 
-        private func TypeParameterForbidsNullableReferenceArgument(
+        internal func TypeParameterForbidsNullableReferenceArgument(
             parameter ITypeParameterSymbol
         ) bool -> parameter.HasNotNullConstraint ||
             (

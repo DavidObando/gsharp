@@ -11975,9 +11975,11 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
 
-            private func NullableTypeArgumentViolatesTranslatedConstraints(
-                parameter ITypeParameterSymbol
-            ) bool -> parameter.HasReferenceTypeConstraint ||
+            private func NullableTypeArgumentViolatesTranslatedConstraints(parameter ITypeParameterSymbol) bool -> (
+                parameter.HasReferenceTypeConstraint && CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(
+                    parameter
+                )
+            ) ||
                 parameter.HasValueTypeConstraint ||
                 parameter.HasUnmanagedTypeConstraint ||
                 parameter.HasConstructorConstraint ||

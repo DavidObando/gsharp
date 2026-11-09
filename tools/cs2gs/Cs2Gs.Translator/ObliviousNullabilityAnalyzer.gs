@@ -1419,9 +1419,22 @@ internal shared class ObliviousNullabilityAnalyzer {
             envelope
             .TypeArguments
             .Length == 1 &&
-            SymbolEqualityComparer
-            .Default
-            .Equals(array.ElementType, envelope.TypeArguments[0]) {
+            (storagePath == "0" || storagePath.StartsWith("0.", StringComparison.Ordinal)) &&
+            TryProjectTupleSlot(
+            array.ElementType,
+            envelope.TypeArguments[0],
+            if storagePath.Length == 1 {
+                ""
+            } else {
+                storagePath.Substring(2)
+            },
+            out var elementPath
+        ) {
+            valuePath = if elementPath.Length == 0 {
+                "0"
+            } else {
+                "0." + elementPath
+            }
             return true
         }
         if valueType is not INamedTypeSymbol named || storageType is not INamedTypeSymbol storage {
@@ -4571,7 +4584,16 @@ internal shared class ObliviousNullabilityAnalyzer {
             return !fixedTupleContracts.Contains(key) &&
                 CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath)
         }
+        let IsSubstitutable = func (key TupleElementKey) bool {
+            return TuplePositionType(key.ContractSymbol?.OriginalDefinition, key.ContractPath) is ITypeParameterSymbol{
+                TypeParameterKind: TypeParameterKind.Method
+            } parameter &&
+                !CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(parameter)
+        }
         let FreezeNonNullableContract = func (key TupleElementKey) {
+            if IsSubstitutable(key) {
+                return
+            }
             if TuplePositionType(key.ContractSymbol, key.ContractPath) is {IsReferenceType: true} &&
                 !TupleContractPositionAcceptsNil(compilation, key.ContractSymbol, key.ContractPath) &&
                 !CanPromoteTuplePosition(compilation, key.ContractSymbol, key.ContractPath) {
@@ -4586,7 +4608,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         do {
             contractsChanged = false
             for (target, source) in tupleContractEdges {
-                if fixedTupleContracts.Contains(source) && fixedTupleContracts.Add(target) {
+                if !IsSubstitutable(target) && fixedTupleContracts.Contains(source) && fixedTupleContracts.Add(target) {
                     contractsChanged = true
                 }
             }

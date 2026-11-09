@@ -753,17 +753,68 @@ partial class CSharpToGSharpTranslator {
             }
             let nested = HashSet[string](System.StringComparer.Ordinal)
             for position in bound.Nullable {
-                if position != "" && IsPromotablePosition(typeArgument, position) {
+                if position != "" && IsPromotablePosition(typeArgument, position, includeOblivious: true) {
                     nested.Add(position)
                 }
             }
             let promoted = PromoteNestedPositions(type, typeArgument, nested, "")
             return if bound.Nullable.Contains("") &&
-                IsNonNullReferencePosition(typeArgument) &&
+                IsNonNullReferencePosition(typeArgument, includeOblivious: true) &&
                 !promoted!!.IsNullable {
                 MakeNullable(promoted)
             } else {
                 promoted
+            }
+        }
+
+        // Tuple storage uses flat Roslyn indexes. Generic inference uses CLR Rest positions.
+        private func CollectTupleStoragePositions(
+            storage ISymbol,
+            declared ITypeSymbol?,
+            model SemanticModel,
+            path List[int32],
+            prefix string,
+            positions HashSet[string]
+        ) {
+            if path.Count > 0 &&
+                declared?.IsReferenceType == true &&
+                ObliviousNullabilityAnalyzer
+                .IsTupleElementTainted(
+                model.Compilation as CSharpCompilation,
+                storage,
+                path,
+                this.context.SiblingCompilations
+            ) {
+                positions.Add(prefix)
+            }
+            let arguments IReadOnlyList[ITypeSymbol]? = switch declared {
+                case array is IArrayTypeSymbol: []ITypeSymbol{array.ElementType}
+                case tuple is INamedTypeSymbol{IsTupleType: true}: tuple
+                    .TupleElements
+                    .Select((element IFieldSymbol) -> element.Type)
+                    .ToList()
+                case named is INamedTypeSymbol: named.TypeArguments
+                default: default(IReadOnlyList[ITypeSymbol]?)
+            }
+            if arguments == nil {
+                return
+            }
+            for var i = 0; i < arguments.Count; i++ {
+                path.Add(i)
+                let position = if declared is INamedTypeSymbol{IsTupleType: true} {
+                    TupleElementPosition(i)
+                } else {
+                    IndexPosition(i)
+                }
+                this.CollectTupleStoragePositions(
+                    storage,
+                    arguments[i],
+                    model,
+                    path,
+                    JoinPosition(prefix, position),
+                    positions
+                )
+                path.RemoveAt(path.Count - 1)
             }
         }
 
@@ -2017,7 +2068,25 @@ partial class CSharpToGSharpTranslator {
                     lambdas.Add((argumentParameter, lambda))
                     continue
                 }
-                let argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
+                var argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
+                if argumentParameter.RefKind != RefKind.None &&
+                    ArgumentStorageSymbol(argumentValue!!, model) is {} storage {
+                    let tuplePositions = ObliviousPositionSet()
+                    this.CollectTupleStoragePositions(
+                        storage,
+                        StorageType(storage),
+                        model,
+                        List[int32](),
+                        "",
+                        tuplePositions.Nullable
+                    )
+                    if !tuplePositions.IsEmpty {
+                        if argumentPositions != nil {
+                            tuplePositions.UnionWith(argumentPositions)
+                        }
+                        argumentPositions = tuplePositions
+                    }
+                }
                 if argumentPositions != nil {
                     Unify(parameterType, StoredValueType(argumentValue!!, model), argumentPositions, found)
                 }
@@ -4091,8 +4160,9 @@ partial class CSharpToGSharpTranslator {
             // Whether the translation can spell the nested [`position`](paramref) of
             // [`type`](paramref) nullable: a non-null reference whose slot is not a type
             // argument of a type parameter that a `T?` argument violates.
-            private func IsPromotablePosition(type ITypeSymbol, position string) bool {
-                if PositionType(type, position) is not{} positionType || !IsNonNullReferencePosition(positionType) {
+            private func IsPromotablePosition(type ITypeSymbol, position string, includeOblivious bool = false) bool {
+                if PositionType(type, position) is not{} positionType ||
+                    !IsNonNullReferencePosition(positionType, includeOblivious) {
                     return false
                 }
                 let separator = position.LastIndexOf('.')
@@ -4284,12 +4354,18 @@ partial class CSharpToGSharpTranslator {
                 )
             }
 
-            private func IsNonNullReferencePosition(type ITypeSymbol) bool -> type.IsReferenceType &&
+            private func IsNonNullReferencePosition(
+                type ITypeSymbol,
+                includeOblivious bool = false
+            ) bool -> type.IsReferenceType &&
                 type is not ITypeParameterSymbol &&
+                (
                 type.NullableAnnotation == Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .NotAnnotated
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .NotAnnotated ||
+                    (includeOblivious && type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.None)
+            )
 
             // Makes each recorded nested position nullable. The top level keeps its
             // nullability.

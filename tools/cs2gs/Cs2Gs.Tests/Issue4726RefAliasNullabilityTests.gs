@@ -144,6 +144,8 @@ public static class Obj {
     @InlineData("interface-dictionary")
     @InlineData("interface-array")
     @InlineData("interface-implicit-array")
+    @InlineData("interface-array-nested")
+    @InlineData("interface-jagged-array")
     @InlineData("nested-lists")
     @InlineData("list-of-arrays")
     @InlineData("dictionary-of-lists")
@@ -166,6 +168,8 @@ public static class Obj {
             case "interface-dictionary": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
             case "interface-array": "new (string, int)[] { (null!, 0), (\"abc\", 1) }"
             case "interface-implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
+            case "interface-array-nested": "new List<(string, int)>[] { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "interface-jagged-array": "new (string, int)[][] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
             case "nested-lists": "new List<List<(string, int)>> { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
             case "list-of-arrays": "new List<(string, int)[]> { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
             case "dictionary-of-lists": "new Dictionary<int, List<(string, int)>> { { 0, new List<(string, int)> { (null!, 0) } }, { 1, new List<(string, int)> { (\"abc\", 1) } } }"
@@ -181,6 +185,7 @@ public static class Obj {
             case "interface-dictionary": "IEnumerable<KeyValuePair<int, (string, int)>>"
             case "interface-array": "IEnumerable<(string, int)>"
             case "interface-implicit-array": "IReadOnlyList<(string, int)>"
+            case "interface-array-nested" or "interface-jagged-array": "IEnumerable<IReadOnlyList<(string, int)>>"
             default: "var"
         }
         let collection = switch shape {
@@ -194,6 +199,8 @@ public static class Obj {
                 "array-of-lists" or
                 "nested-lists" or
                 "list-of-arrays" or
+                "interface-array-nested" or
+                "interface-jagged-array" or
                 "dictionary-of-lists": "row[0].Item1"
             case "interface-dictionary": "row.Value.Item1"
             default: "row.Item1"
@@ -383,22 +390,67 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("inferred")
+    @InlineData("explicit")
+    @InlineData("nullable-constraint")
+    @InlineData("mixed-fixed")
+    func Issue5880_GenericTupleRefStorage_PreservesCSharpOutput(shape string) {
+        let method = if shape == "nullable-constraint" {
+            "#nullable enable\nprivate static void Keep<T>(ref (T, int) value) where T : class? { }\n#nullable disable"
+        } else {
+            "private static void Keep<T>(ref (T, int) value) { }"
+        }
+        let call = if shape == "explicit" {
+            "Keep<string>(ref row);"
+        } else {
+            "Keep(ref row);"
+        }
+        let fixedRow = if shape == "mixed-fixed" {
+            "#nullable enable\n(string, int) fixedRow = (\"fixed\", 1);\nKeep(ref fixedRow);\n#nullable disable"
+        } else {
+            ""
+        }
+        let source = `public static class Obj {
+    ` + method + `
+    public static string Run() {
+        ` + fixedRow + `
+        (string, int) row = (null!, 0);
+        ` + call + `
+        return row.Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        if shape == "explicit" {
+            Assert.Contains("Keep[string?]", printed)
+        }
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
     @InlineData("declaration")
     @InlineData("parameter")
+    @InlineData("generic-parameter")
+    @InlineData("generic-constrained")
     func Issue5880_WholeTupleRefStorage_PreservesFixedLeafContracts(contract string) {
         let declaration = if contract == "declaration" {
             "#nullable enable"
         } else {
             "#nullable disable"
         }
-        let call = if contract == "parameter" {
-            "Keep(ref alias);"
-        } else {
-            ""
+        let call = switch contract {
+            case "parameter" or "generic-constrained": "Keep(ref alias);"
+            case "generic-parameter": "Keep<int>(ref alias);"
+            default: ""
+        }
+        let method = switch contract {
+            case "generic-parameter": "private static void Keep<T>(ref (string, int) value) { }"
+            case "generic-constrained": "private static void Keep<T>(ref (T, int) value) where T : class { }"
+            default: "private static void Keep(ref (string, int) value) { }"
         }
         let source = `#nullable enable
 public static class Obj {
-    private static void Keep(ref (string, int) value) { }
+    ` + method + `
     public static string Run() {
 ` + declaration + `
         (string, int) row = ("x", 1);
