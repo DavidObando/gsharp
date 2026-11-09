@@ -11430,6 +11430,9 @@ internal partial class StatementBinder {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {
                     break
                 }
+                if !Conversion.PreservesNull(conversion.Expression.Type, conversion.Type) {
+                    return false
+                }
                 value = conversion.Expression
             }
             return value.Type == TypeSymbol.Null ||

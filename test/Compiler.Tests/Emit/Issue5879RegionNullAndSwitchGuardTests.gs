@@ -69,6 +69,28 @@ Console.WriteLine(Probe())
 
     shared {
         public func Rows() IEnumerable[[]object] {
+            for conversion in[]string{
+                "cast[string](cast[[]?char](cast[object?](N)))",
+                "cast[object?](cast[string](cast[[]?char](cast[object?](N))))"
+            } {
+                yield []object{"straight_null_materialization_" + conversion, `import System
+class Matcher {
+    var Callback () -> void
+    override func Equals(other object?) bool { Callback() return false }
+    override func GetHashCode() int32 -> 0
+}
+func Probe() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    let target object = Matcher{Callback: clear}
+    const N int32? = default(int32?)
+    if text == nil { return 0 }
+    let matches = target is (CONVERSION)
+    return text.Length
+}
+Console.WriteLine(Probe())
+`.Replace("CONVERSION", conversion), true}
+            }
             for body in[]string{
                 "let matches = value is (cast[object?](nil))",
                 "let matches = value is (cast[object?](cast[int32?](nil)))",
