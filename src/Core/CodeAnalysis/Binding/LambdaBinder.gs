@@ -4812,7 +4812,11 @@ internal class LambdaBinder {
                 literal = direct
                 return true
             }
-            if expression is BoundConversionExpression{Expression: BoundFunctionLiteralExpression converted} {
+            if expression is BoundConversionExpression{
+                Expression: BoundFunctionLiteralExpression converted
+            } conversion &&
+                MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(conversion.Type, out _) &&
+                !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(conversion.Type, out _) {
                 literal = converted
                 return true
             }

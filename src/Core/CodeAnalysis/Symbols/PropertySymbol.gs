@@ -395,6 +395,7 @@ class PropertySymbol : Symbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration PropertyDeclarationSyntax) {
         Declaration = declaration
+        ParameterSymbol.RepointDeclarations(Parameters, declaration.Parameters)
     }
 
     // An accessor keeps the property that first claimed it. A constructed

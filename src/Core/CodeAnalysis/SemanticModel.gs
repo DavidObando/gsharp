@@ -757,6 +757,9 @@ partial class SemanticModel {
                 yield declaredInterface
                 for property in declaredInterface.Properties {
                     yield property
+                    for parameter in property.Parameters {
+                        yield parameter
+                    }
                 }
                 for declaredEvent in declaredInterface.Events {
                     yield declaredEvent
@@ -774,6 +777,9 @@ partial class SemanticModel {
                 yield declaredStruct
                 for property in declaredStruct.Properties.Concat(declaredStruct.StaticProperties) {
                     yield property
+                    for parameter in property.Parameters {
+                        yield parameter
+                    }
                 }
                 for declaredEvent in declaredStruct.Events.Concat(declaredStruct.StaticEvents) {
                     yield declaredEvent
@@ -783,6 +789,9 @@ partial class SemanticModel {
             // declare symbols; the global scope is the authority for those.
             for function in globalScope.Functions {
                 yield function
+                for parameter in function.Parameters {
+                    yield parameter
+                }
             }
             for variable in globalScope.Variables {
                 yield variable

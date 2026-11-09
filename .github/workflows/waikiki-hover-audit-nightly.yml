@@ -1,0 +1,95 @@
+name: waikiki-hover-audit-nightly
+
+# Issue #5026: portable headless language-server hover regression audit over the
+# SHA-pinned Waikiki corpus (DavidObando/Waikiki at
+# ec66d0bfaa39583cd11c66095f2748342dc9e8f6, Gsharp.NET.Sdk 0.5.26).
+#
+# Relevant pull requests run the fast, deterministic in-repository hover audit,
+# #5024/#5025 lifecycle checks, #5035/#5036 indexed-member and receiver
+# provenance checks, and the harness unit tests through build.yml (routed by
+# build/ci-selection.py). This scheduled and manually dispatched workflow runs
+# the full external Waikiki corpus build and 45,829-token / 68,039-check sweep
+# across Linux and Windows (including canonical and VS Code-style Windows drive
+# URIs), verifies the compiler-symbol oracle and issue-linked expectations, and
+# publishes scrubbed Markdown/JSON/CSV artifacts.
+
+on:
+  schedule:
+    - cron: '43 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NBGV_SetCloudBuildVersionVars: false
+
+jobs:
+  audit:
+    name: audit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore language-server test graph
+        run: python3 build/ci-projects.py restore --projects "test/LanguageServer.Tests/LanguageServer.Tests.gsproj"
+
+      - name: Restore .NET local tools
+        run: dotnet tool restore
+
+      - name: Build language-server test graph
+        run: python3 build/ci-projects.py build --projects "test/LanguageServer.Tests/LanguageServer.Tests.gsproj"
+
+      - name: Test Waikiki hover audit harness
+        run: python3 build/test-waikiki-hover-audit.py
+
+      - name: Check out pinned Waikiki corpus
+        shell: bash
+        run: python3 build/waikiki-hover-audit.py checkout --dest "$RUNNER_TEMP/waikiki-corpus"
+
+      - name: Run headless Waikiki hover audit
+        id: run_audit
+        shell: bash
+        env:
+          MSBUILDDISABLENODEREUSE: 1
+        run: |
+          python3 build/waikiki-hover-audit.py run \
+            --corpus "$RUNNER_TEMP/waikiki-corpus" \
+            --out "$RUNNER_TEMP/waikiki-hover-audit-raw"
+
+      - name: Verify and stage scrubbed hover audit artifacts
+        id: verify_artifacts
+        if: steps.run_audit.outcome == 'success'
+        shell: bash
+        run: |
+          python3 build/waikiki-hover-audit.py stage \
+            --raw "$RUNNER_TEMP/waikiki-hover-audit-raw" \
+            --out "$RUNNER_TEMP/waikiki-hover-audit-verified" \
+            --corpus "$RUNNER_TEMP/waikiki-corpus"
+
+      - name: Upload scrubbed hover audit artifacts
+        if: steps.verify_artifacts.outcome == 'success'
+        uses: actions/upload-artifact@v5
+        with:
+          name: waikiki-hover-audit-${{ matrix.os }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/waikiki-hover-audit-verified/summary.json
+            ${{ runner.temp }}/waikiki-hover-audit-verified/summary.md
+            ${{ runner.temp }}/waikiki-hover-audit-verified/failures.json
+            ${{ runner.temp }}/waikiki-hover-audit-verified/failures.csv
+            ${{ runner.temp }}/waikiki-hover-audit-verified/inventory.json

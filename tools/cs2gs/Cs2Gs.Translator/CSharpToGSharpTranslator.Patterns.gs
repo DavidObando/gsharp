@@ -4694,25 +4694,41 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         let expressionElement = cast[ExpressionElementSyntax](element)
                         let operationElementType ITypeSymbol? = collectionOperation?.Elements[i].Type
-                        let boundElementType ITypeSymbol? = if operationElementType != nil &&
+                        let addParameter IParameterSymbol? = this.GetCollectionAddParameter(
+                            collection,
+                            target,
+                            operationElementType ?? elementTypeSymbol,
+                            expressionElement.Expression
+                        )
+                        let addParameterType ITypeSymbol? = addParameter?.Type
+                        let boundElementType ITypeSymbol? = if addParameterType != nil {
+                            if elementTypeSymbol != nil && SymbolEqualityComparer.Default.Equals(
+                                addParameterType,
+                                elementTypeSymbol
+                            ) {
+                                elementTypeSymbol.WithNullableAnnotation(addParameterType.NullableAnnotation)
+                            } else {
+                                addParameterType
+                            }
+                        } else if operationElementType != nil &&
                             originalElementType != nil &&
                             !SymbolEqualityComparer
                             .Default
                             .Equals(operationElementType, originalElementType) {
                             operationElementType
                         } else {
-                            this.GetCollectionAddParameterType(
-                                collection,
-                                target,
-                                elementTypeSymbol ?? operationElementType
-                            ) ??
-                                elementTypeSymbol ??
-                                operationElementType
+                            elementTypeSymbol ?? operationElementType
                         }
                         var boundElementRef GTypeReference? = if boundElementType != nil {
                             this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
                         } else {
                             elementType
+                        }
+                        if addParameter != nil {
+                            boundElementRef = this.PromoteIfUsedAsNullable(
+                                boundElementRef,
+                                addParameter.OriginalDefinition
+                            )
                         }
                         boundElementRef = this.PromoteObliviousArrayElement(
                             boundElementRef,
@@ -4724,7 +4740,8 @@ partial class CSharpToGSharpTranslator {
                                 this.CoerceCollectionElement(
                                     expressionElement.Expression,
                                     boundElementRef,
-                                    boundElementType
+                                    boundElementType,
+                                    addParameter
                                 )
                             )
                         )
@@ -4817,7 +4834,8 @@ partial class CSharpToGSharpTranslator {
         private func CoerceCollectionElement(
             element ExpressionSyntax,
             elementType GTypeReference?,
-            targetElementSymbol ITypeSymbol?
+            targetElementSymbol ITypeSymbol?,
+            targetParameterSymbol IParameterSymbol? = nil
         ) GExpression? {
             var targetElementSymbol = targetElementSymbol
             if elementType?.IsNullable == true &&
@@ -4849,10 +4867,18 @@ partial class CSharpToGSharpTranslator {
                 element,
                 translated,
                 targetElementSymbol ?? convertedSymbol,
-                targetSymbol: nil,
+                targetSymbol: targetParameterSymbol,
+                includePromotedValue: targetParameterSymbol != nil,
                 reportedTarget: collectionType,
                 reportedSlotType: targetElementSymbol
             )
+            if this.GetUserDefinedConversionInputOperator(
+                element,
+                targetElementSymbol ?? convertedSymbol,
+                out _
+            ) != nil {
+                return translated
+            }
             translated = this.AssertFlowNarrowedNullableReference(element, translated, elementType)
             if elementType?.IsNullable != true &&
                 IsNullOrSuppressedNull(element) &&
@@ -4860,7 +4886,9 @@ partial class CSharpToGSharpTranslator {
                 targetElementSymbol!!.NullableAnnotation != Microsoft
                 .CodeAnalysis
                 .NullableAnnotation
-                .Annotated {
+                .Annotated &&
+                this
+                .TargetWillRemainNonNullableReference(targetElementSymbol, targetParameterSymbol, element) {
                 // C# permits this warning-level write. A typed default retains
                 // the target's static type and the nil value without `!!`.
                 return DefaultValueExpression(elementType)
@@ -4873,6 +4901,7 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableAnnotation
                 .Annotated &&
+                this.TargetWillRemainNonNullableReference(targetElementSymbol, targetParameterSymbol, element) &&
                 elementInfo
                 .Nullability
                 .FlowState != Microsoft
@@ -4942,22 +4971,23 @@ partial class CSharpToGSharpTranslator {
             return NamedTypeReference("object")
         }
 
-        /// Issue #4525: a constructible collection's elements are bound through
-        /// its `Add` method, so a nullable `Add(T?)` parameter keeps a
-        /// legitimately null element from being asserted. Roslyn does not expose
-        /// the bound Add method, and C# overload resolution (hiding, generic
-        /// inference, extension methods, candidate sets spanning the hierarchy) is
-        /// not modeled. The helper is therefore fail-safe: the nullable parameter
-        /// is used only when exactly one accessible, non-generic, instance Add
-        /// exists with no extension Add in scope. Any other shape with a nullable
-        /// or default element reports Unsupported instead of guessing.
-        /// @returns The nullable Add parameter type, or null when the element type stands.
-        private func GetCollectionAddParameterType(
+        /// Issue #4525 / #4573: a constructible collection's elements are bound
+        /// through its `Add` method, so the selected `Add` parameter governs
+        /// element nullability and bridging. Roslyn does not expose the bound
+        /// `Add` method on `ICollectionExpressionOperation`, so candidates are
+        /// filtered by expression-aware implicit convertibility from the actual
+        /// element (and its managed-reference projection) when no extension or
+        /// generic `Add` exists in scope. Any ambiguous or generic/extension
+        /// shape with a nullable or default element reports Unsupported instead
+        /// of guessing.
+        /// @returns The selected `Add` parameter symbol, or null when the element type stands.
+        private func GetCollectionAddParameter(
             collection CollectionExpressionSyntax,
             target ITypeSymbol?,
-            elementType ITypeSymbol?
-        ) ITypeSymbol? {
-            if elementType == nil || target == nil {
+            elementType ITypeSymbol?,
+            element ExpressionSyntax? = nil
+        ) IParameterSymbol? {
+            if (elementType == nil && element == nil) || target == nil {
                 return nil
             }
             let nullableElement = collection.Elements.Any(
@@ -4982,28 +5012,32 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
+            let candidatesByLevel = List[List[IMethodSymbol]]()
+            let overridesByBase = Dictionary[IMethodSymbol, IMethodSymbol](SymbolEqualityComparer.Default)
             for var type INamedTypeSymbol? = target as INamedTypeSymbol; type != nil; type = this.GetEffectiveBaseType(
                 type
             ) {
+                let levelCandidates = List[IMethodSymbol]()
                 for add in type.GetMembers("Add").OfType[IMethodSymbol]() {
-                    if !add.IsStatic &&
-                        add
-                        .Parameters
-                        .Length == 1 &&
-                        this
+                    if add.IsStatic || !this.IsCallableWithSingleCollectionElement(add) ||
+                        !this
                         .context
                         .Compilation
-                        .IsSymbolAccessibleWithin(add, within) &&
-                        !candidates
-                        .Any(
-                        (seen IMethodSymbol) -> !add.IsGenericMethod &&
-                            !seen.IsGenericMethod &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(seen.Parameters[0].Type, add.Parameters[0].Type)
-                    ) {
-                        candidates.Add(add)
+                        .IsSymbolAccessibleWithin(add, within) {
+                        continue
                     }
+                    if add.IsOverride && add.OverriddenMethod is {} overridden {
+                        overridesByBase[overridden] = overridesByBase.GetValueOrDefault(add, add)
+                        continue
+                    }
+                    let effectiveAdd = overridesByBase.GetValueOrDefault(add, add)
+                    if !candidates.Any((seen IMethodSymbol) -> this.SameCollectionAddSignature(seen, effectiveAdd)) {
+                        candidates.Add(effectiveAdd)
+                        levelCandidates.Add(effectiveAdd)
+                    }
+                }
+                if levelCandidates.Count > 0 {
+                    candidatesByLevel.Add(levelCandidates)
                 }
             }
             let hasExtensionAdd = this
@@ -5017,13 +5051,75 @@ partial class CSharpToGSharpTranslator {
             )
                 .OfType[IMethodSymbol]()
                 .Any((method IMethodSymbol) -> method.MethodKind == MethodKind.ReducedExtension)
-            let decidable = !hasExtensionAdd &&
-                candidates.Count == 1 &&
-                !candidates[0].IsGenericMethod &&
-                SymbolEqualityComparer
-                .Default
-                .Equals(candidates[0].Parameters[0].Type, elementType)
-            if !decidable {
+            var selectedAdd IMethodSymbol? = nil
+            if !hasExtensionAdd && !candidates.Any(
+                (candidate IMethodSymbol) -> candidate.IsGenericMethod || candidate.Parameters[0].IsParams
+            ) {
+                for levelCandidates in candidatesByLevel {
+                    var applicable = levelCandidates.Where(
+                        (candidate IMethodSymbol) -> this.IsCollectionAddParameterApplicable(
+                            candidate.Parameters[0].Type,
+                            element,
+                            elementType
+                        )
+                    )
+                        .ToList()
+                    if applicable.Count == 0 {
+                        continue
+                    }
+                    if applicable.Count > 1 && element != nil {
+                        if this.context.GetTypeInfo(element).Type is {} exactElementType {
+                            let exactMatches = applicable.Where(
+                                (candidate IMethodSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate.Parameters[0].Type,
+                                    exactElementType
+                                )
+                            )
+                                .ToList()
+                            if exactMatches.Count > 0 {
+                                applicable = exactMatches
+                            }
+                        }
+                        if applicable.Count > 1 {
+                            let specificMatches = applicable.Where(
+                                (candidate IMethodSymbol) -> !applicable.Any(
+                                    (other IMethodSymbol) -> !object.ReferenceEquals(other, candidate) &&
+                                        this.IsBetterCollectionAddConversionTarget(
+                                        other.Parameters[0].Type,
+                                        candidate.Parameters[0].Type
+                                    )
+                                )
+                            )
+                                .ToList()
+                            if specificMatches.Count > 0 {
+                                applicable = specificMatches
+                            }
+                        }
+                        if applicable.Count > 1 {
+                            let firstType = applicable[0].Parameters[0].Type
+                            if applicable.All(
+                                (candidate IMethodSymbol) -> SymbolEqualityComparer.Default.Equals(
+                                    candidate.Parameters[0].Type,
+                                    firstType
+                                )
+                            ) {
+                                let exactArityMatches = applicable.Where(
+                                    (candidate IMethodSymbol) -> candidate.Parameters.Length == 1
+                                )
+                                    .ToList()
+                                if exactArityMatches.Count == 1 {
+                                    applicable = exactArityMatches
+                                }
+                            }
+                        }
+                    }
+                    if applicable.Count == 1 {
+                        selectedAdd = applicable[0]
+                    }
+                    break
+                }
+            }
+            if selectedAdd == nil {
                 if nullableElement {
                     this.context.ReportUnsupported(
                         collection,
@@ -5032,12 +5128,110 @@ partial class CSharpToGSharpTranslator {
                 }
                 return nil
             }
-            let parameterType = candidates[0].Parameters[0].Type
-            return if parameterType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
-                parameterType
-            } else {
-                default(ITypeSymbol?)
+            return selectedAdd.Parameters[0]
+        }
+
+        private func IsCallableWithSingleCollectionElement(method IMethodSymbol) bool {
+            if method.Parameters.Length == 0 {
+                return false
             }
+            let firstRefKind = method.Parameters[0].RefKind
+            if firstRefKind == Microsoft
+                .CodeAnalysis
+                .RefKind
+                .Ref ||
+                firstRefKind == Microsoft
+                .CodeAnalysis
+                .RefKind
+                .Out {
+                return false
+            }
+            for var i = 1; i < method.Parameters.Length; i++ {
+                let parameter = method.Parameters[i]
+                if !parameter.IsOptional && !parameter.IsParams {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func SameCollectionAddSignature(left IMethodSymbol, right IMethodSymbol) bool {
+            if left.IsGenericMethod != right.IsGenericMethod ||
+                left
+                .TypeParameters
+                .Length != right
+                .TypeParameters
+                .Length ||
+                left
+                .Parameters
+                .Length != right
+                .Parameters
+                .Length {
+                return false
+            }
+            for var i = 0; i < left.Parameters.Length; i++ {
+                if left.Parameters[i].RefKind != right.Parameters[i].RefKind || !SymbolEqualityComparer.Default.Equals(
+                    left.Parameters[i].Type,
+                    right.Parameters[i].Type
+                ) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func IsBetterCollectionAddConversionTarget(
+            betterCandidate ITypeSymbol,
+            worseCandidate ITypeSymbol
+        ) bool {
+            if SymbolEqualityComparer.Default.Equals(betterCandidate, worseCandidate) {
+                return false
+            }
+            let forward = this.context.Compilation.ClassifyConversion(betterCandidate, worseCandidate)
+            let reverse = this.context.Compilation.ClassifyConversion(worseCandidate, betterCandidate)
+            return forward.IsImplicit && !forward.IsUserDefined && !(reverse.IsImplicit && !reverse.IsUserDefined)
+        }
+
+        private func IsCollectionAddParameterApplicable(
+            parameterType ITypeSymbol,
+            element ExpressionSyntax?,
+            elementType ITypeSymbol?
+        ) bool {
+            if element != nil {
+                if this.context.SemanticModel.ClassifyConversion(element, parameterType).IsImplicit {
+                    return true
+                }
+                if this.GetManagedReferenceArrayProjectedArgumentType(element) is {} projectedArgumentType &&
+                    (
+                    SymbolEqualityComparer.Default.Equals(parameterType, projectedArgumentType) ||
+                        this
+                        .context
+                        .Compilation
+                        .ClassifyConversion(projectedArgumentType, parameterType)
+                        .IsImplicit
+                ) {
+                    return true
+                }
+                let actualElementType = this.context.GetTypeInfo(element).Type
+                if actualElementType != nil {
+                    return SymbolEqualityComparer.Default.Equals(parameterType, actualElementType) ||
+                        this
+                        .context
+                        .Compilation
+                        .ClassifyConversion(actualElementType, parameterType)
+                        .IsImplicit
+                }
+                return false
+            }
+            return elementType != nil &&
+                (
+                SymbolEqualityComparer.Default.Equals(parameterType, elementType) ||
+                    this
+                    .context
+                    .Compilation
+                    .ClassifyConversion(elementType, parameterType)
+                    .IsImplicit
+            )
         }
 
         private func GetManagedReferenceArrayProjectedCollectionType(
@@ -5157,7 +5351,9 @@ partial class CSharpToGSharpTranslator {
             let enclosing ISymbol? = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart)
             let within = cast[ISymbol](enclosing?.ContainingType) ?? this.context.Compilation.Assembly
             let candidates = List[IMethodSymbol]()
-            for var current INamedTypeSymbol? = openTarget; current != nil; current = current!!.BaseType {
+            for var current INamedTypeSymbol? = openTarget; current != nil; current = this.GetEffectiveBaseType(
+                current
+            ) {
                 for add in current.GetMembers("Add").OfType[IMethodSymbol]() {
                     if !add.IsStatic &&
                         !add.IsGenericMethod &&

@@ -404,12 +404,6 @@ internal shared class IncrementalGlobalScopeReuse {
         for (symbol, updated) in functionsToRepoint {
             symbol.RepointDeclaration(updated)
         }
-        for (symbol, updated) in structsToRepoint {
-            symbol.RepointDeclaration(updated)
-        }
-        for (symbol, updated) in interfacesToRepoint {
-            symbol.RepointDeclaration(updated)
-        }
         for (symbol, updated) in enumsToRepoint {
             symbol.RepointDeclaration(updated)
         }
@@ -439,22 +433,35 @@ internal shared class IncrementalGlobalScopeReuse {
             symbol.RemoveBodySyntax = remove
             symbol.RaiseBodySyntax = raise
         }
+        for (symbol, updated) in structsToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
+        for (symbol, updated) in interfacesToRepoint {
+            symbol.RepointDeclaration(updated)
+        }
         return true
     }
 
     private func EnumerateFunctionSymbols($scope BoundGlobalScope) sequence[FunctionSymbol] {
+        let seen = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
         for function in $scope.Functions {
-            yield function
+            if seen.Add(function) {
+                yield function
+            }
         }
         for structSymbol in $scope.Structs {
             if !structSymbol.Methods.IsDefaultOrEmpty {
                 for method in structSymbol.Methods {
-                    yield method
+                    if seen.Add(method) {
+                        yield method
+                    }
                 }
             }
             if !structSymbol.StaticMethods.IsDefaultOrEmpty {
                 for method in structSymbol.StaticMethods {
-                    yield method
+                    if seen.Add(method) {
+                        yield method
+                    }
                 }
             }
         }
@@ -462,7 +469,9 @@ internal shared class IncrementalGlobalScopeReuse {
         // FunctionDeclarationSyntax declarations and rebindable bodies.
         for interfaceSymbol in $scope.Interfaces {
             for method in EnumerateInterfaceMethods(interfaceSymbol) {
-                yield method
+                if seen.Add(method) {
+                    yield method
+                }
             }
         }
     }

@@ -131,6 +131,9 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(set(jobs).issubset(plan["jobs"]))
                 if "build" in jobs:
                     self.assertIn(ci.SDK, plan["build_projects"].split())
+                if path == "src/LanguageServer/Server.gs":
+                    self.assertIn("waikiki-hover-audit", plan["harness_matrix"]["name"])
+                    self.assertIn("harness", plan["jobs"])
                 if path.startswith("samples/"):
                     self.assertEqual(plan["docs_jobs"], ["build", "visual"])
 
@@ -557,7 +560,9 @@ class PublishJobTests(unittest.TestCase):
         block = job(self.text, "vsix")
         self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
         self.assertIn("--pre-release", block)
-        self.assertLess(block.index("tag-kind"), block.index("vsce package"))
+        self.assertIn('echo "Tag kind: $tag_kind; vsce package flags: ${flags[*]:-(none)}"', block)
+        self.assertLess(block.index("tag-kind"), block.index("vsce package flags:"))
+        self.assertLess(block.index("vsce package flags:"), block.index("npx vsce package"))
 
     def test_publish_verify_forwards_the_ci_output_and_the_script_outputs(self):
         block = job(self.text, "publish-verify")
@@ -648,6 +653,22 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("nbgv get-version -v SimpleVersion", block)
         self.assertIn('release-publish.py tag-kind "$GITHUB_REF_NAME"', block)
         self.assertIn("does not match Nerdbank.GitVersioning SimpleVersion", block)
+
+    def test_waikiki_hover_audit_nightly_workflow_contract(self):
+        text = (ROOT / ".github/workflows/waikiki-hover-audit-nightly.yml").read_text()
+        self.assertIn("ec66d0bfaa39583cd11c66095f2748342dc9e8f6", text)
+        self.assertIn("os: [ubuntu-latest, windows-latest]", text)
+        self.assertIn("python3 build/test-waikiki-hover-audit.py", text)
+        self.assertIn("python3 build/waikiki-hover-audit.py checkout", text)
+        self.assertIn("python3 build/waikiki-hover-audit.py run", text)
+        self.assertIn("python3 build/waikiki-hover-audit.py stage", text)
+        self.assertIn("if: steps.verify_artifacts.outcome == 'success'", text)
+        self.assertNotIn("if: always()", text)
+        self.assertIn("waikiki-hover-audit-verified/summary.json", text)
+        self.assertIn("waikiki-hover-audit-${{ matrix.os }}", text)
+        harness_block = job((ROOT / ".github/workflows/build.yml").read_text(), "harness")
+        self.assertIn("waikiki-hover-audit)", harness_block)
+        self.assertIn("python3 build/test-waikiki-hover-audit.py", harness_block)
 
 
 class RulesTests(unittest.TestCase):

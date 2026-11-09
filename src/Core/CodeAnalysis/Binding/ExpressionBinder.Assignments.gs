@@ -225,7 +225,57 @@ internal partial class ExpressionBinder {
             local.IsScoped = true
             local.HoldsScopedManagedReference = true
         }
-        return BoundAssignmentExpression(nil, variable, convertedExpression, boundExpression.Type)
+        return BoundAssignmentExpression(
+            nil,
+            variable,
+            convertedExpression,
+            GetAssignedValueType(syntax.Expression, boundExpression)
+        )
+    }
+
+    private func GetAssignedValueType(rhsSyntax ExpressionSyntax, boundExpression BoundExpression) TypeSymbol {
+        var currentSyntax = rhsSyntax
+        while true {
+            if currentSyntax is ParenthesizedExpressionSyntax parenthesized {
+                currentSyntax = parenthesized.Expression
+                continue
+            }
+            if currentSyntax is CheckedExpressionSyntax checkedExpression {
+                currentSyntax = checkedExpression.Expression
+                continue
+            }
+            if currentSyntax is BlockExpressionSyntax{Expression: {} tailSyntax} {
+                currentSyntax = tailSyntax
+                continue
+            }
+            break
+        }
+        if currentSyntax is not BinaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.QuestionQuestionToken}} {
+            return boundExpression.Type
+        }
+        var current = boundExpression
+        while current is BoundBlockExpression block {
+            if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultLocal} &&
+                resultLocal
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) &&
+                DelegateRefKindUtilities.TryFindCleanupBlockResultInitializer(
+                block.Statements,
+                resultLocal
+            ) is {} initExpr {
+                current = initExpr
+                continue
+            }
+            current = block.Expression
+        }
+        if current is BoundConversionExpression{
+            Syntax: not CallExpressionSyntax,
+            Expression: BoundBinaryExpression{Op: {Kind: BoundBinaryOperatorKind.NullCoalesce}} coalesce
+        } &&
+            coalesce.Type is not PlatformTypeSymbol {
+            return coalesce.Type
+        }
+        return current.Type
     }
 
     /// Issue #1316 / #2410: binds the RHS of a simple assignment, threading
@@ -250,7 +300,11 @@ internal partial class ExpressionBinder {
                 syntax is IfLetExpressionSyntax ||
                 syntax is ConditionalExpressionSyntax ||
                 syntax is SwitchExpressionSyntax ||
-                syntax is BlockExpressionSyntax
+                syntax is BlockExpressionSyntax ||
+                (
+                syntax is BinaryExpressionSyntax binary && binary.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken
+            ) ||
+                IsNestedLambdaExpression(syntax)
         ) {
             return BindExpression(syntax, nonNullTargetType)
         }
