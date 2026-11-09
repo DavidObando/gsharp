@@ -81,6 +81,7 @@ class StructSymbol : TypeSymbol {
 
     private var substitutedFields ImmutableArray[FieldSymbol]
     private var substitutedFieldsSource ImmutableArray[FieldSymbol]
+    private var substitutedFieldsVersion int32 = -1
     private var substitutedFieldsComputed bool
     private var substitutedProperties ImmutableArray[PropertySymbol]
     private var substitutedPropertiesSource ImmutableArray[PropertySymbol]
@@ -2130,6 +2131,10 @@ class StructSymbol : TypeSymbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration StructDeclarationSyntax) {
         Declaration = declaration
+        if declaration.PrimaryConstructorParameters is {} primaryParameters {
+            ParameterSymbol.RepointDeclarations(primaryConstructorParametersStore, primaryParameters)
+        }
+        memberDefaultVersion++
     }
 
     /// Substitutes this constructed type's arguments through a member type
@@ -2353,7 +2358,8 @@ class StructSymbol : TypeSymbol {
     // making member lookup independent of the order the definition is bound.
     private func GetSubstitutedFields() ImmutableArray[FieldSymbol] {
         let source = Definition!!.Fields
-        if substitutedFieldsComputed && substitutedFieldsSource.Equals(source) {
+        let version = Definition!!.memberDefaultVersion
+        if substitutedFieldsComputed && substitutedFieldsSource.Equals(source) && substitutedFieldsVersion == version {
             return substitutedFields
         }
         let subst = GetSubstitutionMap()
@@ -2400,6 +2406,7 @@ class StructSymbol : TypeSymbol {
         }
         substitutedFields = result
         substitutedFieldsSource = source
+        substitutedFieldsVersion = version
         substitutedFieldsComputed = true
         return result
     }

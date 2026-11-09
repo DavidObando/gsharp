@@ -103,6 +103,8 @@ class DelegateTypeSymbol : TypeSymbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration DelegateDeclarationSyntax) {
         declarationSyntax = declaration
+        ParameterSymbol.RepointDeclarations(parameters, declaration.Parameters)
+        signatureVersion++
     }
 
     /// ```xmldoc

@@ -181,14 +181,15 @@ class WaikikiHoverAuditScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(audit.AuditVerificationError, "PlaceholderHoverCount"):
             audit.verify_artifacts(out_dir)
 
-        self.write_valid_artifacts(out_dir)
-        with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:
-            rows = list(csv.reader(handle))
-        rows[1][4] = "true"
-        with (out_dir / "failures.csv").open("w", encoding="utf-8", newline="") as handle:
-            csv.writer(handle).writerows(rows)
-        with self.assertRaisesRegex(audit.AuditVerificationError, "failures.csv row 0"):
-            audit.verify_artifacts(out_dir)
+        with patch.object(audit, "EXPECTED_REVIEWED_FAILURES", 1):
+            self.write_valid_artifacts(out_dir)
+            with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.reader(handle))
+            rows[1][4] = "true"
+            with (out_dir / "failures.csv").open("w", encoding="utf-8", newline="") as handle:
+                csv.writer(handle).writerows(rows)
+            with self.assertRaisesRegex(audit.AuditVerificationError, "failures.csv row 0"):
+                audit.verify_artifacts(out_dir)
 
         self.write_valid_artifacts(out_dir)
         with (out_dir / "failures.csv").open("r", encoding="utf-8", newline="") as handle:

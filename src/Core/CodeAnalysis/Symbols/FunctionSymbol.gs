@@ -742,6 +742,7 @@ class FunctionSymbol : Symbol {
     /// @param declaration The corresponding declaration in the re-parsed tree.
     internal func RepointDeclaration(declaration FunctionDeclarationSyntax) {
         Declaration = declaration
+        ParameterSymbol.RepointDeclarations(Parameters, declaration.Parameters, declaration.Receiver)
     }
 
     /// ADR-0184: records that this accessor's OWNING property/indexer carries

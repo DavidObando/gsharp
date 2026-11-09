@@ -180,8 +180,13 @@ open class ProjectState {
                 ?.FileName == filePath &&
                 existing
                 .Text
-                .ToString() == text && (rawBytes ?? Array.Empty[uint8]()).SequenceEqual(
-                existing.Text.RawBytes ?? Array.Empty[uint8]()
+                .ToString() == text &&
+                (
+                if rawBytes == nil {
+                    existing.Text.RawBytes == nil || !HasRawByteEncodingDiagnostic(existing)
+                } else {
+                    existing.Text.RawBytes != nil && rawBytes.SequenceEqual(existing.Text.RawBytes!!)
+                }
             ) {
                 return existing
             }
@@ -636,6 +641,10 @@ open class ProjectState {
             }
             return true
         }
+
+        private func HasRawByteEncodingDiagnostic(tree SyntaxTree) bool -> tree.Diagnostics.Any(
+            (d GSharp.Core.CodeAnalysis.Diagnostic) -> d.Id == "GS0628" || d.Id == "GS0632"
+        )
 
         private func NormalizePath(path string) string {
             return ServerPathIdentity.Normalize(path)
