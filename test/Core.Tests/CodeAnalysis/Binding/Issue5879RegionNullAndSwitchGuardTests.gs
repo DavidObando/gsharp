@@ -44,6 +44,20 @@ class Issue5879RegionNullAndSwitchGuardTests {
 
     shared {
         public func Rows() IEnumerable[[]object] {
+            yield []object{"concurrent_dictionary_generic_key", `import System.Collections.Concurrent
+class SyncMap[K, V any] {
+    private var items ConcurrentDictionary[K, V]
+    init() { items = ConcurrentDictionary[K, V]() }
+    func Store(key K, value V) { items[key] = value }
+    func Read(key K) V -> items[key]
+}
+func Probe() int32 {
+    let items = SyncMap[string, int32]()
+    items.Store("key", 2)
+    return items.Read("key")
+}
+Probe()
+`, false}
             for pattern in[]string{
                 "cast[object?](nil)",
                 "cast[C?](nil)",
