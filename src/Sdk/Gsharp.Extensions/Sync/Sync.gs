@@ -63,7 +63,7 @@ import System.Runtime.CompilerServices
 /// }
 /// let hits = m.Load("hits")   // exactly 50
 /// ```
-class SyncMap[K, V any] {
+class SyncMap[K notnull, V any] {
     // The backing store doubles as the hidden monitor for writes. It is
     // private and never returned, stored, or otherwise leaked, so no code
     // outside this class can lock it (ADR-0158's hidden-monitor rule).
