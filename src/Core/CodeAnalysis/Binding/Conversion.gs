@@ -2714,7 +2714,7 @@ class Conversion {
         /// @param source The source type.
         /// @param target The target type.
         /// @returns `true` when the target view is the same reference.
-        private func ProvesNominalReference(source TypeSymbol, target TypeSymbol) bool {
+        internal func ProvesNominalReference(source TypeSymbol, target TypeSymbol) bool {
             let sourceShape = source.StripToBareShape()
             let targetShape = target.StripToBareShape()
             if !IsReferenceLikeTarget(sourceShape) || !IsReferenceLikeTarget(targetShape) {
@@ -4878,7 +4878,8 @@ class Conversion {
             out projected ImmutableArray[TypeSymbol],
             out projectedTargetArguments ImmutableArray[TypeSymbol],
             includeCallableContracts bool = false,
-            includeAllPositions bool = false
+            includeAllPositions bool = false,
+            acceptProjection Func[ImmutableArray[TypeSymbol], bool]? = nil
         ) bool {
             projectedTargetArguments = targetArguments
             if TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr) &&
@@ -4895,7 +4896,7 @@ class Conversion {
             ) &&
                 implementedArguments.Length == targetArguments.Length {
                 projected = implementedArguments
-                return true
+                return acceptProjection?.Invoke(projected) ?? true
             }
             projected = ImmutableArray[TypeSymbol].Empty
             return !(implemented is StructSymbol) &&
@@ -4906,7 +4907,8 @@ class Conversion {
                 out projected,
                 out projectedTargetArguments,
                 includeCallableContracts,
-                includeAllPositions
+                includeAllPositions,
+                acceptProjection
             )
         }
 
@@ -4939,6 +4941,7 @@ class Conversion {
         /// @param targetArguments The target's arguments.
         /// @param includeCallableContracts Include inferred optional callable contracts.
         /// @param includeAllPositions Project stated-nullability positions even when no platform or optional contract exists.
+        /// @param acceptProjection Select a projection, or continue through the remaining constructed views.
         /// @returns `true` when a projection was found.
         internal func TryProjectTypeArgumentsToSupertype(
             from TypeSymbol?,
@@ -4946,7 +4949,8 @@ class Conversion {
             out projected ImmutableArray[TypeSymbol],
             out targetArguments ImmutableArray[TypeSymbol],
             includeCallableContracts bool = false,
-            includeAllPositions bool = false
+            includeAllPositions bool = false,
+            acceptProjection Func[ImmutableArray[TypeSymbol], bool]? = nil
         ) bool {
             var from = from
             var to = to
@@ -4965,7 +4969,9 @@ class Conversion {
                     ) {
                         projected = GetEffectiveInterfaceTypeArguments(candidate)
                         targetArguments = GetEffectiveInterfaceTypeArguments(targetInterface)
-                        return projected.Length == targetArguments.Length
+                        if projected.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true) {
+                            return true
+                        }
                     }
                 }
             }
@@ -4992,7 +4998,7 @@ class Conversion {
                     )
                 ) {
                     targetArguments = effectiveTargetArguments
-                    return true
+                    return acceptProjection?.Invoke(projected) ?? true
                 }
             }
             if !TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr) ||
@@ -5041,7 +5047,8 @@ class Conversion {
                             out projected,
                             out var interfaceTargetArguments,
                             includeCallableContracts,
-                            includeAllPositions
+                            includeAllPositions,
+                            acceptProjection
                         ) {
                             targetArguments = interfaceTargetArguments
                             return true
@@ -5077,7 +5084,8 @@ class Conversion {
                             out projected,
                             out var classTargetArguments,
                             includeCallableContracts,
-                            includeAllPositions
+                            includeAllPositions,
+                            acceptProjection
                         ) {
                             targetArguments = classTargetArguments
                             return true
@@ -5095,7 +5103,8 @@ class Conversion {
                                     out projected,
                                     out var interfaceTargetArguments,
                                     includeCallableContracts,
-                                    includeAllPositions
+                                    includeAllPositions,
+                                    acceptProjection
                                 ) {
                                     targetArguments = interfaceTargetArguments
                                     return true
@@ -5110,16 +5119,32 @@ class Conversion {
             if sourceIsArray {
                 if targetArguments.Length == 1 && positions.Length == 1 && IsArrayElementInterface(targetDefinition) {
                     projected = positions
-                    return true
+                    return acceptProjection?.Invoke(projected) ?? true
                 }
                 return false
             }
             // Preserve nullability stated on imported base and interface type arguments.
             if includeAllPositions && MemberLookup.GetProjectionReceiverImportedType(from) is {} importedReceiver &&
-                MemberLookup
-                .TryGetSymbolicDeclaringContext(importedReceiver, targetDefinition, out _, out var declaredArguments) {
-                projected = declaredArguments
-                return projected.Length == targetArguments.Length
+                importedReceiver.ClrType is {} receiverClr {
+                for candidate in SupertypesOf(receiverClr).Prepend(receiverClr) {
+                    if !candidate.IsGenericType || !ClrTypeUtilities.AreSame(
+                        candidate.GetGenericTypeDefinition(),
+                        targetDefinition
+                    ) ||
+                        !MemberLookup.TryGetSymbolicDeclaringContext(
+                        importedReceiver,
+                        candidate,
+                        out _,
+                        out var declaredArguments
+                    ) {
+                        continue
+                    }
+                    projected = declaredArguments
+                    if projected.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true) {
+                        return true
+                    }
+                }
+                return false
             }
             let sourceClr = if from is ImportedTypeSymbol{OpenDefinition: {} importedOpen} {
                 importedOpen
@@ -5149,7 +5174,7 @@ class Conversion {
                 // apparent `string! -> string`.
                 projected = positions
                 targetArguments = to.GetElementPositions()
-                return positions.Length == targetArguments.Length
+                return positions.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true)
             }
             for candidate in SupertypesOf(sourceDefinition) {
                 var candidateDefinition Type
@@ -5188,7 +5213,9 @@ class Conversion {
                     )
                 }
                 projected = builder.MoveToImmutable()
-                return true
+                if acceptProjection?.Invoke(projected) ?? true {
+                    return true
+                }
             }
             return false
         }

@@ -904,19 +904,101 @@ internal shared class ExternalClrOverrideResolver {
         if contractPositions.IsDefaultOrEmpty {
             return true
         }
-        let implementationPositions = if !isTuple && Conversion.TryProjectTypeArgumentsToSupertype(
-            implementation,
-            contract,
-            out var projected,
-            out _,
-            includeAllPositions: true
-        ) {
-            projected
-        } else if !isTuple {
+        if !isTuple {
+            let views = ImmutableArray.CreateBuilder[ImmutableArray[TypeSymbol]]()
+            let _ = Conversion.TryProjectTypeArgumentsToSupertype(
+                implementation,
+                contract,
+                out _,
+                out _,
+                includeAllPositions: true,
+                acceptProjection: (positions ImmutableArray[TypeSymbol]) -> {
+                    views.Add(positions)
+                    return false
+                }
+            )
+            if views.Count > 0 {
+                // Exact interface implementations take precedence over variance-compatible views.
+                let exact = views.Any(
+                    (positions ImmutableArray[TypeSymbol]) -> ReturnPositionsMatchRuntime(
+                        valueShape,
+                        contractPositions,
+                        positions,
+                        exact: true
+                    )
+                )
+                var matched = false
+                for positions in views {
+                    if !ReturnPositionsMatchRuntime(valueShape, contractPositions, positions, exact) {
+                        continue
+                    }
+                    matched = true
+                    if !ReturnPositionsNullabilityConforms(
+                        valueShape,
+                        contractPositions,
+                        positions,
+                        invariant,
+                        isTask
+                    ) {
+                        return false
+                    }
+                }
+                return matched
+            }
+        }
+        let implementationPositions = if !isTuple {
             GetReturnTypeArgumentPositions(valueShape, implementation)
         } else {
             implementation.GetElementPositions()
         }
+        return ReturnPositionsNullabilityConforms(
+            valueShape,
+            contractPositions,
+            implementationPositions,
+            invariant,
+            isTask
+        )
+    }
+
+    private func ReturnPositionsMatchRuntime(
+        shape TypeSymbol,
+        contractPositions ImmutableArray[TypeSymbol],
+        implementationPositions ImmutableArray[TypeSymbol],
+        exact bool
+    ) bool {
+        if contractPositions.Length != implementationPositions.Length {
+            return false
+        }
+        for var i = 0; i < contractPositions.Length; i++ {
+            let contract = contractPositions[i]
+            let implementation = implementationPositions[i]
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(contract, implementation) ||
+                DeclarationBinder.ConformanceSignaturesEquivalent(contract, implementation) {
+                continue
+            }
+            let variance = Conversion.GetPositionVariance(shape, i)
+            if exact ||
+                variance == TypeParameterVariance.None ||
+                !(
+                if variance == TypeParameterVariance.In {
+                    Conversion.ProvesNominalReference(contract, implementation)
+                } else {
+                    Conversion.ProvesNominalReference(implementation, contract)
+                }
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func ReturnPositionsNullabilityConforms(
+        valueShape TypeSymbol,
+        contractPositions ImmutableArray[TypeSymbol],
+        implementationPositions ImmutableArray[TypeSymbol],
+        invariant bool,
+        isTask bool
+    ) bool {
         if contractPositions.Length != implementationPositions.Length {
             return false
         }

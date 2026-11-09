@@ -6441,10 +6441,15 @@ internal shared class ObliviousNullabilityAnalyzer {
             return true
         }
         for contract in TupleContractDeclarations(compilation, contractSymbol) {
-            if TupleContractPositionAcceptsNil(compilation, contract, contractPath) {
-                continue
+            var mapped = false
+            for path in TupleContractPaths(contractSymbol!!, contractPath, contract) {
+                mapped = true
+                if !TupleContractPositionAcceptsNil(compilation, contract, path) &&
+                    !CanPromoteTuplePosition(compilation, contract, path, visited) {
+                    return false
+                }
             }
-            if !CanPromoteTuplePosition(compilation, contract, contractPath, visited) {
+            if !mapped {
                 return false
             }
         }
@@ -7223,26 +7228,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
     ) {
-        var comparisonType ITypeSymbol? = firstType
-        if first is IMethodSymbol{Arity: > 0} firstMethod &&
-            second is IMethodSymbol secondMethod &&
-            firstMethod.Arity == secondMethod
-            .Arity {
-            // Compare method parameters by ordinal without changing tuple-key ownership.
-            comparisonType = SymbolValueType(
-                firstMethod.ConstructedFrom.Construct(secondMethod.TypeArguments.ToArray())
-            )
-        } else if first is IParameterSymbol{ContainingSymbol: IMethodSymbol{Arity: > 0} firstOwner} firstParam &&
-            second is IParameterSymbol{ContainingSymbol: IMethodSymbol secondOwner} &&
-            firstOwner.Arity == secondOwner.Arity &&
-            firstParam.Ordinal >= 0 &&
-            firstParam.Ordinal < firstOwner
-            .Parameters
-            .Length {
-            comparisonType = SymbolValueType(
-                firstOwner.ConstructedFrom.Construct(secondOwner.TypeArguments.ToArray()).Parameters[firstParam.Ordinal]
-            )
-        }
+        let comparisonType = TupleContractComparisonType(first, firstType, second)
         // Covariant envelopes can reorder type arguments. Bare tuple
         // conversions still pair their elements directly, as before.
         if (
@@ -7252,6 +7238,30 @@ internal shared class ObliviousNullabilityAnalyzer {
             !SymbolEqualityComparer
             .Default
             .Equals(comparisonType, secondType) {
+            if firstType is INamedTypeSymbol firstNamed &&
+                comparisonType is INamedTypeSymbol comparisonNamed &&
+                secondType is INamedTypeSymbol secondNamed &&
+                second != nil {
+                if !AddProjectedTupleContractPair(
+                    first,
+                    firstNamed,
+                    comparisonNamed,
+                    second,
+                    secondNamed,
+                    tupleTainted,
+                    tupleEdges
+                ) {
+                    let _ = AddProjectedTupleContractPair(
+                        second,
+                        secondNamed,
+                        secondNamed,
+                        first,
+                        firstNamed,
+                        tupleTainted,
+                        tupleEdges
+                    )
+                }
+            }
             return
         }
         let firstSlots = NestedTupleSlots(firstType)
@@ -7291,6 +7301,132 @@ internal shared class ObliviousNullabilityAnalyzer {
                 tupleTainted,
                 tupleEdges
             )
+        }
+    }
+
+    private func TupleContractComparisonType(first ISymbol, firstType ITypeSymbol?, second ISymbol?) ITypeSymbol? {
+        if first is IMethodSymbol{Arity: > 0} firstMethod &&
+            second is IMethodSymbol secondMethod &&
+            firstMethod.Arity == secondMethod
+            .Arity {
+            // Compare method parameters by ordinal without changing tuple-key ownership.
+            return SymbolValueType(firstMethod.ConstructedFrom.Construct(secondMethod.TypeArguments.ToArray()))
+        } else if first is IParameterSymbol{ContainingSymbol: IMethodSymbol{Arity: > 0} firstOwner} firstParam &&
+            second is IParameterSymbol{ContainingSymbol: IMethodSymbol secondOwner} &&
+            firstOwner.Arity == secondOwner.Arity &&
+            firstParam.Ordinal >= 0 &&
+            firstParam.Ordinal < firstOwner
+            .Parameters
+            .Length {
+            return SymbolValueType(
+                firstOwner.ConstructedFrom.Construct(secondOwner.TypeArguments.ToArray()).Parameters[firstParam.Ordinal]
+            )
+        }
+        return firstType
+    }
+
+    private func TupleContractPaths(symbol ISymbol, path string, contract ISymbol?) sequence[string] {
+        let type = SymbolValueType(symbol)
+        let target = SymbolValueType(contract)
+        let comparison = TupleContractComparisonType(symbol, type, contract)
+        if SymbolEqualityComparer.Default.Equals(comparison, target) ||
+            (type is INamedTypeSymbol{IsTupleType: true} && target is INamedTypeSymbol{IsTupleType: true}) {
+            yield path
+            yield break
+        }
+        if type is INamedTypeSymbol derived &&
+            comparison is INamedTypeSymbol compared &&
+            target is INamedTypeSymbol baseType {
+            for slot in ProjectedTupleContractSlots(symbol, derived, compared, baseType) {
+                if path == slot.DerivedPath || path.StartsWith(slot.DerivedPath + ".", StringComparison.Ordinal) {
+                    yield slot.BasePath + path.Substring(slot.DerivedPath.Length)
+                }
+            }
+        }
+    }
+
+    private func AddProjectedTupleContractPair(
+        derivedSymbol ISymbol,
+        derivedType INamedTypeSymbol,
+        comparisonType INamedTypeSymbol,
+        baseSymbol ISymbol,
+        baseType INamedTypeSymbol,
+        tupleTainted HashSet[TupleElementKey],
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+    ) bool {
+        var paired = false
+        for slot in ProjectedTupleContractSlots(derivedSymbol, derivedType, comparisonType, baseType) {
+            AddTupleShapeEdges(
+                derivedSymbol,
+                slot.DerivedTuple,
+                slot.DerivedPath,
+                baseSymbol,
+                slot.BaseTuple,
+                slot.BasePath,
+                tupleTainted,
+                tupleEdges
+            )
+            AddTupleShapeEdges(
+                baseSymbol,
+                slot.BaseTuple,
+                slot.BasePath,
+                derivedSymbol,
+                slot.DerivedTuple,
+                slot.DerivedPath,
+                tupleTainted,
+                tupleEdges
+            )
+            paired = true
+        }
+        return paired
+    }
+
+    private func ProjectedTupleContractSlots(
+        derivedSymbol ISymbol,
+        derivedType INamedTypeSymbol,
+        comparisonType INamedTypeSymbol,
+        baseType INamedTypeSymbol
+    ) sequence[(DerivedTuple INamedTypeSymbol, DerivedPath string, BaseTuple INamedTypeSymbol, BasePath string)] {
+        let derivedSlots = NestedTupleSlots(derivedType)
+        let baseSlots = NestedTupleSlots(baseType)
+        if derivedSlots.Count == 0 || baseSlots.Count == 0 {
+            yield break
+        }
+        let pending = Queue[(Actual INamedTypeSymbol, Template INamedTypeSymbol)]()
+        let visited = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
+        pending.Enqueue((comparisonType, comparisonType.OriginalDefinition))
+        while pending.Count > 0 {
+            let (actual, template) = pending.Dequeue()
+            if !visited.Add(actual) {
+                continue
+            }
+            if SymbolEqualityComparer.Default.Equals(actual, baseType) {
+                for slot in baseSlots {
+                    let (owner, path) = ProjectTupleContractPosition(derivedSymbol, slot.Path, template, derivedType)
+                    if !SymbolEqualityComparer.Default.Equals(owner, derivedType) {
+                        continue
+                    }
+                    for derivedSlot in derivedSlots {
+                        if derivedSlot.Path != path ||
+                            derivedSlot
+                            .Tuple
+                            .TupleElements
+                            .Length != slot
+                            .Tuple
+                            .TupleElements
+                            .Length {
+                            continue
+                        }
+                        yield (derivedSlot.Tuple, path, slot.Tuple, slot.Path)
+                    }
+                }
+            }
+            if actual.BaseType is {} actualBase && template.BaseType is {} templateBase {
+                pending.Enqueue((actualBase, templateBase))
+            }
+            for var i = 0; i < actual.Interfaces.Length && i < template.Interfaces.Length; i++ {
+                pending.Enqueue((actual.Interfaces[i], template.Interfaces[i]))
+            }
         }
     }
 

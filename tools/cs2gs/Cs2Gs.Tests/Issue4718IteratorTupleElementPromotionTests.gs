@@ -258,13 +258,15 @@ public static class Consumer {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func ImportedTupleReturnContracts_OnlyEquivalentShapesSharePositionalTaint(reordered bool) {
+    @InlineData("direct")
+    @InlineData("reordered")
+    @InlineData("intermediate")
+    func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", `#nullable enable
 namespace Contract4718;
 public class Carrier<X, Y> { }
 public class Reordered<X, Y> : Carrier<Y, X> { }
+public class Intermediate<X, Y> : Reordered<X, Y> { }
 public abstract class RowsBase {
     public abstract Carrier<(string? Text, int Code), (string Keep, int Code)> Rows();
 }`)}, assemblyName: "Contract4718")
@@ -272,8 +274,13 @@ public abstract class RowsBase {
         let emitted = library.Compilation.Emit(image)
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
         let bytes = image.ToArray()
-        let returnType = if reordered {
-            "Reordered<(string Keep, int Code), (string Text, int Code)>"
+        let derived = if mode == "intermediate" {
+            "Intermediate"
+        } else {
+            "Reordered"
+        }
+        let returnType = if mode != "direct" {
+            "$derived<(string Keep, int Code), (string Text, int Code)>"
         } else {
             "Carrier<(string Text, int Code), (string Keep, int Code)>"
         }
@@ -283,13 +290,14 @@ public sealed class Producer : RowsBase {
         return new ` + "$returnType" + `();
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
-        let expected = if reordered {
-            "Reordered[(Keep string, Code int32), (Text string, Code int32)]"
+        let expected = if mode != "direct" {
+            "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         } else {
             "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
         }
         Assert.Contains("override func Rows() " + expected, printed)
         Assert.Contains("return " + expected + "()", printed)
+        Assert.DoesNotContain("Keep string?", printed)
         let directory = Path.Combine(".local", "issue4718-import-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {

@@ -13,6 +13,30 @@ import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1DeferredTypedMemberLambdasRetainTargetTyping(property bool, inherited bool) {
+        let member = if property {
+            "prop Callback ((int32) -> int32) -> int32 { get { return func(f (int32) -> int32) int32 { return f(7) } } }"
+        } else {
+            "var Callback ((int32) -> int32) -> int32 = func(f (int32) -> int32) int32 { return f(7) }"
+        }
+        let baseType = if inherited {
+            " : List[string?]"
+        } else {
+            ""
+        }
+        let result = EmittedOracle.Evaluate(
+            "import System.Collections.Generic\nclass Holder$baseType {\n$member\n}\n" +
+                "Holder().Callback((x int32) -> x + 1)"
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(8, result.Value)
+    }
+
+    @Theory
     @InlineData("var Value T")
     @InlineData("prop Value T { get; set; }")
     func Issue5892GenericCallableMembersMaterializeOptionalArguments(member string) {

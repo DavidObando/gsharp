@@ -6,6 +6,33 @@ import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1TypedCallbackArgumentsVerifyOnInheritedCollectionReceivers(property bool, inherited bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let member = if property {
+            "prop Callback ((int32) -> int32) -> int32 { get { return func(f (int32) -> int32) int32 { return f(7) } } }"
+        } else {
+            "var Callback ((int32) -> int32) -> int32 = func(f (int32) -> int32) int32 { return f(7) }"
+        }
+        let baseType = if inherited {
+            " : List[string?]"
+        } else {
+            ""
+        }
+        let dll = fixture.Compile(
+            "package TypedCallback5892\nimport System.Collections.Generic\nclass Holder$baseType {\n$member\n}\n" +
+                "System.Console.Write(Holder().Callback((x int32) -> x + 1))",
+            "typed-callback",
+            true
+        )
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("8"), fixture.RunBytes(dll))
+    }
+
+    @Theory
     @InlineData("var Value T")
     @InlineData("prop Value T { get; set; }")
     func Issue5892GenericMemberDefaultsVerifyAndExecute(member string) {

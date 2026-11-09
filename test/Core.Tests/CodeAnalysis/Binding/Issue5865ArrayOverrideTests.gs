@@ -7,6 +7,93 @@ import System.Linq
 import Xunit
 
 class Issue5865ArrayOverrideTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1CompatibleInterfaceViewsRetainTheirOwnNullability(array bool, wide bool) {
+        let value = if array {
+            "Box[]"
+        } else {
+            "Box"
+        }
+        let nullable = if array {
+            "Box?[]"
+        } else {
+            "Box?"
+        }
+        let other = if array {
+            "string[]"
+        } else {
+            "string"
+        }
+        let target = if wide {
+            if array {
+                "object[]"
+            } else {
+                "object"
+            }
+        } else {
+            value
+        }
+        for reverse in[]bool{false, true} {
+            let interfaces = if reverse {
+                "IEnumerable<$nullable>, IEnumerable<$other>"
+            } else {
+                "IEnumerable<$other>, IEnumerable<$nullable>"
+            }
+            using let contract = CSharpFixture(
+                "#nullable enable\nusing System.Collections;\nusing System.Collections.Generic;\nnamespace Dual5865;\n" +
+                    "public sealed class Box {}\npublic abstract class Contract { public abstract IEnumerable<$target> Read(); }\n" +
+                    "public class Dual : $interfaces {\n" +
+                    "IEnumerator<$other> IEnumerable<$other>.GetEnumerator() => throw new System.NotImplementedException();\n" +
+                    "IEnumerator<$nullable> IEnumerable<$nullable>.GetEnumerator() => throw new System.NotImplementedException();\n" +
+                    "IEnumerator IEnumerable.GetEnumerator() => throw new System.NotImplementedException();\n}"
+            )
+            let result = EmittedOracle.Evaluate(
+                []string{"package Dual5865\nclass Rows : Contract {\noverride func Read() Dual -> Dual()\n}"},
+                EmittedOracleOptions{IsLibrary: true, References: []string{contract.AssemblyPath}}
+            )
+            let diagnostic = Assert.Single(result.Diagnostics.Where((d Diagnostic) -> d.Id == "GS0185"))
+            Assert.Equal(2, diagnostic.Location.StartLine)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Review1ExactInterfaceViewTakesPrecedenceOverVariantViews(array bool) {
+        let target = if array {
+            "object[]"
+        } else {
+            "object"
+        }
+        let nullable = if array {
+            "Box?[]"
+        } else {
+            "Box?"
+        }
+        let value = if array {
+            "new object[] { new object() }"
+        } else {
+            "new object()"
+        }
+        using let contract = CSharpFixture(
+            "#nullable enable\nusing System.Collections;\nusing System.Collections.Generic;\nnamespace Exact5865;\n" +
+                "public sealed class Box {}\npublic abstract class Contract { public abstract IEnumerable<$target> Read(); }\n" +
+                "public class Dual : IEnumerable<$nullable>, IEnumerable<$target> {\n" +
+                "IEnumerator<$nullable> IEnumerable<$nullable>.GetEnumerator() { yield return null!; }\n" +
+                "IEnumerator<$target> IEnumerable<$target>.GetEnumerator() { yield return $value; }\n" +
+                "IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<$target>)this).GetEnumerator();\n}"
+        )
+        let result = EmittedOracle.Evaluate(
+            []string{"package Exact5865\nclass Rows : Contract {\noverride func Read() Dual -> Dual()\n}"},
+            EmittedOracleOptions{IsLibrary: true, References: []string{contract.AssemblyPath}}
+        )
+        Assert.Empty(result.Diagnostics)
+    }
+
     @Fact
     func CovariantContainersDoNotMakeNestedMutablePositionsCovariant() {
         using let contract = CSharpFixture(`#nullable enable

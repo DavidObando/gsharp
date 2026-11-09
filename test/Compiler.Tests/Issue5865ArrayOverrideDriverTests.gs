@@ -7,6 +7,112 @@ import Xunit
 
 class Issue5865ArrayOverrideDriverTests {
     @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1CompatibleConstructedInterfacesCannotHideNullableResults(array bool, wide bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let value = if array {
+            "Box[]"
+        } else {
+            "Box"
+        }
+        let nullable = if array {
+            "Box?[]"
+        } else {
+            "Box?"
+        }
+        let other = if array {
+            "string[]"
+        } else {
+            "string"
+        }
+        let target = if wide {
+            if array {
+                "object[]"
+            } else {
+                "object"
+            }
+        } else {
+            value
+        }
+        for reverse in[]bool{false, true} {
+            let interfaces = if reverse {
+                "IEnumerable<$nullable>, IEnumerable<$other>"
+            } else {
+                "IEnumerable<$other>, IEnumerable<$nullable>"
+            }
+            let name = "dual" + reverse.ToString()
+            let native = fixture.CompileCSharp(
+                "#nullable enable\nusing System.Collections;\nusing System.Collections.Generic;\nnamespace Dual5865;\n" +
+                    "public sealed class Box {}\npublic abstract class Contract { public abstract IEnumerable<$target> Read(); }\n" +
+                    "public class Dual : $interfaces {\n" +
+                    "IEnumerator<$other> IEnumerable<$other>.GetEnumerator() => throw new System.NotImplementedException();\n" +
+                    "IEnumerator<$nullable> IEnumerable<$nullable>.GetEnumerator() => throw new System.NotImplementedException();\n" +
+                    "IEnumerator IEnumerable.GetEnumerator() => throw new System.NotImplementedException();\n}",
+                name
+            )
+            let (code, diagnostics) = fixture.TryCompile(
+                "package Dual5865\nclass Rows : Contract {\noverride func Read() Dual -> Dual()\n}",
+                name + "rows",
+                false,
+                "/r:" + native
+            )
+            Assert.NotEqual(0, code)
+            Assert.Contains("error GS0185", diagnostics, StringComparison.Ordinal)
+            Assert.Contains(".gs(3,", diagnostics, StringComparison.Ordinal)
+        }
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Review1ExactNonNullInterfaceWinsOverNullableVariantAndExecutes(array bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let target = if array {
+            "object[]"
+        } else {
+            "object"
+        }
+        let nullable = if array {
+            "Box?[]"
+        } else {
+            "Box?"
+        }
+        let value = if array {
+            "new object[] { new object() }"
+        } else {
+            "new object()"
+        }
+        let nestedCheck = if array {
+            "if (item[0] == null) throw new System.Exception(\"element\");"
+        } else {
+            ""
+        }
+        let native = fixture.CompileCSharp(
+            "#nullable enable\nusing System.Collections;\nusing System.Collections.Generic;\nnamespace Exact5865;\n" +
+                "public sealed class Box {}\npublic abstract class Contract { public abstract IEnumerable<$target> Read(); }\n" +
+                "public class Dual : IEnumerable<$nullable>, IEnumerable<$target> {\n" +
+                "IEnumerator<$nullable> IEnumerable<$nullable>.GetEnumerator() { yield return null!; }\n" +
+                "IEnumerator<$target> IEnumerable<$target>.GetEnumerator() { yield return $value; }\n" +
+                "IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<$target>)this).GetEnumerator();\n}\n" +
+                "public static class Observer { public static int Probe(Contract rows) {\n" +
+                "int count = 0; foreach (var item in rows.Read()) { if (item == null) throw new System.Exception(\"item\"); $nestedCheck count++; } return count; } }",
+            "exact"
+        )
+        let dll = fixture.Compile(
+            "package Exact5865\nclass Rows : Contract {\noverride func Read() Dual -> Dual()\n}\n" +
+                "System.Console.Write(Observer.Probe(Rows()))",
+            "exact-rows",
+            true,
+            "/r:" + native
+        )
+        IlVerifier.Verify(dll, []string{native})
+        Assert.Equal(Encoding.UTF8.GetBytes("1"), fixture.RunBytes(dll))
+    }
+
+    @Theory
     @InlineData("array")
     @InlineData("rectangular")
     @InlineData("jagged")
