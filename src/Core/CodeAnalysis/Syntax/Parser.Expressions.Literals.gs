@@ -1182,6 +1182,24 @@ open partial class Parser {
         SpreadSeparator SyntaxToken?,
         Elements SeparatedSyntaxList[StructLiteralElementSyntax]
     ) {
+        let savedSuppress = suppressTrailingObjectInitializer
+        let savedStructLiteral = suppressStructLiteral
+        suppressTrailingObjectInitializer = 0
+        suppressStructLiteral = 0
+        try {
+            return ParseStructLiteralInitializersCore()
+        } finally {
+            suppressTrailingObjectInitializer = savedSuppress
+            suppressStructLiteral = savedStructLiteral
+        }
+    }
+
+    private func ParseStructLiteralInitializersCore()(
+        SpreadToken SyntaxToken?,
+        SpreadExpression ExpressionSyntax?,
+        SpreadSeparator SyntaxToken?,
+        Elements SeparatedSyntaxList[StructLiteralElementSyntax]
+    ) {
         var spreadToken SyntaxToken? = nil
         var spreadExpression ExpressionSyntax? = nil
         var spreadSeparator SyntaxToken? = nil

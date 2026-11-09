@@ -1007,9 +1007,7 @@ open partial class TypeSymbol : Symbol {
                         parameters.Add(materializedParameter)
                     }
                     return if changed {
-                        cast[TypeSymbol](
-                            FunctionTypeSymbol.Get(parameters.MoveToImmutable(), fn.IsVariadic, materializedReturn)
-                        )
+                        cast[TypeSymbol](fn.WithSignature(parameters.MoveToImmutable(), materializedReturn))
                     } else {
                         type
                     }
@@ -1318,7 +1316,8 @@ open partial class TypeSymbol : Symbol {
         func RequiresSymbolicProjection(type TypeSymbol) bool -> ContainsTypeParameter(type) ||
             ContainsSameCompilationUserType(type) ||
             ContainsReferenceNullableAnnotation(type) ||
-            ContainsFunctionPointer(type)
+            ContainsFunctionPointer(type) ||
+            FunctionTypeSymbol.ContainsOptionalContract(type)
 
         internal func ContainsFunctionPointer(type TypeSymbol) bool {
             var visited HashSet[TypeSymbol]? = nil
@@ -1628,13 +1627,7 @@ open partial class TypeSymbol : Symbol {
                     let functionReturn = substitute(function.ReturnType)
                     functionChanged |= !object.ReferenceEquals(functionReturn, function.ReturnType)
                     result = if functionChanged {
-                        cast[TypeSymbol](
-                            FunctionTypeSymbol.Get(
-                                functionParameters.MoveToImmutable(),
-                                function.IsVariadic,
-                                functionReturn
-                            )
-                        )
+                        cast[TypeSymbol](function.WithSignature(functionParameters.MoveToImmutable(), functionReturn))
                     } else {
                         type
                     }

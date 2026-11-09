@@ -2612,6 +2612,9 @@ internal partial class DeclarationBinder {
                 if ExpressionBinder.IsNegatedInt32MinValueLiteral(unary.OperatorToken.Kind, unary.Operand) {
                     return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int32)
                 }
+                if ExpressionBinder.IsNegatedInt64MinValueLiteral(unary.OperatorToken.Kind, unary.Operand) {
+                    return PredefinedUnaryResultType(unaryOperators, TypeSymbol.Int64)
+                }
                 unaryOperators.Add(unary.OperatorToken.Kind)
                 current = unary.Operand
             } else {

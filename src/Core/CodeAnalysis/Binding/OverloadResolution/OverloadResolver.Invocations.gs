@@ -348,17 +348,26 @@ internal partial class OverloadResolver {
         } else {
             functionType.Arity
         }
+        let parameters = functionType.Parameters
+        let isOptionalAt(int32) -> bool = (i int32) -> !parameters.IsDefaultOrEmpty &&
+            parameters[i].HasExplicitDefaultValue
+        var requiredCount = 0
+        for var i = 0; i < fixedCount; i++ {
+            if !isOptionalAt(i) {
+                requiredCount++
+            }
+        }
         if isVariadic {
-            if syntax.Arguments.Count < fixedCount {
+            if syntax.Arguments.Count < requiredCount {
                 Diagnostics.ReportTooFewArgumentsForVariadic(
                     syntax.Identifier.Location,
                     calleeName,
-                    fixedCount,
+                    requiredCount,
                     syntax.Arguments.Count
                 )
                 return false
             }
-        } else if syntax.Arguments.Count != functionType.Arity {
+        } else if syntax.Arguments.Count < requiredCount || syntax.Arguments.Count > functionType.Arity {
             Diagnostics.ReportWrongArgumentCount(
                 syntax.Identifier.Location,
                 calleeName,
@@ -369,7 +378,11 @@ internal partial class OverloadResolver {
         }
         var parameterSyntax[]ExpressionSyntax?
         var permutedArgs = boundArguments
-        let parameterNameAt(int32) -> string = (parameterIndex int32) -> parameterNames[parameterIndex]
+        let parameterNameAt(int32) -> string = (parameterIndex int32) -> if !parameters.IsDefaultOrEmpty {
+            parameters[parameterIndex].Name
+        } else {
+            parameterNames[parameterIndex]
+        }
         var hasNamedArguments = false
         var firstNamedArgumentName = string.Empty
         for argument in syntax.Arguments {
@@ -380,7 +393,8 @@ internal partial class OverloadResolver {
             }
         }
         if hasNamedArguments {
-            if parameterNames.IsDefaultOrEmpty || parameterNames.Length != functionType.Arity {
+            if parameters.IsDefaultOrEmpty &&
+                (parameterNames.IsDefaultOrEmpty || parameterNames.Length != functionType.Arity) {
                 Diagnostics.ReportNamedArgumentParameterNotFound(
                     syntax.Identifier.Location,
                     calleeName,
@@ -388,7 +402,7 @@ internal partial class OverloadResolver {
                 )
                 return false
             }
-            if isVariadic {
+            if isVariadic && (parameters.IsDefaultOrEmpty || syntax.Arguments.Count > functionType.Arity) {
                 if !TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames) ||
                     !ValidateExpandedVariadicNamedArguments(
                     argumentNames,
@@ -400,16 +414,28 @@ internal partial class OverloadResolver {
                     return false
                 }
                 parameterSyntax = syntax.Arguments.ToArray()
-            } else if !TryReorderUserCallArguments(
-                syntax.Arguments,
-                boundArguments,
-                functionType.Arity,
-                parameterNameAt,
-                calleeName,
-                out parameterSyntax,
-                out permutedArgs
-            ) {
-                return false
+            } else {
+                let diagnosticMark = Diagnostics.Count
+                if !TryReorderUserCallArguments(
+                    syntax.Arguments,
+                    boundArguments,
+                    functionType.Arity,
+                    parameterNameAt,
+                    (i int32) -> isOptionalAt(i) || (isVariadic && i == fixedCount),
+                    calleeName,
+                    out parameterSyntax,
+                    out permutedArgs
+                ) {
+                    if !Diagnostics.HasErrorSince(diagnosticMark) {
+                        Diagnostics.ReportWrongArgumentCount(
+                            syntax.Identifier.Location,
+                            calleeName,
+                            functionType.Arity,
+                            syntax.Arguments.Count
+                        )
+                    }
+                    return false
+                }
             }
         } else {
             parameterSyntax = [syntax.Arguments.Count]ExpressionSyntax
@@ -417,19 +443,64 @@ internal partial class OverloadResolver {
                 parameterSyntax[i] = syntax.Arguments[i]
             }
         }
+        if !isVariadic && !hasNamedArguments && boundArguments.Length < functionType.Arity {
+            if !TryReorderUserCallArguments(
+                syntax.Arguments,
+                boundArguments,
+                functionType.Arity,
+                parameterNameAt,
+                isOptionalAt,
+                calleeName,
+                out parameterSyntax,
+                out permutedArgs
+            ) {
+                return false
+            }
+        }
+        if !parameters.IsDefaultOrEmpty {
+            let filled = permutedArgs.ToBuilder()
+            if isVariadic && filled.Count == functionType.Arity && filled[fixedCount] == nil {
+                filled.RemoveAt(fixedCount)
+            }
+            for var i = 0; i < fixedCount; i++ {
+                if i < filled.Count && filled[i] != nil {
+                    continue
+                }
+                if !isOptionalAt(i) {
+                    Diagnostics.ReportWrongArgumentCount(
+                        syntax.Identifier.Location,
+                        calleeName,
+                        functionType.Arity,
+                        syntax.Arguments.Count
+                    )
+                    return false
+                }
+                let argument = CreateOptionalUserDefaultArgument(parameters[i])
+                if i < filled.Count {
+                    filled[i] = argument
+                } else {
+                    filled.Add(argument)
+                }
+            }
+            permutedArgs = filled.ToImmutable()
+        }
         if isVariadic {
             // Issue #1630: pack/pass-through through the canonical helper
             // (applies #1493 element coercion when packing).
             let sliceType = functionType.ParameterTypes[functionType.Arity - 1]
             var hasElementErrors = false
-            let argumentLocation(int32) -> TextLocation = (argumentIndex int32) -> syntax
-                .Arguments[argumentIndex]
-                .Location
+            let argumentLocation(int32) -> TextLocation = (argumentIndex int32) -> if argumentIndex < syntax
+                .Arguments
+                .Count {
+                syntax.Arguments[argumentIndex].Location
+            } else {
+                syntax.Location
+            }
             permutedArgs = PackOrPassThroughVariadicArguments(
                 conversions,
                 Diagnostics,
                 syntax,
-                boundArguments,
+                permutedArgs,
                 fixedCount,
                 sliceType,
                 calleeName,

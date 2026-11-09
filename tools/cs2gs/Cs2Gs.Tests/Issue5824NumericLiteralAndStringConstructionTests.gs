@@ -3,6 +3,7 @@
 package Cs2Gs.Tests
 
 import Cs2Gs.CodeModel.Printing
+import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
 import Microsoft.CodeAnalysis
@@ -224,7 +225,13 @@ public class P
 }
 
 internal shared class LiteralConstructionRuntimeParity {
-    func AssertMatches(source string, verifyTranslation Action[string]? = nil, librarySource string? = nil) {
+    func AssertMatches(
+        source string,
+        verifyTranslation Action[string]? = nil,
+        librarySource string? = nil,
+        transform((string) -> string)? = nil,
+        verifyIL bool = false
+    ) {
         let tree = CSharpSyntaxTree.ParseText(source, CSharpParseOptions(LanguageVersion.Latest), path: "Probe.cs")
         let library = if librarySource != nil {
             CSharpCompilation.Create(
@@ -256,9 +263,14 @@ internal shared class LiteralConstructionRuntimeParity {
         )
         let model = compilation.GetSemanticModel(tree)
         let context = TranslationContext(compilation, model, "Probe.cs")
-        let printed = GSharpPrinter.Print(
+        var printed = GSharpPrinter.Print(
             CSharpToGSharpTranslator().TranslateDocument(LoadedDocument("Probe.cs", tree, model), context)
         )
+        if transform != nil {
+            let transformed = transform(printed)
+            Assert.NotEqual(printed, transformed)
+            printed = transformed
+        }
         verifyTranslation?.Invoke(printed)
         let directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -320,6 +332,11 @@ internal shared class LiteralConstructionRuntimeParity {
                 compilerArguments.Add("/reference:" + libraryPath)
             }
             RunDotnet(compilerArguments.ToArray(), printed)
+            if verifyIL {
+                let verified = IlVerifyRunner().Verify(translatedPath)
+                Assert.True(verified.Status == IlVerifyStatus.Passed, verified.Output)
+                Assert.Empty(verified.Errors)
+            }
             Assert.Equal(expected, RunDotnet([]string{translatedPath}))
         } finally {
             Directory.Delete(directory, recursive: true)

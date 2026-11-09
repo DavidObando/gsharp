@@ -12,6 +12,7 @@ import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis
 import System.Collections
 import System.Reflection
+import System.Linq
 
 /// Type conversion classifier.
 class Conversion {
@@ -342,6 +343,254 @@ class Conversion {
             allowStructuralProjection: false
         )
 
+        internal func HaveCompatibleOptionalContracts(
+            source TypeSymbol,
+            target TypeSymbol,
+            invariant bool = false
+        ) bool {
+            if object.ReferenceEquals(source, target) ||
+                source == TypeSymbol.Null ||
+                source == TypeSymbol.Never ||
+                source == TypeSymbol.Error ||
+                target == TypeSymbol.Error {
+                return true
+            }
+            let sourceShape = source.StripToBareShape()
+            let targetShape = target.StripToBareShape()
+            if sourceShape is ByRefTypeSymbol sourceRef && targetShape is ByRefTypeSymbol targetRef {
+                return HaveCompatibleOptionalContracts(sourceRef.PointeeType, targetRef.PointeeType, invariant: true)
+            }
+            if (sourceShape is FunctionTypeSymbol || targetShape is FunctionTypeSymbol) &&
+                MemberLookup.TryGetDelegateFunctionTypeFromSymbol(source, out var sourceSignature) &&
+                MemberLookup
+                .TryGetDelegateFunctionTypeFromSymbol(target, out var targetSignature) {
+                return HaveCompatibleCallableContracts(
+                    sourceShape,
+                    targetShape,
+                    sourceSignature!!,
+                    targetSignature!!,
+                    invariant
+                )
+            }
+            let sourceFunction = sourceShape as FunctionTypeSymbol
+            let targetFunction = targetShape as FunctionTypeSymbol
+            if targetFunction != nil &&
+                !targetFunction
+                .Parameters
+                .IsDefaultOrEmpty &&
+                (sourceFunction == nil || !targetFunction.AcceptsOptionalContract(sourceFunction)) {
+                return false
+            }
+            if invariant &&
+                sourceFunction != nil &&
+                !sourceFunction
+                .Parameters
+                .IsDefaultOrEmpty &&
+                (targetFunction == nil || !sourceFunction.AcceptsOptionalContract(targetFunction)) {
+                return false
+            }
+            var targetElements = target.GetElementPositions()
+            if targetElements.IsDefaultOrEmpty {
+                return !invariant || !FunctionTypeSymbol.ContainsOptionalContract(source)
+            }
+            var sourceElements = source.GetElementPositions()
+            if TryProjectPlatformArgumentsToSupertype(
+                source,
+                target,
+                out var projected,
+                out var projectedTarget,
+                includeCallableContracts: true
+            ) {
+                sourceElements = projected
+                targetElements = projectedTarget
+            }
+            if sourceElements.Length != targetElements.Length {
+                return !FunctionTypeSymbol.ContainsOptionalContract(target) &&
+                    (!invariant || !FunctionTypeSymbol.ContainsOptionalContract(source))
+            }
+            for var i = 0; i < targetElements.Length; i++ {
+                let variance = if invariant {
+                    TypeParameterVariance.None
+                } else {
+                    OptionalContractPositionVariance(targetShape, i)
+                }
+                let compatible = if variance == TypeParameterVariance.In {
+                    HaveCompatibleOptionalContracts(targetElements[i], sourceElements[i])
+                } else {
+                    HaveCompatibleOptionalContracts(
+                        sourceElements[i],
+                        targetElements[i],
+                        invariant: variance == TypeParameterVariance.None
+                    )
+                }
+                if !compatible {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func HaveCompatibleCallableContracts(
+            source TypeSymbol,
+            target TypeSymbol,
+            sourceSignature FunctionTypeSymbol,
+            targetSignature FunctionTypeSymbol,
+            invariant bool
+        ) bool {
+            if sourceSignature.Arity != targetSignature.Arity {
+                return false
+            }
+            let sourceParameters = if source is DelegateTypeSymbol sourceDelegate {
+                sourceDelegate.Parameters
+            } else {
+                sourceSignature.Parameters
+            }
+            let targetParameters = if target is DelegateTypeSymbol targetDelegate {
+                targetDelegate.Parameters
+            } else {
+                targetSignature.Parameters
+            }
+            let sourceContract = if source is FunctionTypeSymbol {
+                sourceSignature
+            } else {
+                sourceSignature.WithParameters(sourceParameters)
+            }
+            let targetContract = if target is FunctionTypeSymbol {
+                targetSignature
+            } else {
+                targetSignature.WithParameters(targetParameters)
+            }
+            if target is FunctionTypeSymbol && !targetSignature.AcceptsOptionalContract(sourceContract) {
+                return false
+            }
+            if invariant && source is FunctionTypeSymbol && !sourceSignature.AcceptsOptionalContract(targetContract) {
+                return false
+            }
+            var sourceReturnRefKind = RefKind.None
+            var targetReturnRefKind = RefKind.None
+            let sourceRefKinds = if source is FunctionTypeSymbol {
+                if sourceParameters.IsDefaultOrEmpty {
+                    ImmutableArray[RefKind].Empty
+                } else {
+                    sourceParameters.Select((p ParameterSymbol) -> p.RefKind).ToImmutableArray()
+                }
+            } else {
+                ConversionClassifier.GetMethodGroupTargetRefKinds(
+                    source,
+                    sourceSignature.Arity,
+                    out sourceReturnRefKind
+                )
+            }
+            let targetRefKinds = if target is FunctionTypeSymbol {
+                if targetParameters.IsDefaultOrEmpty {
+                    ImmutableArray[RefKind].Empty
+                } else {
+                    targetParameters.Select((p ParameterSymbol) -> p.RefKind).ToImmutableArray()
+                }
+            } else {
+                ConversionClassifier.GetMethodGroupTargetRefKinds(
+                    target,
+                    targetSignature.Arity,
+                    out targetReturnRefKind
+                )
+            }
+            for var i = 0; i < sourceSignature.Arity; i++ {
+                let byRef = (i < sourceRefKinds.Length && sourceRefKinds[i] != RefKind.None) ||
+                    (i < targetRefKinds.Length && targetRefKinds[i] != RefKind.None)
+                let compatible = if invariant || byRef {
+                    HaveCompatibleOptionalContracts(
+                        sourceSignature.ParameterTypes[i],
+                        targetSignature.ParameterTypes[i],
+                        invariant: true
+                    )
+                } else {
+                    HaveCompatibleOptionalContracts(
+                        targetSignature.ParameterTypes[i],
+                        sourceSignature.ParameterTypes[i]
+                    )
+                }
+                if !compatible {
+                    return false
+                }
+            }
+            if !invariant && targetSignature.ReturnType == TypeSymbol.Void {
+                return true
+            }
+            return HaveCompatibleOptionalContracts(
+                sourceSignature.ReturnType,
+                targetSignature.ReturnType,
+                invariant || sourceReturnRefKind != RefKind.None || targetReturnRefKind != RefKind.None
+            )
+        }
+
+        private func OptionalContractPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
+            let target = UnwrapNullableForVariance(target) ?? target
+            if target is FunctionTypeSymbol function {
+                if index < function
+                    .ParameterTypes
+                    .Length &&
+                    !function
+                    .Parameters
+                    .IsDefaultOrEmpty &&
+                    function
+                    .Parameters[index]
+                    .RefKind != RefKind.None {
+                    return TypeParameterVariance.None
+                }
+                return if index < function.ParameterTypes.Length {
+                    TypeParameterVariance.In
+                } else {
+                    TypeParameterVariance.Out
+                }
+            }
+            if TupleTypeSymbol.TryGetTupleShape(target, out _) {
+                return TypeParameterVariance.Out
+            }
+            if target is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol or MapTypeSymbol {
+                return TypeParameterVariance.None
+            }
+            if NativeSliceTypes.TryGetElement(target, out _, out var isReadOnly) {
+                return if isReadOnly {
+                    TypeParameterVariance.Out
+                } else {
+                    TypeParameterVariance.None
+                }
+            }
+            if target is StructSymbol {
+                return TypeParameterVariance.None
+            }
+            if target is InterfaceSymbol targetInterface {
+                let interfaceDefinition = targetInterface.Definition ?? targetInterface
+                let ownIndex = index - StructSymbol.CollectEnclosingTypeParameters(interfaceDefinition).Length
+                let parameters = interfaceDefinition.DeclaredTypeParameters
+                return if ownIndex < 0 || ownIndex >= parameters.Length {
+                    TypeParameterVariance.None
+                } else {
+                    parameters[ownIndex].Variance
+                }
+            }
+            if target is DelegateTypeSymbol targetDelegate {
+                let parameters = (targetDelegate.Definition ?? targetDelegate).TypeParameters
+                return if index < parameters.Length {
+                    parameters[index].Variance
+                } else {
+                    TypeParameterVariance.None
+                }
+            }
+            if TryGetConstructedGenericShape(target, out var definition, out _) {
+                let parameters = definition.GetGenericArguments()
+                if index >= parameters.Length {
+                    return TypeParameterVariance.None
+                }
+                return switch parameters[index].GenericParameterAttributes & GenericParameterAttributes.VarianceMask {
+                    case GenericParameterAttributes.Covariant: TypeParameterVariance.Out
+                    case GenericParameterAttributes.Contravariant: TypeParameterVariance.In
+                    default: TypeParameterVariance.None
+                }
+            }
+            return TypeParameterVariance.Out
+        }
+
         /// Classifies a conversion, optionally including structural projection.
         /// @param from The source type.
         /// @param to The target type.
@@ -356,6 +605,9 @@ class Conversion {
         ) Conversion {
             var from = from
             var to = to
+            if from != nil && to != nil && !HaveCompatibleOptionalContracts(from, to) {
+                return Conversion.None
+            }
             if to != nil && NativeProtocolMetadata.IsProtocol(to) &&
                 from != TypeSymbol.Null &&
                 from != TypeSymbol.Error &&
@@ -2840,6 +3092,9 @@ class Conversion {
         internal func HasCheckedReferenceConversion(from TypeSymbol?, to TypeSymbol?) bool {
             var from = from
             var to = to
+            if from != nil && to != nil && !HaveCompatibleOptionalContracts(from, to) {
+                return false
+            }
             let removesReferenceNullability = from is NullableTypeSymbol nullableFrom &&
                 IsReferenceLikeTarget(nullableFrom.UnderlyingType) &&
                 !(to is NullableTypeSymbol)
@@ -4615,7 +4870,8 @@ class Conversion {
             targetDefinition Type,
             targetArguments ImmutableArray[TypeSymbol],
             out projected ImmutableArray[TypeSymbol],
-            out projectedTargetArguments ImmutableArray[TypeSymbol]
+            out projectedTargetArguments ImmutableArray[TypeSymbol],
+            includeCallableContracts bool = false
         ) bool {
             projectedTargetArguments = targetArguments
             if TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr) &&
@@ -4637,7 +4893,29 @@ class Conversion {
             projected = ImmutableArray[TypeSymbol].Empty
             return !(implemented is StructSymbol) &&
                 !(implemented is InterfaceSymbol) &&
-                TryProjectPlatformArgumentsToSupertype(implemented, to, out projected, out projectedTargetArguments)
+                TryProjectPlatformArgumentsToSupertype(
+                implemented,
+                to,
+                out projected,
+                out projectedTargetArguments,
+                includeCallableContracts
+            )
+        }
+
+        private func GetSourceInterfaceHierarchy(source TypeSymbol) sequence[InterfaceSymbol] {
+            if source is InterfaceSymbol sourceInterface {
+                for candidate in sourceInterface.SelfAndAllBaseInterfaces() {
+                    yield candidate
+                }
+            } else if source is StructSymbol sourceClass {
+                for level in GetStructHierarchy(sourceClass) {
+                    for implemented in level.Interfaces {
+                        for candidate in implemented.SelfAndAllBaseInterfaces() {
+                            yield candidate
+                        }
+                    }
+                }
+            }
         }
 
         /// #4420: projects [`from`](paramref)'s element positions onto the
@@ -4656,7 +4934,8 @@ class Conversion {
             from TypeSymbol?,
             to TypeSymbol?,
             out projected ImmutableArray[TypeSymbol],
-            out targetArguments ImmutableArray[TypeSymbol]
+            out targetArguments ImmutableArray[TypeSymbol],
+            includeCallableContracts bool = false
         ) bool {
             var from = from
             var to = to
@@ -4667,6 +4946,18 @@ class Conversion {
             if from == nil || to == nil || IsValueTypeLikeFrom(to) {
                 return false
             }
+            if includeCallableContracts && to is InterfaceSymbol targetInterface {
+                for candidate in GetSourceInterfaceHierarchy(from) {
+                    if object.ReferenceEquals(
+                        candidate.Definition ?? candidate,
+                        targetInterface.Definition ?? targetInterface
+                    ) {
+                        projected = GetEffectiveInterfaceTypeArguments(candidate)
+                        targetArguments = GetEffectiveInterfaceTypeArguments(targetInterface)
+                        return projected.Length == targetArguments.Length
+                    }
+                }
+            }
             // A same-compilation G# base class has no CLR type while binding.
             // Reuse the same symbolic hierarchy projection as the ordinary class
             // upcast so rule 3 sees `Parent[string!]`, not the erased match that
@@ -4676,7 +4967,18 @@ class Conversion {
                 if !effectiveTargetArguments.IsDefaultOrEmpty &&
                     TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected) &&
                     projected.Length == effectiveTargetArguments.Length &&
-                    (AnyContainsPlatformType(projected) || AnyContainsPlatformType(effectiveTargetArguments)) {
+                    (
+                    AnyContainsPlatformType(projected) ||
+                        AnyContainsPlatformType(effectiveTargetArguments) ||
+                        (
+                        includeCallableContracts &&
+                            (
+                            projected.Any(FunctionTypeSymbol.ContainsOptionalContract) || effectiveTargetArguments.Any(
+                                FunctionTypeSymbol.ContainsOptionalContract
+                            )
+                        )
+                    )
+                ) {
                     targetArguments = effectiveTargetArguments
                     return true
                 }
@@ -4699,7 +5001,16 @@ class Conversion {
             // decline before any hierarchy walk. The vectors are checked rather
             // than the outer types, because a flags-annotated array hides its
             // element from the outer-type test.
-            if !AnyContainsPlatformType(positions) && !AnyContainsPlatformType(targetArguments) {
+            if !AnyContainsPlatformType(positions) &&
+                !AnyContainsPlatformType(targetArguments) &&
+                (
+                !includeCallableContracts ||
+                    (
+                    !positions.Any(FunctionTypeSymbol.ContainsOptionalContract) && !targetArguments.Any(
+                        FunctionTypeSymbol.ContainsOptionalContract
+                    )
+                )
+            ) {
                 return false
             }
             // A same-compilation G# interface has no ClrType either; its
@@ -4715,7 +5026,8 @@ class Conversion {
                             targetDefinition,
                             targetArguments,
                             out projected,
-                            out var interfaceTargetArguments
+                            out var interfaceTargetArguments,
+                            includeCallableContracts
                         ) {
                             targetArguments = interfaceTargetArguments
                             return true
@@ -4749,7 +5061,8 @@ class Conversion {
                             targetDefinition,
                             targetArguments,
                             out projected,
-                            out var classTargetArguments
+                            out var classTargetArguments,
+                            includeCallableContracts
                         ) {
                             targetArguments = classTargetArguments
                             return true
@@ -4765,7 +5078,8 @@ class Conversion {
                                     targetDefinition,
                                     targetArguments,
                                     out projected,
-                                    out var interfaceTargetArguments
+                                    out var interfaceTargetArguments,
+                                    includeCallableContracts
                                 ) {
                                     targetArguments = interfaceTargetArguments
                                     return true

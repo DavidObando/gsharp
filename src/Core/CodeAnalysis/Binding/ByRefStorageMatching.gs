@@ -53,6 +53,9 @@ internal shared class ByRefStorageMatching {
         storageNullable = false
         parameterNullable = false
         nestedMismatch = false
+        if !Conversion.HaveCompatibleOptionalContracts(storageType, parameterType, invariant: true) {
+            return false
+        }
         let storageKind = storageType.ReferenceNullability
         let parameterKind = parameterType.ReferenceNullability
         // ADR-0186: a platform (`T!`) position stated nothing, so it differs
