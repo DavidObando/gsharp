@@ -504,7 +504,7 @@ internal class ConversionClassifier {
             expression = reboundSibling
         }
         let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
-        let result = BindConversionCore(
+        var result = BindConversionCore(
             diagnosticLocation,
             expression,
             type,
@@ -512,6 +512,16 @@ internal class ConversionClassifier {
             callParameter,
             trackNarrowing
         )
+        // Preserve the requested static contract after identity conversions and runtime-equivalent function adapters.
+        if type != nil && result.Type is {} resultType && resultType != TypeSymbol.Error && !object.ReferenceEquals(
+            resultType,
+            type
+        ) &&
+            FunctionTypeSymbol.ContainsOptionalContract(resultType) &&
+            TypeSymbol
+            .AreRuntimeEquivalentIgnoringReferenceNullability(resultType, type) {
+            result = BoundConversionExpression(nil, type, result, binderCtx.IsCheckedContext)
+        }
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -1218,6 +1228,15 @@ internal class ConversionClassifier {
                 resolvedUserMethodGroup.MethodTypeArguments
             ){ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch, HasTargetDelegateType = true}
             expression = this.createUserMethodGroupAdapter(resolvedUserMethodGroup)
+        }
+        if expression is BoundFunctionLiteralExpression &&
+            expression.Type != nil &&
+            type != nil &&
+            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
+            !Conversion
+            .HaveCompatibleOptionalContracts(expression.Type, type) {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)
+            return BoundErrorExpression(expression.Syntax)
         }
         if expression is BoundFunctionLiteralExpression literal &&
             type is FunctionTypeSymbol targetFunctionType &&
