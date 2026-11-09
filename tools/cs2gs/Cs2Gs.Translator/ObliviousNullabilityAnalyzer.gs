@@ -1404,6 +1404,60 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     internal func HasNestedTupleSlots(type ITypeSymbol?) bool -> NestedTupleSlots(type).Count != 0
 
+    private func TryProjectTupleSlot(
+        valueType ITypeSymbol?,
+        storageType ITypeSymbol?,
+        storagePath string,
+        out valuePath string
+    ) bool {
+        valuePath = storagePath
+        if SymbolEqualityComparer.Default.Equals(valueType, storageType) {
+            return true
+        }
+        if valueType is IArrayTypeSymbol array &&
+            storageType is INamedTypeSymbol envelope &&
+            envelope
+            .TypeArguments
+            .Length == 1 &&
+            SymbolEqualityComparer
+            .Default
+            .Equals(array.ElementType, envelope.TypeArguments[0]) {
+            return true
+        }
+        if valueType is not INamedTypeSymbol named || storageType is not INamedTypeSymbol storage {
+            return false
+        }
+        var template INamedTypeSymbol? = named.OriginalDefinition
+        if !SymbolEqualityComparer.Default.Equals(template, storage.OriginalDefinition) {
+            template = named
+                .OriginalDefinition
+                .AllInterfaces
+                .FirstOrDefault(
+                (candidate INamedTypeSymbol) -> SymbolEqualityComparer.Default.Equals(
+                    candidate.OriginalDefinition,
+                    storage.OriginalDefinition
+                )
+            )
+            if template == nil {
+                for var baseType = named.OriginalDefinition.BaseType; baseType != nil; baseType = baseType!!.BaseType {
+                    if SymbolEqualityComparer.Default.Equals(baseType.OriginalDefinition, storage.OriginalDefinition) {
+                        template = baseType
+                        break
+                    }
+                }
+            }
+        }
+        if template == nil {
+            return false
+        }
+        let (owner, projected) = ProjectTupleContractPosition(named, storagePath, template, named)
+        if !SymbolEqualityComparer.Default.Equals(owner, named) || TuplePositionType(named, projected) == nil {
+            return false
+        }
+        valuePath = projected
+        return true
+    }
+
     // A construction owns value evidence even when no declaration receives it.
     internal func NullableTupleConstructionPositions(
         compilation CSharpCompilation,
@@ -1455,18 +1509,20 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         let prefix = EncodeTuplePath(sinkPrefix)
         let storageSlots = NestedTupleSlots(TuplePositionType(sink, prefix))
-        if valueSlots.Count != storageSlots.Count {
-            return positions
-        }
-        for var i = 0; i < valueSlots.Count; i++ {
-            if valueSlots[i].Tuple.TupleElements.Length != storageSlots[i].Tuple.TupleElements.Length {
-                return positions
+        let storageType = TuplePositionType(sink, prefix)
+        for storageSlot in storageSlots {
+            if !TryProjectTupleSlot(valueType, storageType, storageSlot.Path, out var valuePath) {
+                continue
+            }
+            let i = valueSlots.FindIndex((slot(Path string, Tuple INamedTypeSymbol)) -> slot.Path == valuePath)
+            if i < 0 || valueSlots[i].Tuple.TupleElements.Length != storageSlot.Tuple.TupleElements.Length {
+                continue
             }
             let leaves = HashSet[TupleElementKey](TupleContractKeyComparer.Instance)
             TaintAllTupleLeaves(valueType, valueSlots[i].Tuple, valueSlots[i].Path, leaves)
             for leaf in leaves {
                 let relative = leaf.ContractPath.Substring(valueSlots[i].Path.Length)
-                let storagePath = storageSlots[i].Path + relative
+                let storagePath = storageSlot.Path + relative
                 let path = if prefix.Length == 0 {
                     storagePath
                 } else {
@@ -5858,25 +5914,27 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         if initializer != nil && value is BaseObjectCreationExpressionSyntax creation && model.GetTypeInfo(creation)
             .Type is INamedTypeSymbol createdType {
-            let createdSlots = NestedTupleSlots(createdType)
-            if createdSlots.Count != targetSlots.Count {
-                return
-            }
             let CollectWrite = func (contractType ITypeSymbol, element ExpressionSyntax) {
                 if !TryGetGenericReceiverTuplePath(createdType, contractType, out _, out var path) {
                     return
                 }
                 let encodedPath = EncodeTuplePath(path)
-                let index = createdSlots.FindIndex(
-                    (slot(Path string, Tuple INamedTypeSymbol)) -> slot.Path == encodedPath
-                )
-                if index >= 0 {
+                for slot in targetSlots {
+                    let relativePath = if prefix.Length == 0 {
+                        slot.Path
+                    } else {
+                        slot.Path.Substring(prefix.Length + 1)
+                    }
+                    if !TryProjectTupleSlot(createdType, targetType, relativePath, out var projected) ||
+                        projected != encodedPath {
+                        continue
+                    }
                     CollectTupleValueFlow(
                         target,
-                        targetSlots[index].Tuple,
+                        slot.Tuple,
                         element,
                         model,
-                        targetSlots[index].Path,
+                        slot.Path,
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges
@@ -5920,19 +5978,25 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let sourceSlots = NestedTupleSlots(SymbolValueType(source))
-        if sourceSlots.Count != targetSlots.Count {
-            return
-        }
-        for var i = 0; i < targetSlots.Count; i++ {
-            if targetSlots[i].Tuple.TupleElements.Length != sourceSlots[i].Tuple.TupleElements.Length {
-                return
+        for slot in targetSlots {
+            let relativePath = if prefix.Length == 0 {
+                slot.Path
+            } else {
+                slot.Path.Substring(prefix.Length + 1)
             }
-        }
-        for var i = 0; i < targetSlots.Count; i++ {
+            if !TryProjectTupleSlot(SymbolValueType(source), targetType, relativePath, out var projected) {
+                continue
+            }
+            let i = sourceSlots.FindIndex(
+                (sourceSlot(Path string, Tuple INamedTypeSymbol)) -> sourceSlot.Path == projected
+            )
+            if i < 0 || slot.Tuple.TupleElements.Length != sourceSlots[i].Tuple.TupleElements.Length {
+                continue
+            }
             AddTupleShapeEdges(
                 target,
-                targetSlots[i].Tuple,
-                targetSlots[i].Path,
+                slot.Tuple,
+                slot.Path,
                 source,
                 sourceSlots[i].Tuple,
                 sourceSlots[i].Path,

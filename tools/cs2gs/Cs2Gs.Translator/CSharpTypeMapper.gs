@@ -1625,7 +1625,8 @@ class CSharpTypeMapper {
         declaredType ITypeSymbol?,
         symbol ISymbol?,
         context TranslationContext,
-        path List[int32]
+        path List[int32],
+        nullablePositions HashSet[string]? = nil
     ) GTypeReference? {
         var mapped = mapped
         if path.Count == 0 &&
@@ -1649,7 +1650,8 @@ class CSharpTypeMapper {
                     tupleType.TupleElements[i].Type,
                     symbol,
                     context,
-                    path
+                    path,
+                    nullablePositions
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(element, tuple.ElementTypes[i])
@@ -1668,7 +1670,8 @@ class CSharpTypeMapper {
                 arrayType.ElementType,
                 symbol,
                 context,
-                path
+                path,
+                nullablePositions
             )
             path.RemoveAt(path.Count - 1)
             if !object.ReferenceEquals(element, array.ElementType) {
@@ -1694,7 +1697,8 @@ class CSharpTypeMapper {
                     declaredNamed.TypeArguments[i],
                     symbol,
                     context,
-                    path
+                    path,
+                    nullablePositions
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(argument, named.TypeArguments[i])
@@ -1704,11 +1708,15 @@ class CSharpTypeMapper {
                 mapped = NamedTypeReference(named.Name, arguments, named.ContainingType){IsNullable = named.IsNullable}
             }
         }
-        return if path.Count > 0 && !mapped!!.IsNullable && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
-            context.Compilation,
-            symbol,
-            path,
-            context.SiblingCompilations
+        return if path.Count > 0 &&
+            !mapped!!.IsNullable &&
+            (
+            nullablePositions?.Contains(string.Join(".", path)) ?? ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                context.Compilation,
+                symbol,
+                path,
+                context.SiblingCompilations
+            )
         ) {
             WithNullable(mapped, true)
         } else {

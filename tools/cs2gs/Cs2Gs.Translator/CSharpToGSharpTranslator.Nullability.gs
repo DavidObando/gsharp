@@ -581,7 +581,7 @@ partial class CSharpToGSharpTranslator {
         private func PromoteCreationTupleArguments(
             type GTypeReference?,
             typeSymbol ITypeSymbol?,
-            creation BaseObjectCreationExpressionSyntax
+            creation ExpressionSyntax
         ) GTypeReference? {
             if type == nil || typeSymbol == nil {
                 return type
@@ -601,11 +601,14 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel,
                 this.context.SiblingCompilations
             )
-            return if positions.Count == 0 {
-                type
-            } else {
-                PromoteNestedPositions(type, typeSymbol, positions, "")
-            }
+            return this.typeMapper.PromoteTupleTypeArguments(
+                type,
+                typeSymbol,
+                nil,
+                this.context,
+                List[int32](),
+                positions
+            )
         }
 
         // The declaration a freshly built value flows into: the local/field being

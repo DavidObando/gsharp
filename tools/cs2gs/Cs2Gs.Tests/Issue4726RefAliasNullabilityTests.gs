@@ -17,6 +17,47 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Fact
+    func Issue5868_EightElementTemporaryCollection_PreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() =>
+        new List<(int,int,int,int,int,int,int,string)> { (1,2,3,4,5,6,7,null!) }.Count.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
+    func Issue5868_TemporaryTupleArray_PreservesCSharpOutput() {
+        const source = `public static class Obj {
+    public static string Run() => new (string, int)[] { (null!, 0) }.Length.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
+    func Issue5868_ReorderedTupleSlots_KeepConvertedTypePositions() {
+        const source = `using System.Collections.Generic;
+public class Reordered<TValue, TKey> : Dictionary<TKey, TValue> { }
+public static class Obj {
+    public static string Run() {
+        IDictionary<(string, int), (string, int)> rows =
+            new Reordered<(string, int), (string, int)> { { ("key", 1), (null!, 0) } };
+        string output = "";
+        foreach (var row in rows) output += row.Key.Item1 + ":" + (row.Value.Item1 ?? "null");
+        return output;
+    }
+}`
+        let printed = Translate(source)
+        let declaration = printed.Split('\n').Single((line string) -> line.Contains("let rows ")).Trim()
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "let rows IDictionary[(string, int32), (string?, int32)] = Reordered[(string?, int32), (string, int32)]{ (\"key\", 1): (nil, 0) }"
+            ),
+            Encoding.UTF8.GetBytes(declaration)
+        )
+    }
+
+    @Fact
     func Issue5868_TemporaryTupleCollection_PreservesCSharpOutput() {
         const source = `using System.Collections.Generic;
 public static class Obj {
@@ -152,8 +193,26 @@ public static class Obj {
     @InlineData("array")
     @InlineData("jagged-array")
     @InlineData("array-copy")
+    @InlineData("array-allocation")
+    @InlineData("rectangular-allocation")
     func Issue5880_WholeTupleRefStorage_PreservesCSharpOutput(shape string) {
         let source = switch shape {
+            case "array-allocation": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[1];
+        ref (string, int) alias = ref rows[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+            case "rectangular-allocation": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[1, 1];
+        ref (string, int) alias = ref rows[0, 0];
+        alias = (null, 1);
+        return rows[0, 0].Item1 ?? "null";
+    }
+}`
             case "array-copy": `public static class Obj {
     public static string Run() {
         var rows = new (string, int)[] { ("x", 1) };

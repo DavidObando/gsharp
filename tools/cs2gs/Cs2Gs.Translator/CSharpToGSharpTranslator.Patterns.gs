@@ -4578,10 +4578,15 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 arrayExpression.GetLocation()
             ) is ArrayTypeReference mappedArray {
+                let promotedArray = this.PromoteCreationTupleArguments(
+                    mappedArray,
+                    array,
+                    arrayExpression
+                ) as ArrayTypeReference
                 return if nullableElementSyntax {
-                    MakeNullable(mappedArray.ElementType)
+                    MakeNullable((promotedArray ?? mappedArray).ElementType)
                 } else {
-                    mappedArray.ElementType
+                    (promotedArray ?? mappedArray).ElementType
                 }
             }
             if arrayType is INamedTypeSymbol{IsGenericType: true} generic && generic.TypeArguments.Length == 1 {
