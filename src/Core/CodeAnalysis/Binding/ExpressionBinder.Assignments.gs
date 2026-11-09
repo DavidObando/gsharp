@@ -225,10 +225,34 @@ internal partial class ExpressionBinder {
             local.IsScoped = true
             local.HoldsScopedManagedReference = true
         }
-        return BoundAssignmentExpression(nil, variable, convertedExpression, GetAssignedValueType(boundExpression))
+        return BoundAssignmentExpression(
+            nil,
+            variable,
+            convertedExpression,
+            GetAssignedValueType(syntax.Expression, boundExpression)
+        )
     }
 
-    private func GetAssignedValueType(boundExpression BoundExpression) TypeSymbol {
+    private func GetAssignedValueType(rhsSyntax ExpressionSyntax, boundExpression BoundExpression) TypeSymbol {
+        var currentSyntax = rhsSyntax
+        while true {
+            if currentSyntax is ParenthesizedExpressionSyntax parenthesized {
+                currentSyntax = parenthesized.Expression
+                continue
+            }
+            if currentSyntax is CheckedExpressionSyntax checkedExpression {
+                currentSyntax = checkedExpression.Expression
+                continue
+            }
+            if currentSyntax is BlockExpressionSyntax{Expression: {} tailSyntax} {
+                currentSyntax = tailSyntax
+                continue
+            }
+            break
+        }
+        if currentSyntax is not BinaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.QuestionQuestionToken}} {
+            return boundExpression.Type
+        }
         var current = boundExpression
         while current is BoundBlockExpression block {
             current = block.Expression
@@ -236,7 +260,8 @@ internal partial class ExpressionBinder {
         if current is BoundConversionExpression{
             Syntax: not CallExpressionSyntax,
             Expression: BoundBinaryExpression{Op: {Kind: BoundBinaryOperatorKind.NullCoalesce}} coalesce
-        } {
+        } &&
+            coalesce.Type is not PlatformTypeSymbol {
             return coalesce.Type
         }
         return current.Type

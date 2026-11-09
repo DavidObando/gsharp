@@ -471,6 +471,39 @@ class C {
 }
 `)
         Assert.Contains(explicitNullableCast.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+
+        let explicitNullableCastBlock = Evaluate(`
+class NamedType {
+    prop TupleUnderlyingType NamedType? -> nil
+    prop Arity int32 -> 1
+}
+class C {
+    func F(value object) int32 {
+        var named NamedType? = value as NamedType
+        if named == nil {
+            return 0
+        }
+        named = cast[NamedType?]({ named.TupleUnderlyingType ?? named })
+        return named.Arity
+    }
+}
+`)
+        Assert.Contains(explicitNullableCastBlock.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
+
+        let platformCoalesceFallback = Evaluate(`
+@Oblivious
+shared class Ob {
+    func Nil() string -> nil
+}
+class C {
+    func F() int32 {
+        var x string? = nil
+        x = nil ?? Ob.Nil()
+        return x.Length
+    }
+}
+`)
+        Assert.Contains(platformCoalesceFallback.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
     }
 
     shared {

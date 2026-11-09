@@ -91,5 +91,14 @@ partial class Adr0186PlatformTypeBindingTests {
             exprResult.Diagnostics,
             (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Length", StringComparison.Ordinal)
         )
+
+        let coalesceResult = world.Compile(`    var x string? = nil
+    x = nil ?? Ob.Nil()
+    Console.WriteLine(x.Length)`, NullabilityMode.PlatformTypes)
+        Assert.False(coalesceResult.Success, Describe(coalesceResult))
+        Assert.Contains(
+            coalesceResult.Diagnostics,
+            (d DiagnosticLine) -> d.Id == "GS0158" && d.Message.Contains("Length", StringComparison.Ordinal)
+        )
     }
 }
