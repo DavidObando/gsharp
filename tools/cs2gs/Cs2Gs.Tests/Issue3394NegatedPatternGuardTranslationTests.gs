@@ -396,4 +396,44 @@ namespace Demo
         Assert.DoesNotContain("== nil", rendered, StringComparison.Ordinal)
         TranslationTestValidation.AssertBinds(rendered)
     }
+
+    @Fact
+    func ReassignedNegatedPatternBinder_WithNullCoalescingSelfFallback_PreservesNarrowing() {
+        const source = `
+#nullable enable
+namespace Demo
+{
+    public class TypeNode { }
+    public sealed class NamedTypeNode : TypeNode
+    {
+        public NamedTypeNode? TupleUnderlyingType { get; init; }
+        public int Arity { get; init; }
+        public NamedTypeNode ConstructedFrom => this;
+    }
+
+    public static class C
+    {
+        public static int NormalizeContractTupleNames(TypeNode type)
+        {
+            if (type is not NamedTypeNode named)
+            {
+                return 0;
+            }
+
+            named = named.TupleUnderlyingType ?? named;
+            return named.Arity + named.ConstructedFrom.Arity;
+        }
+    }
+}
+`
+        let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let rendered = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+        Assert.Contains("var named NamedTypeNode? = type as NamedTypeNode", rendered, StringComparison.Ordinal)
+        Assert.Contains("named = named.TupleUnderlyingType ?? named", rendered, StringComparison.Ordinal)
+        Assert.Contains("return named.Arity + named.ConstructedFrom.Arity", rendered, StringComparison.Ordinal)
+        TranslationTestValidation.AssertBinds(rendered)
+    }
 }
