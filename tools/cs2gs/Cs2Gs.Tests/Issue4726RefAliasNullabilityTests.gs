@@ -17,6 +17,54 @@ import Xunit
 
 class Issue4726RefAliasNullabilityTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalTupleRefArgument_SharesBothLeafContracts(flag bool) {
+        let choice = if flag {
+            "true"
+        } else {
+            "false"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) left = ("left", 1);
+    private static (string Text, int Code) right = ("right", 2);
+#nullable enable
+    private static void Apply(ref string? text) { text = null; }
+#nullable disable
+    public static string Run() {
+        Apply(ref (` + choice + ` ? ref left.Text : ref right.Text));
+        return (left.Text ?? "null") + ":" + (right.Text ?? "null");
+    }
+}`
+        let printed = Translate(source)
+        Assert.True(printed.Contains("left (Text string?,", StringComparison.Ordinal), printed)
+        Assert.True(printed.Contains("right (Text string?,", StringComparison.Ordinal), printed)
+        AssertParity(
+            source,
+            printed,
+            if flag {
+                "null:right"
+            } else {
+                "left:null"
+            }
+        )
+    }
+
+    @Fact
+    func TupleProjectedArrayRefAlias_SharesNestedNullableContracts() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    public static string Run() {
+        ref (string? Text, int Code)[] alias = ref state.Rows;
+        return alias[0].Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Rows [](Text string?,", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
     @InlineData("state.Inner!.Rows[0].Text")
     @InlineData("(state.Inner!).Rows[0].Text")
     func SuppressedProjectedArrayRefAlias_RetainsTheOwningDeclaration(storage string) {

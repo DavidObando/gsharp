@@ -5245,20 +5245,6 @@ internal shared class ObliviousNullabilityAnalyzer {
                         scalarTupleEdges
                     )
                 }
-                case argument is ArgumentSyntax when argument.RefKindKeyword.RawKind != 0 && model.GetOperation(
-                    argument
-                ) is IArgumentOperation{Parameter: {RefKind: not RefKind.None} parameter} {
-                    CollectRefTupleStorage(
-                        Canonical(parameter),
-                        argument.Expression,
-                        model,
-                        tupleTainted,
-                        tupleContractEdges,
-                        tupleEdges,
-                        tupleScalarEdges,
-                        scalarTupleEdges
-                    )
-                }
                 case method is MethodDeclarationSyntax {
                     CollectTupleReturnFlows(
                         model.GetDeclaredSymbol(method),
@@ -5378,7 +5364,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                     _ is ConstructorInitializerSyntax or
                     _ is ElementAccessExpressionSyntax or
                     _ is ElementBindingExpressionSyntax {
-                    CollectTupleArgumentFlows(node, model, tupleTainted, tupleEdges, tupleScalarEdges)
+                    CollectTupleArgumentFlows(
+                        node,
+                        model,
+                        tupleTainted,
+                        tupleEdges,
+                        tupleScalarEdges,
+                        tupleContractEdges,
+                        scalarTupleEdges
+                    )
                 }
             }
         }
@@ -5517,13 +5511,31 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
-        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)]
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        scalarTupleEdges List[(Target ISymbol, Source TupleElementKey)]
     ) {
         let arguments = GetCallArguments(call, model)
         if arguments.IsDefaultOrEmpty {
             return
         }
         for argument in arguments {
+            if argument.Parameter is {RefKind: not RefKind.None} refParameter {
+                // Roslyn can associate a ref-conditional argument operation with its value syntax.
+                let refArgument = argument.Syntax.AncestorsAndSelf().OfType[ArgumentSyntax]().FirstOrDefault()
+                if refArgument is ArgumentSyntax{RefKindKeyword: {RawKind: not 0}} sourceArgument {
+                    CollectRefTupleStorage(
+                        Canonical(refParameter),
+                        sourceArgument.Expression,
+                        model,
+                        tupleTainted,
+                        tupleContractEdges,
+                        tupleEdges,
+                        tupleScalarEdges,
+                        scalarTupleEdges
+                    )
+                }
+            }
             if argument.Parameter is IParameterSymbol parameter &&
                 argument
                 .Value
@@ -6180,6 +6192,42 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         let storage = Unwrap(expression, unwrapSuppressions: true)
+        if storage is RefExpressionSyntax reference {
+            CollectRefTupleStorage(
+                target,
+                reference.Expression,
+                model,
+                tupleTainted,
+                tupleContractEdges,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges
+            )
+            return
+        }
+        if storage is ConditionalExpressionSyntax conditional {
+            CollectRefTupleStorage(
+                target,
+                conditional.WhenTrue,
+                model,
+                tupleTainted,
+                tupleContractEdges,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges
+            )
+            CollectRefTupleStorage(
+                target,
+                conditional.WhenFalse,
+                model,
+                tupleTainted,
+                tupleContractEdges,
+                tupleEdges,
+                tupleScalarEdges,
+                scalarTupleEdges
+            )
+            return
+        }
         let targetType = SymbolValueType(target)
         // Out writes caller storage without freezing the caller's declaration.
         let isOutput = target is IParameterSymbol{RefKind: RefKind.Out}
@@ -6213,40 +6261,24 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             return
         }
-        if targetType is INamedTypeSymbol{IsTupleType: true} targetTuple &&
-            sourceType is INamedTypeSymbol{IsTupleType: true} sourceTuple &&
-            targetTuple
-            .TupleElements
-            .Length == sourceTuple
-            .TupleElements
-            .Length {
-            if !isOutput {
-                AddTupleShapeEdges(
-                    target,
-                    targetTuple,
-                    string.Empty,
-                    sourceSymbol,
-                    sourceTuple,
-                    sourcePath,
-                    tupleTainted,
-                    tupleContractEdges
-                )
-            }
-            AddTupleShapeEdges(
-                sourceSymbol,
-                sourceTuple,
-                sourcePath,
+        if targetType is INamedTypeSymbol{IsTupleType: true} || HasNestedTupleSlots(targetType) {
+            AddTupleContractPair(
                 target,
-                targetTuple,
-                string.Empty,
+                targetType,
+                sourceSymbol,
+                sourceType,
                 tupleTainted,
                 if isOutput {
                     tupleEdges
                 } else {
                     tupleContractEdges
-                }
+                },
+                secondPrefix: sourcePath,
+                bidirectional: !isOutput
             )
-            return
+            if targetType is INamedTypeSymbol{IsTupleType: true} {
+                return
+            }
         }
         if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
             return
@@ -7447,7 +7479,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         second ISymbol?,
         secondType ITypeSymbol?,
         tupleTainted HashSet[TupleElementKey],
-        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        secondPrefix string = "",
+        bidirectional bool = true
     ) {
         var comparisonType ITypeSymbol? = firstType
         if first is IMethodSymbol{Arity: > 0} firstMethod &&
@@ -7497,20 +7531,29 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for var i = 0; i < firstSlots.Count; i++ {
+            let secondPath = if secondPrefix.Length == 0 {
+                secondSlots[i].Path
+            } else if secondSlots[i].Path.Length == 0 {
+                secondPrefix
+            } else {
+                secondPrefix + "." + secondSlots[i].Path
+            }
+            if bidirectional {
+                AddTupleShapeEdges(
+                    first,
+                    firstSlots[i].Tuple,
+                    firstSlots[i].Path,
+                    second,
+                    secondSlots[i].Tuple,
+                    secondPath,
+                    tupleTainted,
+                    tupleEdges
+                )
+            }
             AddTupleShapeEdges(
-                first,
-                firstSlots[i].Tuple,
-                firstSlots[i].Path,
                 second,
                 secondSlots[i].Tuple,
-                secondSlots[i].Path,
-                tupleTainted,
-                tupleEdges
-            )
-            AddTupleShapeEdges(
-                second,
-                secondSlots[i].Tuple,
-                secondSlots[i].Path,
+                secondPath,
                 first,
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
