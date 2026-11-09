@@ -48,6 +48,7 @@ public static class Obj {
     }
 }`
         let printed = Translate(source)
+        // #5909 blocks inherited initializer execution; compare the converted declaration bytes.
         let declaration = printed.Split('\n').Single((line string) -> line.Contains("let rows ")).Trim()
         Assert.Equal(
             Encoding.UTF8.GetBytes(
