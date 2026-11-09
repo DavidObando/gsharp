@@ -5848,8 +5848,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             TaintAllTupleLeaves(target, targetTuple, prefix, tupleTainted)
             return
         }
-        if TryResolveTupleSource(value, model, out var source, out var sourceTuple) {
-            AddTupleShapeEdges(target, targetTuple, prefix, source, sourceTuple, string.Empty, tupleTainted, tupleEdges)
+        if TryResolveTupleStorageSource(value, model, out var source, out var sourceTuple, out var sourcePrefix) {
+            AddTupleShapeEdges(target, targetTuple, prefix, source, sourceTuple, sourcePrefix, tupleTainted, tupleEdges)
         }
     }
 
@@ -5985,7 +5985,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             return
         }
-        if TryResolveTupleSource(value, model, out var tupleSource, out var sourceTuple) {
+        if TryResolveTupleStorageSource(value, model, out var tupleSource, out var sourceTuple, out var sourcePrefix) {
             if targetPattern is DeclarationExpressionSyntax{
                 Designation: ParenthesizedVariableDesignationSyntax forwardedPattern
             } {
@@ -5993,7 +5993,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     forwardedPattern,
                     tupleSource,
                     sourceTuple,
-                    string.Empty,
+                    sourcePrefix,
                     model,
                     scalarTupleEdges
                 )
@@ -6003,7 +6003,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 targetPattern,
                 tupleSource,
                 sourceTuple,
-                string.Empty,
+                sourcePrefix,
                 model,
                 scalarTupleEdges
             )
@@ -6264,23 +6264,44 @@ internal shared class ObliviousNullabilityAnalyzer {
         out tupleType INamedTypeSymbol?,
         out prefix string
     ) bool {
+        var expression = expression
         prefix = string.Empty
         if model == nil {
             symbol = nil
             tupleType = nil
             return false
         }
+        expression = UnwrapTupleValue(expression)
+        if TryResolveTupleElementSource(expression, model, out var projected) &&
+            TuplePositionType(projected.ContractSymbol, projected.ContractPath) is INamedTypeSymbol{
+            IsTupleType: true
+        } projectedTuple {
+            symbol = projected.ContractSymbol
+            tupleType = projectedTuple
+            prefix = projected.ContractPath
+            return true
+        }
         if expression is ElementAccessExpressionSyntax access && model.GetTypeInfo(access.Expression)
             .Type is IArrayTypeSymbol {
-            let (owner, depth) = RefArrayStorage(access, model)
+            let (storageOwner, depth) = RefArrayStorage(access, model)
+            var owner = storageOwner
             var type = SymbolValueType(owner)
+            var receiver ExpressionSyntax = access
+            for var i = 0; i < depth && receiver is ElementAccessExpressionSyntax element; i++ {
+                receiver = Unwrap(element.Expression, unwrapSuppressions: true)
+            }
+            if TryResolveTupleElementSource(receiver, model, out var parent) {
+                owner = parent.ContractSymbol
+                prefix = parent.ContractPath
+                type = TuplePositionType(owner, prefix)
+            }
             for var i = 0; i < depth && type is IArrayTypeSymbol array; i++ {
                 type = array.ElementType
+                prefix = AppendTuplePath(prefix, 0)
             }
             if owner != nil && type is INamedTypeSymbol{IsTupleType: true} tuple {
                 symbol = owner
                 tupleType = tuple
-                prefix = string.Join(".", Enumerable.Repeat("0", depth))
                 return true
             }
         }

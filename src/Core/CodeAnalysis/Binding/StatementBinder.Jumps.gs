@@ -2517,6 +2517,9 @@ internal partial class StatementBinder {
                 return HasFunctionLocalRefScope(condAddr.WhenTrueOperand) ||
                     HasFunctionLocalRefScope(condAddr.WhenFalseOperand)
             }
+            case conditional is BoundConditionalExpression {
+                return HasFunctionLocalRefScope(conditional.WhenTrue) || HasFunctionLocalRefScope(conditional.WhenFalse)
+            }
             default {
                 if RefCapabilities.TryGetRefReturnEscapeSources(
                     expr,

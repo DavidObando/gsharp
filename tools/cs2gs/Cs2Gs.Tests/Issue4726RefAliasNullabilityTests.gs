@@ -16,6 +16,45 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ArrayTupleElementReturn_CarriesItsOwningLeafContract(copy bool) {
+        let result = if copy {
+            "var result = rows[0]; return result;"
+        } else {
+            "return rows[0];"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code)[] rows = new[] { ("x", 1) };
+    private static (string Text, int Code) Read() {
+        ref string alias = ref rows[0].Text;
+        alias = null;
+        ` + result + `
+    }
+    public static string Run() => Read().Code.ToString();
+}`
+        let printed = Translate(source)
+        Assert.Contains("func Read() (Text string?, Code int32)", printed)
+        AssertParity(source, printed, "1")
+    }
+
+    @Fact
+    func TupleProjectedArrayRefAlias_PromotesTheDeclarationLeaf() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    private static string Read() {
+        ref string alias = ref state.Rows[0].Text;
+        alias = null;
+        return state.Rows[0].Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
     @Fact
     func TupleRefIndexer_SharesNullableLeavesWithItsBackingStorage() {
         const source = `public class Holder {

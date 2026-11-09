@@ -12,6 +12,27 @@ import Xunit
 
 class Issue5858TupleReferenceTests {
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalTupleProjection_UsesBothCallerRefScopes(viaAlias bool) {
+        let body = if viaAlias {
+            "var ref alias = (flag ? left : right).Text\nreturn ref alias"
+        } else {
+            "return ref (flag ? left : right).Text"
+        }
+        let source = "func Borrow(ref left (Text string, Code int32), ref right (Text string, Code int32), flag bool) ref string {\n" +
+            body +
+            "\n}"
+        let compilation = Compilation(SyntaxTree.Parse(source))
+        Assert.Empty(compilation.BoundProgram.Diagnostics)
+        let unsafeSource = source.Replace("ref right", "scoped ref right", StringComparison.Ordinal)
+        let rejected = Compilation(SyntaxTree.Parse(unsafeSource))
+        let diagnostic = Assert.Single(rejected.BoundProgram.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal("GS0254", diagnostic.Id)
+        Assert.Contains("return ref", unsafeSource.Split('\n')[diagnostic.Location.StartLine])
+    }
+
+    @Theory
     @InlineData("(Text string, Code int32)", "(\"x\", 1)", "Text")
     @InlineData("(Inner (Text string, Code int32), Flag bool)", "((\"x\", 1), true)", "Inner.Text")
     func TupleElementAlias_SharesStorageWithItsAggregateRoot(type string, value string, member string) {

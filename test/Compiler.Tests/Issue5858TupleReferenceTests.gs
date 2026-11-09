@@ -11,6 +11,69 @@ class Issue5858TupleReferenceTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func ConditionalTupleProjection_RefReturnMutatesSelectedCallerStorage(viaAlias bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let body = if viaAlias {
+            "var ref alias = (flag ? left : right).Text\nreturn ref alias"
+        } else {
+            "return ref (flag ? left : right).Text"
+        }
+        let dll = fixture.Compile(`package ConditionalReturn5858
+import System
+class Source { shared {
+func Borrow(ref left (Text string, Code int32), ref right (Text string, Code int32), flag bool) ref string {
+` + body + `
+}
+} }
+func Main() {
+    var left (Text string, Code int32) = ("left", 1)
+    var right (Text string, Code int32) = ("right", 2)
+    var ref first = Source.Borrow(ref left, ref right, true)
+    first = "keep"
+    Console.WriteLine(left.Text + ":" + right.Text)
+    var ref second = Source.Borrow(ref left, ref right, false)
+    second = "changed"
+    Console.WriteLine(left.Text + ":" + right.Text)
+}`, "ConditionalReturn5858", executable: true)
+        let consumer = fixture.CompileCSharp(`public static class Consumer {
+    public static string Run() {
+        var left = (Text: "left", Code: 1);
+        var right = (Text: "right", Code: 2);
+        ConditionalReturn5858.Source.Borrow(ref left, ref right, true) = "keep";
+        ConditionalReturn5858.Source.Borrow(ref left, ref right, false) = "changed";
+        return left.Text + ":" + right.Text;
+    }
+}`, "ConditionalReturn5858Consumer", dll)
+        // Incoming-reference joins have the same ILVerify limitation as other ref-parameter forwarders.
+        IlVerifier.Verify(consumer, []string{dll})
+        let assemblies = EmittedFixture.LoadTogether(dll, consumer)
+        let method = assemblies[0].GetType("ConditionalReturn5858.Source")!!.GetMethod("Borrow")!!
+        let code = method.GetMethodBody()!!.GetILAsByteArray()!!
+        Assert.Equal(
+            if viaAlias {
+                21
+            } else {
+                19
+            },
+            code.Length
+        )
+        Assert.Equal("Item1", method.Module.ResolveField(BitConverter.ToInt32(code, 14))!!.Name)
+        Array.Clear(code, 14, 4)
+        let expected = List[uint8](
+            []uint8{0x04, 0x39, 0x06, 0, 0, 0, 0x02, 0x38, 0x01, 0, 0, 0, 0x03, 0x7c, 0, 0, 0, 0}
+        )
+        if viaAlias {
+            expected.AddRange([]uint8{0x0a, 0x06})
+        }
+        expected.Add(0x2a)
+        Assert.Equal(expected.ToArray(), code)
+        Assert.Equal("keep:changed", assemblies[1].GetType("Consumer")!!.GetMethod("Run")!!.Invoke(nil, nil))
+        Assert.Equal(Encoding.UTF8.GetBytes("keep:right\nkeep:changed\n"), fixture.RunBytes(dll))
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConditionalBoxedTupleReceiver_AddressesOnlyTheSelectedPayload(flag bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let choice = if flag {
