@@ -19,6 +19,59 @@ class Issue4726RefAliasNullabilityTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
+    func TupleRefConstructorArgument_SharesItsFixedNullableContract(targetTyped bool) {
+        let creation = if targetTyped {
+            "new(ref row.Text)"
+        } else {
+            "new Reset(ref row.Text)"
+        }
+        let source = `#nullable enable
+public class Reset {
+    public Reset(ref string? text) { text = null; }
+}
+#nullable disable
+public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Run() {
+        Reset reset = ` + creation + `;
+        return row.Text ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("row (Text string?,", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleRefAlias_SharesContractsThroughElementContainers(projected bool) {
+        let declaration = if projected {
+            "private static (((string Text, int Code)[] Rows, int Flag) Inner, int Marker) state = " +
+                "((new[] { (\"x\", 1) }, 2), 3);"
+        } else {
+            "private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { (\"x\", 1) }, 2);"
+        }
+        let storage = if projected {
+            "state.Inner"
+        } else {
+            "state"
+        }
+        let source = `public static class Obj {
+    ` + declaration + `
+    public static string Run() {
+        ref ((string? Text, int Code)[] Rows, int Flag) alias = ref ` + storage + `;
+        return alias.Rows[0].Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Rows [](Text string?,", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
     func ConditionalTupleRefArgument_SharesBothLeafContracts(flag bool) {
         let choice = if flag {
             "true"

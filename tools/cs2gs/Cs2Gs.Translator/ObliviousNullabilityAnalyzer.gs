@@ -5360,7 +5360,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 }
                 case _ is InvocationExpressionSyntax or
-                    _ is ObjectCreationExpressionSyntax or
+                    _ is BaseObjectCreationExpressionSyntax or
                     _ is ConstructorInitializerSyntax or
                     _ is ElementAccessExpressionSyntax or
                     _ is ElementBindingExpressionSyntax {
@@ -6501,12 +6501,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         return tupleType != nil && tupleType.IsTupleType == true
     }
 
-    /// Issue #3641: the tuple positions reachable from [`type`](paramref)
-    /// through generic type ARGUMENTS (`List<(string, byte[])>`), keyed by the
-    /// very path the type mapper walks when it renders the declaration
-    /// (`PromoteTupleTypeArguments`): type-argument indexes first, tuple
-    /// element indexes after. Bare tuple types are excluded — those already own
-    /// the empty-prefix key — so the two collectors never key the same leaf twice.
+    /// Issue #3641: tuple slots reachable through arrays, generic arguments, and tuple elements.
+    /// Paths follow the type mapper's array, generic-argument, and tuple-element positions.
+    /// Bare root tuples are excluded because they already own the empty-prefix key.
     /// @param type The declared type to scan.
     /// @returns The nested tuple slots, outermost type argument first.
     private func NestedTupleSlots(type ITypeSymbol?) List[(Path string, Tuple INamedTypeSymbol)] {
@@ -6520,7 +6517,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func CollectNestedTupleSlots(
         type ITypeSymbol?,
         prefix string,
-        slots List[(Path string, Tuple INamedTypeSymbol)]
+        slots List[(Path string, Tuple INamedTypeSymbol)],
+        includeTuple bool = true
     ) {
         if type is IArrayTypeSymbol array {
             CollectNestedTupleSlots(array.ElementType, AppendTuplePath(prefix, 0), slots)
@@ -6530,7 +6528,18 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if named.IsTupleType {
-            slots.Add((prefix, named))
+            if includeTuple {
+                slots.Add((prefix, named))
+            }
+            // Parent shape edges cover direct tuples, but containers own separate tuple slots.
+            for var i = 0; i < named.TupleElements.Length; i++ {
+                CollectNestedTupleSlots(
+                    named.TupleElements[i].Type,
+                    AppendTuplePath(prefix, i),
+                    slots,
+                    includeTuple: false
+                )
+            }
             return
         }
         for var i = 0; i < named.TypeArguments.Length; i++ {
@@ -7517,10 +7526,10 @@ internal shared class ObliviousNullabilityAnalyzer {
         let firstSlots = NestedTupleSlots(firstType)
         let secondSlots = NestedTupleSlots(secondType)
         if firstType is INamedTypeSymbol{IsTupleType: true} firstTuple {
-            firstSlots.Add((string.Empty, firstTuple))
+            CollectNestedTupleSlots(firstTuple, string.Empty, firstSlots)
         }
         if secondType is INamedTypeSymbol{IsTupleType: true} secondTuple {
-            secondSlots.Add((string.Empty, secondTuple))
+            CollectNestedTupleSlots(secondTuple, string.Empty, secondSlots)
         }
         if firstSlots.Count == 0 || firstSlots.Count != secondSlots.Count {
             return
