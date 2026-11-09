@@ -428,6 +428,36 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("array")
+    @InlineData("jagged")
+    @InlineData("rectangular")
+    func Issue5880_GenericArrayTupleRefStorage_PreservesCSharpOutput(shape string) {
+        let creation = switch shape {
+            case "jagged": "new[] { new (string, int)[] { (\"x\", 1) } }"
+            case "rectangular": "new (string, int)[1, 1] { { (\"x\", 1) } }"
+            default: "new (string, int)[] { (\"x\", 1) }"
+        }
+        let element = switch shape {
+            case "jagged": "rows[0][0]"
+            case "rectangular": "rows[0, 0]"
+            default: "rows[0]"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref (T, int) value) { }
+    public static string Run() {
+        var rows = ` + creation + `;
+        ref (string, int) alias = ref ` + element + `;
+        alias = (null!, 0);
+        Keep<string>(ref ` + element + `);
+        return ` + element + `.Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string?]", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
     @InlineData("declaration")
     @InlineData("parameter")
     @InlineData("generic-parameter")

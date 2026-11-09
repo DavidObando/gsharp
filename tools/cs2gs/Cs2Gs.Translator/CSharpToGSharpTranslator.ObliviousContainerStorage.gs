@@ -2069,17 +2069,22 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 var argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
-                if argumentParameter.RefKind != RefKind.None &&
-                    ArgumentStorageSymbol(argumentValue!!, model) is {} storage {
-                    let tuplePositions = ObliviousPositionSet()
-                    this.CollectTupleStoragePositions(
-                        storage,
-                        StorageType(storage),
+                if argumentParameter.RefKind != RefKind.None {
+                    let (storage, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
+                        argumentValue!!,
                         model,
-                        List[int32](),
-                        "",
-                        tuplePositions.Nullable
+                        preserveSubstitution: true
                     )
+                    var declared = StorageType(storage)
+                    let path = List[int32]()
+                    for var i = 0; i < depth && declared is IArrayTypeSymbol array; i++ {
+                        path.Add(0)
+                        declared = array.ElementType
+                    }
+                    let tuplePositions = ObliviousPositionSet()
+                    if storage != nil && path.Count == depth {
+                        this.CollectTupleStoragePositions(storage, declared, model, path, "", tuplePositions.Nullable)
+                    }
                     if !tuplePositions.IsEmpty {
                         if argumentPositions != nil {
                             tuplePositions.UnionWith(argumentPositions)
