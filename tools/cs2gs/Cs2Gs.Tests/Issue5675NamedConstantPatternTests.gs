@@ -1045,4 +1045,116 @@ namespace Demo
     }
 }`, "NotMatched 0 / Matched 2 2 / False 0 / True 2 2 / False 0 / True 2 2 / False 0 / True 2 2 / None 0 / Const 2 2", rejectRedundantAssertions: true)
     }
+
+    @Fact
+    func Issue5837_LoopDowncastNullableClearedStructAndSwitchWhenGuard_MatchCSharpOracle() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class B
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+    }
+    public class BaseRow
+    {
+        public int Id = 1;
+    }
+    public class Row : BaseRow
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+        public object Child = new B();
+        public object Tag = 3;
+    }
+    public struct StructRow
+    {
+        public int Id;
+        public object Child;
+        public object Tag;
+    }
+    public static class P
+    {
+        static string LoopTypedDowncast()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            initial.Child = child;
+            BaseRow current = initial;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            while (current is Row { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string LoopNullableSubject()
+        {
+            Row? current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = 3 }; };
+            while (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current!.Id + " " + matched.Id;
+            return "False";
+        }
+        static string NullableSubjectClearedOnSingleProperty()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            if (current is { A: 1 } matched)
+                return "True " + (matched == null ? "null" : matched.Id.ToString());
+            return "False";
+        }
+        static string NullableSubjectClearedOnLastProperty()
+        {
+            Row? current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = null; };
+            if (current is { Tag: 3, Child: B { A: 1 } } matched)
+                return "True " + (matched == null ? "null" : matched.Id.ToString());
+            return "False";
+        }
+        static string NullableStructSubject()
+        {
+            var child = new B();
+            StructRow? current = new StructRow { Id = 1, Child = child, Tag = 3 };
+            child.OnRead = () => { current = new StructRow { Id = 2, Child = child, Tag = 0 }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Value.Tag + " " + matched.Id;
+            return "False " + current.Value.Tag;
+        }
+        static string NonNullableStructSubject()
+        {
+            var child = new B();
+            StructRow current = new StructRow { Id = 1, Child = child, Tag = 3 };
+            child.OnRead = () => { current = new StructRow { Id = 2, Child = child, Tag = 0 }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Tag + " " + matched.Id;
+            return "False " + current.Tag;
+        }
+        static string SwitchExprWithWhenGuard()
+        {
+            var current = new Row { Id = 2, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            bool ResetCurrent() { current = new Row { Id = 99, Tag = 99 }; return true; }
+            return current switch
+            {
+                { Child: B { A: 1 }, Tag: 3 } matched when matched.Id == 2 && ResetCurrent() => "True " + current.Id + " " + matched.Id,
+                _ => "False",
+            };
+        }
+        public static string Run() =>
+            LoopTypedDowncast() + " / " +
+            LoopNullableSubject() + " / " +
+            NullableSubjectClearedOnSingleProperty() + " / " +
+            NullableSubjectClearedOnLastProperty() + " / " +
+            NullableStructSubject() + " / " +
+            NonNullableStructSubject() + " / " +
+            SwitchExprWithWhenGuard();
+    }
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2", rejectRedundantAssertions: true)
+    }
 }

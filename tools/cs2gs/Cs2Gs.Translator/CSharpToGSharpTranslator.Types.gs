@@ -2599,7 +2599,9 @@ partial class CSharpToGSharpTranslator {
                     guards,
                     mutableBindings,
                     receiver,
-                    materializeReceiverBindings: true
+                    materializeReceiverBindings: true,
+                    usedDesignators: usedDesignators,
+                    receiverSyntax: receiverSyntax
                 )
                 return DiscardPattern()
             }
@@ -3178,15 +3180,17 @@ partial class CSharpToGSharpTranslator {
             guards List[GExpression],
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]? = nil,
             receiver GExpression? = nil,
-            materializeReceiverBindings bool = false
+            materializeReceiverBindings bool = false,
+            usedDesignators HashSet[string]? = nil,
+            receiverSyntax ExpressionSyntax? = nil
         ) {
             let bindingsBefore = HashSet[ISymbol](this.state.PatternBindings.Keys, SymbolEqualityComparer.Default)
-            let memberTest = translate()
+            var memberTest = translate()
             for added in this.state.PatternBindings.Keys.ToList() {
                 if bindingsBefore.Contains(added) {
                     continue
                 }
-                let matched = this.state.PatternBindings[added]
+                var matched = this.state.PatternBindings[added]
                 let scope_ = this
                     .state
                     .CurrentBodyScope ??
@@ -3195,15 +3199,53 @@ partial class CSharpToGSharpTranslator {
                     .FirstOrDefault()
                     ?.SyntaxTree
                     .GetRoot()
-                if mutableBindings != nil &&
-                    added is ILocalSymbol mutableSymbol &&
-                    (
-                    (scope_ != nil && this.IsSymbolReassigned(mutableSymbol, scope_)) ||
-                        (
-                        materializeReceiverBindings && scope_ != nil && this.ReadsSymbol(scope_, mutableSymbol) &&
-                            ExpressionReferencesIdentifier(matched, receiver)
-                    )
-                ) {
+                let isReassigned = added is ILocalSymbol reassignedLocal && scope_ != nil && this.IsSymbolReassigned(
+                    reassignedLocal,
+                    scope_
+                )
+                if materializeReceiverBindings &&
+                    added is ILocalSymbol receiverBinder &&
+                    scope_ != nil &&
+                    this.ReadsSymbol(scope_, receiverBinder) && ExpressionReferencesIdentifier(matched, receiver) {
+                    let binderSyntax = receiverBinder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    let nullableCapture = this.ScrutineeStorageIsNullableInGSharp(receiverSyntax) ||
+                        binderSyntax?.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .VarPatternSyntax
+                    if nullableCapture &&
+                        matched is NonNullAssertionExpression nonNullMatched &&
+                        object.ReferenceEquals(nonNullMatched.Operand, receiver) {
+                        matched = nonNullMatched.Operand
+                    }
+                    let captureName = if isReassigned && mutableBindings != nil && binderSyntax != nil {
+                        this.NewMutableSwitchPatternCaptureName(
+                            binderSyntax.Parent as Microsoft.CodeAnalysis.CSharp.Syntax.PatternSyntax,
+                            usedDesignators
+                        )
+                    } else {
+                        this.EmittedName(receiverBinder, receiverBinder.Name)!!
+                    }
+                    let capturedId = IdentifierExpression(captureName)
+                    if nullableCapture {
+                        this.state.StoredPatternCaptures.Add(capturedId)
+                    }
+                    let capturePattern GPattern = if nullableCapture {
+                        VarPattern(captureName)
+                    } else {
+                        PropertyPattern(List[PropertyPatternField](), captureName)
+                    }
+                    memberTest = BinaryExpression(memberTest, "&&", PatternTestExpression(matched, capturePattern))
+                    this.state.PatternBindings[added] = capturedId
+                    if isReassigned && mutableBindings != nil {
+                        mutableBindings.Add((receiverBinder, capturedId))
+                    } else {
+                        bindings.Add((added, capturedId))
+                    }
+                    continue
+                }
+                if mutableBindings != nil && added is ILocalSymbol mutableSymbol && isReassigned {
                     mutableBindings.Add((mutableSymbol, matched))
                     continue
                 }

@@ -353,15 +353,33 @@ partial class CSharpToGSharpTranslator {
                     mainBinder
                 },
                 guards,
-                negated
+                negated,
+                if deferScrutineeCapture {
+                    isPattern.Expression
+                } else {
+                    default(ExpressionSyntax?)
+                }
             )
             into.AddRange(this.RecordPatternCacheResets(isPattern))
             into.AddRange(guards)
             if separateMainBinder && mainBinder != nil {
+                this.state.PatternBindings.TryGetValue(mainBinder, out var mainReplacement)
                 this.state.PatternBindings.Remove(mainBinder)
+                var sourceExpr GExpression = mainReplacement ?? idExpr
+                if scrutineeIsNullable &&
+                    sourceExpr is NonNullAssertionExpression nonNullSource &&
+                    object.ReferenceEquals(nonNullSource.Operand, idExpr) {
+                    sourceExpr = nonNullSource.Operand
+                }
+                let binderSyntax = mainBinder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                let binderSymbolType = if !scrutineeIsNullable && binderSyntax?.Parent !is VarPatternSyntax {
+                    mainBinder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                } else {
+                    mainBinder.Type
+                }
                 let binderName = this.EmittedName(mainBinder, mainBinder.Name)
                 var binderType = this.PromoteIfUsedAsNullable(
-                    this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
+                    this.typeMapper.MapExplicitType(binderSymbolType, this.context, clause.GetLocation()),
                     mainBinder
                 )
                 if binderType != nil &&
@@ -369,15 +387,17 @@ partial class CSharpToGSharpTranslator {
                     mainBinder
                     .Type
                     .IsReferenceType &&
-                    mainBinder
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax()
-                    ?.Parent is VarPatternSyntax &&
                     (
-                    this.InferredLocalDeclarationIsNullable(mainBinder) ||
-                        scrutineeIsNullable ||
-                        !this.TryGetVarCaptureStaticNonNull(mainBinder, out var mainVarIsNonNull) || !mainVarIsNonNull
+                    (deferScrutineeCapture && scrutineeIsNullable && object.ReferenceEquals(sourceExpr, idExpr)) ||
+                        (
+                        binderSyntax?.Parent is VarPatternSyntax &&
+                            (
+                            this.InferredLocalDeclarationIsNullable(mainBinder) ||
+                                scrutineeIsNullable ||
+                                !this.TryGetVarCaptureStaticNonNull(mainBinder, out var mainVarIsNonNull) ||
+                                !mainVarIsNonNull
+                        )
+                    )
                 ) {
                     binderType = MakeNullable(binderType)
                 }
@@ -399,9 +419,9 @@ partial class CSharpToGSharpTranslator {
                     !SymbolEqualityComparer
                     .Default
                     .Equals(scrutineeType, mainBinder.Type) && binderType != nil {
-                    cast[GExpression](ConversionExpression(binderType, idExpr, isCheckedReferenceCast: true))
+                    cast[GExpression](ConversionExpression(binderType, sourceExpr, isCheckedReferenceCast: true))
                 } else {
-                    cast[GExpression](idExpr)
+                    cast[GExpression](sourceExpr)
                 }
                 into.Add(LocalDeclarationStatement(binding, binderName, binderType, binderInit))
             }
@@ -486,7 +506,8 @@ partial class CSharpToGSharpTranslator {
             pattern PatternSyntax,
             mainBinder ILocalSymbol?,
             into List[GStatement],
-            negated bool = false
+            negated bool = false,
+            scrutineeSyntax ExpressionSyntax? = nil
         ) {
             switch pattern {
                 case parenthesized is ParenthesizedPatternSyntax {
@@ -497,7 +518,8 @@ partial class CSharpToGSharpTranslator {
                         parenthesized.Pattern,
                         mainBinder,
                         into,
-                        negated
+                        negated,
+                        scrutineeSyntax
                     )
                     return
                 }
@@ -509,7 +531,8 @@ partial class CSharpToGSharpTranslator {
                         notPattern.Pattern,
                         mainBinder,
                         into,
-                        !negated
+                        !negated,
+                        scrutineeSyntax
                     )
                     return
                 }
@@ -524,7 +547,8 @@ partial class CSharpToGSharpTranslator {
                         binaryPattern.Left,
                         mainBinder,
                         into,
-                        negated
+                        negated,
+                        scrutineeSyntax
                     )
                     this.EmitMustHoldGuards(
                         idExpr,
@@ -533,7 +557,8 @@ partial class CSharpToGSharpTranslator {
                         binaryPattern.Right,
                         mainBinder,
                         into,
-                        negated
+                        negated,
+                        scrutineeSyntax
                     )
                     return
                 }
@@ -569,7 +594,7 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 default {
-                    let patternTest = this.TranslatePatternTest(idExpr, pattern, scrutineeType)
+                    let patternTest = this.TranslatePatternTest(idExpr, pattern, scrutineeType, scrutineeSyntax)
                     into.Add(
                         BreakIf(
                             if negated {

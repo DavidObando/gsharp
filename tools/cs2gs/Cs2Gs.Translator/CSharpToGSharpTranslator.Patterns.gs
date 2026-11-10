@@ -1109,13 +1109,27 @@ partial class CSharpToGSharpTranslator {
                 if binder.Type.IsReferenceType {
                     storageType = MakeNullable(storageType)
                 }
+                if storageType != nil &&
+                    storageType.IsNullable &&
+                    replacement is NonNullAssertionExpression nonNull &&
+                    object.ReferenceEquals(nonNull.Operand, receiver) {
+                    replacement = nonNull.Operand
+                }
                 let name string? = this.EmittedName(binder, binder.Name)
                 let local = IdentifierExpression(name)
                 declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, storageType))
                 assignments.Add(AssignmentStatement(local, replacement))
+                let nullableReceiverCapture = binder.Type.IsReferenceType && this.ScrutineeStorageIsNullableInGSharp(
+                    isPattern.Expression
+                ) &&
+                    ExpressionReferencesIdentifier(replacement, receiver)
+                if nullableReceiverCapture {
+                    this.state.StoredPatternCaptures.Add(local)
+                }
                 let gscNarrowsAssignedLocal = !negated &&
                     !outerBlockWrapped &&
                     !crossesShortCircuitBoundary &&
+                    !nullableReceiverCapture &&
                     !this.IsLocalReassigned(binder) && !this.IsClosureAssignedVariable(binder)
                 this
                     .state
@@ -1123,6 +1137,7 @@ partial class CSharpToGSharpTranslator {
                     .Type
                     .IsReferenceType &&
                     !gscNarrowsAssignedLocal &&
+                    !nullableReceiverCapture &&
                     binder.NullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
@@ -2335,22 +2350,31 @@ partial class CSharpToGSharpTranslator {
             isNestedPatternMember bool = false,
             receiverAlreadyMatched bool = false
         ) GExpression {
-            if !receiverAlreadyMatched && recursive.Type != nil && this.ScrutineeMayLoseNarrowingInPattern(
-                receiverSyntax
+            if !receiverAlreadyMatched &&
+                (recursive.Type != nil || IsNullableValueType(receiverType)) &&
+                this.ScrutineeMayLoseNarrowingInPattern(receiverSyntax) && !this.IsConditionalAccessAnalyzerType(
+                recursive.Type
             ) &&
-                !this.IsConditionalAccessAnalyzerType(recursive.Type) && !this.IsPlainAccessAnalyzerType(
+                !this.IsPlainAccessAnalyzerType(recursive.Type, out _) && !this.IsVariableReferenceAnalyzerType(
                 recursive.Type,
                 out _
-            ) &&
-                !this
-                .IsVariableReferenceAnalyzerType(recursive.Type, out _) {
-                let testedType ITypeSymbol? = this.context.GetTypeInfo(recursive.Type).Type
-                let strippedReceiverType ITypeSymbol? = UnwrapNullable(receiverType)
-                if testedType != nil && strippedReceiverType != nil && !SymbolEqualityComparer.Default.Equals(
-                    strippedReceiverType,
+            ) {
+                let testedType ITypeSymbol? = if recursive.Type != nil {
+                    this.context.GetTypeInfo(recursive.Type).Type
+                } else {
+                    UnwrapNullable(receiverType)
+                }
+                let effectiveReceiverType ITypeSymbol? = if IsNullableValueType(receiverType) {
+                    receiverType
+                } else {
+                    UnwrapNullable(receiverType)
+                }
+                if testedType != nil && effectiveReceiverType != nil && !SymbolEqualityComparer.Default.Equals(
+                    effectiveReceiverType,
                     UnwrapNullable(testedType)
                 ) {
-                    let assignable = IsAssignableNonNull(strippedReceiverType, testedType)
+                    let assignable = !IsNullableValueType(receiverType) &&
+                        IsAssignableNonNull(effectiveReceiverType, testedType)
                     if !assignable || recursive.Designation is SingleVariableDesignationSyntax {
                         let temp = this.NewSpillName()
                         let local = IdentifierExpression(temp)
@@ -2389,14 +2413,12 @@ partial class CSharpToGSharpTranslator {
                             .GetDeclaredSymbol(recDesignationAfter) is {} recSymbolAfter {
                             this.state.PatternBindings[recSymbolAfter] = local
                         }
-                        return BinaryExpression(
-                            PatternTestExpression(
-                                receiver,
-                                this.BuildPatternTypeTest(temp, recursive.Type, recursive, designationAfterType: true)
-                            ),
-                            "&&",
-                            rest
-                        )
+                        let capturePattern GPattern = if recursive.Type != nil {
+                            this.BuildPatternTypeTest(temp, recursive.Type, recursive, designationAfterType: true)
+                        } else {
+                            PropertyPattern(List[PropertyPatternField](), temp)
+                        }
+                        return BinaryExpression(PatternTestExpression(receiver, capturePattern), "&&", rest)
                     }
                 }
             }
@@ -2638,17 +2660,6 @@ partial class CSharpToGSharpTranslator {
                         sub
                         .DescendantNodesAndSelf().Any(this.PatternNodeRunsUserCode) {
                         memberReceiver = EnsureNonNullAssertion(receiver)
-                        if recursive.Designation is SingleVariableDesignationSyntax recVarAfter &&
-                            this
-                            .context
-                            .GetDeclaredSymbol(recVarAfter) is {} recBoundAfter &&
-                            this
-                            .state
-                            .PatternBindings
-                            .TryGetValue(recBoundAfter, out var currentBinding) &&
-                            object.ReferenceEquals(currentBinding, receiver) {
-                            this.state.PatternBindings[recBoundAfter] = memberReceiver!!
-                        }
                     }
                     test = if test == nil {
                         memberTest
