@@ -7786,12 +7786,13 @@ partial class CSharpToGSharpTranslator {
                 .TryResolveTupleContainerSource(
                 assignment.Left,
                 this.context.SemanticModel,
-                out _,
+                out var containerSymbol,
                 out var containerType,
                 out var containerPrefix,
                 unwrapSuppressions: true
             ) &&
                 containerPrefix.Length > 0 {
+                effectiveSymbol ??= containerSymbol
                 current = containerType
                 for component in containerPrefix.Split('.') {
                     if int32.TryParse(component, out var prefixIndex) {
