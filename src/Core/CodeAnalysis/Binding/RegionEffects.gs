@@ -248,13 +248,13 @@ internal sealed class RegionPatternTest {
         value RegionReceiverPath?,
         valueIsNull bool,
         candidate RegionTypeTest?,
-        constantValuePath RegionReceiverPath? = nil
+        constantValue RegionConstantValue? = nil
     ) {
         Subject = subject
         Value = value
         ValueIsNull = valueIsNull
         Candidate = candidate
-        ConstantValuePath = constantValuePath
+        ConstantValue = constantValue
     }
 
     /// Gets the path of the tested value, or `nil` when the walker cannot follow it.
@@ -267,8 +267,8 @@ internal sealed class RegionPatternTest {
         get;
     }
 
-    /// Gets the direct constant-read path, without substituting a local's type origin.
-    prop ConstantValuePath RegionReceiverPath? {
+    /// Gets constant value provenance, separate from a mutable local's type origin.
+    prop ConstantValue RegionConstantValue? {
         get;
     }
 
@@ -281,6 +281,25 @@ internal sealed class RegionPatternTest {
     prop Candidate RegionTypeTest? {
         get;
     }
+}
+
+/// A null literal or a constant read, followed by conversions that must preserve null.
+internal sealed class RegionConstantValue {
+    init(path RegionReceiverPath?, targets ImmutableArray[RegionReceiverPath]) {
+        Path = path
+        Targets = targets
+    }
+
+    /// Gets the constant-read path, or `nil` for a null literal.
+    prop Path RegionReceiverPath? {
+        get;
+    }
+
+    prop Targets ImmutableArray[RegionReceiverPath] {
+        get;
+    }
+
+    func Through(target RegionReceiverPath) RegionConstantValue -> RegionConstantValue(Path, Targets.Add(target))
 }
 
 /// An operator whose operands are names or literals; the consumer decides whether it is predefined
@@ -317,13 +336,15 @@ internal sealed class RegionConversion {
         target RegionReceiverPath?,
         sourceIsBuiltInByForm bool,
         sourceIsNil bool = false,
-        operatorArms bool = false
+        operatorArms bool = false,
+        allowExplicit bool = false
     ) {
         Source = source
         Target = target
         SourceIsBuiltInByForm = sourceIsBuiltInByForm
         SourceIsNil = sourceIsNil
         OperatorArms = operatorArms
+        AllowExplicit = allowExplicit
     }
 
     prop Source RegionReceiverPath? {
@@ -347,6 +368,10 @@ internal sealed class RegionConversion {
     /// Whether the site is where two operator arms meet (`flag ? a + 1 : b + 1`): their types are built in, and meet
     /// without an operator, only when the operators of the region are predefined.
     prop OperatorArms bool {
+        get;
+    }
+
+    prop AllowExplicit bool {
         get;
     }
 }

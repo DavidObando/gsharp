@@ -2452,6 +2452,9 @@ internal partial class StatementBinder {
                 // Any other LocalVariableSymbol (let/var inside the function body) is local-scope.
                 return v.Variable is LocalVariableSymbol local && (local.RefKind == RefKind.None || local.IsScoped)
             }
+            case tuple is BoundTupleElementAccessExpression {
+                return HasFunctionLocalRefScope(tuple.Receiver)
+            }
             case fa is BoundFieldAccessExpression {
                 // Reference type fields live in a heap object — safe regardless of receiver scope.
                 if fa.Receiver is {Type: StructSymbol s} && s.IsClass {
@@ -2513,6 +2516,9 @@ internal partial class StatementBinder {
             case condAddr is BoundConditionalAddressExpression {
                 return HasFunctionLocalRefScope(condAddr.WhenTrueOperand) ||
                     HasFunctionLocalRefScope(condAddr.WhenFalseOperand)
+            }
+            case conditional is BoundConditionalExpression {
+                return HasFunctionLocalRefScope(conditional.WhenTrue) || HasFunctionLocalRefScope(conditional.WhenFalse)
             }
             default {
                 if RefCapabilities.TryGetRefReturnEscapeSources(
@@ -2781,6 +2787,9 @@ internal partial class StatementBinder {
                 case BoundFieldAccessExpression {
                     return ExpressionBinder.IsLvalue(expr)
                 }
+                case BoundTupleElementAccessExpression {
+                    return ExpressionBinder.IsLvalue(expr)
+                }
                 case boundClrPropertyAccessExpression is BoundClrPropertyAccessExpression when boundClrPropertyAccessExpression.Member is FieldInfo {
                     return ExpressionBinder.IsLvalue(expr)
                 }
@@ -2854,6 +2863,11 @@ internal partial class StatementBinder {
                 Receiver: {} clrReceiver
             }: !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) &&
                 IsRootedAtReceiverWhere(clrReceiver, capturedOnly, ownReceiver)
+            case tuple is BoundTupleElementAccessExpression: IsRootedAtReceiverWhere(
+                tuple.Receiver,
+                capturedOnly,
+                ownReceiver
+            )
             case block is BoundBlockExpression: IsRootedAtReceiverWhere(block.Expression, capturedOnly, ownReceiver)
             case conditional is BoundConditionalAddressExpression: IsRootedAtReceiverWhere(
                 conditional.WhenTrueOperand,

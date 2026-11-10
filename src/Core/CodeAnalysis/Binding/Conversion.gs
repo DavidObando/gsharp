@@ -2600,6 +2600,47 @@ class Conversion {
             return ProvesNominalReference(source, target)
         }
 
+        /// Checks whether a predefined conversion preserves a known null payload.
+        internal func PreservesNull(source TypeSymbol, target TypeSymbol) bool {
+            let sourceNullable = NullableLifting.IsAnyValueTypeNullable(source as NullableTypeSymbol) ||
+                NullableLifting.IsValueTypeNullableClr(source.ClrType)
+            let targetNullable = NullableLifting.IsAnyValueTypeNullable(target as NullableTypeSymbol) ||
+                NullableLifting.IsValueTypeNullableClr(target.ClrType)
+            let sourceReference = source.StripToBareShape()
+            let targetReference = target.StripToBareShape()
+            if source == TypeSymbol.Null {
+                return targetNullable || IsNullDefault(targetReference)
+            }
+            if IsRepresentationPreservingImplicit(sourceReference, targetReference) ||
+                HasCheckedReferenceConversion(sourceReference, targetReference) {
+                return true
+            }
+            let conversion = ClassifyNonStructural(source, target)
+            if !conversion.Exists || conversion.IsStructuralProjection {
+                return false
+            }
+            if targetNullable {
+                return sourceNullable || HasExplicitUnboxingConversion(source, target)
+            }
+            return sourceNullable && conversion.IsImplicit && IsReferenceLikeTarget(targetReference)
+        }
+
+        // The default is null in every instantiation only for nullable values or reference types.
+        // A type parameter needs an explicit `class` constraint. An `Enum` base constraint can admit value types.
+        internal func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
+            NullableLifting.IsAnyValueTypeNullable(nullable) || IsNullDefaultReference(nullable.UnderlyingType)
+        } else {
+            IsNullDefaultReference(type)
+        }
+
+        private func IsNullDefaultReference(type TypeSymbol) bool -> if PlatformTypeSymbol.StripTopLevel(
+            type
+        ) is TypeParameterSymbol parameter {
+            parameter.HasReferenceTypeConstraint && !parameter.HasValueTypeConstraint
+        } else {
+            Binder.IsReferenceTypeForConstraint(type)
+        }
+
         /// Issue #5536: decides whether a function value converts to a function or delegate target without a new body.
         /// A function literal binds its body to the target, so only a literal can convert a result or parameter value.
         /// A function value or method group keeps its delegate: emission reuses the delegate

@@ -5665,6 +5665,7 @@ internal partial class ExpressionBinder {
                     TryGetAddressedStorageType(conditional, out _)
             }
             return switch expression {
+                case tuple is BoundTupleElementAccessExpression: IsLvalue(tuple.Receiver)
                 case field is BoundFieldAccessExpression: IsAddressableFieldReceiver(field.Receiver)
                 case BoundClrPropertyAccessExpression{Member: FieldInfo field} access: !field.IsLiteral &&
                     IsAddressableFieldReceiver(access.Receiver)

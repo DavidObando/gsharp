@@ -261,15 +261,26 @@ public static class Consumer {
     @InlineData("direct")
     @InlineData("reordered")
     @InlineData("intermediate")
+    @InlineData("widened-interface")
+    @InlineData("wrapped")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
-        let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", `#nullable enable
+        let baseReturn = switch mode {
+            case "widened-interface": "ICarrier<object, (string? Text, int Code)>"
+            case "wrapped": "Carrier<((string? Text, int Code) Data, int Marker)>"
+            default: "Carrier<(string? Text, int Code), (string Keep, int Code)>"
+        }
+        let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", (`#nullable enable
 namespace Contract4718;
+public interface ICarrier<out X, Y> { }
+public class Derived<T> : ICarrier<string, T> { }
+public class Carrier<T> { }
+public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
 public class Reordered<X, Y> : Carrier<Y, X> { }
 public class Intermediate<X, Y> : Reordered<X, Y> { }
 public abstract class RowsBase {
-    public abstract Carrier<(string? Text, int Code), (string Keep, int Code)> Rows();
-}`)}, assemblyName: "Contract4718")
+    public abstract ` + "$baseReturn" + ` Rows();
+}`))}, assemblyName: "Contract4718")
         using let image = MemoryStream()
         let emitted = library.Compilation.Emit(image)
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
@@ -279,10 +290,11 @@ public abstract class RowsBase {
         } else {
             "Reordered"
         }
-        let returnType = if mode != "direct" {
-            "$derived<(string Keep, int Code), (string Text, int Code)>"
-        } else {
-            "Carrier<(string Text, int Code), (string Keep, int Code)>"
+        let returnType = switch mode {
+            case "direct": "Carrier<(string Text, int Code), (string Keep, int Code)>"
+            case "widened-interface": "Derived<(string Text, int Code)>"
+            case "wrapped": "Wrapped<(string Text, int Code)>"
+            default: "$derived<(string Keep, int Code), (string Text, int Code)>"
         }
         let printed = Translate((`using Contract4718;
 public sealed class Producer : RowsBase {
@@ -290,10 +302,11 @@ public sealed class Producer : RowsBase {
         return new ` + "$returnType" + `();
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
-        let expected = if mode != "direct" {
-            "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
-        } else {
-            "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+        let expected = switch mode {
+            case "direct": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+            case "widened-interface": "Derived[(Text string?, Code int32)]"
+            case "wrapped": "Wrapped[(Text string?, Code int32)]"
+            default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
         Assert.Contains("override func Rows() " + expected, printed)
         Assert.Contains("return " + expected + "()", printed)

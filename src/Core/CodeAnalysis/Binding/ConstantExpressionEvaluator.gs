@@ -165,7 +165,8 @@ internal shared class ConstantExpressionEvaluator {
             }
             case defaultValue is BoundDefaultExpression when Conversion.IsReferenceLikeTarget(
                 defaultValue.Type.StripToBareShape()
-            ) {
+            ) ||
+                UsesObjectNullCarrier(defaultValue.Type) {
                 return TryBuildConstant(nil, defaultValue.Type, out built)
             }
             case BoundClrPropertyAccessExpression{Receiver: nil, Member: FieldInfo field} fieldAccess when
@@ -173,8 +174,17 @@ internal shared class ConstantExpressionEvaluator {
                 return TryBuildConstant(constantValue, fieldAccess.Type, out built)
             }
             case conversion is BoundConversionExpression {
-                return TryBuild(conversion.Expression, out var operand) &&
-                    TryConvert(operand!!, conversion.Type, conversion.IsChecked, out built)
+                if !TryBuild(conversion.Expression, out var operand) {
+                    return false
+                }
+                // Null carriers do not retain the source type needed to select the emitted conversion.
+                if (!operand.Type.IsValueType || NullableLifting.IsValueTypeNullableClr(operand.Type)) &&
+                    !Conversion.PreservesNull(conversion.Expression.Type, conversion.Type) &&
+                    TryInvoke(operand, out var value) &&
+                    value == nil {
+                    return false
+                }
+                return TryConvert(operand, conversion.Type, conversion.IsChecked, out built)
             }
             case call is BoundImportedCallExpression when call
                 .Function
@@ -447,10 +457,7 @@ internal shared class ConstantExpressionEvaluator {
 
     private func TryBuildConstant(value object?, type TypeSymbol, @NotNullWhen(true) out built Expression?) bool {
         built = nil
-        if value == nil && type.StripToBareShape() is not TypeParameterSymbol && Conversion.IsReferenceLikeTarget(
-            type.StripToBareShape()
-        ) &&
-            type.StripToBareShape() != TypeSymbol.String {
+        if value == nil && UsesObjectNullCarrier(type) {
             built = Expression.Constant(nil, typeof(object))
             return true
         }
@@ -506,6 +513,18 @@ internal shared class ConstantExpressionEvaluator {
             return true
         }
         return TryConvert(source, storageType, isChecked: false, out normalized)
+    }
+
+    private func UsesObjectNullCarrier(type TypeSymbol) bool {
+        let bare = type.StripToBareShape()
+        return bare is not TypeParameterSymbol &&
+            bare != TypeSymbol.String &&
+            (
+            Conversion.IsReferenceLikeTarget(bare) || NullableLifting.IsAnyValueTypeNullable(
+                type as NullableTypeSymbol
+            ) ||
+                NullableLifting.IsValueTypeNullableClr(type.ClrType)
+        )
     }
 
     private func TryConvert(

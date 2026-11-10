@@ -1339,6 +1339,19 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   cannot resolve still counts, and a non-empty map literal (`map[K, V]{k: v}`) counts as a construction because key
   insertion calls `GetHashCode` and `Equals`. The conversion of a typed `for ... in` variable and the `Deconstruct` call or getter of
   a tuple-target `for ... in` run before every body run, so an indexed iteration with such a prelude runs user code.
+- *Intrinsic casts and null constants (#5879, #5881).* `cast[T](operand)` records a conversion site, not an invocation.
+  The shared conversion classifier includes explicit operators at this site, and the walker visits the operand's effects.
+  Null-pattern provenance follows defaults, null-preserving conversions, and `const` declarations inside the region.
+  The consumer checks null preservation for each source-to-target conversion through `Conversion.PreservesNull`.
+  Reference casts, nullable lifts and boxing preserve null. Constructing a string from a null character array does not.
+  Constant folding checks the bound source type with the same query before converting an internal null carrier.
+  An unmodelled conversion that changes null to a value does not fold; a reference `const` initializer reports `GS0376`.
+  Straight-line null-operand classification uses the same query before unwrapping each bound conversion.
+  Defaults use the shared `Conversion.IsNullDefault` query. An `Enum` constraint does not prove a reference-type default.
+  Type clauses naming in-scope generic parameters stay unresolved instead of selecting same-named global types.
+  Nullable null constants retain their provenance but use typed local storage instead of literal inlining.
+  Mutable `var` and non-`const` `let` origins do not prove constant null values.
+  Nested-region composition preserves these value records without changing cached records.
 - *Function values.* A call whose callee name the region declares (`let Invoke = callback; Invoke()`) calls a function
   value, which is an indirect call (A3), also when a nested loop's record is composed. A member call whose receiver is
   a plain name of the entry scope (a variable or a type) is resolved on the receiver's declared type, on the type its

@@ -8714,7 +8714,18 @@ internal partial class StatementBinder {
                     Invariant.Required(nativeType, "a detected native integer has a type", expression: "nativeType")
                         .Name
                 )
-            } else if ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue) {
+            } else if ConstantExpressionEvaluator.TryFold(
+                convertedInitializer,
+                declaredVariable.Type,
+                out constValue
+            ) ||
+                (
+                declaredVariable is LocalVariableSymbol && NullableLifting.IsAnyValueTypeNullable(
+                    declaredVariable.Type as NullableTypeSymbol
+                ) &&
+                    ConstantExpressionEvaluator.TryEvaluate(convertedInitializer, out constValue) && constValue == nil
+            ) {
+                // Nullable value constants have no CLR Constant row. Keep their null payload on local symbols only.
                 if declaredVariable is GlobalVariableSymbol global {
                     global.SetConstantValue(constValue)
                 } else if declaredVariable is LocalVariableSymbol constLocal {
@@ -10893,7 +10904,7 @@ internal partial class StatementBinder {
             }
         }
 
-        /// ADR-0208 R12 (#5171): the plain variable that the `ref` local
+        /// ADR-0208 R12 (#5171, #5858): the variable whose storage the `ref` local
         /// [`root`](paramref) names in its initializer, or `null` when
         /// [`root`](paramref) is not such a local.
         internal func TryGetAliasedRoot(root VariableSymbol) VariableSymbol? {
@@ -10909,6 +10920,10 @@ internal partial class StatementBinder {
                     .Op
                     .Kind == BoundUnaryOperatorKind.NullAssertion {
                     origin = unary.Operand
+                } else if origin is BoundTupleElementAccessExpression tuple {
+                    origin = tuple.Receiver
+                } else if origin is BoundBlockExpression block {
+                    origin = block.Expression
                 } else {
                     break
                 }
@@ -10921,7 +10936,7 @@ internal partial class StatementBinder {
             parameter.Type is StructSymbol{IsClass: false}
 
         /// ADR-0208 R12 (#5171): [`root`](paramref) followed by the variables
-        /// it aliases through plain `ref` local initializers.
+        /// it aliases through variable and tuple-element `ref` local initializers.
         internal func AliasChain(root VariableSymbol) List[VariableSymbol] {
             let chain = List[VariableSymbol]()
             chain.Add(root)
@@ -10936,7 +10951,7 @@ internal partial class StatementBinder {
         /// ADR-0208 R12 (#5171): whether [`root`](paramref) may name storage
         /// that no other root names: a by-reference parameter, whose caller may
         /// pass an element or a member, or a `ref` local whose initializer is
-        /// not a plain variable. A member, index or indirect write and any call
+        /// not rooted in variable or tuple-element storage. A member, index or indirect write and any call
         /// can change that storage.
         internal func IsExternalStorageAlias(root VariableSymbol) bool {
             if root is ParameterSymbol parameter {
@@ -11413,30 +11428,14 @@ internal partial class StatementBinder {
             default: true
         }
 
-        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` (BCL or source) or
-        // a reference type (`Binder.IsReferenceTypeForConstraint`: a source class counts). A type parameter counts only
-        // with an explicit `class` constraint: a base-class constraint can be `System.Enum` (`T Enum struct`), whose
-        // default is a boxed zero, and an unconstrained `default(T)` is zero for `T` = `int32`. A value type does not
-        // count.
-        private func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
-            NullableLifting.IsAnyValueTypeNullable(nullable) || IsNullDefaultReference(nullable.UnderlyingType)
-        } else {
-            IsNullDefaultReference(type)
-        }
-
-        private func IsNullDefaultReference(type TypeSymbol) bool -> if PlatformTypeSymbol.StripTopLevel(
-            type
-        ) is TypeParameterSymbol parameter {
-            parameter.HasReferenceTypeConstraint && !parameter.HasValueTypeConstraint
-        } else {
-            Binder.IsReferenceTypeForConstraint(type)
-        }
-
         private func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {
                     break
+                }
+                if !Conversion.PreservesNull(conversion.Expression.Type, conversion.Type) {
+                    return false
                 }
                 value = conversion.Expression
             }
@@ -11452,7 +11451,7 @@ internal partial class StatementBinder {
                     variable.Variable
                 )
             ) ||
-                (value is BoundDefaultExpression && IsNullDefault(value.Type))
+                (value is BoundDefaultExpression && Conversion.IsNullDefault(value.Type))
         }
 
         /// ADR-0208 R19 (#5710): whether a binary `==` or `!=` emits `object.Equals(object, object)` on an operand
