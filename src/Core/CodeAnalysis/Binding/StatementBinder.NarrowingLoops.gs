@@ -664,7 +664,7 @@ internal partial class StatementBinder {
         if ResolveTestedType(typeName, test.Arity) is {} type {
             return type
         }
-        if test.MayBeConstant && $scope.TryLookupSymbol(typeName) != nil {
+        if test.MayBeConstant && (test.DeclaredInRegion || $scope.TryLookupSymbol(typeName) != nil) {
             testsConstant = true
             return nil
         }
