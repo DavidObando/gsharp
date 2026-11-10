@@ -3516,7 +3516,10 @@ internal class ConversionClassifier {
         }
         if parameter != nil && parameter.RefKind != RefKind.None {
             if argument is BoundAddressOfExpression{IsUnmanaged: false} addr {
-                let operandType TypeSymbol? = addr.Operand?.Type
+                let operandType TypeSymbol? = ByRefStorageMatching.TryGetStorageType(addr, parameter.RefKind) ??
+                    addr
+                    .Operand
+                    ?.Type
                 if operandType == TypeSymbol.Error ||
                     expectedType == TypeSymbol.Error ||
                     (
@@ -3598,11 +3601,7 @@ internal class ConversionClassifier {
         parameterType TypeSymbol,
         argument BoundExpression? = nil
     ) bool {
-        let checkedStorageType = if parameter.RefKind == RefKind.Out {
-            ByRefStorageMatching.TryGetStorageType(argument, parameter.RefKind) ?? storageType
-        } else {
-            storageType
-        }
+        let checkedStorageType = ByRefStorageMatching.TryGetStorageType(argument, parameter.RefKind) ?? storageType
         var storageNullable = false
         var parameterNullable = false
         var nestedMismatch = false

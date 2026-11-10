@@ -1318,7 +1318,12 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if pointee != nil {
-                    conversions.ReportByRefStorageMismatch(refArgumentLocation, parameter.Name, paramType, pointee)
+                    conversions.ReportByRefStorageMismatch(
+                        refArgumentLocation,
+                        parameter.Name,
+                        paramType,
+                        ByRefStorageMatching.TryGetStorageType(addrCtor, parameter.RefKind) ?? pointee
+                    )
                     hasErrors = true
                     convertedArguments.Add(argument)
                     continue
@@ -2320,7 +2325,12 @@ internal partial class OverloadResolver {
                     continue
                 }
                 if pointee != nil {
-                    conversions.ReportByRefStorageMismatch(argLocation, parameter.Name, parameter.Type, pointee)
+                    conversions.ReportByRefStorageMismatch(
+                        argLocation,
+                        parameter.Name,
+                        parameter.Type,
+                        ByRefStorageMatching.TryGetStorageType(addrInit, parameter.RefKind) ?? pointee
+                    )
                     hadErrors = true
                     convertedArgs.Add(argument)
                     continue

@@ -404,9 +404,18 @@ namespace Imported5814 {
 }`)
         using let references = fixture.RuntimeReferences()
         let validSource = `import Imported5814
+func TakeInCounter(in c Counter) int32 -> c.n
+func TakeInString(in s string) int32 -> s.Length
 let box = Box(Counter())
 if box.readonlyField is Counter {
     defer box.readonlyField.Bump()
+    let _ = TakeInCounter(box.readonlyField)
+}
+if box.readonlyField is Counter {
+    let _ = TakeInCounter(in box.readonlyField)
+}
+if box.readonlyField is string {
+    let _ = TakeInString(in box.readonlyField)
 }
 if box.GetOnlyProp is Counter {
     box.GetOnlyProp.Bump()
@@ -422,6 +431,28 @@ if box.GetOnlyProp is Counter {
             .Where((d Diagnostic) -> d.IsError)
             .ToArray()
         Assert.Empty(validErrors)
+
+        let incompatibleInSource = `import Imported5814
+func TakeInString(in s string) int32 -> s.Length
+let box = Box(Counter())
+if box.readonlyField is Counter {
+    let _ = TakeInString(in box.readonlyField)
+}
+`
+        let incompatibleInTree = SyntaxTree.Parse(SourceText.From(incompatibleInSource))
+        let incompatibleInCompilation = Compilation(references, incompatibleInTree)
+        let incompatibleInProgram = Binder.BindProgram(
+            incompatibleInCompilation.GlobalScope,
+            incompatibleInCompilation.References
+        )
+        let incompatibleInError = Assert.Single(
+            incompatibleInTree
+                .Diagnostics
+                .Concat(incompatibleInCompilation.GlobalScope.Diagnostics)
+                .Concat(incompatibleInProgram.Diagnostics)
+                .Where((d Diagnostic) -> d.IsError)
+        )
+        Assert.Equal("GS0154", incompatibleInError.Id)
 
         for member in[]string{"mutableField", "MutableProp"} {
             let call = "Bump()"

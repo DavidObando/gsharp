@@ -3425,10 +3425,7 @@ internal partial class StatementBinder {
             let declaredType = switch expression {
                 case variable is BoundVariableExpression: variable.Variable.Type
                 case field is BoundFieldAccessExpression: field.SubstitutedType ?? field.Field.Type
-                case BoundClrPropertyAccessExpression{Member: FieldInfo}: ExpressionBinder.AddressedLeafStorageType(
-                    expression,
-                    useEffectiveNullability: false
-                )
+                case access is BoundClrPropertyAccessExpression when access.Member is FieldInfo: access.EffectiveDeclaredType
                 default: expression.Type
             }
             return IsUnboxedValueType(expression.Type) && IsUnboxedValueType(declaredType)

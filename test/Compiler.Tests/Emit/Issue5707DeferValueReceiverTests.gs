@@ -713,13 +713,22 @@ func TakeIn(in c Counter) int32 {
     return c.n + 5
 }
 
-func EarlyReturn(box Box) int32 {
+class SourceBox {
+    let value object?
+    init(value object?) { this.value = value }
+}
+
+func EarlyReturn(box Box, source SourceBox) int32 {
     if !(box.value is Counter) {
         return -1
     }
     defer box.value.Bump()
     let copy Counter = box.value
-    return copy.n + box.value.n + TakeIn(box.value)
+    let boxSum = copy.n + box.value.n + TakeIn(box.value)
+    if source.value is Counter {
+        return boxSum + TakeIn(in source.value)
+    }
+    return boxSum
 }
 
 async func RunAsync(box Box) Task {
@@ -734,6 +743,7 @@ let tree Expression[(Box) -> int32] = (b Box) -> if b.value is Counter { b.value
 Console.WriteLine(tree.Compile()(imported))
 if imported.value is Counter {
     defer imported.value.Bump()
+    Console.WriteLine(TakeIn(in imported.value))
 }
 if imported.value is Counter c {
     Console.WriteLine(c.n)
@@ -748,7 +758,7 @@ if nested.inner.value is Counter {
 if nested.inner.value is Counter c {
     Console.WriteLine(c.n)
 }
-Console.WriteLine(EarlyReturn(imported))
+Console.WriteLine(EarlyReturn(imported, SourceBox(Counter{n: 4})))
 if imported.value is Counter c {
     Console.WriteLine(c.n)
 }
@@ -763,7 +773,7 @@ if derived.inheritedValue is Counter c {
 }
 let textBox = DerivedBox("hello")
 textBox.RunInherited()
-`, "7\n1\n1\n1\n8\n2\n3\n10\n2\n1\n5\n", fixture.AssemblyPath)
+`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\n", fixture.AssemblyPath)
     }
 
     shared {

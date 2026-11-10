@@ -1909,9 +1909,12 @@ internal partial class MethodBodyEmitter {
         return true
     }
 
-    private func TryEmitBoxedValueTypeReceiver(receiver BoundExpression) bool {
+    internal func TryEmitBoxedValueTypeReceiver(receiver BoundExpression) bool {
         if receiver is BoundVariableExpression bve {
             return this.TryLoadStructVariableAddress(bve)
+        }
+        if !ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type) && receiver.Type?.ClrType?.IsValueType != true {
+            return false
         }
         let storage = SideEffectSpiller.GetReceiverStorageView(receiver)
         if object.ReferenceEquals(storage, receiver) || !Binder.IsReferenceTypeForConstraint(

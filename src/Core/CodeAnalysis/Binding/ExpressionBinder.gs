@@ -5792,23 +5792,28 @@ internal partial class ExpressionBinder {
 
         internal func TryGetAddressedStorageType(
             expression BoundExpression,
-            @NotNullWhen(true) out storageType TypeSymbol?
+            @NotNullWhen(true) out storageType TypeSymbol?,
+            useEffectiveNullability bool = false
         ) bool {
             var current = expression
             while current is BoundBlockExpression block {
                 current = block.Expression
             }
             if current is BoundConditionalExpression conditional {
-                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue) ||
-                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse) ||
-                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: true) {
+                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue, useEffectiveNullability) ||
+                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse, useEffectiveNullability) ||
+                    !ConditionalStorageTypesMatch(
+                    nestedTrue,
+                    nestedFalse,
+                    requireExactNullability: !useEffectiveNullability
+                ) {
                     storageType = nil
                     return false
                 }
                 storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
                 return true
             }
-            storageType = AddressedLeafStorageType(current, useEffectiveNullability: false)
+            storageType = AddressedLeafStorageType(current, useEffectiveNullability: useEffectiveNullability)
             return true
         }
 
@@ -5817,6 +5822,10 @@ internal partial class ExpressionBinder {
             useEffectiveNullability bool = true,
             binderCtx BinderContext? = nil
         ) TypeSymbol {
+            var current = current
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
             switch current {
                 case bve is BoundVariableExpression {
                     let declaredType = bve.Variable.Type
@@ -5856,14 +5865,8 @@ internal partial class ExpressionBinder {
                         declaredFieldType
                     }
                 }
-                case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
-                    let declaredFieldType = if access.Receiver != nil {
-                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType ?? access.Receiver.Type, field)
-                    } else if access.StaticContainerType != nil {
-                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
-                    } else {
-                        ClrNullability.GetFieldTypeSymbol(field)
-                    }
+                case BoundClrPropertyAccessExpression{Member: FieldInfo} access {
+                    let declaredFieldType = access.EffectiveDeclaredType
                     return if useEffectiveNullability {
                         ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
                     } else {

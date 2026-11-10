@@ -4156,6 +4156,11 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
+        if syntax.RefKindModifier.Text == "in" && !RefCapabilities.IsDirectlyAddressableForImplicitIn(operand) {
+            let spilledIn = conversions.CreateImplicitInReference(operand, operand.Type)
+            spilledIn.AnchorSyntax(syntax)
+            return spilledIn
+        }
         return BoundAddressOfExpression(
             syntax,
             operand,
