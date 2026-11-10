@@ -342,6 +342,87 @@ public static class Obj {
         AssertParity(source, printed, "null:3|ok:2")
     }
 
+    @Fact
+    func ArrayOfTuplesContainingArrays_PreservesSegmentOrderAndMatchesRuntime() {
+        const source = `public static class Obj {
+    public static string Run() {
+        var groups = new[] {
+            (Id: 7, Rows: new (string, int)[] { ("x", 0), ("abc", 1) })
+        };
+        groups[0].Rows[0] = (null, 2);
+        return groups[0].Id + ":" + (groups[0].Rows[0].Item1 == null ? "null" : groups[0].Rows[0].Item1) + ":" + groups[0].Rows[0].Item2 + "," + groups[0].Rows[1].Item1 + ":" + groups[0].Rows[1].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Rows: [](string?, int32)", printed)
+        AssertParity(source, printed, "7:null:2,abc:1")
+    }
+
+    @Fact
+    func PromotedArrayElementTuple_PassedToFixedTupleParameter_BridgesLeafAndMatchesRuntime() {
+        const source = `#nullable enable
+public static class FixedTupleConsumer {
+    public static string Consume((string Text, int Code) value) => value.Text + ":" + value.Code;
+}
+#nullable disable
+public static class Obj {
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 0);
+        return (items[0].Text == null ? "null" : items[0].Text) + "|" + FixedTupleConsumer.Consume(items[1]);
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(".Item1!!", printed)
+        AssertParity(source, printed, "null|abc:1")
+    }
+
+    @Fact
+    func ArrayElementNestedTupleFieldWrite_PromotesNestedLeaf() {
+        // Direct tuple-member assignment execution in gsc is tracked by #5897.
+        const source = `public static class Obj {
+    public static string Run() {
+        var items = new ((string Text, int Code) Nested, int Id)[] { (("x", 1), 2), (("abc", 3), 4) };
+        items[0].Nested = (null, 5);
+        return (items[0].Nested.Text == null ? "null" : items[0].Nested.Text) + ":" + items[0].Nested.Code + ":" + items[0].Id + "," + items[1].Nested.Text + ":" + items[1].Nested.Code + ":" + items[1].Id;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("let items = [](Nested (Text string?, Code int32), Id int32)", printed)
+        Assert.DoesNotContain("Text string,", printed)
+    }
+
+    @Theory
+    @InlineData("method-return")
+    @InlineData("property-getter")
+    @InlineData("property-initializer")
+    func ArrayElementTupleWrite_ThroughMethodReturnGetterAndPropertyInitializer_PromotesBackingStorageAndMatchesRuntime(
+        memberKind string
+    ) {
+        let memberDecl = switch memberKind {
+            case "method-return": "private static (string, int)[] GetRows() => rows;"
+            case "property-getter": "private static (string, int)[] Rows => rows;"
+            default: "private static (string, int)[] Rows { get; } = rows;"
+        }
+        let writeTarget = if memberKind == "method-return" {
+            "GetRows()[0] = (null, 0);"
+        } else {
+            "Obj.Rows[0] = (null, 0);"
+        }
+        let source = `public static class Obj {
+    private static (string, int)[] rows = new (string, int)[] { ("x", 0), ("abc", 1) };
+    ` + memberDecl + `
+    public static string Run() {
+        ` + writeTarget + `
+        return (rows[0].Item1 == null ? "null" : rows[0].Item1) + ":" + rows[0].Item2 + "," + rows[1].Item1 + ":" + rows[1].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("[](string?, int32)", printed)
+        Assert.DoesNotContain("[](string, int32)", printed)
+        AssertParity(source, printed, "null:0,abc:1")
+    }
+
     shared {
         private func Translate(source string) string {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})

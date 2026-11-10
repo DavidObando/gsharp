@@ -673,7 +673,9 @@ partial class CSharpToGSharpTranslator {
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
                     assignment.Right == whole: if activeModel
-                    .GetSymbolInfo(assignment.Left).Symbol is {} assigned {
+                    .GetSymbolInfo(assignment.Left)
+                    .Symbol is {} assigned &&
+                    assigned is not IFieldSymbol{ContainingType: {IsTupleType: true}} {
                     (assigned, "")
                 } else if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
                     assignment.Left,

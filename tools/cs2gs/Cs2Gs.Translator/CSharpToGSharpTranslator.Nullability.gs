@@ -657,24 +657,22 @@ partial class CSharpToGSharpTranslator {
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
                     assignment.Right == node {
-                    let symbol ISymbol? = this
-                        .context
-                        .GetSymbolInfo(assignment.Left)
-                        .Symbol ??
-                        (
-                        if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
-                            assignment.Left,
-                            this.context.SemanticModel,
-                            out var containerOwner,
-                            out _,
-                            out _,
-                            unwrapSuppressions: true
-                        ) {
-                            containerOwner
-                        } else {
-                            default(ISymbol?)
-                        }
-                    )
+                    let assigned = this.context.GetSymbolInfo(assignment.Left).Symbol
+                    let symbol ISymbol? = if assigned != nil &&
+                        assigned is not IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                        assigned
+                    } else if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
+                        assignment.Left,
+                        this.context.SemanticModel,
+                        out var containerOwner,
+                        out _,
+                        out _,
+                        unwrapSuppressions: true
+                    ) {
+                        containerOwner
+                    } else {
+                        assigned
+                    }
                     return if symbol is IDiscardSymbol {
                         default(ISymbol?)
                     } else {
@@ -1214,8 +1212,7 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "0")
             }
             var node ExpressionSyntax = value
-            let tuplePrefix = List[string]()
-            var elementDepth = 1
+            let segments = List[string]{"0"}
             while true {
                 if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
                     node = cast[ExpressionSyntax](node.Parent)
@@ -1246,14 +1243,14 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         outer = dimension
                     }
-                    elementDepth++
+                    segments.Insert(0, "0")
                     node = outer
                     continue
                 }
                 if node.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
                     let index = tuple.Arguments.IndexOf(argument)
                     if index >= 0 {
-                        tuplePrefix.Insert(0, index.ToString(CultureInfo.InvariantCulture))
+                        segments.Insert(0, index.ToString(CultureInfo.InvariantCulture))
                         node = tuple
                         continue
                     }
@@ -1262,11 +1259,8 @@ partial class CSharpToGSharpTranslator {
             }
             let (sink, prefix) = this.DirectValueSink(node)
             var position = prefix
-            for segment in tuplePrefix {
+            for segment in segments {
                 position = JoinPosition(position, segment)
-            }
-            for var i = 0; i < elementDepth; i++ {
-                position = JoinPosition(position, "0")
             }
             return (sink, position)
         }

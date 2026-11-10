@@ -5286,7 +5286,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         model,
                         tupleTainted,
                         tupleEdges,
-                        tupleScalarEdges
+                        tupleScalarEdges,
+                        tupleContractEdges
                     )
                 }
                 case localFunction is LocalFunctionStatementSyntax {
@@ -5297,7 +5298,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         model,
                         tupleTainted,
                         tupleEdges,
-                        tupleScalarEdges
+                        tupleScalarEdges,
+                        tupleContractEdges
                     )
                 }
                 case lambda is AnonymousFunctionExpressionSyntax {
@@ -5308,7 +5310,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         model,
                         tupleTainted,
                         tupleEdges,
-                        tupleScalarEdges
+                        tupleScalarEdges,
+                        tupleContractEdges
                     )
                 }
                 case property is PropertyDeclarationSyntax {
@@ -5322,7 +5325,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                                 model,
                                 tupleTainted,
                                 tupleEdges,
-                                tupleScalarEdges
+                                tupleScalarEdges,
+                                tupleContractEdges: tupleContractEdges
                             )
                         }
                         CollectTupleGetterFlows(
@@ -5332,7 +5336,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                             model,
                             tupleTainted,
                             tupleEdges,
-                            tupleScalarEdges
+                            tupleScalarEdges,
+                            tupleContractEdges
                         )
                     }
                 }
@@ -5346,7 +5351,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                             model,
                             tupleTainted,
                             tupleEdges,
-                            tupleScalarEdges
+                            tupleScalarEdges,
+                            tupleContractEdges
                         )
                     }
                 }
@@ -5485,7 +5491,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
-        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)]
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         let returnType ITypeSymbol? = SymbolValueType(declaration)
         let returnsTuple = returnType is INamedTypeSymbol namedReturn && namedReturn.IsTupleType
@@ -5501,7 +5508,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 model,
                 tupleTainted,
                 tupleEdges,
-                tupleScalarEdges
+                tupleScalarEdges,
+                tupleContractEdges: tupleContractEdges
             )
         }
         for statement in EnumerateOwnReturns(body) {
@@ -5513,7 +5521,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     model,
                     tupleTainted,
                     tupleEdges,
-                    tupleScalarEdges
+                    tupleScalarEdges,
+                    tupleContractEdges: tupleContractEdges
                 )
             }
         }
@@ -5545,7 +5554,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         model SemanticModel,
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
-        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)]
+        tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         let getter AccessorDeclarationSyntax? = accessorList?.Accessors.FirstOrDefault(
             (a AccessorDeclarationSyntax) -> a.IsKind(SyntaxKind.GetAccessorDeclaration)
@@ -5557,7 +5567,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             model,
             tupleTainted,
             tupleEdges,
-            tupleScalarEdges
+            tupleScalarEdges,
+            tupleContractEdges
         )
     }
 
@@ -8918,7 +8929,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             case IdentifierNameSyntax, MemberAccessExpressionSyntax {
                 let symbol ISymbol? = model.GetSymbolInfo(expression).Symbol
-                return if symbol != nil && IsValueDeclarationSymbol(symbol) {
+                return if symbol != nil &&
+                    symbol is not IFieldSymbol{ContainingType: {IsTupleType: true}} &&
+                    IsValueDeclarationSymbol(symbol) {
                     Canonical(symbol)
                 } else {
                     default(ISymbol?)

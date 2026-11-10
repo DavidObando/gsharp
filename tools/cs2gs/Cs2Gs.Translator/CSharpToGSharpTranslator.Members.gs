@@ -2306,6 +2306,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #1072: a non-nullable reference static auto-property whose
             // initializer is nullable (e.g. `GetAttribute<...>()?.Member`) is
             // rendered `T?` so the initializer assignment type-checks.
+            type = this.PromoteIfUsedAsNullable(type, symbol)
             type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer!!.Value)
             let binding = if hasSet {
                 BindingKind.Var

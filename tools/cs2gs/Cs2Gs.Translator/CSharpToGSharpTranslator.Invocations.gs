@@ -2057,6 +2057,20 @@ partial class CSharpToGSharpTranslator {
             )
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
+                targetParameter is {} tupleParameter &&
+                !ContainsTypeParameter(tupleParameter.OriginalDefinition.Type) &&
+                this
+                .TryBridgeTupleValue(
+                argument.Expression,
+                translated,
+                targetType,
+                tupleParameter,
+                out var bridgedArgumentTuple
+            ) {
+                return bridgedArgumentTuple
+            }
+            if !IsNameOfArgument(argument) &&
+                !isXunitNullAssertion &&
                 (targetRequiresNonNull || hasUserDefinedConversion) &&
                 targetParameter is {} parameter &&
                 targetType != nil {

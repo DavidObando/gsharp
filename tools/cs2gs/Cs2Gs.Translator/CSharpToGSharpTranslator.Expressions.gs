@@ -6440,6 +6440,15 @@ partial class CSharpToGSharpTranslator {
             if path.Count == 0 && this.YieldsValueNilableBeyondItsCSharpType(unwrapped) {
                 return true
             }
+            if path.Count > 0 && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                unwrapped,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations,
+                path
+            ) {
+                return true
+            }
             let activeMemo = memo ?? Dictionary[ILocalSymbol, Dictionary[string, bool]](SymbolEqualityComparer.Default)
             if unwrapped is MemberAccessExpressionSyntax tupleAccess && this.TryGetTupleElementAccess(
                 tupleAccess,
