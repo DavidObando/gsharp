@@ -2057,6 +2057,19 @@ partial class CSharpToGSharpTranslator {
             )
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
+                targetParameter is {} tupleParameter &&
+                this
+                .TryBridgeTupleValue(
+                argument.Expression,
+                translated,
+                targetType,
+                tupleParameter,
+                out var bridgedArgumentTuple
+            ) {
+                return bridgedArgumentTuple
+            }
+            if !IsNameOfArgument(argument) &&
+                !isXunitNullAssertion &&
                 (targetRequiresNonNull || hasUserDefinedConversion) &&
                 targetParameter is {} parameter &&
                 targetType != nil {
@@ -6244,6 +6257,7 @@ partial class CSharpToGSharpTranslator {
             sink ISymbol?,
             sinkTypeOverride ITypeSymbol? = nil
         ) ITypeSymbol? {
+            var sink = sink
             let tupleIndices = List[int32]()
             let node Microsoft.CodeAnalysis.SyntaxNode? = OutermostTransparentNode(value, tupleIndices)
             var sinkType ITypeSymbol? = sinkTypeOverride ?? ObliviousNullabilityAnalyzer.SymbolValueType(sink)
@@ -6253,6 +6267,27 @@ partial class CSharpToGSharpTranslator {
                 default(ITypeSymbol?)
             }
             let path = List[int32]()
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment && assignment.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
+            ) &&
+                ObliviousNullabilityAnalyzer
+                .TryResolveTupleContainerSource(
+                assignment.Left,
+                this.context.SemanticModel,
+                out var containerTarget,
+                out var containerType,
+                out var containerPrefix,
+                unwrapSuppressions: true
+            ) &&
+                containerPrefix.Length > 0 {
+                sink = containerTarget
+                sinkType = containerType
+                for component in containerPrefix.Split('.') {
+                    if int32.TryParse(component, out var prefixIndex) {
+                        path.Add(prefixIndex)
+                    }
+                }
+            }
             if node!!.Parent is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -6263,6 +6298,10 @@ partial class CSharpToGSharpTranslator {
                 path.Add(0)
             }
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                while sinkType is IArrayTypeSymbol arraySink {
+                    sinkType = arraySink.ElementType
+                    path.Add(0)
+                }
                 while sinkType is INamedTypeSymbol nullableNamed &&
                     nullableNamed
                     .OriginalDefinition
@@ -6285,10 +6324,58 @@ partial class CSharpToGSharpTranslator {
                 path.Add(index)
             }
             if tupleIndices.Count != 0 {
+                var target = sink
+                var targetPath IReadOnlyList[int32] = path
+                if sink is IParameterSymbol parameter &&
+                    node!!.Parent is ArgumentSyntax{Parent: ArgumentListSyntax{Parent: {} call}} {
+                    let receiverTarget ISymbol? = switch call {
+                        case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: this
+                            .context
+                            .GetSymbolInfo(member.Expression)
+                            .Symbol
+                        case creation is BaseObjectCreationExpressionSyntax: ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(
+                            creation,
+                            this.context.SemanticModel
+                        )
+                        default: default(ISymbol?)
+                    }
+                    let receiverType = switch call {
+                        case creation is BaseObjectCreationExpressionSyntax: this
+                            .context
+                            .GetTypeInfo(creation)
+                            .Type as INamedTypeSymbol
+                        default: ObliviousNullabilityAnalyzer.SymbolValueType(receiverTarget) as INamedTypeSymbol
+                    }
+                    if receiverType != nil && ObliviousNullabilityAnalyzer.TryGetGenericReceiverTuplePath(
+                        receiverType,
+                        parameter,
+                        out _,
+                        out var receiverPath
+                    ) {
+                        let combinedPath = receiverPath!!.Concat(path).ToList()
+                        if call is BaseObjectCreationExpressionSyntax creation {
+                            return if ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
+                                this.context.Compilation,
+                                receiverTarget,
+                                receiverType,
+                                combinedPath,
+                                this.context.SiblingCompilations,
+                                creation
+                            ) {
+                                sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                            } else {
+                                sinkType
+                            }
+                        } else if receiverTarget != nil {
+                            target = receiverTarget
+                            targetPath = combinedPath
+                        }
+                    }
+                }
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                     this.context.Compilation,
-                    sink,
-                    path,
+                    target,
+                    targetPath,
                     this.context.SiblingCompilations
                 ) {
                     sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
