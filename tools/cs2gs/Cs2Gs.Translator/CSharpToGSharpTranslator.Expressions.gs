@@ -6262,6 +6262,7 @@ partial class CSharpToGSharpTranslator {
             }
             let sourceMayBeNil = this.SourceTupleElementIsAnnotatedNullable(value, path) ||
                 this.TupleElementYieldsNilableBeyondItsCSharpType(value, path)
+            let (effectiveTargetSymbol, targetPath) = this.GetTargetTupleElementContract(targetSymbol, value, path)
             let targetRequiresNonNull = elementType.IsReferenceType &&
                 elementType.NullableAnnotation != Microsoft
                 .CodeAnalysis
@@ -6269,13 +6270,124 @@ partial class CSharpToGSharpTranslator {
                 .Annotated &&
                 !ContainsTypeParameter(elementType) &&
                 this.SlotTypeIsDeclared(targetSymbol, value, path) &&
+                !ObliviousNullabilityAnalyzer.TupleContractPositionAcceptsNil(
+                this.context.Compilation,
+                effectiveTargetSymbol,
+                targetPath
+            ) &&
                 !ObliviousNullabilityAnalyzer
-                .IsTupleElementTainted(this.context.Compilation, targetSymbol, path, this.context.SiblingCompilations)
+                .IsTupleElementTainted(
+                this.context.Compilation,
+                effectiveTargetSymbol,
+                targetPath,
+                this.context.SiblingCompilations
+            )
             let conversionOperator = this.TryGetTupleElementConversionOperator(value, path, elementType)
             if conversionOperator != nil {
                 return true
             }
             return targetRequiresNonNull && sourceMayBeNil
+        }
+
+        private func GetTargetTupleElementContract(
+            targetSymbol ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32]
+        )(Symbol ISymbol?, Path List[int32]) {
+            var effectiveSymbol ISymbol? = targetSymbol
+            var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(targetSymbol)
+            let targetPath = List[int32]()
+            let tupleIndices = List[int32]()
+            let outermost = OutermostTransparentNode(value, tupleIndices)
+            if targetSymbol is IParameterSymbol parameter &&
+                outermost?.Parent is ArgumentSyntax{Parent: BaseArgumentListSyntax{Parent: {} callNode}} {
+                let receiverExpr = switch callNode {
+                    case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: member.Expression
+                    case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                    default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                }
+                if receiverExpr != nil &&
+                    this
+                    .context
+                    .GetSymbolInfo(receiverExpr)
+                    .Symbol is {} receiverSymbol &&
+                    ObliviousNullabilityAnalyzer.SymbolValueType(receiverSymbol) is INamedTypeSymbol receiverType &&
+                    ObliviousNullabilityAnalyzer
+                    .TryGetGenericReceiverTuplePath(
+                    receiverType,
+                    parameter,
+                    out var receiverTupleType,
+                    out var receiverTuplePath
+                ) {
+                    effectiveSymbol = receiverSymbol
+                    current = receiverTupleType
+                    targetPath.AddRange(receiverTuplePath!!)
+                }
+            }
+            if outermost is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
+                ObliviousNullabilityAnalyzer
+                .TryResolveTupleContainerSource(
+                assignment.Left,
+                this.context.SemanticModel,
+                out _,
+                out var containerType,
+                out var containerPrefix,
+                unwrapSuppressions: true
+            ) &&
+                containerPrefix.Length > 0 {
+                current = containerType
+                for component in containerPrefix.Split('.') {
+                    if int32.TryParse(component, out var prefixIndex) {
+                        targetPath.Add(prefixIndex)
+                    }
+                }
+            }
+            if outermost?.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .YieldStatementSyntax &&
+                current is INamedTypeSymbol{TypeArguments: {Length: 1}} envelope {
+                current = envelope.TypeArguments[0]
+                targetPath.Add(0)
+            }
+            let combined = List[int32](tupleIndices.Count + path.Count)
+            for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                combined.Add(tupleIndices[i])
+            }
+            combined.AddRange(path)
+            for index in combined {
+                while current is IArrayTypeSymbol arraySink {
+                    targetPath.Add(0)
+                    current = arraySink.ElementType
+                }
+                while current is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    targetPath.Add(0)
+                    current = nullableNamed.TypeArguments[0]
+                }
+                targetPath.Add(index)
+                current = if current is INamedTypeSymbol{IsTupleType: true} tuple &&
+                    index >= 0 &&
+                    index < tuple
+                    .TupleElements
+                    .Length {
+                    tuple.TupleElements[index].Type
+                } else {
+                    default(ITypeSymbol?)
+                }
+            }
+            return (effectiveSymbol, targetPath)
         }
 
         private func BuildBridgedTupleLeaf(
@@ -6313,6 +6425,7 @@ partial class CSharpToGSharpTranslator {
                         projection: projection
                     )!!
                 }
+                let (effectiveTargetSymbol, targetPath) = this.GetTargetTupleElementContract(targetSymbol, value, path)
                 let targetRequiresNonNull = elementType.IsReferenceType &&
                     elementType.NullableAnnotation != Microsoft
                     .CodeAnalysis
@@ -6320,11 +6433,16 @@ partial class CSharpToGSharpTranslator {
                     .Annotated &&
                     !ContainsTypeParameter(elementType) &&
                     this.SlotTypeIsDeclared(targetSymbol, value, path) &&
+                    !ObliviousNullabilityAnalyzer.TupleContractPositionAcceptsNil(
+                    this.context.Compilation,
+                    effectiveTargetSymbol,
+                    targetPath
+                ) &&
                     !ObliviousNullabilityAnalyzer
                     .IsTupleElementTainted(
                     this.context.Compilation,
-                    targetSymbol,
-                    path,
+                    effectiveTargetSymbol,
+                    targetPath,
                     this.context.SiblingCompilations
                 )
                 let operatorReturnsNullable = conversionOperator
@@ -6440,6 +6558,15 @@ partial class CSharpToGSharpTranslator {
             if path.Count == 0 && this.YieldsValueNilableBeyondItsCSharpType(unwrapped) {
                 return true
             }
+            if path.Count > 0 && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+                this.context.Compilation,
+                unwrapped,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations,
+                path
+            ) {
+                return true
+            }
             let activeMemo = memo ?? Dictionary[ILocalSymbol, Dictionary[string, bool]](SymbolEqualityComparer.Default)
             if unwrapped is MemberAccessExpressionSyntax tupleAccess && this.TryGetTupleElementAccess(
                 tupleAccess,
@@ -6462,6 +6589,17 @@ partial class CSharpToGSharpTranslator {
                     path.Skip(1).ToList(),
                     activeMemo
                 )
+            }
+            if path.Count > 0 &&
+                unwrapped is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .BinaryExpressionSyntax coalesce &&
+                coalesce
+                .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression) {
+                return this.TupleElementYieldsNilableBeyondItsCSharpType(coalesce.Left, path, activeMemo) ||
+                    this.TupleElementYieldsNilableBeyondItsCSharpType(coalesce.Right, path, activeMemo)
             }
             if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
