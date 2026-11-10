@@ -1625,7 +1625,8 @@ class CSharpTypeMapper {
         declaredType ITypeSymbol?,
         symbol ISymbol?,
         context TranslationContext,
-        path List[int32]
+        path List[int32],
+        createdType INamedTypeSymbol? = nil
     ) GTypeReference? {
         var mapped = mapped
         if path.Count == 0 &&
@@ -1640,7 +1641,8 @@ class CSharpTypeMapper {
                 arrayType.ElementType,
                 symbol,
                 context,
-                path
+                path,
+                createdType
             )
             path.RemoveAt(path.Count - 1)
             if !object.ReferenceEquals(element, array.ElementType) {
@@ -1663,7 +1665,8 @@ class CSharpTypeMapper {
                     tupleType.TupleElements[i].Type,
                     symbol,
                     context,
-                    path
+                    path,
+                    createdType
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(element, tuple.ElementTypes[i])
@@ -1694,7 +1697,8 @@ class CSharpTypeMapper {
                     declaredNamed.TypeArguments[i],
                     symbol,
                     context,
-                    path
+                    path,
+                    createdType
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(argument, named.TypeArguments[i])
@@ -1704,10 +1708,15 @@ class CSharpTypeMapper {
                 mapped = NamedTypeReference(named.Name, arguments, named.ContainingType){IsNullable = named.IsNullable}
             }
         }
+        let (targetSymbol, targetPath) = if createdType != nil {
+            ObliviousNullabilityAnalyzer.MapCreationTupleTarget(symbol, createdType, path)
+        } else {
+            (symbol, cast[IReadOnlyList[int32]](path))
+        }
         return if path.Count > 0 && !mapped!!.IsNullable && ObliviousNullabilityAnalyzer.IsTupleElementTainted(
             context.Compilation,
-            symbol,
-            path,
+            targetSymbol,
+            targetPath,
             context.SiblingCompilations
         ) {
             WithNullable(mapped, true)

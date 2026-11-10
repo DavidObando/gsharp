@@ -6304,12 +6304,23 @@ partial class CSharpToGSharpTranslator {
                             .Type as INamedTypeSymbol
                         default: ObliviousNullabilityAnalyzer.SymbolValueType(receiverTarget) as INamedTypeSymbol
                     }
-                    if receiverTarget != nil &&
-                        receiverType != nil &&
-                        ObliviousNullabilityAnalyzer
-                        .TryGetGenericReceiverTuplePath(receiverType, parameter, out _, out var receiverPath) {
-                        target = receiverTarget
-                        targetPath = receiverPath!!.Concat(path).ToList()
+                    if receiverType != nil && ObliviousNullabilityAnalyzer.TryGetGenericReceiverTuplePath(
+                        receiverType,
+                        parameter,
+                        out _,
+                        out var receiverPath
+                    ) {
+                        let combinedPath = receiverPath!!.Concat(path).ToList()
+                        if call is BaseObjectCreationExpressionSyntax {
+                            target, targetPath = ObliviousNullabilityAnalyzer.MapCreationTupleTarget(
+                                receiverTarget,
+                                receiverType,
+                                combinedPath
+                            )
+                        } else if receiverTarget != nil {
+                            target = receiverTarget
+                            targetPath = combinedPath
+                        }
                     }
                 }
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(

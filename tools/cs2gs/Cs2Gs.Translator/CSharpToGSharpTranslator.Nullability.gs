@@ -598,7 +598,14 @@ partial class CSharpToGSharpTranslator {
             return if sink == nil {
                 type
             } else {
-                this.PromoteTupleTypeArguments(type, typeSymbol, sink, List[int32]())
+                this.typeMapper.PromoteTupleTypeArguments(
+                    type,
+                    typeSymbol,
+                    sink,
+                    this.context,
+                    List[int32](),
+                    typeSymbol as INamedTypeSymbol
+                )
             }
         }
 

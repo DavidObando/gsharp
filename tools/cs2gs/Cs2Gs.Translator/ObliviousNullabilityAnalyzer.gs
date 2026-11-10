@@ -5572,10 +5572,53 @@ internal shared class ObliviousNullabilityAnalyzer {
             case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
             default: default(ExpressionSyntax?)
         }
+        if call is BaseObjectCreationExpressionSyntax creation {
+            let sink ISymbol? = ResolveCreationTupleSink(creation, model)
+            if model.GetTypeInfo(creation)
+                .Type is not INamedTypeSymbol createdType ||
+                argument.Parameter is not IParameterSymbol creationParameter ||
+                creationParameter.RefKind == RefKind.Out ||
+                creationParameter.RefKind == RefKind.Ref ||
+                !TryGetGenericReceiverTuplePath(
+                createdType,
+                creationParameter,
+                out var creationTupleType,
+                out var creationTuplePath
+            ) ||
+                argument
+                .Value
+                ?.Syntax is not ExpressionSyntax creationValue {
+                return
+            }
+            let createdTainted = HashSet[TupleElementKey](TupleElementKeyComparer.Instance)
+            let createdEdges = List[(Target TupleElementKey, Source TupleElementKey)]()
+            let createdScalarEdges = List[(Target TupleElementKey, Source ISymbol)]()
+            CollectTupleValueFlow(
+                createdType,
+                creationTupleType,
+                creationValue,
+                model,
+                EncodeTuplePath(creationTuplePath),
+                createdTainted,
+                createdEdges,
+                createdScalarEdges
+            )
+            for key in createdTainted {
+                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, key.Path)
+                tupleTainted.Add(TupleElementKey(mappedTarget, mappedPath))
+            }
+            for (targetKey, sourceKey) in createdEdges {
+                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, targetKey.Path)
+                tupleEdges.Add((TupleElementKey(mappedTarget, mappedPath), sourceKey))
+            }
+            for (targetKey, scalarSource) in createdScalarEdges {
+                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, targetKey.Path)
+                tupleScalarEdges.Add((TupleElementKey(mappedTarget, mappedPath), scalarSource))
+            }
+            return
+        }
         let target ISymbol? = if receiver != nil {
             model.GetSymbolInfo(receiver).Symbol
-        } else if call is BaseObjectCreationExpressionSyntax creation {
-            ResolveCreationTupleSink(creation, model)
         } else {
             default(ISymbol?)
         }
@@ -5583,10 +5626,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         // a field/property — `var prepared = new List<(string, byte[])>();
         // prepared.Add((path, original))` is where the null-bearing element
         // enters the tuple that the enclosing method then returns.
-        let targetType ITypeSymbol? = switch call {
-            case creation is BaseObjectCreationExpressionSyntax: model.GetTypeInfo(creation).Type
-            default: SymbolValueType(target)
-        }
+        let targetType ITypeSymbol? = SymbolValueType(target)
         // Scalar flow already treats out as callee-to-caller and deliberately
         // excludes ref, so neither is receiver-directed here.
         if !(
@@ -5594,8 +5634,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 target is IFieldSymbol ||
                     target is IPropertySymbol ||
                     target is ILocalSymbol ||
-                    target is IParameterSymbol ||
-                    target is IMethodSymbol
+                    target is IParameterSymbol
             )
         ) ||
             targetType is not INamedTypeSymbol receiverType ||
@@ -5618,6 +5657,52 @@ internal shared class ObliviousNullabilityAnalyzer {
             tupleEdges,
             tupleScalarEdges
         )
+    }
+
+    internal func MapCreationTupleTarget(sink ISymbol?, createdType INamedTypeSymbol, createdPath IReadOnlyList[int32])(
+        Target ISymbol,
+        Path IReadOnlyList[int32]
+    ) {
+        let (target, mappedPath) = MapCreationTupleTarget(sink, createdType, EncodeTuplePath(createdPath))
+        return (target, DecodeTuplePath(mappedPath))
+    }
+
+    internal func MapCreationTupleTarget(sink ISymbol?, createdType INamedTypeSymbol, createdPath string)(
+        Target ISymbol,
+        Path string
+    ) {
+        if sink == nil || SymbolValueType(sink) is not INamedTypeSymbol sinkType {
+            return (createdType, createdPath)
+        }
+        if SymbolEqualityComparer.Default.Equals(
+            NormalizeContractTupleNames(createdType),
+            NormalizeContractTupleNames(sinkType)
+        ) {
+            return (Canonical(sink)!!, createdPath)
+        }
+        for slot in ProjectedTupleContractSlots(sink, createdType, createdType, sinkType) {
+            if createdPath == slot.DerivedPath || createdPath.StartsWith(
+                slot.DerivedPath + ".",
+                StringComparison.Ordinal
+            ) {
+                return (Canonical(sink)!!, slot.BasePath + createdPath.Substring(slot.DerivedPath.Length))
+            }
+        }
+        return (createdType, createdPath)
+    }
+
+    private func DecodeTuplePath(path string) IReadOnlyList[int32] {
+        if path.Length == 0 {
+            return Array.Empty[int32]()
+        }
+        let parts = path.Split('.')
+        let result = List[int32](parts.Length)
+        for part in parts {
+            if int32.TryParse(part, out var index) {
+                result.Add(index)
+            }
+        }
+        return result
     }
 
     private func ResolveCreationTupleSink(creation BaseObjectCreationExpressionSyntax, model SemanticModel) ISymbol? {

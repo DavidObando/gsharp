@@ -268,6 +268,8 @@ public static class Consumer {
     @InlineData("contravariant-exact-first")
     @InlineData("unconstrained-extra")
     @InlineData("unconstrained-extra-switch")
+    @InlineData("base-typed-reordered")
+    @InlineData("base-typed-extra")
     @InlineData("nested-contravariant")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
@@ -296,7 +298,9 @@ public class ContraDerived<T> : IContra<ICarrier<object, T>> { }
 public class Carrier<T> { }
 public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
-public class Reordered<X, Y> : Carrier<Y, X> { }
+public class Reordered<X, Y> : Carrier<Y, X> {
+    public Reordered(X first = default!, Y second = default!) { }
+}
 public class Intermediate<X, Y> : Reordered<X, Y> { }
 public class WrappedOut<X, Y> : IOut<Reordered<X, Y>> { }
 public class ExtraDerived<X, Y, Z> : Carrier<Y, Z> {
@@ -315,7 +319,9 @@ public abstract class RowsBase {
             default: "Reordered"
         }
         let returnType = switch mode {
-            case "direct": "Carrier<(string Text, int Code), (string Keep, int Code)>"
+            case "direct",
+            "base-typed-reordered",
+            "base-typed-extra": "Carrier<(string Text, int Code), (string Keep, int Code)>"
             case "widened-interface": "Derived<(string Text, int Code)>"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
             case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
@@ -324,9 +330,14 @@ public abstract class RowsBase {
             "unconstrained-extra-switch": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
             default: "$derived<(string Keep, int Code), (string Text, int Code)>"
         }
+        let extraCreationType = "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
+        let cleanCreationType = "ExtraDerived<(string Extra, int Code), (string Untainted, int Code), (string Keep, int Code)>"
+        let reorderedCreationType = "Reordered<(string Keep, int Code), (string Text, int Code)>"
         let body = switch mode {
             case "unconstrained-extra": "string extra = null; return new $returnType((extra, 1), (extra, 2));"
             case "unconstrained-extra-switch": "string extra = null; return 0 switch { _ => new $returnType(((extra), 1), ((extra), 2)) };"
+            case "base-typed-reordered": "string extra = null; $returnType local = new $reorderedCreationType((\"keep\", 1), (extra, 2)); return local;"
+            case "base-typed-extra": "string extra = null; Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $extraCreationType((extra, 1), (extra, 2));"
             default: "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
@@ -336,7 +347,9 @@ public sealed class Producer : RowsBase {
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
         let expected = switch mode {
-            case "direct": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+            case "direct",
+            "base-typed-reordered",
+            "base-typed-extra": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
             case "widened-interface": "Derived[(Text string?, Code int32)]"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
             case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
@@ -345,6 +358,7 @@ public sealed class Producer : RowsBase {
             "unconstrained-extra-switch": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
             default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
+        let expectedExtraCreation = "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
         Assert.Contains("override func Rows() " + expected, printed)
         if mode == "unconstrained-extra" {
             Assert.Contains("return $expected(", printed)
@@ -354,6 +368,21 @@ public sealed class Producer : RowsBase {
             Assert.Contains("$expected(", printed)
             Assert.Contains("((extra), 1)", printed)
             Assert.Contains("((extra)!!, 2)", printed)
+        } else if mode == "base-typed-reordered" {
+            Assert.Contains(
+                "local $expected = Reordered[(Keep string, Code int32), (Text string?, Code int32)](",
+                printed
+            )
+            Assert.Contains("(extra, 2)", printed)
+        } else if mode == "base-typed-extra" {
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Untainted string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains("return $expectedExtraCreation(", printed)
+            Assert.Contains("(extra, 1)", printed)
+            Assert.Contains("(extra!!, 2)", printed)
+            Assert.DoesNotContain("Untainted string?", printed)
         } else {
             Assert.Contains("return $expected()", printed)
         }
