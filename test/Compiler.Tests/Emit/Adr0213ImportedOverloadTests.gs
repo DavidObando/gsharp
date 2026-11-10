@@ -240,4 +240,51 @@ func Main() { }`
             .ToArray()
         Assert.Equal(expected, string.Join(" ", errors))
     }
+
+    private const ErasureAndInterpolationLibrarySource string = `namespace ErasureLib;
+public struct Token { public int Raw; }
+public struct Payload {
+    public int Raw;
+    public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
+}
+public class S {
+    public void UseEnum(int n, Token t) { }
+    public void UseEnum(object o, Payload p) { }
+    public void UseFmt(System.FormattableString f, System.DateTimeOffset d) { }
+    public void UseFmt(object a, object b) { }
+    public void UseList(System.Collections.Generic.List<object> xs, Token t) { }
+    public void UseList(object o, Payload p) { }
+}`
+
+    @Theory
+    @InlineData("s.UseEnum(kind, tok)", "GS0158@10:16")
+    @InlineData(`s.UseFmt("n=${n}", dt)`, "GS0158@10:16")
+    @InlineData("s.UseList(xs, tok)", "GS0158@10:16")
+    func ImportedErasureAndInterpolationOverloadsWithAConversion_RemoveAByReferenceFact(call string, expected string) {
+        let source = `package T
+import System
+import System.Collections.Generic
+import ErasureLib
+enum Kind { A }
+struct Item { var V int32 }
+func Run(ref text string?, s S, kind Kind, xs List[Item], tok Token, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        ` + call + `
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(ErasureAndInterpolationLibrarySource, assemblyName: "ErasureLib")
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal(expected, string.Join(" ", errors))
+    }
 }

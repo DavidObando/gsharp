@@ -2064,6 +2064,8 @@ internal partial class StatementBinder {
                         return false
                     }
                     builder.Add(intArg!!)
+                } else if unwrapped is InterpolatedStringExpressionSyntax {
+                    builder.Add(BoundDefaultExpression(unwrapped, argType))
                 } else {
                     builder.Add(BoundDefaultExpression(argSyntax, argType))
                 }
@@ -2726,6 +2728,16 @@ internal partial class StatementBinder {
             nil,
             ImmutableArray.CreateRange(boundArgs.Select((a BoundExpression) -> a.Type))
         )
+        let candidateMethods = MemberLookup.ExcludeErasureOnlyEnumCandidates(
+            methods,
+            symbolicArgs,
+            argumentNames: nil,
+            symbolicReceiverType: symbolic
+        )
+            .ToList()
+        if candidateMethods.Count == 0 {
+            return false
+        }
         let recoverTypeArgSymbols(MethodInfo, bool) -> ImmutableArray[TypeSymbol?] = (
             closed MethodInfo,
             expanded bool
@@ -2738,18 +2750,39 @@ internal partial class StatementBinder {
             )
             return MemberLookup.ValidateSymbolicMethodConstraintsWithReceiver(symbolic, closed, recovered)
         }
+        let importedReceiver = symbolic as ImportedTypeSymbol
+        let interpolatedStringArgs = if callSyntax != nil {
+            ExpressionBinder.ComputeInterpolatedStringArgFlags(callSyntax.Arguments, combination.Count)
+        } else {
+            default(IReadOnlyList[bool]?)
+        }
         let resolution = ClrOverloadResolution.Resolve(
-            methods,
+            candidateMethods,
             clrArgTypes,
             explicitTypeArgs,
             binderCtx.References.MapClrTypeToReferences,
-            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArgs),
+            interpolatedStringArgs,
             recoverTypeArgSymbols: recoverTypeArgSymbols,
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArgs),
+            structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
+                boundArgs,
+                nativeConversions: conversions
+            ),
+            erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArgs),
+            delegateArgumentCheck: ExpressionBinder.MakeDelegateArgumentCheck(boundArgs),
+            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(explicitTypeArgSymbols),
+            explicitTypeArgumentMismatchCheck: ExpressionBinder.MakeExplicitTypeArgumentMismatchCheck(
+                boundArgs,
+                explicitTypeArgSymbols
+            ),
+            openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(boundArgs),
             symbolicArgTypes: symbolicArgs,
             symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
                 boundArgs,
                 nativeConversions: conversions,
                 receiverType: symbolic,
+                openGenericDefinition: importedReceiver?.OpenDefinition,
+                symbolicTypeArguments: importedReceiver?.TypeArguments ?? default(ImmutableArray[TypeSymbol]),
                 explicitMethodTypeArguments: explicitTypeArgSymbols
             )
         )

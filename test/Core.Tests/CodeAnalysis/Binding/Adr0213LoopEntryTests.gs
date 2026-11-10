@@ -4108,6 +4108,21 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("parenthesized-address-of-argument-selects-ref-overload (A3, #5662)", `package T
+import System
+func Use(ref s string, d DateTimeOffset) { }
+func Use(s string, o object) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var other = "a"
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use((&other), dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
             return rows
         }
     }

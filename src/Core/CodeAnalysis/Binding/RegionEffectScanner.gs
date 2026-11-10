@@ -2084,12 +2084,12 @@ internal sealed class RegionEffectScanner {
         while inner is ParenthesizedExpressionSyntax parenthesized {
             inner = parenthesized.Expression
         }
-        if argument is RefArgumentExpressionSyntax or
+        if inner is RefArgumentExpressionSyntax or
             ConditionalRefArgumentExpressionSyntax or
             UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} {
             return RegionArgumentForm.ByReference
         }
-        if argument is NamedArgumentExpressionSyntax {
+        if inner is NamedArgumentExpressionSyntax {
             return RegionArgumentForm.Named
         }
         if IsNilLiteral(inner) {
@@ -2589,7 +2589,11 @@ internal sealed class RegionEffectScanner {
             ClassifyCallArgument(argument, out var form, out var path)
             argumentForms.Add(form)
             arguments.Add(path)
-            switch argument {
+            var unwrappedArgument = argument
+            while unwrappedArgument is ParenthesizedExpressionSyntax parenthesized {
+                unwrappedArgument = parenthesized.Expression
+            }
+            switch unwrappedArgument {
                 case reference is RefArgumentExpressionSyntax {
                     NodesVisited++
                     let text = reference.RefKindModifier.Text
