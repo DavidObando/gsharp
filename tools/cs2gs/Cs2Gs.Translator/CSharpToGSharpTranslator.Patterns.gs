@@ -2475,18 +2475,24 @@ partial class CSharpToGSharpTranslator {
             // stored capture's type test narrows it only inside the test
             // block, but a descendant binding reads it after the test, so
             // member reads go through the narrowed `(t as Inner)!!`.
-            if userDeconstruct != nil &&
+            let narrowedType = if recursive.Type != nil {
+                this.context.GetTypeInfo(recursive.Type).Type
+            } else {
+                default(ITypeSymbol?)
+            }
+            let requiresTypeNarrowing = receiverType != nil &&
+                narrowedType != nil &&
+                !SymbolEqualityComparer
+                .Default
+                .Equals(UnwrapNullablePatternType(receiverType), UnwrapNullablePatternType(narrowedType))
+            if (userDeconstruct != nil || requiresTypeNarrowing) &&
                 recursive.Type != nil &&
                 isNestedPatternMember &&
                 this
                 .state
                 .StoredPatternCaptures
                 .Contains(receiver!!) {
-                let narrowedType = this.context.GetTypeInfo(recursive.Type).Type
-                memberReceiver = if receiverType != nil && narrowedType != nil && SymbolEqualityComparer.Default.Equals(
-                    receiverType,
-                    narrowedType
-                ) {
+                memberReceiver = if !requiresTypeNarrowing {
                     EnsureNonNullAssertion(receiver)
                 } else {
                     this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type, receiverType)
@@ -2537,7 +2543,8 @@ partial class CSharpToGSharpTranslator {
                         memberTest = this.TranslateRecordPatternMemberSubpatternTest(
                             sub.Pattern,
                             memberAccess,
-                            memberType
+                            memberType,
+                            subpatternMember
                         )
                     } else {
                         // Issue #1971: an extended subpattern (`Start.X: 0`)
@@ -2829,7 +2836,12 @@ partial class CSharpToGSharpTranslator {
                     .context
                     .GetTypeInfo(memberPath)
                     .Type
-                return this.TranslateRecordPatternMemberSubpatternTest(leafPattern, finalMemberAccess, leafType)
+                return this.TranslateRecordPatternMemberSubpatternTest(
+                    leafPattern,
+                    finalMemberAccess,
+                    leafType,
+                    leafSymbol
+                )
             }
             let link GExpression = MemberAccessExpression(memberReceiver, names[index])
             let intermediateSymbol ISymbol? = this.GetPatternMemberSymbol(intermediateExprs[index])
@@ -2879,10 +2891,41 @@ partial class CSharpToGSharpTranslator {
                     link,
                     declaredType,
                     (local GExpression) -> {
-                        let nextReceiver = if nullableValueLink || declaredType?.IsReferenceType == true {
-                            cast[GExpression](NonNullAssertionExpression(local))
+                        let canonicalIntermediateType = this.GetCanonicalPatternMemberStorageType(
+                            intermediateSymbol,
+                            declaredType
+                        ) ??
+                            declaredType
+                        let narrowedLocal = if declaredType != nil &&
+                            canonicalIntermediateType != nil &&
+                            !SymbolEqualityComparer
+                            .Default
+                            .Equals(
+                            UnwrapNullablePatternType(canonicalIntermediateType),
+                            UnwrapNullablePatternType(declaredType)
+                        ) {
+                            cast[GExpression](
+                                ParenthesizedExpression(
+                                    BinaryExpression(
+                                        local,
+                                        "as",
+                                        TypeExpression(
+                                            this.typeMapper.Map(
+                                                UnwrapNullablePatternType(declaredType),
+                                                this.context,
+                                                location: nil
+                                            )
+                                        )
+                                    )
+                                )
+                            )
                         } else {
                             local
+                        }
+                        let nextReceiver = if nullableValueLink || declaredType?.IsReferenceType == true {
+                            cast[GExpression](NonNullAssertionExpression(narrowedLocal))
+                        } else {
+                            narrowedLocal
                         }
                         let next = this.TranslateExtendedPropertyLink(
                             names,
@@ -2901,7 +2944,8 @@ partial class CSharpToGSharpTranslator {
                             next
                         }
                     },
-                    out var cachedIntermediate
+                    out var cachedIntermediate,
+                    memberSymbol: intermediateSymbol
                 ) {
                     return cachedIntermediate!!
                 }

@@ -3069,8 +3069,13 @@ partial class CSharpToGSharpTranslator {
                     for memberName in memberPath {
                         memberAccess = MemberAccessExpression(memberAccess, memberName)
                     }
-                    let memberType ITypeSymbol? = if sub.NameColon != nil {
-                        this.RegisterPatternMemberSlot(this.GetPatternMemberSymbol(sub.NameColon!!.Name), memberAccess)
+                    let subpatternMember ISymbol? = if sub.NameColon != nil {
+                        this.GetPatternMemberSymbol(sub.NameColon!!.Name)
+                    } else {
+                        default(ISymbol?)
+                    }
+                    let memberType ITypeSymbol? = if subpatternMember != nil {
+                        this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
                     } else {
                         default(ITypeSymbol?)
                     }
@@ -3080,7 +3085,8 @@ partial class CSharpToGSharpTranslator {
                         bindings,
                         guards,
                         mutableBindings,
-                        memberType
+                        memberType,
+                        subpatternMember
                     )
                 }
             }
@@ -3146,7 +3152,8 @@ partial class CSharpToGSharpTranslator {
                         bindings,
                         guards,
                         mutableBindings,
-                        this.RegisterPatternMemberSlot(memberSymbol, memberAccess)
+                        this.RegisterPatternMemberSlot(memberSymbol, memberAccess),
+                        memberSymbol
                     )
                 }
             }
@@ -3215,7 +3222,8 @@ partial class CSharpToGSharpTranslator {
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             guards List[GExpression],
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]?,
-            memberType ITypeSymbol? = nil
+            memberType ITypeSymbol? = nil,
+            memberSymbol ISymbol? = nil
         ) {
             if pattern is Microsoft.CodeAnalysis.CSharp.Syntax.DiscardPatternSyntax {
                 return
@@ -3241,7 +3249,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #4356: the member's type lets the nested test guard a
             // nullable member and read it once (TranslatePatternTest).
             this.AddTypedSubpatternGuard(
-                () -> this.TranslateRecordPatternMemberSubpatternTest(pattern, memberAccess, memberType),
+                () -> this.TranslateRecordPatternMemberSubpatternTest(pattern, memberAccess, memberType, memberSymbol),
                 bindings,
                 guards,
                 mutableBindings

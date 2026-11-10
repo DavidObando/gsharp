@@ -333,7 +333,10 @@ partial class CSharpToGSharpTranslator {
                 .Length == 0 {
                 return false
             }
-            if !this.CanPreserveSuspendingExtensionSignature(symbol, method) {
+            if !this.CanPreserveSuspendingExtensionSignature(symbol, method) ||
+                this.TypeContainsPointerOrFunctionPointer(symbol.ReturnType) || symbol.Parameters.Any(
+                (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+            ) {
                 return false
             }
             let receiver = symbol.Parameters[0]
@@ -1404,10 +1407,9 @@ partial class CSharpToGSharpTranslator {
                 body = BlockStatement([]GStatement{BlockStatement(body.Statements, isUnsafe: true)})
             }
             let isAsyncVoidHandler = IsCSharpAsyncVoidHandler(symbol)
-            let overridesImportedNonMigratedDeconstruct = symbol != nil && this.EmittedName(
-                symbol,
-                symbol.Name
-            ) != symbol.Name &&
+            let overridesImportedNonMigratedDeconstruct = symbol != nil &&
+                symbol.Name == "Deconstruct" &&
+                this.EmittedName(symbol, symbol.Name) != symbol.Name &&
                 symbol.OverriddenMethod != nil &&
                 symbol.OverriddenMethod!!
                 .DeclaringSyntaxReferences

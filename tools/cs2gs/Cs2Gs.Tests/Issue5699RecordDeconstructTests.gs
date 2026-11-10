@@ -1687,6 +1687,194 @@ namespace RecordDeconstruction {
 }`)
     }
 
+    @Fact
+    func UnsafeSameArityPointerOverloadsAndCovariantPatternCache_PreserveParity() {
+        Verify(`
+namespace RecordDeconstruction {
+    public unsafe record OverloadedPtr {
+        public static int[] IntCells = new[] { 11 };
+        public static long[] LongCells = new[] { 22L };
+        public void Deconstruct(out int* p, out int tag) {
+            fixed (int* ptr = IntCells) { p = ptr; }
+            tag = 1;
+        }
+        public void Deconstruct(out long* p, out int tag) {
+            fixed (long* ptr = LongCells) { p = ptr; }
+            tag = 2;
+        }
+    }
+    public unsafe static class UnsafeExtensions {
+        public static void Deconstruct(this OverloadedPtr r, out int* p, out int a, out int b) {
+            fixed (int* ptr = OverloadedPtr.IntCells) { p = ptr; }
+            a = 3;
+            b = 4;
+        }
+        public static void Deconstruct(this OverloadedPtr r, out long* p, out int a, out int b) {
+            fixed (long* ptr = OverloadedPtr.LongCells) { p = ptr; }
+            a = 5;
+            b = 6;
+        }
+    }
+    public record R {
+        public int X;
+        public int Y;
+        public static int Calls;
+        public void Deconstruct(out int x, out int y) { Calls++; x = Y * 10; y = X; }
+    }
+    public record D : R {
+        public int Extra = 9;
+    }
+    public class Holder {
+        public int Reads;
+        private readonly R child;
+        public Holder(R child) { this.child = child; }
+        public virtual R Child { get { Reads++; return child; } }
+    }
+    public class DerivedHolder : Holder {
+        private readonly D derivedChild;
+        public DerivedHolder(D child) : base(child) { this.derivedChild = child; }
+        public override D Child { get { Reads++; return derivedChild; } }
+    }
+    public static class Probe {
+        public static unsafe string Run() {
+            var item = new OverloadedPtr();
+            int* ip;
+            int itag;
+            item.Deconstruct(out ip, out itag);
+            long* lp;
+            int ltag;
+            item.Deconstruct(out lp, out ltag);
+            int* eip;
+            int ea, eb;
+            UnsafeExtensions.Deconstruct(item, out eip, out ea, out eb);
+            long* elp;
+            int ela, elb;
+            UnsafeExtensions.Deconstruct(item, out elp, out ela, out elb);
+            Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
+            var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
+            var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
+            return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{matched},{untypedCovariant}";
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func ImportedContracts_CoverBridgeConstructorsValueSnapshotsEscapedOverridesAndInheritedSourceInterfaces() {
+        let externalSource = `
+namespace ExternalContracts {
+    public interface IParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public record struct MutatingStruct(int X, int Y) {
+        public void Deconstruct(out int x, out int y) {
+            X += 100;
+            x = Y * 10;
+            y = X;
+        }
+    }
+    public class KeywordBase {
+        public virtual int func() => 1;
+    }
+    public class UnrenamedBase {
+        public int X = 4;
+        public int Y = 7;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`
+        let consumerSource = `
+namespace RecordDeconstruction {
+    public abstract record RefCtorBase {
+        public int Seed;
+        protected RefCtorBase(ref RefCtorBase other) {
+            Seed = other.Seed + 5;
+        }
+        protected RefCtorBase(int seed) {
+            Seed = seed;
+        }
+    }
+    public record RefCtorDerived : RefCtorBase, ExternalContracts.IParts {
+        public RefCtorDerived(ref RefCtorBase other) : base(ref other) { }
+        public RefCtorDerived(int seed) : base(seed) { }
+        public void Deconstruct(out int x, out int y) { x = Seed; y = Seed * 2; }
+    }
+    public abstract record GenericBase<T> {
+        public int Value;
+        protected GenericBase(GenericBase<int> other) {
+            Value = (other == null ? 8 : other.Value) + 10;
+        }
+        protected GenericBase(int v) {
+            Value = v;
+        }
+    }
+    public record StringDerived : GenericBase<string>, ExternalContracts.IParts {
+        public StringDerived(GenericBase<int> other) : base(other) { }
+        public void Deconstruct(out int x, out int y) { x = Value; y = Value + 1; }
+    }
+    public interface ISourceParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public record SourceRecord : ISourceParts {
+        public int X = 2;
+        public int Y = 3;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts { }
+    public class KeywordDerived : ExternalContracts.KeywordBase {
+        public override int func() => 42;
+    }
+    public static class StructHolder {
+        public static ExternalContracts.MutatingStruct Current = new ExternalContracts.MutatingStruct(2, 3);
+    }
+    public static class Probe {
+        public static string Run() {
+            RefCtorBase seedBase = new RefCtorDerived(10);
+            ExternalContracts.IParts p1 = new RefCtorDerived(ref seedBase);
+            var (a1, b1) = p1;
+            ExternalContracts.IParts p2 = new StringDerived(default(GenericBase<int>));
+            var (a2, b2) = p2;
+            var (sx, sy) = StructHolder.Current;
+            var (sx2, sy2) = StructHolder.Current;
+            ExternalContracts.KeywordBase kb = new KeywordDerived();
+            ISourceParts sp = new InheritedMetadataParts();
+            var (ix, iy) = sp;
+            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy}";
+        }
+    }
+}`
+        VerifyWithExternalReference(externalSource, [](string, string){("Snippet.cs", consumerSource)})
+    }
+
+    @Fact
+    func MigratedProducerDeconstructCollision_RenamesConsumerInterfaceAndImplementingRecordTogether() {
+        let producerSource = `
+namespace Producer {
+    public record R {
+        public int X = 2;
+        public int Y = 3;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`
+        let consumerSource = `
+namespace RecordDeconstruction {
+    public interface I {
+        int deconstruct();
+    }
+    public record D : Producer.R, I {
+        public int deconstruct() => 7;
+    }
+    public static class Probe {
+        public static string Run() {
+            var d = new D { X = 4, Y = 5 };
+            I i = d;
+            var (x, y) = d;
+            return $"{x},{y},{d.deconstruct()},{i.deconstruct()}";
+        }
+    }
+}`
+        VerifyMigratedProducerAndConsumer(producerSource, consumerSource)
+    }
+
     shared {
         private func Verify(source string, emittedSignature string? = nil) {
             Verify([](string, string){("Snippet.cs", source)}, emittedSignature)

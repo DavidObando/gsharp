@@ -102,6 +102,12 @@ internal class EmittedNameAllocator {
         }
     }
 
+    func GetSymbolContractMembers(symbol ISymbol) IReadOnlyCollection[ISymbol] {
+        lock this.gate {
+            return this.GetContractGroup(Canonical(symbol))
+        }
+    }
+
     private init(compilation Compilation) {
         this.compilation = compilation
         this.CollectContractGroups()

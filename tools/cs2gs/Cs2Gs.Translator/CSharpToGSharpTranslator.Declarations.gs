@@ -1665,18 +1665,43 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.TypeHasUnsafeSignatureMember(mergedMembers)
-            if kind == TypeDeclarationKind.Class && symbol != nil && this.ShouldAttachOwnedExtensions(node, symbol) {
-                for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
+            if (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.DataClass) &&
+                symbol != nil &&
+                this
+                .ShouldAttachOwnedExtensions(node, symbol) {
+                if kind == TypeDeclarationKind.Class {
+                    for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
+                        members.Add(
+                            this.BuildDeconstructContractForwardingMethod(
+                                inheritedContract,
+                                "Deconstruct",
+                                ThisExpression(),
+                                this.EmittedName(inheritedContract, inheritedContract.Name)!!,
+                                isOpen: !symbol.IsSealed,
+                                isOverride: false
+                            )
+                        )
+                    }
+                }
+                for (slot, impl) in this.GetInheritedRenamedDeconstructInterfaceContracts(symbol) {
                     members.Add(
                         this.BuildDeconstructContractForwardingMethod(
-                            inheritedContract,
-                            "Deconstruct",
+                            slot,
+                            this.EmittedName(slot, slot.Name)!!,
                             ThisExpression(),
-                            this.EmittedName(inheritedContract, inheritedContract.Name)!!,
-                            isOpen: !symbol.IsSealed,
+                            this.EmittedName(impl, impl.Name)!!,
+                            isOpen: kind == TypeDeclarationKind.Class && !symbol.IsSealed,
                             isOverride: false
                         )
                     )
+                    let adapter = this.BuildRecordDeconstructionAdapter(
+                        slot,
+                        forceConcreteImplementation: true,
+                        ownerIsUnsafe: isUnsafe
+                    )
+                    if adapter != nil {
+                        members.Add(adapter)
+                    }
                 }
             }
             if kind == TypeDeclarationKind.DataClass && symbol != nil && this.HasImportedDeconstructContractBridge(
