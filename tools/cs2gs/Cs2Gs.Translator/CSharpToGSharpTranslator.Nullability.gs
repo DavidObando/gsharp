@@ -657,7 +657,24 @@ partial class CSharpToGSharpTranslator {
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
                     assignment.Right == node {
-                    let symbol ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
+                    let symbol ISymbol? = this
+                        .context
+                        .GetSymbolInfo(assignment.Left)
+                        .Symbol ??
+                        (
+                        if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
+                            assignment.Left,
+                            this.context.SemanticModel,
+                            out var containerOwner,
+                            out _,
+                            out _,
+                            unwrapSuppressions: true
+                        ) {
+                            containerOwner
+                        } else {
+                            default(ISymbol?)
+                        }
+                    )
                     return if symbol is IDiscardSymbol {
                         default(ISymbol?)
                     } else {
@@ -1094,6 +1111,18 @@ partial class CSharpToGSharpTranslator {
             } else {
                 mappedElementType
             }
+            if literal != nil {
+                let (sink, position) = this.ResolveArrayStorageSink(literal)
+                elementType = this.PromoteTupleTypeArguments(
+                    elementType,
+                    elementTypeSymbol,
+                    sink,
+                    position
+                        .Split('.')
+                        .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                        .ToList()
+                )
+            }
             if literal is ImplicitArrayCreationExpressionSyntax implicitArray {
                 elementType = this.PromoteInferredDelegateArrayElementType(
                     elementType,
@@ -1185,6 +1214,8 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "0")
             }
             var node ExpressionSyntax = value
+            let tuplePrefix = List[string]()
+            var elementDepth = 1
             while true {
                 if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
                     node = cast[ExpressionSyntax](node.Parent)
@@ -1206,10 +1237,38 @@ partial class CSharpToGSharpTranslator {
                     node = cast[ExpressionSyntax](node.Parent)
                     continue
                 }
+                if node.Parent is InitializerExpressionSyntax initializer && initializer.IsKind(
+                    SyntaxKind.ArrayInitializerExpression
+                ) {
+                    var outer = initializer
+                    while outer.Parent is InitializerExpressionSyntax dimension && dimension.IsKind(
+                        SyntaxKind.ArrayInitializerExpression
+                    ) {
+                        outer = dimension
+                    }
+                    elementDepth++
+                    node = outer
+                    continue
+                }
+                if node.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
+                    let index = tuple.Arguments.IndexOf(argument)
+                    if index >= 0 {
+                        tuplePrefix.Insert(0, index.ToString(CultureInfo.InvariantCulture))
+                        node = tuple
+                        continue
+                    }
+                }
                 break
             }
             let (sink, prefix) = this.DirectValueSink(node)
-            return (sink, JoinPosition(prefix, "0"))
+            var position = prefix
+            for segment in tuplePrefix {
+                position = JoinPosition(position, segment)
+            }
+            for var i = 0; i < elementDepth; i++ {
+                position = JoinPosition(position, "0")
+            }
+            return (sink, position)
         }
 
         private func IsWidenedArrayCreationElement(value ExpressionSyntax?) bool {

@@ -672,7 +672,21 @@ partial class CSharpToGSharpTranslator {
                 case assignment is AssignmentExpressionSyntax when assignment.IsKind(
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
-                    assignment.Right == whole: (activeModel.GetSymbolInfo(assignment.Left).Symbol, "")
+                    assignment.Right == whole: if activeModel
+                    .GetSymbolInfo(assignment.Left).Symbol is {} assigned {
+                    (assigned, "")
+                } else if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
+                    assignment.Left,
+                    activeModel,
+                    out var containerOwner,
+                    out _,
+                    out var containerPrefix,
+                    unwrapSuppressions: true
+                ) {
+                    (containerOwner, containerPrefix)
+                } else {
+                    (default(ISymbol?), "")
+                }
                 case argument is ArgumentSyntax: ArgumentDestination(argument, activeModel)
                 case returnStatement is ReturnStatementSyntax: (
                     activeModel.GetEnclosingSymbol(returnStatement.SpanStart) as IMethodSymbol,
