@@ -8714,7 +8714,18 @@ internal partial class StatementBinder {
                     Invariant.Required(nativeType, "a detected native integer has a type", expression: "nativeType")
                         .Name
                 )
-            } else if ConstantExpressionEvaluator.TryFold(convertedInitializer, declaredVariable.Type, out constValue) {
+            } else if ConstantExpressionEvaluator.TryFold(
+                convertedInitializer,
+                declaredVariable.Type,
+                out constValue
+            ) ||
+                (
+                declaredVariable is LocalVariableSymbol && NullableLifting.IsAnyValueTypeNullable(
+                    declaredVariable.Type as NullableTypeSymbol
+                ) &&
+                    ConstantExpressionEvaluator.TryEvaluate(convertedInitializer, out constValue) && constValue == nil
+            ) {
+                // Nullable value constants have no CLR Constant row. Keep their null payload on local symbols only.
                 if declaredVariable is GlobalVariableSymbol global {
                     global.SetConstantValue(constValue)
                 } else if declaredVariable is LocalVariableSymbol constLocal {
@@ -11413,30 +11424,14 @@ internal partial class StatementBinder {
             default: true
         }
 
-        // The default of a type is null for every instantiation only for a value-type `Nullable<T>` (BCL or source) or
-        // a reference type (`Binder.IsReferenceTypeForConstraint`: a source class counts). A type parameter counts only
-        // with an explicit `class` constraint: a base-class constraint can be `System.Enum` (`T Enum struct`), whose
-        // default is a boxed zero, and an unconstrained `default(T)` is zero for `T` = `int32`. A value type does not
-        // count.
-        private func IsNullDefault(type TypeSymbol) bool -> if type is NullableTypeSymbol nullable {
-            NullableLifting.IsAnyValueTypeNullable(nullable) || IsNullDefaultReference(nullable.UnderlyingType)
-        } else {
-            IsNullDefaultReference(type)
-        }
-
-        private func IsNullDefaultReference(type TypeSymbol) bool -> if PlatformTypeSymbol.StripTopLevel(
-            type
-        ) is TypeParameterSymbol parameter {
-            parameter.HasReferenceTypeConstraint && !parameter.HasValueTypeConstraint
-        } else {
-            Binder.IsReferenceTypeForConstraint(type)
-        }
-
         private func IsNullOperand(operand BoundExpression) bool {
             var value = operand
             while value is BoundConversionExpression conversion {
                 if conversion.Type.StripToBareShape() is PointerTypeSymbol or FunctionPointerTypeSymbol {
                     break
+                }
+                if !Conversion.PreservesNull(conversion.Expression.Type, conversion.Type) {
+                    return false
                 }
                 value = conversion.Expression
             }
@@ -11452,7 +11447,7 @@ internal partial class StatementBinder {
                     variable.Variable
                 )
             ) ||
-                (value is BoundDefaultExpression && IsNullDefault(value.Type))
+                (value is BoundDefaultExpression && Conversion.IsNullDefault(value.Type))
         }
 
         /// ADR-0208 R19 (#5710): whether a binary `==` or `!=` emits `object.Equals(object, object)` on an operand

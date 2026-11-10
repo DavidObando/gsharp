@@ -43,11 +43,20 @@ open class LocalVariableSymbol : VariableSymbol {
     open prop RefKind RefKind
 
     /// Gets or sets a value indicating whether this local is a folded
-    /// compile-time `const` binding (issue #216). Such a local has no IL
-    /// slot — every read is inlined — so it has no address (issue #4400).
+    /// compile-time `const` binding (issue #216). Constants have no source-level address (issue #4400).
     internal prop IsConst bool
 
     internal prop ConstantValue object?
+
+    /// Gets whether literal emission can represent this constant without typed storage.
+    internal prop CanInlineConstantValue bool -> IsConst &&
+        (
+        ConstantValue != nil ||
+            (
+            !NullableLifting.IsAnyValueTypeNullable(Type as NullableTypeSymbol) &&
+                !NullableLifting.IsValueTypeNullableClr(Type.ClrType)
+        )
+    )
 
     internal prop ManagedReferenceOrigin BoundExpression?
     internal prop ManagedReferenceStorage LocalVariableSymbol?

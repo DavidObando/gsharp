@@ -999,6 +999,9 @@ internal partial class StatementBinder {
         if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
             return nil
         }
+        if binderCtx.CurrentTypeParameters?.ContainsKey(FirstNameSegment(type.DottedName)) == true {
+            return nil
+        }
         let arity = if type.TypeArguments is {} arguments {
             arguments.Count
         } else {
@@ -1634,7 +1637,7 @@ internal partial class StatementBinder {
     }
 
     // Whether a conversion site can run a user-defined or imported conversion operator (the predicate of the
-    // conversion classifier, `HasUserDefinedImplicitConversion`). A site that the walker cannot follow can.
+    // conversion classifier, `HasUserDefinedConversion`). A site that the walker cannot follow can.
     private func ConversionsRunUserCode(effects RegionEffects) bool {
         for conversion in effects.Conversions {
             if conversion.OperatorArms {
@@ -1692,7 +1695,7 @@ internal partial class StatementBinder {
                     ) {
                         continue
                     }
-                    if ConversionOperatorReaches(source, target) {
+                    if ConversionOperatorReaches(source, target, conversion.AllowExplicit) {
                         return true
                     }
                 }
@@ -1917,7 +1920,7 @@ internal partial class StatementBinder {
 
     // A conversion operator converts the value to the target, directly or between their value types (a lifted
     // conversion). Every check without the `?` of a nullable value type is kept, so no operator is missed.
-    private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol) bool {
+    private func ConversionOperatorReaches(source TypeSymbol, target TypeSymbol, allowExplicit bool = false) bool {
         let sourceValue = StripNullableValue(source)
         let targetValue = StripNullableValue(target)
         if TypeSymbol.ContainsTypeParameter(sourceValue) || TypeSymbol.ContainsTypeParameter(targetValue) ||
@@ -1941,14 +1944,14 @@ internal partial class StatementBinder {
                     sourceTuple.ElementTypes[index]
                 let targetElement = StripReferenceNullability(targetTuple.ElementTypes[index]) ??
                     targetTuple.ElementTypes[index]
-                if ConversionOperatorReaches(sourceElement, targetElement) {
+                if ConversionOperatorReaches(sourceElement, targetElement, allowExplicit) {
                     return true
                 }
             }
         }
-        return conversions.HasUserDefinedImplicitConversion(source, target) ||
-            conversions.HasUserDefinedImplicitConversion(sourceValue, target) ||
-            conversions.HasUserDefinedImplicitConversion(sourceValue, targetValue) || Conversion.Classify(
+        return conversions.HasUserDefinedConversion(source, target, allowExplicit) ||
+            conversions.HasUserDefinedConversion(sourceValue, target, allowExplicit) ||
+            conversions.HasUserDefinedConversion(sourceValue, targetValue, allowExplicit) || Conversion.Classify(
             sourceValue,
             targetValue
         )
@@ -2356,7 +2359,7 @@ internal partial class StatementBinder {
             TestedType(candidate, out _) != nil {
             return false
         }
-        if test.ValueIsNull || RegionPatternValueIsNull(test) {
+        if test.ValueIsNull || RegionPatternValueIsNull(test, effects) {
             return false
         }
         if test.Subject is not{} subject || ConversionTypes(subject, effects) is not{} inputs || inputs.Count == 0 {
@@ -2383,10 +2386,48 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func RegionPatternValueIsNull(test RegionPatternTest) bool {
-        guard let path = test.ConstantValuePath else {
+    private func RegionPatternValueIsNull(test RegionPatternTest, effects RegionEffects) bool {
+        guard let constant = test.ConstantValue else {
             return false
         }
+        if constant.Path is {} path && !RegionConstantPathIsNull(path) {
+            return false
+        }
+        if constant.Targets.IsDefaultOrEmpty {
+            return true
+        }
+        let sourceTypes = if constant.Path is {} path {
+            ConversionTypes(path, effects)
+        } else {
+            List[TypeSymbol]{TypeSymbol.Null}
+        }
+        guard let initialSources = sourceTypes else {
+            return false
+        }
+        var sources = initialSources
+        if sources.Count == 0 {
+            return false
+        }
+        for target in constant.Targets {
+            guard let types = ConversionTypes(target, effects) else {
+                return false
+            }
+            if types.Count == 0 {
+                return false
+            }
+            for source in sources {
+                for type in types {
+                    if !Conversion.PreservesNull(source, type) {
+                        return false
+                    }
+                }
+            }
+            sources = types
+        }
+        return true
+    }
+
+    private func RegionConstantPathIsNull(path RegionReceiverPath) bool {
         if path.RootIsCall || path.RootType != nil || path.RootLiteralType != nil {
             return false
         }

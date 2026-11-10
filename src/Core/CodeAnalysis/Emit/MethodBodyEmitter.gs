@@ -360,7 +360,10 @@ internal partial class MethodBodyEmitter {
             }
             case decl is BoundVariableDeclaration {
                 if decl.ConstantValue != nil ||
-                    (decl.Variable is GlobalVariableSymbol{IsConst: true} or LocalVariableSymbol{IsConst: true}) {
+                    (
+                    decl.Variable is GlobalVariableSymbol{IsConst: true} or
+                        LocalVariableSymbol{CanInlineConstantValue: true}
+                ) {
                     break // value inlined at read sites; initializer is a side-effect-free literal
 
                 }

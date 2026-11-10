@@ -46,7 +46,7 @@ internal partial class MethodBodyEmitter {
             this.EmitLiteral(BoundLiteralExpression(nil, globalConst.ConstantValue, globalConst.Type))
             return
         }
-        if variable is LocalVariableSymbol{IsConst: true} localConst {
+        if variable is LocalVariableSymbol{CanInlineConstantValue: true} localConst {
             this.EmitLiteral(BoundLiteralExpression(nil, localConst.ConstantValue, localConst.Type))
             return
         }
