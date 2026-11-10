@@ -1677,7 +1677,7 @@ partial class CSharpToGSharpTranslator {
                     // combinator (e.g. `is Frame child and not EmptyFrame`) as a
                     // ConstantPattern over an identifier — but the identifier binds
                     // to a TYPE, so it is a type test, not an equality. `x is T`.
-                    return this.BuildTypeTestExpression(receiver, constant.Expression, constant)
+                    return this.BuildLeafTypeTestWithCompoundCapture(receiver, constant.Expression, constant, nil)
                 }
                 case constant is ConstantPatternSyntax {
                     return this.TranslateConstantPatternTest(receiver, constant.Expression, receiverType)
@@ -1698,10 +1698,12 @@ partial class CSharpToGSharpTranslator {
                     // `x is T t` → the boolean test `x is T`; the binder `t` is a
                     // Kotlin-style smart cast of `x` inside the guarded block, so
                     // references to `t` are rewritten to the narrowed `x` (ADR-0069).
+                    var declaredSymbol ISymbol? = nil
                     if declaration.Designation is SingleVariableDesignationSyntax single &&
                         this
                         .context
                         .GetDeclaredSymbol(single) is {} boundSymbol {
+                        declaredSymbol = boundSymbol
                         if this.IsConditionalAccessAnalyzerType(declaration.Type) {
                             // Issue #4173 round 3, §4.2(d): a CAE designator can
                             // only reach here at top level, under top-level `not`,
@@ -1747,11 +1749,16 @@ partial class CSharpToGSharpTranslator {
                             )!!
                         }
                     }
-                    return this.BuildTypeTestExpression(receiver, declaration.Type, declaration)
+                    return this.BuildLeafTypeTestWithCompoundCapture(
+                        receiver,
+                        declaration.Type,
+                        declaration,
+                        declaredSymbol
+                    )
                 }
                 case typePattern is TypePatternSyntax {
                     // `x is T` (no binder) → boolean test `x is T`.
-                    return this.BuildTypeTestExpression(receiver, typePattern.Type, typePattern)
+                    return this.BuildLeafTypeTestWithCompoundCapture(receiver, typePattern.Type, typePattern, nil)
                 }
                 case recursive is RecursivePatternSyntax {
                     let matchedRecursiveType = receiverIsNonNull &&
@@ -2437,6 +2444,39 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     let assignable = effectiveReceiverType.IsReferenceType &&
                         IsAssignableNonNull(effectiveReceiverType, testedType)
+                    if !assignable &&
+                        !isNestedPatternMember &&
+                        receiverSyntax != nil &&
+                        this.activeSwitchEvaluationCache != nil {
+                        let (
+                            cachedPrefixTest,
+                            cachedLocal,
+                            cachedMemberOverride
+                        ) = this.BuildCachedSwitchTypeConversion(receiver, recursive, testedType)
+                        if recursive.Designation is SingleVariableDesignationSyntax cachedRecDesignation &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(cachedRecDesignation) is {} cachedRecSymbol {
+                            this.state.PatternBindings[cachedRecSymbol] = cachedMemberOverride ?? cachedLocal
+                        }
+                        let cachedRest = this.TranslateRecursivePatternTest(
+                            cachedLocal,
+                            recursive,
+                            receiverSyntax: nil,
+                            testedType,
+                            isNestedPatternMember: true,
+                            receiverAlreadyMatched: true,
+                            receiverNarrowingLost: receiverNarrowingLost,
+                            memberReceiverOverride: cachedMemberOverride
+                        )
+                        if recursive.Designation is SingleVariableDesignationSyntax cachedRecDesignationAfter &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(cachedRecDesignationAfter) is {} cachedRecSymbolAfter {
+                            this.state.PatternBindings[cachedRecSymbolAfter] = cachedMemberOverride ?? cachedLocal
+                        }
+                        return BinaryExpression(cachedPrefixTest, "&&", cachedRest)
+                    }
                     var capturePattern GPattern? = nil
                     var local GExpression? = nil
                     if !assignable || recursive.Designation is SingleVariableDesignationSyntax {
@@ -2783,7 +2823,8 @@ partial class CSharpToGSharpTranslator {
                             sub.ExpressionColon!!.Expression,
                             sub.Pattern,
                             memberReceiver,
-                            sharedPrefixes
+                            sharedPrefixes,
+                            !isNestedPatternMember && receiverSyntax != nil
                         )
                     }
                     if receiverMayBeNilInGSharp &&
@@ -3024,7 +3065,8 @@ partial class CSharpToGSharpTranslator {
             memberPath ExpressionSyntax,
             leafPattern PatternSyntax,
             receiver GExpression?,
-            sharedPrefixes Dictionary[string, GExpression]? = nil
+            sharedPrefixes Dictionary[string, GExpression]? = nil,
+            isRootSubject bool = false
         ) GExpression {
             let names = SplitMemberPath(memberPath)
             // `intermediateExprs[i]` is the sub-expression whose runtime value
@@ -3049,7 +3091,8 @@ partial class CSharpToGSharpTranslator {
                 receiver,
                 memberPath,
                 leafPattern,
-                sharedPrefixes
+                sharedPrefixes,
+                isRootSubject
             )
         }
 
@@ -3067,27 +3110,65 @@ partial class CSharpToGSharpTranslator {
             memberReceiver GExpression?,
             memberPath ExpressionSyntax,
             leafPattern PatternSyntax,
-            sharedPrefixes Dictionary[string, GExpression]? = nil
+            sharedPrefixes Dictionary[string, GExpression]? = nil,
+            isRootSubject bool = false
         ) GExpression {
             if index == names.Count - 1 {
                 let finalMemberAccess GExpression = MemberAccessExpression(memberReceiver, names[index])
-                if this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(memberPath).Symbol) {
+                let leafSymbol ISymbol? = this.context.GetSymbolInfo(memberPath).Symbol
+                if this.IsGSharpNullableAnalyzerApiMember(leafSymbol) {
                     this.state.GSharpNullablePatternReceivers.Add(finalMemberAccess)
                 }
-                this.RegisterPatternMemberShape(this.context.GetSymbolInfo(memberPath).Symbol, finalMemberAccess)
+                this.RegisterPatternMemberShape(leafSymbol, finalMemberAccess)
                 let leafType ITypeSymbol? = this.context.GetTypeInfo(memberPath).Type
+                if this.activeSwitchEvaluationCache != nil &&
+                    leafSymbol != nil &&
+                    leafType != nil &&
+                    leafType.TypeKind != TypeKind
+                    .Error {
+                    let entry = this.GetOrAddCachedSwitchMemberEntry(
+                        memberReceiver,
+                        leafSymbol,
+                        leafType,
+                        memberPath.GetLocation(),
+                        index == 0 && isRootSubject
+                    )
+                    let cachedLeaf = IdentifierExpression(entry.Value)
+                    let innerTest = this.TranslatePatternTest(
+                        cachedLeaf,
+                        leafPattern,
+                        leafType,
+                        isNestedPatternMember: true
+                    )
+                    return BlockExpression(
+                        List[GStatement]{
+                            IfStatement(
+                                UnaryExpression("!", IdentifierExpression(entry.Flag)),
+                                BlockStatement(
+                                    List[GStatement]{
+                                        AssignmentStatement(cachedLeaf, finalMemberAccess),
+                                        AssignmentStatement(
+                                            IdentifierExpression(entry.Flag),
+                                            LiteralExpression.Bool(true)
+                                        )
+                                    }
+                                )
+                            )
+                        },
+                        innerTest
+                    )
+                }
                 return this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true)
             }
             let link GExpression = MemberAccessExpression(memberReceiver, names[index])
+            let linkSymbol ISymbol? = this.context.GetSymbolInfo(intermediateExprs[index]).Symbol
             let declaredType ITypeSymbol? = this.ResolveDeclaredReceiverType(
                 this.context.GetTypeInfo(intermediateExprs[index]).Type,
                 intermediateExprs[index]
             )
             // The emitted G# type decides, not Roslyn's: an analyzer-API link
             // such as `Identifier` (a Roslyn struct) is `SyntaxToken?` in G#.
-            let gsharpNullableLink = this.IsGSharpNullableAnalyzerApiMember(
-                this.context.GetSymbolInfo(intermediateExprs[index]).Symbol
-            )
+            let gsharpNullableLink = this.IsGSharpNullableAnalyzerApiMember(linkSymbol)
             // A `Nullable<T>` value link (`P` in `P.X` for a `Point?` P) is
             // nullable too. gsc's `&&` guard narrows a nullable REFERENCE local
             // but not a nullable VALUE one (unwrapping `Nullable<T>` is a real
@@ -3105,14 +3186,15 @@ partial class CSharpToGSharpTranslator {
                     names,
                     intermediateExprs,
                     index + 1,
-                    if nullableValueLink || (needsGuard && this.state.StoredPatternCaptures.Contains(local)) {
+                    if nullableValueLink || this.state.StoredPatternCaptures.Contains(local) {
                         cast[GExpression](NonNullAssertionExpression(local))
                     } else {
                         local
                     },
                     memberPath,
                     leafPattern,
-                    sharedPrefixes
+                    sharedPrefixes,
+                    isRootSubject: false
                 )
                 return if needsGuard {
                     cast[GExpression](
@@ -3121,6 +3203,37 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     next
                 }
+            }
+            if this.activeSwitchEvaluationCache != nil &&
+                linkSymbol != nil &&
+                declaredType != nil &&
+                declaredType.TypeKind != TypeKind
+                .Error {
+                let entry = this.GetOrAddCachedSwitchMemberEntry(
+                    memberReceiver,
+                    linkSymbol,
+                    declaredType,
+                    intermediateExprs[index].GetLocation(),
+                    index == 0 && isRootSubject
+                )
+                let cachedLink = IdentifierExpression(entry.Value)
+                if gsharpNullableLink {
+                    this.state.GSharpNullablePatternReceivers.Add(cachedLink)
+                }
+                return BlockExpression(
+                    List[GStatement]{
+                        IfStatement(
+                            UnaryExpression("!", IdentifierExpression(entry.Flag)),
+                            BlockStatement(
+                                List[GStatement]{
+                                    AssignmentStatement(cachedLink, link),
+                                    AssignmentStatement(IdentifierExpression(entry.Flag), LiteralExpression.Bool(true))
+                                }
+                            )
+                        )
+                    },
+                    rest(cachedLink)
+                )
             }
             if !needsGuard && sharedPrefixes == nil {
                 return rest(link)
@@ -5813,8 +5926,134 @@ partial class CSharpToGSharpTranslator {
         private var activeSwitchEvaluationCache(
             Declarations List[GStatement],
             NullGuard List[(Flag string, Value string)],
-            Members List[(ReceiverKey string, Member ISymbol, Flag string, Value string)]
+            Members List[(ReceiverKey string, Member ISymbol, Flag string, Value string)],
+            TypeConversions List[
+                (TestedType ITypeSymbol, Flag string, Matched string, Value string, NullableStorage bool)
+            ]
         )? = nil
+
+        private func BuildLeafTypeTestWithCompoundCapture(
+            receiver GExpression?,
+            typeSyntax ExpressionSyntax,
+            site SyntaxNode,
+            declaredSymbol ISymbol?
+        ) GExpression {
+            if this.activeCompoundConversionCapture is {} captureTarget && !this.IsConditionalAccessAnalyzerType(
+                typeSyntax as TypeSyntax
+            ) &&
+                !this.IsPlainAccessAnalyzerType(typeSyntax as TypeSyntax, out _) &&
+                !this
+                .IsVariableReferenceAnalyzerType(typeSyntax as TypeSyntax, out _) {
+                let testedType ITypeSymbol? = (this.context.GetSymbolInfo(typeSyntax).Symbol as ITypeSymbol) ??
+                    this
+                    .context
+                    .GetTypeInfo(typeSyntax)
+                    .Type
+                if testedType != nil &&
+                    (
+                    SymbolEqualityComparer.Default.Equals(UnwrapNullable(testedType), captureTarget.TargetType) ||
+                        IsAssignableNonNull(UnwrapNullable(testedType), captureTarget.TargetType)
+                ) {
+                    let temp = this.NewSpillName()
+                    let local = IdentifierExpression(temp)
+                    if declaredSymbol != nil {
+                        this.state.PatternBindings[declaredSymbol] = local
+                    }
+                    let capturePattern = this.BuildPatternTypeTest(temp, typeSyntax, site, designationAfterType: true)
+                    return BinaryExpression(
+                        PatternTestExpression(receiver, capturePattern),
+                        "&&",
+                        BlockExpression(
+                            List[GStatement]{AssignmentStatement(captureTarget.TargetLocal, local)},
+                            LiteralExpression.Bool(true)
+                        )
+                    )
+                }
+            }
+            return this.BuildTypeTestExpression(receiver, typeSyntax, site)
+        }
+
+        private func BuildCachedSwitchTypeConversion(
+            receiver GExpression?,
+            recursive RecursivePatternSyntax,
+            testedType ITypeSymbol
+        )(PrefixTest GExpression, Local GExpression, MemberOverride GExpression?) {
+            let cache = this.activeSwitchEvaluationCache!!
+            let unwrappedTarget = UnwrapNullable(testedType)!!
+            var entry = cache.TypeConversions.FirstOrDefault(
+                (candidate(TestedType ITypeSymbol, Flag string, Matched string, Value string, NullableStorage bool)) ->
+                SymbolEqualityComparer.Default.Equals(candidate.TestedType, unwrappedTarget)
+            )
+            if entry.TestedType == nil {
+                let flagName = this.NewSpillName()
+                let matchedName = this.NewSpillName()
+                let valueName = this.NewSpillName()
+                var storageType = this.typeMapper.Map(unwrappedTarget, this.context, recursive.GetLocation())
+                if unwrappedTarget.IsReferenceType {
+                    storageType = MakeNullable(storageType)
+                }
+                cache.Declarations.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Var,
+                        flagName,
+                        NamedTypeReference("bool"),
+                        LiteralExpression.Bool(false)
+                    )
+                )
+                cache.Declarations.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Var,
+                        matchedName,
+                        NamedTypeReference("bool"),
+                        LiteralExpression.Bool(false)
+                    )
+                )
+                cache.Declarations.Add(LocalDeclarationStatement(BindingKind.Var, valueName, storageType))
+                let nullableStorage = storageType?.IsNullable == true
+                if nullableStorage {
+                    this.state.StoredPatternCaptures.Add(IdentifierExpression(valueName))
+                }
+                entry = (unwrappedTarget, flagName, matchedName, valueName, nullableStorage)
+                cache.TypeConversions.Add(entry)
+            }
+            let temp = this.NewSpillName()
+            let capturePattern GPattern = if recursive.Type != nil {
+                this.BuildPatternTypeTest(temp, recursive.Type, recursive, designationAfterType: true)
+            } else {
+                PropertyPattern(List[PropertyPatternField](), temp)
+            }
+            let local = IdentifierExpression(entry.Value)
+            let memberOverride GExpression? = if entry.NullableStorage {
+                cast[GExpression](NonNullAssertionExpression(local))
+            } else {
+                default(GExpression?)
+            }
+            let prefixTest = BlockExpression(
+                List[GStatement]{
+                    IfStatement(
+                        UnaryExpression("!", IdentifierExpression(entry.Flag)),
+                        BlockStatement(
+                            List[GStatement]{
+                                AssignmentStatement(
+                                    IdentifierExpression(entry.Matched),
+                                    BinaryExpression(
+                                        PatternTestExpression(receiver, capturePattern),
+                                        "&&",
+                                        BlockExpression(
+                                            List[GStatement]{AssignmentStatement(local, IdentifierExpression(temp))},
+                                            LiteralExpression.Bool(true)
+                                        )
+                                    )
+                                ),
+                                AssignmentStatement(IdentifierExpression(entry.Flag), LiteralExpression.Bool(true))
+                            }
+                        )
+                    )
+                },
+                IdentifierExpression(entry.Matched)
+            )
+            return (prefixTest, local, memberOverride)
+        }
 
         private func BuildCachedSwitchNullGuard(receiver GExpression?, receiverType ITypeSymbol?) GExpression {
             let cache = this.activeSwitchEvaluationCache!!
@@ -5863,14 +6102,13 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func TranslateCachedSwitchMemberSubpattern(
+        private func GetOrAddCachedSwitchMemberEntry(
             memberReceiver GExpression?,
-            memberAccess GExpression,
             subpatternMember ISymbol,
             memberType ITypeSymbol,
-            sub SubpatternSyntax,
+            location Location,
             isRootSubject bool
-        ) GExpression {
+        )(ReceiverKey string, Member ISymbol, Flag string, Value string) {
             let cache = this.activeSwitchEvaluationCache!!
             let receiverKey = if isRootSubject {
                 "<root>"
@@ -5890,7 +6128,7 @@ partial class CSharpToGSharpTranslator {
             if entry.Member == nil {
                 let flagName = this.NewSpillName()
                 let valueName = this.NewSpillName()
-                var storageType = this.typeMapper.Map(memberType, this.context, sub.GetLocation())
+                var storageType = this.typeMapper.Map(memberType, this.context, location)
                 if memberType.IsReferenceType {
                     storageType = MakeNullable(storageType)
                 }
@@ -5909,6 +6147,24 @@ partial class CSharpToGSharpTranslator {
                 entry = (receiverKey, subpatternMember, flagName, valueName)
                 cache.Members.Add(entry)
             }
+            return entry
+        }
+
+        private func TranslateCachedSwitchMemberSubpattern(
+            memberReceiver GExpression?,
+            memberAccess GExpression,
+            subpatternMember ISymbol,
+            memberType ITypeSymbol,
+            sub SubpatternSyntax,
+            isRootSubject bool
+        ) GExpression {
+            let entry = this.GetOrAddCachedSwitchMemberEntry(
+                memberReceiver,
+                subpatternMember,
+                memberType,
+                sub.GetLocation(),
+                isRootSubject
+            )
             let cachedLocal = IdentifierExpression(entry.Value)
             let innerTest = this.TranslatePatternTest(cachedLocal, sub.Pattern, memberType, isNestedPatternMember: true)
             return BlockExpression(
@@ -6324,6 +6580,16 @@ partial class CSharpToGSharpTranslator {
                         reference.Instance?.Type
                     ) {
                         return true
+                    }
+                }
+                if subpattern.ExpressionColon != nil {
+                    for node in subpattern.ExpressionColon!!.Expression.DescendantNodesAndSelf() {
+                        if this.context.GetSymbolInfo(node).Symbol is IPropertySymbol prop && this.AccessorRunsUserCode(
+                            prop,
+                            prop.ContainingType
+                        ) {
+                            return true
+                        }
                     }
                 }
                 return false

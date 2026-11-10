@@ -1073,6 +1073,7 @@ namespace Demo
         public int A { get { OnRead?.Invoke(); return 1; } }
         int IExplicitRow.ExplicitA { get { OnRead?.Invoke(); return 1; } }
         public object Child = new B();
+        public B TypedChild = new B();
         public object Tag = 3;
         public object BaseTag { get => Tag; set => Tag = value; }
         object IExplicitRow.Tag => Tag;
@@ -1397,6 +1398,65 @@ namespace Demo
                 return "True " + current.Id + " " + matched.Id;
             return "False " + current.Id;
         }
+        static int SwitchTypedMultiArmReplaced()
+        {
+            var initial = new Row { Id = 1 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new BaseRow { Id = 9 }; };
+            return current switch
+            {
+                Row { A: 0 } => 0,
+                Row { A: 1 } => 1,
+                _ => -1,
+            };
+        }
+        static int SwitchExtendedPropertyClearedToNull()
+        {
+            var child = new B();
+            Row? current = new Row { Id = 1, TypedChild = child };
+            child.OnRead = () => { current = null; };
+            return current switch
+            {
+                { TypedChild.A: 0 } => 0,
+                { TypedChild.A: 1 } => 1,
+                _ => -1,
+            };
+        }
+        static string BareTypeLeafInDelayedCompoundCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new BaseRow { Id = 9 }; };
+            if (current is ((not null and DerivedRow { A: 0 }) or Row) and { Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string SwitchCacheSuspendedInWhenAndBody()
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var other = new Row { Id = 2, Tag = 0 };
+            current.OnRead = () => { current = new Row { Id = 9, Tag = 3 }; };
+            return current switch
+            {
+                { A: 1, Tag: 3 } when other is { Tag: 3 } => "WhenWrong",
+                { A: 1, Tag: 3 } => (other is { Tag: 3 }).ToString(),
+                _ => "Default",
+            };
+        }
+        static int SwitchAsStatementClearedToNull()
+        {
+            int recorded = -2;
+            int Record(int v) { recorded = v; return v; }
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            _ = current switch
+            {
+                { A: 0 } => Record(0),
+                { A: 1 } => Record(1),
+                _ => Record(-1),
+            };
+            return recorded;
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1434,8 +1494,13 @@ namespace Demo
             HiddenBaseTypedAndTyped(0) + " / " +
             HiddenBaseTypedAndTyped(3) + " / " +
             SwitchMultiArmClearedToNull() + " / " +
-            DelayedCompoundOrAndConversionCapture();
+            DelayedCompoundOrAndConversionCapture() + " / " +
+            SwitchTypedMultiArmReplaced() + " / " +
+            SwitchExtendedPropertyClearedToNull() + " / " +
+            BareTypeLeafInDelayedCompoundCapture() + " / " +
+            SwitchCacheSuspendedInWhenAndBody() + " / " +
+            SwitchAsStatementClearedToNull();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1", rejectRedundantAssertions: true)
     }
 }
