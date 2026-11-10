@@ -635,6 +635,7 @@ namespace Demo
     func AVarLocalAnArrayElementOrATypeParameterMember_FollowsItsEmittedSlot() {
         let printed = Translate(`
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.Threading;
 namespace Demo
@@ -651,10 +652,14 @@ namespace Demo
     public static class P
     {
         private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>[]? arrayCache;
         private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
         private static Box<Dictionary<string, int>>? fullBox = new Box<Dictionary<string, int>>(new Dictionary<string, int> { ["a"] = 1 });
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
         static T[] MakeArray<T>(T value) => new T[] { value };
+        static Func<(Dictionary<string, int>, T)>[] Readers<T>(T seed) => new Func<(Dictionary<string, int>, T)>[] { () => (new Dictionary<string, int>(), seed) };
+        static void GetOutBox(out Box<Dictionary<string, int>> value) { value = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); }
+        static void GetInferredOutBox<T>(T seed, out Box<T> value) { value = new Box<T>(seed); }
         static int VarReassign() { var d = new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
         static int VarReassignArm(bool flag) { var d = new Dictionary<string, int>(); d = flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return d.Count; }
         static int VarReassignAlias() { var a = new Dictionary<string, int>(); var d = a; d = Volatile.Read(ref full!); return d.Count; }
@@ -663,6 +668,10 @@ namespace Demo
         static int VarArrayElement() { var arr = new Dictionary<string, int>[1]; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
         static int ImplicitArrayNonNullElement() { var arr = new[] { new Dictionary<string, int>() }; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
         static int ArrayInitializers() { var arr = new Dictionary<string, int>[] { Volatile.Read(ref full!) }; Dictionary<string, int>[] typedImplicit = new[] { Volatile.Read(ref full!) }; return arr[0].Count + typedImplicit[0].Count; }
+        static int NullableDelegateArrayElement(Func<Dictionary<string, int>>?[] readers) { readers[0] = () => Volatile.Read(ref full!); return readers[0]!().Count; }
+        static int PartiallyInferredDelegateArrayElement() { var fs = Readers(Volatile.Read(ref cache!)); fs[0] = () => (Volatile.Read(ref full!), Volatile.Read(ref cache!)); var pair = fs[0](); return pair.Item1.Count + (pair.Item2 == null ? 1 : 0); }
+        static int InlineNestedArrayForEach() { var sum = 0; foreach (var row in new[] { new[] { 1 } }) { sum += row[0]; } return sum; }
+        static int OutVarTypedBox() { GetOutBox(out var b); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
         static int TypedBox() { Box<Dictionary<string, int>> b = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
         static int TypedBoxMembers() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)) { Value = Volatile.Read(ref full!) }; b.Prop = Volatile.Read(ref full!); b[0] = Volatile.Read(ref full!); b.Items[0] = Volatile.Read(ref full!); return b.Accept(Volatile.Read(ref full!)) + b.Value.Count + b.Prop.Count + b[0].Count + b.Items[0].Count; }
         static int ForEachTypedBox() { var total = 0; foreach (var item in new[] { new Box<Dictionary<string, int>>(new Dictionary<string, int>()) }) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
@@ -671,16 +680,19 @@ namespace Demo
         static bool NullableArrayElement() { Dictionary<string, int>?[] arr = new Dictionary<string, int>?[1]; arr[0] = Volatile.Read(ref cache!); return arr[0] == null; }
         static int InferredArrayElement() { var arr = MakeArray(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref cache!); return 1; }
         static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); return 1; }
+        static int ImplicitInferredJaggedArrayElement() { var rows = new[] { Volatile.Read(ref arrayCache!) }; rows[0] = Volatile.Read(ref arrayCache!); return 1; }
         static int InferredBoxItemsElement() { var b = Wrap(Volatile.Read(ref cache!)); b.Items[0] = Volatile.Read(ref cache!); return 1; }
         static bool NullableTypedBox() { var b = new Box<Dictionary<string, int>?>(Volatile.Read(ref cache!)); b.Value = Volatile.Read(ref cache!); b.Prop = Volatile.Read(ref cache!); return b.Value == null && b.Prop == null; }
         static int DeconstructedBox() { (Box<Dictionary<string, int>> b, int n) = (Wrap(Volatile.Read(ref cache!)), 0); b.Value = Volatile.Read(ref cache!); return 1; }
+        static int OutVarInferredBox() { GetInferredOutBox(Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref cache!); return 1; }
         static int ForEachInferredBox() { foreach (var item in MakeArray(Wrap(Volatile.Read(ref cache!)))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         public static string Run() =>
             VarReassign() + " " + VarReassignArm(true) + " " + VarReassignAlias() + " " + VarNewBoxReassign() + " " +
             Element(new Dictionary<string, int>[1]) + " " + VarArrayElement() + " " + ImplicitArrayNonNullElement() + " " + ArrayInitializers() + " " +
+            NullableDelegateArrayElement(new Func<Dictionary<string, int>>?[1]) + " " + PartiallyInferredDelegateArrayElement() + " " + InlineNestedArrayForEach() + " " + OutVarTypedBox() + " " +
             TypedBox() + " " + TypedBoxMembers() + " " + ForEachTypedBox() + " " + CollectionInitializers() + " " +
             VarWidenedByNull(true) + " " + NullableArrayElement() + " " + InferredArrayElement() + " " + ImplicitInferredArrayElement() + " " +
-            InferredBoxItemsElement() + " " + NullableTypedBox() + " " + DeconstructedBox() + " " + ForEachInferredBox();
+            ImplicitInferredJaggedArrayElement() + " " + InferredBoxItemsElement() + " " + NullableTypedBox() + " " + DeconstructedBox() + " " + OutVarInferredBox() + " " + ForEachInferredBox();
     }
 }`)
         Assert.Contains("var d = Dictionary[string, int32]()\n        d = Volatile.Read(&full)!!\n", printed)
@@ -688,6 +700,9 @@ namespace Demo
         Assert.Contains("b = Volatile.Read(&fullBox)!!\n", printed)
         Assert.Contains("arr[0] = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("[]Dictionary[string, int32]{Volatile.Read(&full)!!}", printed)
+        Assert.Contains("readers[0] = () -> Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("fs[0] = () -> (Volatile.Read(&full)!!, Volatile.Read(&cache))\n", printed)
+        Assert.Contains("GetOutBox(out var b)\n        b!!.Value = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Value = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Prop = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b[0] = Volatile.Read(&full)!!\n", printed)
@@ -699,11 +714,17 @@ namespace Demo
         Assert.Contains("d = Volatile.Read(&cache)\n", printed)
         Assert.Contains("arr[0] = Volatile.Read(&cache)\n", printed)
         Assert.Contains("[]Dictionary[string, int32]?{Volatile.Read(&cache)}", printed)
+        Assert.Contains("[][]?Dictionary[string, int32]{Volatile.Read(&arrayCache)}", printed)
+        Assert.Contains("rows[0] = Volatile.Read(&arrayCache)\n", printed)
         Assert.Contains("b.Items[0] = Volatile.Read(&cache)\n", printed)
         Assert.Contains("b.Value = Volatile.Read(&cache)\n", printed)
         Assert.Contains("b.Prop = Volatile.Read(&cache)\n", printed)
+        Assert.Contains(
+            "GetInferredOutBox(Volatile.Read(&cache), out var b)\n        b!!.Value = Volatile.Read(&cache)\n",
+            printed
+        )
         Assert.Contains("item!!.Value = Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 2 1 5 1 2 True True 1 1 1 True 1 1")
+        RunsAs(printed, "1 1 1 1 1 1 1 2 1 2 1 1 1 5 1 2 True True 1 1 1 1 True 1 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
