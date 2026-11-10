@@ -4981,6 +4981,11 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil || unwrapped is BaseObjectCreationExpressionSyntax {
                 return false
             }
+            if unwrapped is CastExpressionSyntax cast &&
+                !(cast.Type is NullableTypeSyntax) &&
+                this.CastUsesCheckedReferenceConversion(cast) {
+                return false
+            }
             if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     if this.ResultMentionsValueNilableOnlyInEmittedGSharp(operand, visitedLocals) {
@@ -4998,6 +5003,22 @@ partial class CSharpToGSharpTranslator {
                 .DeclaringSyntaxReferences
                 .FirstOrDefault()
                 ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                if !IsImplicitlyTypedLocal(aliasedLocal) &&
+                    aliasedLocal
+                    .Type
+                    .NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    (
+                    this
+                        .state
+                        .EmittedLocalTypeClauses
+                        .Contains(aliasedLocal) ||
+                        this.YieldsValueNilableBeyondItsCSharpType(aliasInit)
+                ) {
+                    return false
+                }
                 let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
                 if !activeVisited.Add(aliasedLocal) {
                     return false
@@ -5807,7 +5828,25 @@ partial class CSharpToGSharpTranslator {
             implicitArray ImplicitArrayCreationExpressionSyntax,
             results List[ImplicitArrayCreationExpressionSyntax]
         ) {
-            var top Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = implicitArray
+            let seenResults = HashSet[ImplicitArrayCreationExpressionSyntax]()
+            let visitedLocals = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+            this.CollectSameDepthComposedFromExpression(
+                implicitArray,
+                implicitArray,
+                results,
+                seenResults,
+                visitedLocals
+            )
+        }
+
+        private func CollectSameDepthComposedFromExpression(
+            originArray ImplicitArrayCreationExpressionSyntax,
+            node Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            results List[ImplicitArrayCreationExpressionSyntax],
+            seenResults HashSet[ImplicitArrayCreationExpressionSyntax],
+            visitedLocals HashSet[ILocalSymbol]
+        ) {
+            var top Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax = node
             var climbedComposed = false
             while true {
                 switch top.Parent {
@@ -5845,18 +5884,54 @@ partial class CSharpToGSharpTranslator {
                         climbedComposed = true
                     }
                     default {
-                        if !climbedComposed {
-                            return
+                        if climbedComposed {
+                            let candidates = List[ImplicitArrayCreationExpressionSyntax]()
+                            let seenCandidates = HashSet[ImplicitArrayCreationExpressionSyntax]()
+                            this.CollectUnderlyingImplicitArrays(top, candidates, seenCandidates)
+                            for candidate in candidates {
+                                if !object.ReferenceEquals(candidate, originArray) && this.SameDepthImplicitArraysMatch(
+                                    originArray,
+                                    candidate
+                                ) &&
+                                    seenResults.Add(candidate) {
+                                    results.Add(candidate)
+                                }
+                            }
                         }
-                        let candidates = List[ImplicitArrayCreationExpressionSyntax]()
-                        let seenCandidates = HashSet[ImplicitArrayCreationExpressionSyntax]()
-                        this.CollectUnderlyingImplicitArrays(top, candidates, seenCandidates)
-                        for candidate in candidates {
-                            if !object.ReferenceEquals(candidate, implicitArray) && this.SameDepthImplicitArraysMatch(
-                                implicitArray,
-                                candidate
-                            ) {
-                                results.Add(candidate)
+                        if top.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator} &&
+                            this
+                            .context
+                            .SemanticModel
+                            .GetDeclaredSymbol(declarator) is ILocalSymbol local &&
+                            IsImplicitlyTypedLocal(local) &&
+                            !this
+                            .state
+                            .EmittedLocalTypeClauses
+                            .Contains(local) &&
+                            visitedLocals
+                            .Add(local) {
+                            let scopeNode = declarator.FirstAncestorOrSelf[BlockSyntax]() as Microsoft
+                                .CodeAnalysis
+                                .SyntaxNode ??
+                                declarator.FirstAncestorOrSelf[MemberDeclarationSyntax]() ??
+                                declarator
+                                .SyntaxTree
+                                .GetRoot()
+                            if this.GetScopeIdentifiersByName(scopeNode, local.Name) is {} matchingIdentifiers {
+                                for identifier in matchingIdentifiers {
+                                    if SymbolEqualityComparer.Default.Equals(
+                                        this.context.GetSymbolInfo(identifier).Symbol,
+                                        local
+                                    ) {
+                                        this.CollectSameDepthComposedFromExpression(
+                                            originArray,
+                                            identifier,
+                                            results,
+                                            seenResults,
+                                            visitedLocals
+                                        )
+                                    }
+                                }
                             }
                         }
                         return
@@ -6146,18 +6221,22 @@ partial class CSharpToGSharpTranslator {
                 component.Levels,
                 component.Depth
             )
-            if this.TryGetAssignedInferredArrayInitializer(implicitArray) is {} initArray && !object.ReferenceEquals(
-                initArray,
-                implicitArray
-            ) {
-                let initComponent = this.GetImplicitArrayComponent(initArray)
-                promoted = this.PromoteImplicitArrayLevel(
-                    promoted,
-                    elementTypeSymbol,
-                    initArray,
-                    initComponent.Levels,
-                    initComponent.Depth
-                )
+            if component.Levels.Count > 0 {
+                for root in component.Levels[0] {
+                    if this.TryGetAssignedInferredArrayInitializer(root) is {} initArray && !object.ReferenceEquals(
+                        initArray,
+                        root
+                    ) {
+                        let initComponent = this.GetImplicitArrayComponent(initArray)
+                        promoted = this.PromoteImplicitArrayLevel(
+                            promoted,
+                            elementTypeSymbol,
+                            initArray,
+                            initComponent.Levels,
+                            initComponent.Depth + component.Depth
+                        )
+                    }
+                }
             }
             return promoted
         }
