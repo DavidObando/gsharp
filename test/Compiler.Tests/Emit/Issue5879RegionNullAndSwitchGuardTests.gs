@@ -163,10 +163,11 @@ Console.WriteLine(Probe())
             for arms in[]string{
                 "case _ when { action = mutate false } { action = noop noop() }",
                 "case _ when { action = mutate false } { action = noop noop() }\n        case _ when { action() false } { }",
-                "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }"
+                "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }",
+                "default { action() return text.Length }\n        case 1 when { action = mutate false } { action = noop noop() }\n        case 2 when { action = noop false } { action = noop noop() }"
             } {
                 for inFinally in[]bool{false, true} {
-                    if !inFinally && arms.Contains("\n") {
+                    if inFinally && arms.Contains("text.Length") {
                         continue
                     }
                     var body = `let mutate = func() { text = nil }
@@ -187,12 +188,19 @@ func Run(x int32NOOP) int32 {
     var text string? = nil
     text = "safe"
     REGION
-    return text.Length
+    TAIL
 }
 Console.WriteLine(Run(1ARGUMENT))
 `.Replace(
                         "REGION",
                         region
+                    ).Replace(
+                        "TAIL",
+                        if arms.Contains("text.Length") {
+                            "return 2"
+                        } else {
+                            "return text.Length"
+                        }
                     ).Replace(
                         "NOOP",
                         if inFinally {
