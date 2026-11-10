@@ -185,10 +185,39 @@ Probe()
 `, true}
             for hiddenBody in[]string{
                 "if items is DerivedList and var DerivedList { let c = items.Count }",
+                "const DerivedList C? = nil\n        if items is DerivedList { let c = items.Count }",
                 "const DerivedList C? = nil\n        if items is DerivedList {} { let c = items.Count }",
+                "const DerivedList C? = nil\n        for var j = 0; j < 1; j++ {\n            if items is DerivedList { let c = items.Count }\n        }",
                 "const DerivedList C? = nil\n        for var j = 0; j < 1; j++ {\n            if items is DerivedList matched { let c = items.Count }\n        }"
             } {
                 yield []object{"hidden_count_" + hiddenBody, HiddenCount(hiddenBody), true}
+            }
+            for basePattern in[]string{
+                "if value is Derived d and Base and { Flag: 1 } { }",
+                "if cast[Derived](value) is Base and { Flag: 1 } { }"
+            } {
+                yield []object{"hidden_base_flag_" + basePattern, `open class Base {
+    var Callback () -> void
+    prop Flag int32 { get { Callback() return 1 } }
+}
+class Derived : Base {
+    var Flag int32 = 1
+}
+func Read() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    let derived = Derived{Callback: clear}
+    let value object = derived
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        PATTERN
+        if i == 1 { return length }
+    }
+    return 0
+}
+Read()
+`.Replace("PATTERN", basePattern), true}
             }
             for declaration in[]string{
                 "var Local C? = nil\n        Local = replacement",

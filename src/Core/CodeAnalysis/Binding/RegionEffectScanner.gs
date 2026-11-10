@@ -29,9 +29,6 @@ internal sealed class RegionEffectScanner {
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
     // of `if x is not T v { return }` is visible after the statement that declares it.
     private var patternNames HashSet[string] = HashSet[string]()
-    private let undeclaredTypeCandidates HashSet[TypeOrConstantPatternSyntax] = HashSet[TypeOrConstantPatternSyntax](
-        ReferenceEqualityComparer.Instance
-    )
     private var pendingReceiver ExpressionSyntax? = nil
     private var pendingReceiverIsRoot bool = false
     private var pendingReceiverPath RegionReceiverPath? = nil
@@ -557,11 +554,6 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypeOrConstantPattern {
                 let pattern = cast[TypeOrConstantPatternSyntax](node)
-                if CandidateUnlessDeclared(TypeTest("", pattern.CandidateType, pattern.PropertyPattern == nil)) != nil {
-                    undeclaredTypeCandidates.Add(pattern)
-                } else {
-                    undeclaredTypeCandidates.Remove(pattern)
-                }
                 if pattern.PropertyPattern == nil {
                     RecordPatternTest(pattern.Expression, TypeTest("", pattern.CandidateType, true))
                     constantPatternDepth++
@@ -581,7 +573,7 @@ internal sealed class RegionEffectScanner {
                 Visit(binary.Left)
                 let outer = patternSubject
                 let outerIsOperatorForm = patternSubjectIsOperatorForm
-                if binary.OperatorToken.Text == "and" && TryNarrowPatternSubject(binary.Left) is {} narrowed {
+                if binary.OperatorToken.Text == "and" && TryNarrowPatternSubject(binary.Left, out var narrowed) {
                     patternSubject = narrowed
                     patternSubjectIsOperatorForm = false
                 }
@@ -618,14 +610,16 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.IsExpression {
                 let isExpression = cast[IsExpressionSyntax](node)
                 Visit(isExpression.Expression)
+                let subject = BuildPath(isExpression.Expression)
+                let subjectIsOperatorForm = IsOperatorForm(isExpression.Expression)
+                RecordTypeTests(isExpression.Expression, isExpression.Pattern)
                 let outer = patternSubject
                 let outerIsOperatorForm = patternSubjectIsOperatorForm
-                patternSubject = BuildPath(isExpression.Expression)
-                patternSubjectIsOperatorForm = IsOperatorForm(isExpression.Expression)
+                patternSubject = subject
+                patternSubjectIsOperatorForm = subjectIsOperatorForm
                 Visit(isExpression.Pattern)
                 patternSubject = outer
                 patternSubjectIsOperatorForm = outerIsOperatorForm
-                RecordTypeTests(isExpression.Expression, isExpression.Pattern)
             }
             case SyntaxKind.SwitchStatement {
                 let switchStatement = cast[SwitchStatementSyntax](node)
@@ -633,6 +627,7 @@ internal sealed class RegionEffectScanner {
                 let subject = BuildPath(switchStatement.Expression)
                 let subjectIsOperatorForm = IsOperatorForm(switchStatement.Expression)
                 for switchCase in switchStatement.Cases {
+                    RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     Push()
                     let outer = patternSubject
                     let outerIsOperatorForm = patternSubjectIsOperatorForm
@@ -641,7 +636,6 @@ internal sealed class RegionEffectScanner {
                     Visit(switchCase.Value)
                     patternSubject = outer
                     patternSubjectIsOperatorForm = outerIsOperatorForm
-                    RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
@@ -654,6 +648,7 @@ internal sealed class RegionEffectScanner {
                 let subject = BuildPath(switchExpression.Expression)
                 let subjectIsOperatorForm = IsOperatorForm(switchExpression.Expression)
                 for arm in switchExpression.Arms {
+                    RecordTypeTests(switchExpression.Expression, arm.Value)
                     Push()
                     let outer = patternSubject
                     let outerIsOperatorForm = patternSubjectIsOperatorForm
@@ -662,7 +657,6 @@ internal sealed class RegionEffectScanner {
                     Visit(arm.Value)
                     patternSubject = outer
                     patternSubjectIsOperatorForm = outerIsOperatorForm
-                    RecordTypeTests(switchExpression.Expression, arm.Value)
                     VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
@@ -1347,12 +1341,13 @@ internal sealed class RegionEffectScanner {
         // A nested type test of a name that the enclosing region declares tests no entry-scope receiver; the local
         // has a type that its origin does not show.
         for var i = current.TypeTests.Count - 1; i >= testsBefore; i-- {
-            let name = current.TypeTests[i].Name
+            let test = current.TypeTests[i]
+            let name = test.Name
             if IsDeclared(name) {
                 SetOrigin(name, nil)
                 current.TypeTests.RemoveAt(i)
-            } else if CandidateUnlessDeclared(current.TypeTests[i]) == nil {
-                current.TypeTests.RemoveAt(i)
+            } else if !test.DeclaredInRegion && CandidateUnlessDeclared(test) == nil {
+                current.TypeTests[i] = RegionTypeTest(test.Name, test.TypeName, test.Arity, test.MayBeConstant, true)
             }
         }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
@@ -2924,9 +2919,7 @@ internal sealed class RegionEffectScanner {
         CollectSubjectTypePatterns(pattern, tested)
         var all = 0
         for node in pattern.DescendantNodesAndSelf() {
-            if node is TypePatternSyntax {
-                all++
-            } else if node is TypeOrConstantPatternSyntax candidate && undeclaredTypeCandidates.Contains(candidate) {
+            if node is TypePatternSyntax || node is TypeOrConstantPatternSyntax {
                 all++
             }
         }
@@ -2948,28 +2941,40 @@ internal sealed class RegionEffectScanner {
         for node in tested {
             if node is TypePatternSyntax typePattern {
                 current.TypeTests.Add(TypeTest(name, typePattern.Type, false))
-            } else if node is TypeOrConstantPatternSyntax candidate && undeclaredTypeCandidates.Contains(candidate) {
-                current.TypeTests.Add(TypeTest(name, candidate.CandidateType, candidate.PropertyPattern == nil))
+            } else if node is TypeOrConstantPatternSyntax candidate {
+                let mayBeConstant = candidate.PropertyPattern == nil
+                let declared = mayBeConstant && IsDeclared(FirstSegment(candidate.CandidateType.DottedName))
+                current.TypeTests.Add(TypeTest(name, candidate.CandidateType, mayBeConstant, declared))
             }
         }
     }
 
-    private func TryNarrowPatternSubject(pattern PatternSyntax) RegionReceiverPath? {
+    private func TryNarrowPatternSubject(pattern PatternSyntax, out narrowed RegionReceiverPath?) bool {
         switch pattern {
             case parenthesized is ParenthesizedPatternSyntax {
-                return TryNarrowPatternSubject(parenthesized.Pattern)
+                return TryNarrowPatternSubject(parenthesized.Pattern, out narrowed)
             }
             case typePattern is TypePatternSyntax {
-                return TypeOrigin(typePattern.Type)
+                narrowed = TypeOrigin(typePattern.Type)
+                return true
             }
-            case candidate is TypeOrConstantPatternSyntax when candidate.PropertyPattern != nil {
-                return TypeOrigin(candidate.CandidateType)
+            case candidate is TypeOrConstantPatternSyntax {
+                narrowed = if candidate.PropertyPattern != nil {
+                    TypeOrigin(candidate.CandidateType)
+                } else {
+                    default(RegionReceiverPath?)
+                }
+                return true
             }
             case binary is BinaryPatternSyntax when binary.OperatorToken.Text == "and" {
-                return TryNarrowPatternSubject(binary.Right) ?? TryNarrowPatternSubject(binary.Left)
+                if TryNarrowPatternSubject(binary.Right, out narrowed) {
+                    return true
+                }
+                return TryNarrowPatternSubject(binary.Left, out narrowed)
             }
             default {
-                return nil
+                narrowed = nil
+                return false
             }
         }
     }
@@ -3032,13 +3037,8 @@ internal sealed class RegionEffectScanner {
                 CollectSubjectTypePatterns(binary.Left, tested)
                 CollectSubjectTypePatterns(binary.Right, tested)
             }
-            case TypePatternSyntax {
+            case TypePatternSyntax, TypeOrConstantPatternSyntax {
                 tested.Add(pattern)
-            }
-            case candidate is TypeOrConstantPatternSyntax {
-                if undeclaredTypeCandidates.Contains(candidate) {
-                    tested.Add(pattern)
-                }
             }
             default { }
         }
@@ -3046,16 +3046,21 @@ internal sealed class RegionEffectScanner {
 
     // The members of a name do not depend on the type arguments or on `?`, so a test of a named type keeps its
     // name and arity. An array, tuple or function type has no name.
-    private func TypeTest(name string, type TypeClauseSyntax, mayBeConstant bool) RegionTypeTest {
+    private func TypeTest(
+        name string,
+        type TypeClauseSyntax,
+        mayBeConstant bool,
+        declaredInRegion bool = false
+    ) RegionTypeTest {
         if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
-            return RegionTypeTest(name, nil, 0, mayBeConstant)
+            return RegionTypeTest(name, nil, 0, mayBeConstant, declaredInRegion)
         }
         let arity = if type.TypeArguments is {} arguments {
             arguments.Count
         } else {
             0
         }
-        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant)
+        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant, declaredInRegion)
     }
 
     private func NameOf(expression ExpressionSyntax?) string? {
