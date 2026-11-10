@@ -5604,16 +5604,19 @@ internal shared class ObliviousNullabilityAnalyzer {
                 createdScalarEdges
             )
             for key in createdTainted {
-                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, key.Path)
-                tupleTainted.Add(TupleElementKey(mappedTarget, mappedPath))
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, key.Path) {
+                    tupleTainted.Add(TupleElementKey(mappedTarget, mappedPath))
+                }
             }
             for (targetKey, sourceKey) in createdEdges {
-                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, targetKey.Path)
-                tupleEdges.Add((TupleElementKey(mappedTarget, mappedPath), sourceKey))
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path) {
+                    tupleEdges.Add((TupleElementKey(mappedTarget, mappedPath), sourceKey))
+                }
             }
             for (targetKey, scalarSource) in createdScalarEdges {
-                let (mappedTarget, mappedPath) = MapCreationTupleTarget(sink, createdType, targetKey.Path)
-                tupleScalarEdges.Add((TupleElementKey(mappedTarget, mappedPath), scalarSource))
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path) {
+                    tupleScalarEdges.Add((TupleElementKey(mappedTarget, mappedPath), scalarSource))
+                }
             }
             return
         }
@@ -5659,36 +5662,67 @@ internal shared class ObliviousNullabilityAnalyzer {
         )
     }
 
-    internal func MapCreationTupleTarget(sink ISymbol?, createdType INamedTypeSymbol, createdPath IReadOnlyList[int32])(
-        Target ISymbol,
-        Path IReadOnlyList[int32]
-    ) {
-        let (target, mappedPath) = MapCreationTupleTarget(sink, createdType, EncodeTuplePath(createdPath))
-        return (target, DecodeTuplePath(mappedPath))
+    internal func IsCreationTupleElementTainted(
+        compilation CSharpCompilation?,
+        sink ISymbol?,
+        createdType INamedTypeSymbol,
+        createdPath IReadOnlyList[int32],
+        siblingCompilations IReadOnlyList[CSharpCompilation]? = nil
+    ) bool {
+        let targets = MapCreationTupleTargets(sink, createdType, createdPath)
+        for (targetSymbol, targetPath) in targets {
+            if !IsTupleElementTainted(compilation, targetSymbol, targetPath, siblingCompilations) {
+                return false
+            }
+        }
+        return targets.Count > 0
     }
 
-    internal func MapCreationTupleTarget(sink ISymbol?, createdType INamedTypeSymbol, createdPath string)(
-        Target ISymbol,
-        Path string
-    ) {
+    internal func MapCreationTupleTargets(
+        sink ISymbol?,
+        createdType INamedTypeSymbol,
+        createdPath IReadOnlyList[int32]
+    ) IReadOnlyList[(Target ISymbol, Path IReadOnlyList[int32])] {
+        let mapped = MapCreationTupleTargets(sink, createdType, EncodeTuplePath(createdPath))
+        let result = List[(Target ISymbol, Path IReadOnlyList[int32])](mapped.Count)
+        for (target, mappedPath) in mapped {
+            result.Add((target, DecodeTuplePath(mappedPath)))
+        }
+        return result
+    }
+
+    internal func MapCreationTupleTargets(
+        sink ISymbol?,
+        createdType INamedTypeSymbol,
+        createdPath string
+    ) IReadOnlyList[(Target ISymbol, Path string)] {
         if sink == nil || SymbolValueType(sink) is not INamedTypeSymbol sinkType {
-            return (createdType, createdPath)
+            return [](Target ISymbol, Path string){(createdType, createdPath)}
         }
         if SymbolEqualityComparer.Default.Equals(
             NormalizeContractTupleNames(createdType),
             NormalizeContractTupleNames(sinkType)
         ) {
-            return (Canonical(sink)!!, createdPath)
+            return [](Target ISymbol, Path string){(Canonical(sink)!!, createdPath)}
         }
+        let canonicalSink = Canonical(sink)!!
+        let matches = List[(Target ISymbol, Path string)]()
+        let seen = HashSet[string](StringComparer.Ordinal)
         for slot in ProjectedTupleContractSlots(sink, createdType, createdType, sinkType) {
             if createdPath == slot.DerivedPath || createdPath.StartsWith(
                 slot.DerivedPath + ".",
                 StringComparison.Ordinal
             ) {
-                return (Canonical(sink)!!, slot.BasePath + createdPath.Substring(slot.DerivedPath.Length))
+                let mappedPath = slot.BasePath + createdPath.Substring(slot.DerivedPath.Length)
+                if seen.Add(mappedPath) {
+                    matches.Add((canonicalSink, mappedPath))
+                }
             }
         }
-        return (createdType, createdPath)
+        if matches.Count > 0 {
+            return matches
+        }
+        return [](Target ISymbol, Path string){(createdType, createdPath)}
     }
 
     private func DecodeTuplePath(path string) IReadOnlyList[int32] {

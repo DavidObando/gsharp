@@ -270,6 +270,7 @@ public static class Consumer {
     @InlineData("unconstrained-extra-switch")
     @InlineData("base-typed-reordered")
     @InlineData("base-typed-extra")
+    @InlineData("repeated-type-parameter")
     @InlineData("nested-contravariant")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
@@ -298,6 +299,9 @@ public class ContraDerived<T> : IContra<ICarrier<object, T>> { }
 public class Carrier<T> { }
 public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
+public class Both<T> : Carrier<T, T> {
+    public Both(T value = default!) { }
+}
 public class Reordered<X, Y> : Carrier<Y, X> {
     public Reordered(X first = default!, Y second = default!) { }
 }
@@ -321,7 +325,8 @@ public abstract class RowsBase {
         let returnType = switch mode {
             case "direct",
             "base-typed-reordered",
-            "base-typed-extra": "Carrier<(string Text, int Code), (string Keep, int Code)>"
+            "base-typed-extra",
+            "repeated-type-parameter": "Carrier<(string Text, int Code), (string Keep, int Code)>"
             case "widened-interface": "Derived<(string Text, int Code)>"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
             case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
@@ -338,6 +343,7 @@ public abstract class RowsBase {
             case "unconstrained-extra-switch": "string extra = null; return 0 switch { _ => new $returnType(((extra), 1), ((extra), 2)) };"
             case "base-typed-reordered": "string extra = null; $returnType local = new $reorderedCreationType((\"keep\", 1), (extra, 2)); return local;"
             case "base-typed-extra": "string extra = null; Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $extraCreationType((extra, 1), (extra, 2));"
+            case "repeated-type-parameter": "string text = null; Carrier<(string Text, int Code), (string Text, int Code)> both = new Both<(string Text, int Code)>((text, 1)); _ = both; return new $reorderedCreationType((\"keep\", 1), (text, 2));"
             default: "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
@@ -349,7 +355,8 @@ public sealed class Producer : RowsBase {
         let expected = switch mode {
             case "direct",
             "base-typed-reordered",
-            "base-typed-extra": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+            "base-typed-extra",
+            "repeated-type-parameter": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
             case "widened-interface": "Derived[(Text string?, Code int32)]"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
             case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
@@ -383,6 +390,12 @@ public sealed class Producer : RowsBase {
             Assert.Contains("(extra, 1)", printed)
             Assert.Contains("(extra!!, 2)", printed)
             Assert.DoesNotContain("Untainted string?", printed)
+        } else if mode == "repeated-type-parameter" {
+            Assert.Contains(
+                "both Carrier[(Text string?, Code int32), (Text string?, Code int32)] = Both[(Text string?, Code int32)](",
+                printed
+            )
+            Assert.Contains("(text, 1)", printed)
         } else {
             Assert.Contains("return $expected()", printed)
         }

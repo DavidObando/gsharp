@@ -6312,11 +6312,17 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         let combinedPath = receiverPath!!.Concat(path).ToList()
                         if call is BaseObjectCreationExpressionSyntax {
-                            target, targetPath = ObliviousNullabilityAnalyzer.MapCreationTupleTarget(
+                            return if ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
+                                this.context.Compilation,
                                 receiverTarget,
                                 receiverType,
-                                combinedPath
-                            )
+                                combinedPath,
+                                this.context.SiblingCompilations
+                            ) {
+                                sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                            } else {
+                                sinkType
+                            }
                         } else if receiverTarget != nil {
                             target = receiverTarget
                             targetPath = combinedPath
@@ -12014,15 +12020,26 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
 
-            private func NullableTypeArgumentViolatesTranslatedConstraints(
-                parameter ITypeParameterSymbol
-            ) bool -> parameter.HasReferenceTypeConstraint ||
+            private func NullableTypeArgumentViolatesTranslatedConstraints(parameter ITypeParameterSymbol) bool -> (
+                parameter.HasNotNullConstraint && !IsDictionaryKeyTypeParameter(parameter)
+            ) ||
+                parameter.HasReferenceTypeConstraint ||
                 parameter.HasValueTypeConstraint ||
                 parameter.HasUnmanagedTypeConstraint ||
                 parameter.HasConstructorConstraint ||
                 !parameter
                 .ConstraintTypes
                 .IsEmpty
+
+            private func IsDictionaryKeyTypeParameter(
+                parameter ITypeParameterSymbol
+            ) bool -> parameter.TypeParameterKind == TypeParameterKind.Type &&
+                parameter.Ordinal == 0 &&
+                parameter
+                .ContainingType
+                ?.OriginalDefinition
+                .ToDisplayString() ==
+            "System.Collections.Generic.Dictionary<TKey, TValue>"
 
             private func DerivesFromOrEquals(candidate INamedTypeSymbol?, target INamedTypeSymbol) bool {
                 for var current INamedTypeSymbol? = candidate; current != nil; current = current!!.BaseType {
