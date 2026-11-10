@@ -266,6 +266,8 @@ public static class Consumer {
     @InlineData("nested-reordered")
     @InlineData("contravariant-self-first")
     @InlineData("contravariant-exact-first")
+    @InlineData("unconstrained-extra")
+    @InlineData("nested-contravariant")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
             case "widened-interface": "ICarrier<object, (string? Text, int Code)>"
@@ -273,6 +275,7 @@ public static class Consumer {
             case "nested-reordered": "IOut<Carrier<(string? Text, int Code), (string Keep, int Code)>>"
             case "contravariant-self-first",
             "contravariant-exact-first": "ICarrier<IContra<Recursive>, (string? Text, int Code)>"
+            case "nested-contravariant": "IContra<ICarrier<string, (string? Text, int Code)>>"
             default: "Carrier<(string? Text, int Code), (string Keep, int Code)>"
         }
         let recursiveInterfaces = if mode == "contravariant-exact-first" {
@@ -288,12 +291,16 @@ public class Recursive : ` + "$recursiveInterfaces" + ` { }
 public interface ICarrier<out X, Y> { }
 public class Derived<T> : ICarrier<string, T> { }
 public class RecursiveDerived<T> : ICarrier<Recursive, T> { }
+public class ContraDerived<T> : IContra<ICarrier<object, T>> { }
 public class Carrier<T> { }
 public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
 public class Reordered<X, Y> : Carrier<Y, X> { }
 public class Intermediate<X, Y> : Reordered<X, Y> { }
 public class WrappedOut<X, Y> : IOut<Reordered<X, Y>> { }
+public class ExtraDerived<X, Y, Z> : Carrier<Y, Z> {
+    public ExtraDerived(X extra = default!, Z keep = default!) { }
+}
 public abstract class RowsBase {
     public abstract ` + "$baseReturn" + ` Rows();
 }`))}, assemblyName: "Contract4718")
@@ -310,24 +317,39 @@ public abstract class RowsBase {
             case "direct": "Carrier<(string Text, int Code), (string Keep, int Code)>"
             case "widened-interface": "Derived<(string Text, int Code)>"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
+            case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
             case "wrapped": "Wrapped<(string Text, int Code)>"
+            case "unconstrained-extra": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
             default: "$derived<(string Keep, int Code), (string Text, int Code)>"
+        }
+        let body = if mode == "unconstrained-extra" {
+            "string extra = null; return new $returnType((extra, 1), (extra, 2));"
+        } else {
+            "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
 public sealed class Producer : RowsBase {
     public override ` + "$returnType" + ` Rows() {
-        return new ` + "$returnType" + `();
+        ` + "$body" + `
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
         let expected = switch mode {
             case "direct": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
             case "widened-interface": "Derived[(Text string?, Code int32)]"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
+            case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
             case "wrapped": "Wrapped[(Text string?, Code int32)]"
+            case "unconstrained-extra": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
             default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
         Assert.Contains("override func Rows() " + expected, printed)
-        Assert.Contains("return " + expected + "()", printed)
+        if mode == "unconstrained-extra" {
+            Assert.Contains("return $expected(", printed)
+            Assert.Contains("(extra, 1)", printed)
+            Assert.Contains("(extra!!, 2)", printed)
+        } else {
+            Assert.Contains("return $expected()", printed)
+        }
         Assert.DoesNotContain("Keep string?", printed)
         let directory = Path.Combine(".local", "issue4718-import-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)

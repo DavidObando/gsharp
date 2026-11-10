@@ -3465,10 +3465,16 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return translated
             }
-            if !this.IsPureForwardingPromotedTarget(targetSymbol) && !this.IsActivePatternBinding(value) &&
-                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.IsNilableOnlyInEmittedGSharp(value) &&
-                this
-                .ReceiverNeedsNullForgiveness(value) {
+            if !this.IsPureForwardingPromotedTarget(targetSymbol) &&
+                !(
+                Unparenthesize(value)?.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax} &&
+                    targetType?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            ) &&
+                !this.IsActivePatternBinding(value) && !this.LambdaResultFeedsNullableObservedInvocation(value) &&
+                !this.IsNilableOnlyInEmittedGSharp(value) && this.ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
             }
             let includePromotedLambdaArm = IsBranchArm(value) &&
@@ -3478,12 +3484,20 @@ partial class CSharpToGSharpTranslator {
                 value
             ) &&
                 this.LambdaTargetIsTranslatedSourceOrSiblingSlot(branchLambda)
+            let includePromotedTupleElement = Unparenthesize(value)?.Parent is ArgumentSyntax{
+                Parent: TupleExpressionSyntax
+            } &&
+                this.SlotTypeIsDeclared(targetSymbol, value) &&
+                targetType?.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
             return this.ForgiveNullableReferenceValue(
                 value,
                 translated,
                 targetType,
                 targetSymbol,
-                includePromotedValue: includePromotedLambdaArm
+                includePromotedValue: includePromotedLambdaArm || includePromotedTupleElement
             )
         }
 

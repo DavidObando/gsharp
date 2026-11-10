@@ -5572,21 +5572,20 @@ internal shared class ObliviousNullabilityAnalyzer {
             case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
             default: default(ExpressionSyntax?)
         }
-        let target ISymbol? = if receiver == nil {
-            default(ISymbol?)
-        } else {
+        let target ISymbol? = if receiver != nil {
             model.GetSymbolInfo(receiver).Symbol
+        } else if call is BaseObjectCreationExpressionSyntax creation {
+            ResolveCreationTupleSink(creation, model)
+        } else {
+            default(ISymbol?)
         }
         // Issue #3641: a LOCAL collection is just as much a declaration sink as
         // a field/property — `var prepared = new List<(string, byte[])>();
         // prepared.Add((path, original))` is where the null-bearing element
         // enters the tuple that the enclosing method then returns.
-        let targetType ITypeSymbol? = switch target {
-            case field is IFieldSymbol: field.Type
-            case property is IPropertySymbol: property.Type
-            case local is ILocalSymbol: local.Type
-            case receiverParameter is IParameterSymbol: receiverParameter.Type
-            default: default(ITypeSymbol?)
+        let targetType ITypeSymbol? = switch call {
+            case creation is BaseObjectCreationExpressionSyntax: model.GetTypeInfo(creation).Type
+            default: SymbolValueType(target)
         }
         // Scalar flow already treats out as callee-to-caller and deliberately
         // excludes ref, so neither is receiver-directed here.
@@ -5595,7 +5594,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 target is IFieldSymbol ||
                     target is IPropertySymbol ||
                     target is ILocalSymbol ||
-                    target is IParameterSymbol
+                    target is IParameterSymbol ||
+                    target is IMethodSymbol
             )
         ) ||
             targetType is not INamedTypeSymbol receiverType ||
@@ -5618,6 +5618,33 @@ internal shared class ObliviousNullabilityAnalyzer {
             tupleEdges,
             tupleScalarEdges
         )
+    }
+
+    private func ResolveCreationTupleSink(creation BaseObjectCreationExpressionSyntax, model SemanticModel) ISymbol? {
+        var node SyntaxNode = creation
+        while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
+            (
+            node.Parent is ConditionalExpressionSyntax conditional &&
+                (conditional.WhenTrue == node || conditional.WhenFalse == node)
+        ) ||
+            (node.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node) {
+            node = node.Parent!!
+        }
+        return switch node.Parent {
+            case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator}: model.GetDeclaredSymbol(
+                declarator
+            )
+            case EqualsValueClauseSyntax{Parent: PropertyDeclarationSyntax property}: model.GetDeclaredSymbol(property)
+            case assignment is AssignmentExpressionSyntax when assignment.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) &&
+                assignment.Right == node: ResolveAssignable(assignment.Left, model)
+            case returnStatement is ReturnStatementSyntax: OwningMember(
+                model.GetEnclosingSymbol(returnStatement.SpanStart)
+            )
+            case arrow is ArrowExpressionClauseSyntax: OwningMember(model.GetDeclaredSymbol(arrow.Parent!!))
+            default: default(ISymbol?)
+        }
     }
 
     /// Issue #3641: routes a value flowing into a declaration to the bare-tuple
@@ -6744,15 +6771,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             return true
         }
         for contract in TupleContractDeclarations(compilation, contractSymbol) {
-            var mapped = false
-            for path in TupleContractPaths(contractSymbol!!, contractPath, contract) {
-                mapped = true
-                if !TupleContractPositionAcceptsNil(compilation, contract, path) &&
-                    !CanPromoteTuplePosition(compilation, contract, path, visited) {
-                    return false
-                }
-            }
-            if !mapped {
+            if !TupleContractAllowsPromotion(compilation, contractSymbol!!, contractPath, contract, visited) {
                 return false
             }
         }
@@ -7644,24 +7663,50 @@ internal shared class ObliviousNullabilityAnalyzer {
         return firstType
     }
 
-    private func TupleContractPaths(symbol ISymbol, path string, contract ISymbol?) sequence[string] {
+    private func TupleContractAllowsPromotion(
+        compilation Compilation?,
+        symbol ISymbol,
+        path string,
+        contract ISymbol?,
+        visited HashSet[ISymbol]
+    ) bool {
         let type = SymbolValueType(symbol)
         let target = SymbolValueType(contract)
         let comparison = TupleContractComparisonType(symbol, type, contract)
         if SymbolEqualityComparer.Default.Equals(comparison, target) ||
             (type is INamedTypeSymbol{IsTupleType: true} && target is INamedTypeSymbol{IsTupleType: true}) {
-            yield path
-            yield break
+            return TupleContractPositionAcceptsNil(compilation, contract, path) ||
+                CanPromoteTuplePosition(compilation, contract, path, visited)
         }
-        if type is INamedTypeSymbol derived &&
-            comparison is INamedTypeSymbol compared &&
-            target is INamedTypeSymbol baseType {
-            for slot in ProjectedTupleContractSlots(symbol, derived, compared, baseType) {
-                if path == slot.DerivedPath || path.StartsWith(slot.DerivedPath + ".", StringComparison.Ordinal) {
-                    yield slot.BasePath + path.Substring(slot.DerivedPath.Length)
-                }
+        if type is not INamedTypeSymbol derived ||
+            comparison is not INamedTypeSymbol compared ||
+            target is not INamedTypeSymbol baseType ||
+            !HasMatchingContractView(compared, baseType) {
+            return false
+        }
+        for slot in ProjectedTupleContractSlots(symbol, derived, compared, baseType) {
+            if path != slot.DerivedPath && !path.StartsWith(slot.DerivedPath + ".", StringComparison.Ordinal) {
+                continue
+            }
+            let basePath = slot.BasePath + path.Substring(slot.DerivedPath.Length)
+            if !TupleContractPositionAcceptsNil(compilation, contract, basePath) &&
+                !CanPromoteTuplePosition(compilation, contract, basePath, visited) {
+                return false
             }
         }
+        return true
+    }
+
+    private func HasMatchingContractView(sourceNamed INamedTypeSymbol, targetNamed INamedTypeSymbol) bool {
+        if SymbolEqualityComparer.Default.Equals(sourceNamed.OriginalDefinition, targetNamed.OriginalDefinition) {
+            return MatchesConstructedContractView(
+                sourceNamed,
+                targetNamed,
+                exact: false,
+                inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
+            )
+        }
+        return EnumerateMatchingContractViews(sourceNamed, targetNamed).Any()
     }
 
     private func AddProjectedTupleContractPair(
@@ -7783,12 +7828,22 @@ internal shared class ObliviousNullabilityAnalyzer {
             yield break
         }
         if SymbolEqualityComparer.Default.Equals(sourceNamed.OriginalDefinition, targetNamed.OriginalDefinition) {
-            if MatchesConstructedContractView(
-                sourceNamed,
-                targetNamed,
-                exact: false,
-                inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
-            ) &&
+            let compatible = if variance == VarianceKind.In {
+                MatchesConstructedContractView(
+                    targetNamed,
+                    sourceNamed,
+                    exact: false,
+                    inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
+                )
+            } else {
+                MatchesConstructedContractView(
+                    sourceNamed,
+                    targetNamed,
+                    exact: false,
+                    inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
+                )
+            }
+            if compatible &&
                 TrySplitTuplePath(targetPath, out var argIndex, out var argRemainder) &&
                 argIndex < sourceNamed
                 .TypeArguments

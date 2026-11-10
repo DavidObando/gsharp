@@ -6285,10 +6285,37 @@ partial class CSharpToGSharpTranslator {
                 path.Add(index)
             }
             if tupleIndices.Count != 0 {
+                var target = sink
+                var targetPath IReadOnlyList[int32] = path
+                if sink is IParameterSymbol parameter &&
+                    node!!.Parent is ArgumentSyntax{Parent: ArgumentListSyntax{Parent: {} call}} {
+                    let receiverTarget ISymbol? = switch call {
+                        case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: this
+                            .context
+                            .GetSymbolInfo(member.Expression)
+                            .Symbol
+                        case creation is BaseObjectCreationExpressionSyntax: this.ResolveValueSink(creation)
+                        default: default(ISymbol?)
+                    }
+                    let receiverType = switch call {
+                        case creation is BaseObjectCreationExpressionSyntax: this
+                            .context
+                            .GetTypeInfo(creation)
+                            .Type as INamedTypeSymbol
+                        default: ObliviousNullabilityAnalyzer.SymbolValueType(receiverTarget) as INamedTypeSymbol
+                    }
+                    if receiverTarget != nil &&
+                        receiverType != nil &&
+                        ObliviousNullabilityAnalyzer
+                        .TryGetGenericReceiverTuplePath(receiverType, parameter, out _, out var receiverPath) {
+                        target = receiverTarget
+                        targetPath = receiverPath!!.Concat(path).ToList()
+                    }
+                }
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                     this.context.Compilation,
-                    sink,
-                    path,
+                    target,
+                    targetPath,
                     this.context.SiblingCompilations
                 ) {
                     sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
