@@ -2183,7 +2183,12 @@ partial class CSharpToGSharpTranslator {
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
                 return this.RefStorageIsNullable(slot, includeArrays: true)
             }
-            if this.RefStorageContractIsFrozen(symbol, 0) {
+            if this.RefStorageContractIsFrozen(symbol, 0) || ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+                this.context.Compilation,
+                symbol,
+                string.Empty,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
                 return false
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
@@ -2402,15 +2407,20 @@ partial class CSharpToGSharpTranslator {
             return slot
         }
 
-        private func ConnectRefStorage(target RefStorageSlot, expression ExpressionSyntax, model SemanticModel) {
+        private func ConnectRefStorage(
+            target RefStorageSlot,
+            expression ExpressionSyntax,
+            model SemanticModel,
+            visited HashSet[SyntaxNode]? = nil
+        ) {
             let storage = UnwrapParenthesesAndSuppressions(expression)!!
             if storage is RefExpressionSyntax nested {
-                this.ConnectRefStorage(target, nested.Expression, model)
+                this.ConnectRefStorage(target, nested.Expression, model, visited)
                 return
             }
             if storage is ConditionalExpressionSyntax conditional {
-                this.ConnectRefStorage(target, conditional.WhenTrue, model)
-                this.ConnectRefStorage(target, conditional.WhenFalse, model)
+                this.ConnectRefStorage(target, conditional.WhenTrue, model, visited)
+                this.ConnectRefStorage(target, conditional.WhenFalse, model, visited)
                 return
             }
             var receiver ExpressionSyntax = storage
@@ -2434,6 +2444,29 @@ partial class CSharpToGSharpTranslator {
                 source is IDiscardSymbol ||
                 (source is IFieldSymbol field && field.ContainingType.IsTupleType) {
                 return
+            }
+            let activeVisited = visited ?? HashSet[SyntaxNode]()
+            if depth == 0 &&
+                receiver is InvocationExpressionSyntax invocation &&
+                source is IMethodSymbol method &&
+                ObliviousNullabilityAnalyzer.IsRefStorageSymbol(method) && activeVisited.Add(invocation) {
+                var forwarded = false
+                for (forwardedArgument, forwardedPrefix) in ObliviousNullabilityAnalyzer
+                    .GetRefInvocationForwardedArguments(invocation, method, model) {
+                    if forwardedPrefix.Length == 0 {
+                        forwarded = true
+                        this.ConnectRefStorage(target, forwardedArgument, model, activeVisited)
+                    }
+                }
+                if forwarded && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(method, string.Empty) &&
+                    this
+                    .RefStoragePositionType(source, depth)
+                    ?.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return
+                }
             }
             if receiver is InvocationExpressionSyntax{
                 Expression: MemberAccessExpressionSyntax{Name: IdentifierNameSyntax} access
@@ -2521,6 +2554,9 @@ partial class CSharpToGSharpTranslator {
                             .CodeAnalysis
                             .NullableAnnotation
                             .NotAnnotated {
+                            continue
+                        }
+                        if ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(parameter, string.Empty) {
                             continue
                         }
                         this.ConnectRefStorage(this.GetRefStorageSlot(parameter, 0), argument.Expression, model)
@@ -2750,11 +2786,25 @@ partial class CSharpToGSharpTranslator {
             if type?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
-            if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) || this.RefStoragePositionType(
-                slot.Symbol.OriginalDefinition,
-                slot.Depth
-            )
-                ?.IsReferenceType != true {
+            if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) ||
+                (
+                slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+                    this.context.Compilation,
+                    slot.Symbol,
+                    string.Empty,
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                )
+            ) ||
+                (
+                this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
+                    ?.IsReferenceType != true &&
+                    !(
+                    slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
+                        slot.Symbol,
+                        string.Empty
+                    )
+                )
+            ) {
                 return true
             }
             if type?.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated {

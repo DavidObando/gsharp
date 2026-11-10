@@ -778,12 +778,18 @@ partial class CSharpToGSharpTranslator {
         ) {
             if path.Count > 0 &&
                 declared?.IsReferenceType == true &&
-                ObliviousNullabilityAnalyzer
-                .IsTupleElementTainted(
-                model.Compilation as CSharpCompilation,
-                storage,
-                path,
-                this.context.SiblingCompilations
+                (
+                declared?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    ObliviousNullabilityAnalyzer
+                    .IsTupleElementTainted(
+                    model.Compilation as CSharpCompilation,
+                    storage,
+                    path,
+                    this.context.SiblingCompilations
+                )
             ) {
                 positions.Add(prefix)
             }

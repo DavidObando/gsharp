@@ -1791,6 +1791,23 @@ internal shared class ObliviousNullabilityAnalyzer {
         // further down can ever answer for an enabled `compilation`.
         if compilation!!.Options.NullableContextOptions == NullableContextOptions.Disable {
             let result = Cache.GetValue(compilation!!, Compute)
+            let scalarKey = TupleElementKey(query.Symbol, string.Empty)
+            let hasOtherSiblings = siblingCompilations != nil && siblingCompilations.Any(
+                (sibling CSharpCompilation) -> sibling != nil && !object.ReferenceEquals(sibling, compilation)
+            )
+            if result.FixedTupleContracts.Contains(scalarKey) ||
+                (
+                hasOtherSiblings &&
+                    IsTupleContractFixedCore(
+                    compilation,
+                    query.Symbol,
+                    string.Empty,
+                    siblingCompilations,
+                    HashSet[TupleElementQuery](TupleElementQueryComparer.ContractInstance)
+                )
+            ) {
+                return false
+            }
             if result.Tainted.Contains(query.Symbol!!) {
                 return true
             }
@@ -1913,6 +1930,24 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
+    internal func IsTupleContractFixed(
+        compilation CSharpCompilation?,
+        symbol ISymbol?,
+        path string,
+        siblingCompilations IReadOnlyList[CSharpCompilation]? = nil
+    ) bool {
+        if compilation == nil || symbol == nil || IsSubstitutableMethodPosition(symbol, path) {
+            return false
+        }
+        return IsTupleContractFixedCore(
+            compilation,
+            symbol,
+            path,
+            siblingCompilations,
+            HashSet[TupleElementQuery](TupleElementQueryComparer.ContractInstance)
+        )
+    }
+
     private func IsTupleContractFixedCore(
         compilation CSharpCompilation?,
         symbol ISymbol?,
@@ -1922,6 +1957,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) bool {
         var symbol = symbol
         symbol = OwningMember(symbol)
+        if IsSubstitutableMethodPosition(symbol, path) || IsDeclaredNullablePosition(TuplePositionType(symbol, path)) {
+            return false
+        }
         let key = TupleElementKey(symbol, path)
         if !visited.Add(TupleElementQuery(compilation, key)) {
             return false
@@ -4354,6 +4392,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         return symbol
     }
 
+    private func ContainingExecutableMember(symbol ISymbol?) ISymbol? {
+        var current = symbol
+        while current is ILocalSymbol or
+            IParameterSymbol or
+            IMethodSymbol{MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction} {
+            current = current?.ContainingSymbol
+        }
+        return OwningMember(current)
+    }
+
     // Every declaration whose `[AllowNull]` binds `symbol`'s write contract:
     // the symbol itself, a property setter's `value` parameter, and the base or
     // interface declaration an inherited signature comes from.
@@ -4605,13 +4653,21 @@ internal shared class ObliviousNullabilityAnalyzer {
         do {
             contractsChanged = false
             for (target, source) in tupleContractEdges {
-                if !IsSubstitutable(target) && fixedTupleContracts.Contains(source) && fixedTupleContracts.Add(target) {
+                if !IsSubstitutable(target) &&
+                    !IsDeclaredNullablePosition(TuplePositionType(target.ContractSymbol, target.ContractPath)) &&
+                    fixedTupleContracts.Contains(source) && fixedTupleContracts.Add(target) {
                     contractsChanged = true
                 }
             }
         } while contractsChanged
         tupleEdges.AddRange(tupleContractEdges)
         // Filter each declaration's seeds before sharing projected type-argument evidence.
+        let CanPromoteScalar = func (symbol ISymbol?) bool {
+            return symbol != nil && !fixedTupleContracts.Contains(TupleElementKey(symbol, string.Empty))
+        }
+        tainted.RemoveWhere((symbol ISymbol) -> !CanPromoteScalar(symbol))
+        edges.RemoveAll((edge(Target ISymbol, Source ISymbol)) -> !CanPromoteScalar(edge.Target))
+        scalarTupleEdges.RemoveAll((edge(Target ISymbol, Source TupleElementKey)) -> !CanPromoteScalar(edge.Target))
         tupleTainted.RemoveWhere((key TupleElementKey) -> !CanPromote(key))
         tupleTainted = HashSet[TupleElementKey](tupleTainted, TupleElementKeyComparer.Instance)
         tupleEdges.RemoveAll((edge(Target TupleElementKey, Source TupleElementKey)) -> !CanPromote(edge.Target))
@@ -5317,7 +5373,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 (parameter.Type is {IsReferenceType: true} and not ITypeParameterSymbol) &&
                     (IsNullGuardDominatedRead(value, model) || IsNullGuardDominatedExpression(value, model))
             )
-            if !guardedArgument {
+            if !guardedArgument &&
+                !(parameter.RefKind != RefKind.None && IsSubstitutableMethodPosition(parameter, string.Empty)) {
                 CollectScalarValueFlow(parameterSymbol, value, model, tainted, edges, scalarTupleEdges)
             }
             // A parameter forwarded unchanged into another parameter inherits
@@ -5539,6 +5596,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     CollectTupleArgumentFlows(
                         node,
                         model,
+                        tainted,
+                        edges,
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges,
@@ -5681,6 +5740,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func CollectTupleArgumentFlows(
         call SyntaxNode,
         model SemanticModel,
+        tainted HashSet[ISymbol],
+        edges List[(Target ISymbol, Source ISymbol)],
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
@@ -5739,6 +5800,10 @@ internal shared class ObliviousNullabilityAnalyzer {
                         for (typeParameter, paramPath) in paramPaths {
                             for resolved in resolvedSources {
                                 let fullPath = CombineTuplePaths(resolved.Prefix, paramPath)
+                                if resolved.Symbol is IMethodSymbol &&
+                                    IsSubstitutableMethodPosition(resolved.Symbol, fullPath) {
+                                    continue
+                                }
                                 if TuplePositionType(resolved.StorageType, paramPath) is {} subType {
                                     let hasNestedTupleLeaves = subType is INamedTypeSymbol{IsTupleType: true} ||
                                         HasNestedTupleSlots(subType)
@@ -5771,10 +5836,48 @@ internal shared class ObliviousNullabilityAnalyzer {
                     model,
                     tupleTainted,
                     tupleEdges,
-                    tupleScalarEdges
+                    tupleScalarEdges,
+                    isCallBoundary: true
                 )
             }
             CollectGenericReceiverTupleArgumentFlow(call, argument, model, tupleTainted, tupleEdges, tupleScalarEdges)
+        }
+        let ConnectSharedLeaf = func (
+            dst(Symbol ISymbol, Type ITypeSymbol, Path string, IsOutput bool),
+            src(Symbol ISymbol, Type ITypeSymbol, Path string, IsOutput bool),
+            isOutputPair bool
+        ) {
+            if !dst.Type.IsReferenceType || !src.Type.IsReferenceType {
+                return
+            }
+            let dstContractKey = TupleElementKey(dst.Symbol, dst.Path)
+            let srcContractKey = TupleElementKey(src.Symbol, src.Path)
+            if !isOutputPair {
+                tupleContractEdges.Add((dstContractKey, srcContractKey))
+            }
+            if dst.Path.Length > 0 {
+                if !IsEligibleTupleLeaf(dst.Type) {
+                    return
+                }
+                if IsDeclaredNullablePosition(src.Type) {
+                    tupleTainted.Add(dstContractKey)
+                } else if src.Path.Length > 0 {
+                    if isOutputPair {
+                        tupleEdges.Add((dstContractKey, srcContractKey))
+                    }
+                } else {
+                    tupleScalarEdges.Add((dstContractKey, Canonical(src.Symbol)!!))
+                }
+            } else if IsEligibleScalarTarget(dst.Symbol) {
+                let dstScalar = Canonical(dst.Symbol)!!
+                if IsDeclaredNullablePosition(src.Type) {
+                    tainted.Add(dstScalar)
+                } else if src.Path.Length > 0 {
+                    scalarTupleEdges.Add((dstScalar, srcContractKey))
+                } else {
+                    edges.Add((dstScalar, Canonical(src.Symbol)!!))
+                }
+            }
         }
         for entries in sharedTypeParameterStorages.Values {
             let nonOutputIndex = entries.FindIndex(
@@ -5792,8 +5895,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
                 let current = entries[i]
                 let isOutputPair = representative.IsOutput || current.IsOutput
-                let bidirectional = !current.IsOutput || representative.IsOutput
-                let edges = if isOutputPair {
+                let contractOrValueEdges = if isOutputPair {
                     tupleEdges
                 } else {
                     tupleContractEdges
@@ -5806,25 +5908,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                         current.Symbol,
                         current.Type,
                         tupleTainted,
-                        edges,
+                        contractOrValueEdges,
                         secondPrefix: current.Path,
-                        bidirectional: bidirectional,
+                        bidirectional: true,
                         firstPrefix: representative.Path
                     )
-                } else if representative
-                    .Path
-                    .Length > 0 &&
-                    current
-                    .Path
-                    .Length > 0 &&
-                    IsEligibleTupleLeaf(representative.Type) &&
-                    IsEligibleTupleLeaf(current.Type) {
-                    let representativeKey = TupleElementKey(representative.Symbol, representative.Path)
-                    let currentKey = TupleElementKey(current.Symbol, current.Path)
-                    edges.Add((currentKey, representativeKey))
-                    if bidirectional {
-                        edges.Add((representativeKey, currentKey))
-                    }
+                } else {
+                    ConnectSharedLeaf(current, representative, isOutputPair)
+                    ConnectSharedLeaf(representative, current, isOutputPair)
                 }
             }
         }
@@ -5942,13 +6033,24 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
-        prefix string = ""
+        prefix string = "",
+        isCallBoundary bool = false
     ) {
         if target == nil {
             return
         }
         if targetType is INamedTypeSymbol tuple && tuple.IsTupleType {
-            CollectTupleValueFlow(target, tuple, value, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges)
+            CollectTupleValueFlow(
+                target,
+                tuple,
+                value,
+                model,
+                prefix,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges,
+                isCallBoundary: isCallBoundary
+            )
             return
         }
         CollectNestedTupleValueFlow(
@@ -5959,7 +6061,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             tupleTainted,
             tupleEdges,
             tupleScalarEdges,
-            prefix
+            prefix,
+            isCallBoundary
         )
     }
 
@@ -5972,7 +6075,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol)],
-        prefix string
+        prefix string,
+        isCallBoundary bool = false
     ) {
         var value = value
         let targetSlots = List[(Path string, Tuple INamedTypeSymbol)]()
@@ -5994,7 +6098,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    prefix
+                    prefix,
+                    isCallBoundary
                 )
                 CollectNestedTupleValueFlow(
                     target,
@@ -6004,7 +6109,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    prefix
+                    prefix,
+                    isCallBoundary
                 )
                 return
             }
@@ -6018,7 +6124,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges,
-                        prefix
+                        prefix,
+                        isCallBoundary
                     )
                 }
                 return
@@ -6056,14 +6163,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                         return nil
                     }
                     let leaf = key.ContractPath.Substring(sourcePrefix.Length)
-                    return TupleElementKey(
-                        target,
-                        if slot.Path.Length == 0 {
-                            leaf
-                        } else {
-                            slot.Path + "." + leaf
-                        }
-                    )
+                    let mappedPath = if slot.Path.Length == 0 {
+                        leaf
+                    } else {
+                        slot.Path + "." + leaf
+                    }
+                    if isCallBoundary &&
+                        target is IParameterSymbol &&
+                        IsSubstitutableMethodPosition(target, mappedPath) {
+                        return nil
+                    }
+                    return TupleElementKey(target, mappedPath)
                 }
                 for key in direct {
                     if MapKey(key) is {} mapped {
@@ -6093,7 +6203,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    AppendTuplePath(prefix, 0)
+                    AppendTuplePath(prefix, 0),
+                    isCallBoundary
                 )
             }
             return
@@ -6123,7 +6234,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         slot.Path,
                         tupleTainted,
                         tupleEdges,
-                        tupleScalarEdges
+                        tupleScalarEdges,
+                        isCallBoundary: isCallBoundary
                     )
                 }
             }
@@ -6201,7 +6313,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol?)],
-        respectNullGuards bool = false
+        respectNullGuards bool = false,
+        isCallBoundary bool = false
     ) {
         var value = value
         value = UnwrapTupleValue(value)
@@ -6219,7 +6332,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    isCallBoundary
                 )
                 CollectTupleValueFlow(
                     target,
@@ -6230,7 +6344,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    isCallBoundary
                 )
                 return
             }
@@ -6245,7 +6360,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges,
-                        respectNullGuards
+                        respectNullGuards,
+                        isCallBoundary
                     )
                 }
                 return
@@ -6265,10 +6381,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                             tupleTainted,
                             tupleEdges,
                             tupleScalarEdges,
-                            respectNullGuards
+                            respectNullGuards,
+                            isCallBoundary
                         )
                     } else if IsEligibleTupleLeaf(targetType) &&
-                        !(target is IParameterSymbol && IsSubstitutableMethodPosition(target, path)) {
+                        !(isCallBoundary && target is IParameterSymbol && IsSubstitutableMethodPosition(target, path)) {
                         let targetKey = TupleElementKey(target, path)
                         let contextualOperator IMethodSymbol? = GetContextualOperator(elementValue, model, targetType)
                         let canForwardElement = contextualOperator == nil ||
@@ -6329,7 +6446,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         if IsDefaultTupleValue(value, model) {
-            TaintAllTupleLeaves(target, targetTuple, prefix, tupleTainted)
+            TaintAllTupleLeaves(target, targetTuple, prefix, tupleTainted, isCallBoundary)
             return
         }
         if TryResolveTupleStorageSource(value, model, out var source, out var sourceTuple, out var sourcePrefix) {
@@ -6369,16 +6486,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleEdges
                 )
             } else if IsEligibleTupleLeaf(targetType) {
-                let crossMember = !SymbolEqualityComparer.Default.Equals(OwningMember(target), OwningMember(source))
+                let crossMember = !SymbolEqualityComparer.Default.Equals(
+                    ContainingExecutableMember(target),
+                    ContainingExecutableMember(source)
+                )
                 if crossMember &&
-                    (
-                    (
-                        target is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(target, targetPath)
-                    ) ||
-                        (
-                        source is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(source, sourcePath)
-                    )
-                ) {
+                    target is IMethodSymbol or
+                    IParameterSymbol &&
+                    IsSubstitutableMethodPosition(target, targetPath) {
                     continue
                 }
                 let targetKey = TupleElementKey(target, targetPath)
@@ -6399,14 +6514,16 @@ internal shared class ObliviousNullabilityAnalyzer {
         target ISymbol?,
         tupleType INamedTypeSymbol?,
         prefix string,
-        tupleTainted HashSet[TupleElementKey]
+        tupleTainted HashSet[TupleElementKey],
+        isCallBoundary bool = false
     ) {
         for var i = 0; i < tupleType!!.TupleElements.Length; i++ {
             let elementType = tupleType!!.TupleElements[i].Type
             let path = AppendTuplePath(prefix, i)
             if elementType is INamedTypeSymbol nested && nested.IsTupleType {
-                TaintAllTupleLeaves(target, nested, path, tupleTainted)
-            } else if IsEligibleTupleLeaf(elementType) {
+                TaintAllTupleLeaves(target, nested, path, tupleTainted, isCallBoundary)
+            } else if IsEligibleTupleLeaf(elementType) &&
+                !(isCallBoundary && target is IParameterSymbol && IsSubstitutableMethodPosition(target, path)) {
                 tupleTainted.Add(TupleElementKey(target, path))
             }
         }
@@ -6715,6 +6832,24 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if SymbolValueType(scalar)?.IsReferenceType != true {
                         continue
                     }
+                    if !SymbolEqualityComparer.Default.Equals(
+                        ContainingExecutableMember(target),
+                        ContainingExecutableMember(scalar)
+                    ) &&
+                        (
+                        (
+                            target is IMethodSymbol or
+                                IParameterSymbol &&
+                                IsSubstitutableMethodPosition(target, string.Empty)
+                        ) ||
+                            (
+                            scalar is IMethodSymbol or
+                                IParameterSymbol &&
+                                IsSubstitutableMethodPosition(scalar, string.Empty)
+                        )
+                    ) {
+                        continue
+                    }
                     let first = TupleElementKey(target, string.Empty)
                     let second = TupleElementKey(Canonical(scalar), string.Empty)
                     tupleContractEdges.Add((first, second))
@@ -6746,7 +6881,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
                 continue
             }
-            if !SymbolEqualityComparer.Default.Equals(OwningMember(target), OwningMember(sourceSymbol)) &&
+            if !SymbolEqualityComparer.Default.Equals(
+                ContainingExecutableMember(target),
+                ContainingExecutableMember(sourceSymbol)
+            ) &&
                 (
                 (target is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(target, string.Empty)) ||
                     (
@@ -6926,6 +7064,9 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         var symbol ISymbol? = switch current {
+            case DeclarationExpressionSyntax{
+                Designation: SingleVariableDesignationSyntax designation
+            }: model.GetDeclaredSymbol(designation)
             case _ is InvocationExpressionSyntax or
                 _ is IdentifierNameSyntax or
                 _ is MemberAccessExpressionSyntax or
@@ -6996,24 +7137,24 @@ internal shared class ObliviousNullabilityAnalyzer {
         return false
     }
 
-    private func EnumerateRefInvocationSources(
+    internal func GetRefInvocationForwardedArguments(
         invocation InvocationExpressionSyntax,
         method IMethodSymbol,
         model SemanticModel,
-        unwrapSuppressions bool,
-        visited HashSet[ISymbol]
-    ) sequence[(Symbol ISymbol, StorageType ITypeSymbol, Prefix string)] {
+        visited HashSet[ISymbol]? = nil
+    ) sequence[(Expression ExpressionSyntax, Prefix string)] {
+        let activeVisited = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
         let definition = (method.ReducedFrom ?? method).OriginalDefinition
         let implementation = definition.PartialImplementationPart ?? definition
         let parameterReturns = List[(Ordinal int32, Prefix string)]()
-        if visited.Add(implementation) {
+        if activeVisited.Add(implementation) {
             try {
                 for (returned, declarationModel) in RefReturnExpressions(implementation, model.Compilation) {
                     for inner in EnumerateTupleContainerSources(
                         returned,
                         declarationModel,
                         unwrapSuppressions: true,
-                        visited
+                        activeVisited
                     ) {
                         if inner.Symbol is IParameterSymbol parameter && SymbolEqualityComparer.Default.Equals(
                             parameter.ContainingSymbol,
@@ -7024,7 +7165,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 }
             } finally {
-                visited.Remove(implementation)
+                activeVisited.Remove(implementation)
             }
         }
         if parameterReturns.Count == 0 && implementation.Arity > 0 {
@@ -7042,9 +7183,25 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         for (ordinal, innerPrefix) in parameterReturns {
-            if GetRefInvocationArgumentExpression(invocation, ordinal, model) is not{} argumentExpression {
-                continue
+            if GetRefInvocationArgumentExpression(invocation, ordinal, model) is {} argumentExpression {
+                yield (argumentExpression, innerPrefix)
             }
+        }
+    }
+
+    private func EnumerateRefInvocationSources(
+        invocation InvocationExpressionSyntax,
+        method IMethodSymbol,
+        model SemanticModel,
+        unwrapSuppressions bool,
+        visited HashSet[ISymbol]
+    ) sequence[(Symbol ISymbol, StorageType ITypeSymbol, Prefix string)] {
+        for (argumentExpression, innerPrefix) in GetRefInvocationForwardedArguments(
+            invocation,
+            method,
+            model,
+            visited
+        ) {
             for caller in EnumerateTupleContainerSources(argumentExpression, model, unwrapSuppressions, visited) {
                 let prefix = CombineTuplePaths(caller.Prefix, innerPrefix)
                 let storageType = TuplePositionType(caller.StorageType, innerPrefix)
@@ -7370,7 +7527,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         .NullableAnnotation
         .None
 
-    private func IsSubstitutableMethodPosition(symbol ISymbol?, path string) bool {
+    internal func IsSubstitutableMethodPosition(symbol ISymbol?, path string) bool {
         if !TryGetMethodTypeParameterPosition(symbol, path, out var parameter, out var isNestedLeaf) {
             return false
         }

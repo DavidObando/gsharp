@@ -954,6 +954,9 @@ public static class Obj {
     @InlineData("leaf-ref-first")
     @InlineData("leaf-both-out")
     @InlineData("whole-both-out")
+    @InlineData("leaf-out-taints-ref")
+    @InlineData("whole-out-taints-ref")
+    @InlineData("annotated-leaf")
     func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
         let method = switch shape {
             case "whole-tuple": "private static void Keep<T>(ref T a, ref T b) { }"
@@ -964,29 +967,40 @@ public static class Obj {
             case "leaf-ref-first": "private static void Keep<T>(ref (T, int) b, out (T, int) a) { a = b; }"
             case "leaf-both-out": "private static void Keep<T>(T value, out (T, int) a, out (T, int) b) { a = (value, 1); b = (value, 2); }"
             case "whole-both-out": "private static void Keep<T>(T value, out T a, out T b) { a = value; b = value; }"
+            case "leaf-out-taints-ref": "private static void Keep<T>(out (T, int) dst, ref (T, int) src) { dst = src; }"
+            case "whole-out-taints-ref": "private static void Keep<T>(out T dst, ref T src) { dst = src; }"
             default: "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
         }
+        let bDeclaration = if shape == "annotated-leaf" {
+            "#nullable enable\n        (string?, int) b = (null, 0);\n#nullable disable"
+        } else {
+            "(string, int) b = (null!, 0);"
+        }
         let taintedCall = switch shape {
-            case "explicit-leaf": "Keep<string>(ref a, ref b);"
+            case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref a, ref b);"
             case "whole-out-first" or "leaf-out-first": "Keep(out a, ref b);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref b, out a);"
             case "leaf-both-out": "Keep<string>(\"ok\", out a, out b);"
             case "whole-both-out": "Keep((\"ok\", 1), out a, out b);"
+            case "leaf-out-taints-ref": "Keep<string>(out b, ref a);"
+            case "whole-out-taints-ref": "Keep(out b, ref a);"
             default: "Keep(ref a, ref b);"
         }
         let cleanCall = switch shape {
-            case "explicit-leaf": "Keep<string>(ref cleanA, ref cleanB);"
+            case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref cleanA, ref cleanB);"
             case "whole-out-first" or "leaf-out-first": "Keep(out cleanA, ref cleanB);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref cleanB, out cleanA);"
             case "leaf-both-out": "Keep<string>(\"keep\", out cleanA, out cleanB);"
             case "whole-both-out": "Keep((\"keep\", 2), out cleanA, out cleanB);"
+            case "leaf-out-taints-ref": "Keep<string>(out cleanB, ref cleanA);"
+            case "whole-out-taints-ref": "Keep(out cleanB, ref cleanA);"
             default: "Keep(ref cleanA, ref cleanB);"
         }
         let source = `public static class Obj {
     ` + method + `
     public static string Run() {
         (string, int) a = ("x", 1);
-        (string, int) b = (null!, 0);
+        ` + bDeclaration + `
         ` + taintedCall + `
         (string, int) cleanA = ("keep", 2);
         (string, int) cleanB = ("stay", 3);
@@ -997,17 +1011,135 @@ public static class Obj {
         let printed = Translate(source)
         Assert.DoesNotContain("(T?, int32)", printed)
         Assert.Contains("var a (string?, int32)", printed)
-        Assert.Contains("var cleanA = (\"keep\", 2)", printed)
-        if shape is "explicit-leaf" or "leaf-both-out" {
+        Assert.DoesNotContain("cleanA (string?, int32)", printed)
+        if shape == "annotated-leaf" {
+            Assert.Contains("var cleanA (string, int32) = (\"keep\", 2)", printed)
+        } else {
+            Assert.Contains("var cleanA = (\"keep\", 2)", printed)
+        }
+        if shape is "explicit-leaf" or "leaf-both-out" or "leaf-out-taints-ref" or "annotated-leaf" {
             Assert.Contains("Keep[string?]", printed)
             Assert.Contains("Keep[string]", printed)
         }
         let expected = switch shape {
             case "leaf-both-out" or "whole-both-out": "ok:ok:keep:keep"
+            case "leaf-out-taints-ref" or "whole-out-taints-ref": "x:x:keep:keep"
             case "whole-out-first" or "whole-ref-first" or "leaf-out-first" or "leaf-ref-first": "null:null:stay:stay"
             default: "x:null:keep:stay"
         }
         AssertParity(source, printed, expected)
+    }
+
+    @Theory
+    @InlineData("tuple-taints-scalar")
+    @InlineData("scalar-taints-tuple")
+    @InlineData("fixed-scalar-peer")
+    @InlineData("fixed-tuple-peer")
+    func Issue5880_SharedGenericScalarAndTupleRefArguments_SynchronizePerInvocation(shape string) {
+        if shape is "fixed-scalar-peer" or "fixed-tuple-peer" {
+            let declarations = if shape == "fixed-scalar-peer" {
+                `#nullable enable
+        string a = "ok";
+#nullable disable
+        (string, int) b = ("x", 1);`
+            } else {
+                `string a = "ok";
+#nullable enable
+        (string, int) b = ("x", 1);
+#nullable disable`
+            }
+            let source = `public static class Obj {
+    private static void Keep<T>(ref T a, ref (T, int) b) { }
+    public static string Run() {
+        ` + declarations + `
+        Keep<string>(ref a, ref b);
+        return (a ?? "fallback") + ":" + (b.Item1 ?? "fallback") + ":" + b.Item2;
+    }
+}`
+            let printed = Translate(source)
+            Assert.DoesNotContain("string?", printed)
+            AssertParity(source, printed, "ok:x:1")
+            return
+        }
+        let aInit = if shape == "scalar-taints-tuple" {
+            "null!"
+        } else {
+            "\"ok\""
+        }
+        let bInit = if shape == "scalar-taints-tuple" {
+            "(\"ok\", 1)"
+        } else {
+            "(null!, 0)"
+        }
+        let expected = if shape == "scalar-taints-tuple" {
+            "null:ok:keep:stay"
+        } else {
+            "ok:null:keep:stay"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref T a, ref (T, int) b) { }
+    public static string Run() {
+        string a = ` + aInit + `;
+        (string, int) b = ` + bInit + `;
+        Keep<string>(ref a, ref b);
+        string cleanA = "keep";
+        (string, int) cleanB = ("stay", 2);
+        Keep<string>(ref cleanA, ref cleanB);
+        return (a ?? "null") + ":" + (b.Item1 ?? "null") + ":" + cleanA + ":" + cleanB.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var a string?", printed)
+        Assert.Contains("var b (string?, int32)", printed)
+        Assert.Contains("var cleanA = \"keep\"", printed)
+        Assert.Contains("var cleanB = (\"stay\", 2)", printed)
+        Assert.Contains("Keep[string?](&a, &b)", printed)
+        Assert.Contains("Keep[string](&cleanA, &cleanB)", printed)
+        AssertParity(source, printed, expected)
+    }
+
+    @Theory
+    @InlineData("parameter-write")
+    @InlineData("local-to-return")
+    @InlineData("local-ref-to-parameter")
+    func Issue5880_GenericMethodBodyTupleFlows_PromoteOwnDeclarations(shape string) {
+        let source = switch shape {
+            case "local-to-return": `public static class Obj {
+    private static (T, int) Create<T>() where T : class? {
+        (T, int) row = (null, 0);
+        return row;
+    }
+    public static string Run() {
+        (string, int) row = Create<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "local-ref-to-parameter": `public static class Obj {
+    private static void Clear<T>(ref (T, int) value) where T : class? {
+        ref T item = ref value.Item1;
+        item = null;
+    }
+    public static string Run() {
+        (string, int) row = ("ok", 0);
+        Clear<string>(ref row);
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            default: `public static class Obj {
+    private static void Clear<T>(ref (T, int) value) where T : class? {
+        value = (null, 0);
+    }
+    public static string Run() {
+        (string, int) row = ("ok", 1);
+        Clear<string>(ref row);
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+        }
+        let printed = Translate(source)
+        Assert.Contains("(T?, int32)", printed)
+        Assert.Contains("row (string?, int32)", printed)
+        AssertParity(source, printed, "null:0")
     }
 
     @Theory
