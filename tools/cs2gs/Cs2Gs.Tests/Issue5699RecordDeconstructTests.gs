@@ -39,7 +39,9 @@ namespace RecordDeconstruction {
         public static string Run() {
             var r = new R();
             STATEMENT
-            return $"{x},{y},{z}";
+            var pat = r is R(70, 80, 90);
+            var sw = r switch { R(70, 80, 90) => 1, _ => 0 };
+            return $"{x},{y},{z},{pat},{sw}";
         }
     }
 }`).Replace("STATEMENT", statement))
@@ -601,12 +603,18 @@ namespace RecordDeconstruction {
             string first;
             try { first = (r is PATTERN).ToString(); }
             catch (System.NullReferenceException) { first = "threw"; }
+            R? rSingle = new R();
+            R.Hook = () => rSingle = null;
+            string singleOutcome;
+            try { singleOutcome = (rSingle is R(1, _) { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { singleOutcome = "threw"; }
             R.Hook = null;
             R plain = new R();
             var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
+            var inheritedSubtypeMiss = plain is R(0, _) or Sub(1, _) { Extra: 9 };
             object boxed = new R();
             var boxedMatch = boxed is PATTERN;
-            return $"{first},{subtypeMiss},{boxedMatch}";
+            return $"{first},{singleOutcome},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
         }
     }
 }`).Replace(
@@ -835,6 +843,9 @@ namespace External {
         int Deconstruct(int scale);
         void Deconstruct(out int x, out int y);
     }
+    public interface IStaticParts {
+        static abstract int Deconstruct(int scale);
+    }
     public record Base {
         public int X, Y;
         public Base() { }
@@ -961,6 +972,31 @@ namespace RecordDeconstruction {
                     public int Count => Tag;
                     public int Reset() => Tag;
                     public int Deconstruct(int scale) => Tag * scale;
+                }
+                public abstract record AbstractPropBase {
+                    public abstract int Count { get; }
+                }
+                public record ConcretePropRecord : AbstractPropBase, External.IParts {
+                    public override int Count => 7;
+                    public int Reset() => Count;
+                    public int Deconstruct(int scale) => Count * scale;
+                    public void Deconstruct(out int x, out int y) { x = Count * 10; y = 3; }
+                }
+                public class Outer {
+                    public record R : External.IParts {
+                        public class RDeconstructBridge { }
+                        public int Count => 4;
+                        public int Reset() => 4;
+                        public int Deconstruct(int scale) => 4 * scale;
+                        public void Deconstruct(out int x, out int y) { x = 40; y = 4; }
+                    }
+                }
+                public class classDeconstructBridge { }
+                public record @class : External.IParts {
+                    public int Count => 5;
+                    public int Reset() => 5;
+                    public int Deconstruct(int scale) => 5 * scale;
+                    public void Deconstruct(out int x, out int y) { x = 50; y = 5; }
                 }`
             }
         ).Replace(
@@ -968,10 +1004,18 @@ namespace RecordDeconstruction {
             if overrideBase {
                 "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; var extra = $\"{cx},{cy},{ix},{iy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
+        if !overrideBase {
+            VerifyExternalUnsupported(external, `
+namespace RecordDeconstruction {
+    public record StaticRec : External.IStaticParts {
+        public static int Deconstruct(int scale) => scale * 2;
+    }
+}`)
+        }
     }
 
     @Theory
@@ -1173,6 +1217,9 @@ namespace RecordDeconstruction {
         void Deconstruct(out int x, out int y) { x = 11; y = 22; }
     }
     public class DefaultImpl : IParts { }
+    public class ExplicitImpl : IParts {
+        void IParts.Deconstruct(out int x, out int y) { x = 77; y = 88; }
+    }
     public record R : IParts {
         public int X;
         public int Y;
@@ -1187,7 +1234,9 @@ namespace RecordDeconstruction {
             BODY
             IParts defParts = new DefaultImpl();
             var (dx, dy) = defParts;
-            return $"{x},{y},{dx},{dy},{new R { X = 2, Y = 3 }.Check()}";
+            IParts expParts = new ExplicitImpl();
+            var (ex, ey) = expParts;
+            return $"{x},{y},{dx},{dy},{ex},{ey},{new R { X = 2, Y = 3 }.Check()}";
         }
     }
 }`).Replace("BODY", body))
@@ -1711,6 +1760,34 @@ namespace RecordDeconstruction {
             Assert.Equal(
                 expected + "\n",
                 CompileAndRun(printedSources, externalBytes, externalName + ".dll").Replace("\r\n", "\n")
+            )
+        }
+
+        private func VerifyExternalUnsupported(externalSource string, source string) {
+            let externalName = "External" + Guid.NewGuid().ToString("N")
+            let external = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("External.cs", externalSource)},
+                assemblyName: externalName
+            )
+            Assert.True(external.BoundWithoutErrors, string.Join("\n", external.ErrorDiagnostics))
+            using let externalImage = MemoryStream()
+            Assert.True(external.Compilation.Emit(externalImage).Success)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(externalImage.ToArray()))
+                .ToArray()
+            let project = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Snippet.cs", source)},
+                references,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+            Assert.Contains(
+                context.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
             )
         }
 

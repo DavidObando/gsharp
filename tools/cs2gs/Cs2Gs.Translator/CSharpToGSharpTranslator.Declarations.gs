@@ -1690,7 +1690,7 @@ partial class CSharpToGSharpTranslator {
                         if node.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax {
                             this.state.PendingTopLevelDeclarations.Add(bridge)
                         } else {
-                            members.Insert(0, bridge)
+                            this.pendingNestedBridges[node] = bridge
                         }
                     }
                 }

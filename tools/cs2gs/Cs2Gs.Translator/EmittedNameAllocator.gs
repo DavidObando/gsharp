@@ -72,7 +72,7 @@ internal class EmittedNameAllocator {
 
     func HasRenamedDeconstructContract(method IMethodSymbol?) bool {
         if method == nil ||
-            method.Name != "Deconstruct" ||
+            SourceName(method) != "Deconstruct" ||
             method.IsImplicitlyDeclared ||
             method
             .DeclaringSyntaxReferences
@@ -969,7 +969,7 @@ internal class EmittedNameAllocator {
 
     shared {
         func IsUserRecordDeconstruct(method IMethodSymbol?) bool -> method != nil &&
-            method.Name == "Deconstruct" &&
+            SourceName(method) == "Deconstruct" &&
             method
             .ContainingType
             .IsRecord &&

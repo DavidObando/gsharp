@@ -38,9 +38,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 case method is MethodDeclarationSyntax {
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol importedContractMethod &&
-                        importedContractMethod
-                        .ContainingType
-                        .IsValueType &&
+                        (importedContractMethod.ContainingType.IsValueType || importedContractMethod.IsStatic) &&
                         EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
                         this
                         .nameAllocator
@@ -283,6 +281,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 case nestedType is BaseTypeDeclarationSyntax {
                     let nested GMember? = this.Visit(nestedType)
+                    if this.pendingNestedBridges.Remove(nestedType, out var nestedBridge) {
+                        yield (nestedBridge, true)
+                    }
                     if nested != nil {
                         yield (nested, true)
                     }
