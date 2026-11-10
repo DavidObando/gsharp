@@ -863,7 +863,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // which already know how to preserve NarrowedType / InterfaceType /
         // StaticContainerType — no risk of silently dropping a field here.
         protected override func RewriteExpression(node BoundExpression) BoundExpression {
-            return if object.ReferenceEquals(node, this.target) {
+            return if object.ReferenceEquals(node, this.target) ||
+                (
+                this.target.Syntax != nil &&
+                    object.ReferenceEquals(node.Syntax, this.target.Syntax) &&
+                    node.Kind == this.target.Kind &&
+                    node.Type == this.target.Type
+            ) {
                 this.replacement
             } else {
                 base.RewriteExpression(node)
