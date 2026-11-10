@@ -758,7 +758,7 @@ func Main() {
     holder.Self().Row.Text ??= "holder-coalesced"
     Console.WriteLine("${holder.InitRow.Text}:${holder.InitRow.Code}:${holder.Row.Text}:${holder.Row.Code}:${holder.Calls}")
 
-    var rows = [](Text string?, Code int32){("elem", 3)}
+    var rows = [](Text string?, Code int32){("elem", 3), ("second", 30)}
     var idxCalls = 0
     let nextIndex = () -> {
         idxCalls++
@@ -767,7 +767,36 @@ func Main() {
     rows[nextIndex()].Code += 6
     rows[nextIndex()].Text = nil
     rows[nextIndex()].Text ??= "array-coalesced"
-    Console.WriteLine("${rows[0].Text}:${rows[0].Code}:${idxCalls}")
+    let originalRows = rows
+    var i = 0
+    let changeIndex = () -> {
+        i = 1
+        return 42
+    }
+    rows[i].Code = changeIndex()
+    let replaceRows = () -> {
+        rows = [](Text string?, Code int32){("replaced0", -1), ("replaced1", -2)}
+        return 77
+    }
+    rows[i].Code = replaceRows()
+    Console.WriteLine(
+        "${originalRows[0].Text}:${originalRows[0].Code}:${originalRows[1].Code}:${rows[0].Code}:${rows[1].Code}:${idxCalls}"
+    )
+
+    var left (Text string?, Code int32) = ("left", 10)
+    var right (Text string?, Code int32) = ("right", 20)
+    var chooseCalls = 0
+    let choose = () -> {
+        chooseCalls++
+        return chooseCalls == 1
+    }
+    (choose() ? left : right).Code += 5
+    var blockSteps = 0
+    ({
+        blockSteps++
+        right
+    }).Code += 7
+    Console.WriteLine("${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}")
 
     var ref whole = row
     whole.Text = "via-ref"
@@ -783,7 +812,7 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:9:3\nclosed:33\nasync-fallback:5\n"
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n15:27:1:1\nclosed:33\nasync-fallback:5\n"
             ),
             fixture.RunBytes(dll)
         )

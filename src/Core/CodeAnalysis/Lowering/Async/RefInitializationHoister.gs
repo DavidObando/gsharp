@@ -140,6 +140,22 @@ shared class RefInitializationHoister {
                     }
                     return HoistOperand(block.Expression, prelude, captureComponents)
                 }
+                case conditional is BoundConditionalExpression {
+                    return HoistOperand(
+                        BoundDereferenceExpression(
+                            conditional.Syntax,
+                            BoundConditionalAddressExpression(
+                                conditional.Syntax,
+                                conditional.Condition,
+                                conditional.WhenTrue,
+                                conditional.WhenFalse,
+                                conditional.Type
+                            )
+                        ),
+                        prelude,
+                        captureComponents
+                    )
+                }
                 case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                     return HoistOperand(address.Operand, prelude, captureComponents: true)
                 }
@@ -341,6 +357,9 @@ shared class RefInitializationHoister {
         shared {
             private func IsReconstructableStorage(expression BoundExpression) bool {
                 return switch expression {
+                    case block is BoundBlockExpression: IsReconstructableStorage(block.Expression)
+                    case conditional is BoundConditionalExpression: IsReconstructableStorage(conditional.WhenTrue) &&
+                        IsReconstructableStorage(conditional.WhenFalse)
                     case tuple is BoundTupleElementAccessExpression: IsReconstructableStorage(tuple.Receiver)
                     case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
                     case BoundClrPropertyAccessExpression{

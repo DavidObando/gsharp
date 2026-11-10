@@ -471,7 +471,11 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         }
         let rewrittenReceiver = this.RewriteExpression(originalTuple.Receiver)
         let statements = ImmutableArray.CreateBuilder[BoundStatement]()
-        let capturedReceiver = this.CapturePropertyStorageReceiver(rewrittenReceiver, statements)
+        let capturedReceiver = this.CapturePropertyStorageReceiver(
+            rewrittenReceiver,
+            statements,
+            captureComponents: true
+        )
         var value = if !object.ReferenceEquals(capturedReceiver, originalTuple.Receiver) {
             ReceiverSubstitutionRewriter.Replace(node.Value, originalTuple.Receiver, capturedReceiver)
         } else {
@@ -604,6 +608,26 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
         }
         switch receiver {
+            case block is BoundBlockExpression {
+                statements.AddRange(block.Statements)
+                return this.SpillStorageReceiverParts(block.Expression, statements, captureComponents)
+            }
+            case conditional is BoundConditionalExpression {
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(
+                        conditional.Syntax,
+                        BoundConditionalAddressExpression(
+                            conditional.Syntax,
+                            conditional.Condition,
+                            conditional.WhenTrue,
+                            conditional.WhenFalse,
+                            conditional.Type
+                        )
+                    ),
+                    statements,
+                    captureComponents
+                )
+            }
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
             }
@@ -1064,6 +1088,14 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         dereference.Operand
                     ) {
                         return true
+                    }
+                    case block is BoundBlockExpression {
+                        receiver = block.Expression
+                        continue
+                    }
+                    case conditional is BoundConditionalExpression {
+                        return IsInPlaceStorageWriteReceiver(conditional.WhenTrue) &&
+                            IsInPlaceStorageWriteReceiver(conditional.WhenFalse)
                     }
                     case tuple is BoundTupleElementAccessExpression {
                         receiver = tuple.Receiver
