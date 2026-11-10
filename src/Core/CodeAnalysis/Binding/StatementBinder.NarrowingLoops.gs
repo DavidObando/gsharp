@@ -979,9 +979,10 @@ internal partial class StatementBinder {
                     }
                     if binderCtx.NonNullByRefVariables.Contains(variable) &&
                         !AddSymbolType(
-                        ExpressionBinder.ApplyEffectiveReferenceNullability(
-                            declaredStorage,
-                            StripReferenceNullability(declaredStorage)
+                        ExpressionBinder.AddressedLeafStorageType(
+                            BoundVariableExpression(nil, variable),
+                            useEffectiveNullability: true,
+                            binderCtx: binderCtx
                         ),
                         types
                     ) {
@@ -990,7 +991,11 @@ internal partial class StatementBinder {
                 }
                 if narrowed != nil &&
                     !AddSymbolType(
-                    ExpressionBinder.ApplyEffectiveReferenceNullability(declaredStorage, narrowed),
+                    ExpressionBinder.AddressedLeafStorageType(
+                        BoundVariableExpression(nil, variable, narrowedType: narrowed),
+                        useEffectiveNullability: true,
+                        binderCtx: binderCtx
+                    ),
                     types
                 ) {
                     return false
@@ -1000,7 +1005,11 @@ internal partial class StatementBinder {
                         let tested = TestedType(test, out var testsConstant)
                         if tested != nil {
                             if !AddSymbolType(
-                                ExpressionBinder.ApplyEffectiveReferenceNullability(declaredStorage, tested),
+                                ExpressionBinder.AddressedLeafStorageType(
+                                    BoundVariableExpression(nil, variable, narrowedType: tested),
+                                    useEffectiveNullability: true,
+                                    binderCtx: binderCtx
+                                ),
                                 types
                             ) {
                                 return false
@@ -2084,8 +2093,14 @@ internal partial class StatementBinder {
                 if ConversionTypes(path, effects) is not{} types || types.Count == 0 {
                     return false
                 }
+                let asserted = HasTrailingNullAssertion(argSyntax)
+                if asserted {
+                    for var typeIndex = 0; typeIndex < types.Count; typeIndex++ {
+                        types[typeIndex] = StripAllNullability(types[typeIndex]) ?? types[typeIndex]
+                    }
+                }
                 argumentTypes.Add(types)
-                overloadArgumentTypes.Add(OverloadValueTypes(path, effects))
+                overloadArgumentTypes.Add(OverloadValueTypes(path, asserted, effects))
                 kinds.Add(ArgumentTyped)
             }
         }
@@ -2904,6 +2919,10 @@ internal partial class StatementBinder {
             binderCtx.References.MapClrTypeToReferences,
             interpolatedStringArgs,
             recoverTypeArgSymbols: recoverTypeArgSymbols,
+            supplementaryInterfaceCheck: (
+                source Type,
+                target Type
+            ) -> ExpressionBinder.IsUserClassAssignableToInterfaceFromArgs(boundArgs, clrArgTypes, source, target),
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArgs),
             structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(
                 boundArgs,
@@ -3886,7 +3905,15 @@ internal partial class StatementBinder {
         }
     }
 
-    private func OverloadValueTypes(path RegionReceiverPath, effects RegionEffects) List[TypeSymbol]? {
+    private func HasTrailingNullAssertion(argSyntax ExpressionSyntax?) bool {
+        var current = argSyntax
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        return current is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.BangBangToken}}
+    }
+
+    private func OverloadValueTypes(path RegionReceiverPath, asserted bool, effects RegionEffects) List[TypeSymbol]? {
         if ResolveReceiverPath(
             path,
             effects,
@@ -3898,14 +3925,26 @@ internal partial class StatementBinder {
         let result = List[TypeSymbol]()
         for type in types {
             if type.Symbol is {} symbol {
-                result.Add(symbol)
+                result.Add(
+                    if asserted {
+                        StripAllNullability(symbol) ?? symbol
+                    } else {
+                        symbol
+                    }
+                )
             } else if type.Clr is {} clr {
                 let resolved = BuiltInType(clr.FullName) ?? TypeSymbol.FromClrTypeWithoutNullability(
                     clr,
                     NullabilityFreeReason.ResolvedTypeName
                 )
-                result.Add(resolved)
-                if path.Steps.Length > 0 && !clr.IsValueType {
+                result.Add(
+                    if asserted {
+                        StripAllNullability(resolved) ?? resolved
+                    } else {
+                        resolved
+                    }
+                )
+                if !asserted && path.Steps.Length > 0 && !clr.IsValueType {
                     result.Add(NullableTypeSymbol.Get(resolved))
                 }
             }

@@ -4153,6 +4153,34 @@ func Run(ref text string?, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@10:16")
+            Add("unboxed-object-in-argument-uses-value-storage-type (A3, #5662)", `package T
+import System
+func Read(in v int32, d DateTimeOffset) { }
+func Read(in o object, d object) { }
+func Run(ref text string?, in x object, dt DateTime) int32 {
+    if text == nil || x !is int32 { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Read(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("null-asserted-argument-strips-nullability-for-overload-selection (A3, #5662)", `package T
+import System
+func Use(s string, d DateTimeOffset) { }
+func Use(s string?, o object) { }
+func Run(ref text string?, maybe string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(maybe!!, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
             return rows
         }
     }

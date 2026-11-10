@@ -269,13 +269,16 @@ public class S {
     public static string DescribeStatic(object o) => "sobj:" + o;
     public void UseList(System.Collections.Generic.List<object> xs, Token t) { }
     public void UseList(object o, Payload p) { }
+    public void UseDisp(System.IDisposable d, System.DateTimeOffset dt, int pad = 0) { }
+    public void UseDisp(object a, object b) { }
 }`
 
     @Theory
-    @InlineData("s.UseEnum(kind, tok)", "GS0158@10:16")
-    @InlineData(`s.UseFmt("n=${n}", dt)`, "GS0158@10:16")
-    @InlineData(`S.UseStaticFmt(("n=${n}"), dt)`, "GS0158@10:16")
-    @InlineData("s.UseList(xs, tok)", "GS0158@10:16")
+    @InlineData("s.UseEnum(kind, tok)", "GS0158@13:16")
+    @InlineData(`s.UseFmt("n=${n}", dt)`, "GS0158@13:16")
+    @InlineData(`S.UseStaticFmt(("n=${n}"), dt)`, "GS0158@13:16")
+    @InlineData("s.UseList(xs, tok)", "GS0158@13:16")
+    @InlineData("s.UseDisp(c, dt)", "GS0158@13:16")
     func ImportedErasureAndInterpolationOverloadsWithAConversion_RemoveAByReferenceFact(call string, expected string) {
         let source = `package T
 import System
@@ -283,7 +286,10 @@ import System.Collections.Generic
 import ErasureLib
 enum Kind { A }
 struct Item { var V int32 }
-func Run(ref text string?, s S, kind Kind, xs List[Item], tok Token, dt DateTime) int32 {
+class DisposableError : Exception, IDisposable {
+    func Dispose() { }
+}
+func Run(ref text string?, s S, kind Kind, xs List[Item], c DisposableError, tok Token, dt DateTime) int32 {
     if text == nil { return 0 }
     var n = 0
     while text.Length > 0 && n < 3 {

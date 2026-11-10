@@ -4814,7 +4814,7 @@ internal partial class ExpressionBinder {
         /// Issue #658: variant of (cref:IsUserClassAssignableToInterface) that
         /// works with (cref:ImmutableArray{T}) arguments (used by instance
         /// method call paths).
-        private func IsUserClassAssignableToInterfaceFromArgs(
+        internal func IsUserClassAssignableToInterfaceFromArgs(
             boundArguments ImmutableArray[BoundExpression],
             argTypes[]Type?,
             source Type,
@@ -4825,7 +4825,12 @@ internal partial class ExpressionBinder {
                 if !ClrTypeUtilities.AreSame(argTypes[i + argumentOffset], source) {
                     continue
                 }
-                if boundArguments[i].Type is StructSymbol{IsClass: true} ss {
+                let rawType = switch boundArguments[i].Type {
+                    case nullable is NullableTypeSymbol: nullable.UnderlyingType
+                    case platform is PlatformTypeSymbol: platform.UnderlyingType
+                    default: boundArguments[i].Type
+                }
+                if rawType is StructSymbol{IsClass: true} ss {
                     if UserClassImplementsInterface(ss, target) {
                         return true
                     }
