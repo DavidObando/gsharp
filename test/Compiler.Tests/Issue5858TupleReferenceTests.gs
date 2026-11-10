@@ -699,12 +699,20 @@ func MutateByRef[T any](ref row (Value T, Code int32), next T) {
     row.Code += 3
 }
 
+async func YieldNext(value int32) Task[int32] {
+    await Task.Yield()
+    return value
+}
+
 async func MutateAsync() string {
     var row (Text string?, Code int32) = ("start", 1)
+    var alt (Text string?, Code int32) = ("alt", 10)
+    var flag = true
     row.Text = await Task.FromResult[string?](nil)
     row.Text ??= await Task.FromResult("async-fallback")
-    row.Code += await Task.FromResult(4)
-    return "${row.Text}:${row.Code}"
+    row.Code += await YieldNext(4)
+    (flag ? row : alt).Code = await YieldNext(9)
+    return "${row.Text}:${row.Code}:${alt.Code}"
 }
 
 func Main() {
@@ -845,7 +853,7 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:5\n"
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:9:10\n"
             ),
             fixture.RunBytes(dll)
         )

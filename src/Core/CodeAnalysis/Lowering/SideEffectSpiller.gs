@@ -661,25 +661,6 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     this.SpillNativeSliceElementOperand(dereference.Operand, statements, captureComponents)
                 )
             }
-            case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
-                dereference.Operand.Type
-            ) ||
-                dereference
-                .Operand
-                .Type is ByRefTypeSymbol {
-                let operand = this.MaybeSpill(
-                    dereference.Operand,
-                    !IsStableLocalRead(dereference.Operand) &&
-                        (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)),
-                    "ptr",
-                    statements
-                )
-                return if object.ReferenceEquals(operand, dereference.Operand) {
-                    dereference
-                } else {
-                    BoundDereferenceExpression(dereference.Syntax, operand)
-                }
-            }
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
                 let owner = this.SpillStorageReceiverParts(tuple.Receiver, statements, captureComponents: true)
@@ -731,6 +712,25 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     address.PointeeType
                 )
                 return BoundDereferenceExpression(dereference.Syntax, captured)
+            }
+            case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
+                dereference.Operand.Type
+            ) ||
+                dereference
+                .Operand
+                .Type is ByRefTypeSymbol {
+                let operand = this.MaybeSpill(
+                    dereference.Operand,
+                    !IsStableLocalRead(dereference.Operand) &&
+                        (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)),
+                    "ptr",
+                    statements
+                )
+                return if object.ReferenceEquals(operand, dereference.Operand) {
+                    dereference
+                } else {
+                    BoundDereferenceExpression(dereference.Syntax, operand)
+                }
             }
             case element is BoundIndexExpression {
                 {
