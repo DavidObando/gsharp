@@ -712,7 +712,11 @@ async func MutateAsync() string {
     row.Text ??= await Task.FromResult("async-fallback")
     row.Code += await YieldNext(4)
     (flag ? row : alt).Code = await YieldNext(9)
-    return "${row.Text}:${row.Code}:${alt.Code}"
+    var p = &alt
+    (*p).Code = await YieldNext(12)
+    let box = Holder()
+    box.Self().Calls += await YieldNext(4)
+    return "${row.Text}:${row.Code}:${alt.Code}:${box.Calls}"
 }
 
 func Main() {
@@ -734,8 +738,15 @@ func Main() {
     nested.Inner.Text = nil
     nested.Inner.Text ??= "rebuilt"
     nested.Inner.Code += 8
+    var nestedIfSteps = 0
+    ({
+        if true {
+            nestedIfSteps++
+        }
+        nested
+    }).Inner.Code += 5
     nested.Flag = true
-    Console.WriteLine("${nested.Inner.Text}:${nested.Inner.Code}:${nested.Flag}")
+    Console.WriteLine("${nested.Inner.Text}:${nested.Inner.Code}:${nested.Flag}:${nestedIfSteps}")
 
     var longTuple (
         int32,
@@ -853,7 +864,7 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:9:10\n"
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:15:True:1\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:9:12:5\n"
             ),
             fixture.RunBytes(dll)
         )

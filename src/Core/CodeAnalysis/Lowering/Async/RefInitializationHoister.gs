@@ -159,6 +159,12 @@ shared class RefInitializationHoister {
                 case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                     return HoistOperand(address.Operand, prelude, captureComponents: true)
                 }
+                case BoundDereferenceExpression{
+                    Operand: BoundVariableExpression{Variable: LocalVariableSymbol aliased}
+                } when refLocals
+                    .TryGetValue(aliased, out var aliasedTemplate) {
+                    return HoistOperand(aliasedTemplate.Operand, prelude, captureComponents: true)
+                }
                 case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
                     for statement in block.Statements {
                         prelude.Add(RewriteStatement(statement))

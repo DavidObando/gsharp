@@ -715,10 +715,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
                 dereference.Operand.Type
-            ) ||
-                dereference
-                .Operand
-                .Type is ByRefTypeSymbol {
+            ) {
                 let operand = this.MaybeSpill(
                     dereference.Operand,
                     !IsStableLocalRead(dereference.Operand) &&
@@ -731,6 +728,28 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                 } else {
                     BoundDereferenceExpression(dereference.Syntax, operand)
                 }
+            }
+            case dereference is BoundDereferenceExpression when dereference.Operand.Type is ByRefTypeSymbol {
+                if IsStableLocalRead(dereference.Operand) ||
+                    !(captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)) {
+                    return dereference
+                }
+                let local = LocalVariableSymbol(
+                    "${this.tempPrefix}ptr${this.counter++}",
+                    isReadOnly: true,
+                    type: dereference.Operand.Type
+                )
+                statements.Add(
+                    BoundVariableDeclaration(
+                        dereference.Syntax,
+                        local,
+                        BoundAddressOfExpression(dereference.Syntax, dereference, unmanaged: false)
+                    )
+                )
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    BoundVariableExpression(dereference.Syntax, local)
+                )
             }
             case element is BoundIndexExpression {
                 {
@@ -863,16 +882,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         // which already know how to preserve NarrowedType / InterfaceType /
         // StaticContainerType — no risk of silently dropping a field here.
         protected override func RewriteExpression(node BoundExpression) BoundExpression {
-            return if object.ReferenceEquals(node, this.target) ||
-                (
-                this.target.Syntax != nil && object.ReferenceEquals(node.Syntax, this.target.Syntax) &&
-                    node.Kind == this
-                    .target
-                    .Kind &&
-                    node.Type == this
-                    .target
-                    .Type
-            ) {
+            return if object.ReferenceEquals(node, this.target) {
                 this.replacement
             } else {
                 base.RewriteExpression(node)

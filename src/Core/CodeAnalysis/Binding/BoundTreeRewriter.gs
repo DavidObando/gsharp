@@ -1225,6 +1225,22 @@ abstract class BoundTreeRewriter {
     /// @param node The indirect assignment expression to rewrite.
     /// @returns The rewritten expression.
     protected open func RewriteIndirectAssignmentExpression(node BoundIndirectAssignmentExpression) BoundExpression {
+        if node.Pointer is BoundAddressOfExpression{
+            Operand: BoundTupleElementAccessExpression tuple,
+            IsUnmanaged: false
+        } address {
+            let receiver = RewriteExpression(tuple.Receiver)
+            let value = RewriteWithSharedReceiver(node.Value, tuple.Receiver, receiver)
+            if object.ReferenceEquals(receiver, tuple.Receiver) && object.ReferenceEquals(value, node.Value) {
+                return node
+            }
+            let updatedTuple = if object.ReferenceEquals(receiver, tuple.Receiver) {
+                tuple
+            } else {
+                BoundTupleElementAccessExpression(tuple.Syntax, receiver, tuple.TupleType, tuple.Index)
+            }
+            return BoundIndirectAssignmentExpression(node.Syntax, address.Update(updatedTuple), value)
+        }
         let pointer = RewriteExpression(node.Pointer)
         let value = RewriteExpression(node.Value)
         if pointer == node.Pointer && value == node.Value {

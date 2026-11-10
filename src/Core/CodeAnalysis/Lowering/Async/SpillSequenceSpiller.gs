@@ -3709,18 +3709,20 @@ shared class SpillSequenceSpiller {
                 bHasAwait
             }
             if rightHasAwait {
+                let previousLeft = left
                 if preserveReceiverStorage && SideEffectSpiller.IsInPlaceStorageWriteReceiver(left) {
                     // This pass also lifts control-flow blocks before SideEffectSpiller runs.
-                    let previousLeft = left
                     left = propertyReceiverSpiller.CapturePropertyStorageReceiver(
                         left,
                         sideEffects,
                         captureComponents: true
                     )
                     propertyReceiverSpiller.ProbeStorageReceiver(left, sideEffects)
-                    right = SideEffectSpiller.SubstituteReceiver(right, previousLeft, left)
                 } else if !CanDeferAcrossLift(left) {
                     left = StoreOperand(left, locals, sideEffects)
+                }
+                if preserveReceiverStorage && !object.ReferenceEquals(left, previousLeft) {
+                    right = SideEffectSpiller.SubstituteReceiver(right, previousLeft, left)
                 }
                 let spilledB = SpillExpression(right)
                 locals.AddRange(spilledB.Locals)
