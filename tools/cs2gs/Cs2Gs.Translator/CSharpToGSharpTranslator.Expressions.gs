@@ -128,9 +128,20 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(identifier)
                 .Symbol is IMethodSymbol{MethodKind: MethodKind.Ordinary} method {
-                this.ReportMetadataRecordDeconstruction(method, identifier)
                 let emitted = this.EmittedName(method, method.Name)
                 if !method.IsStatic && emitted != method.Name {
+                    let isInvocationTarget = identifier.Parent is InvocationExpressionSyntax invocation &&
+                        invocation.Expression == identifier
+                    let isNameOfTarget = identifier.Parent is ArgumentSyntax nameOfArg && IsNameOfArgument(nameOfArg)
+                    if !isInvocationTarget && !isNameOfTarget && this.TryResolveMigratedProducerDeconstruct(
+                        method,
+                        out _,
+                        out _
+                    ) &&
+                        this
+                        .TryGetConvertedDelegateInvoke(identifier, out var invoke) {
+                        return this.TranslateExactMethodGroupArgument(identifier, method, invoke)
+                    }
                     return MemberAccessExpression(ThisExpression(), emitted)
                 }
             }
@@ -1222,17 +1233,6 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func TranslateMemberAccess(member MemberAccessExpressionSyntax) GExpression? {
-            if member
-                .Name
-                .Identifier
-                .ValueText == "Deconstruct" &&
-                member.Parent is not InvocationExpressionSyntax &&
-                this
-                .context
-                .SemanticModel
-                .GetOperation(member) is IMethodReferenceOperation reference {
-                this.ReportMetadataRecordDeconstruction(reference.Method, member)
-            }
             // ADR-0169 analyzer mode: idioms that need more than a member
             // rename (e.g. name.Identifier -> expr.GetLastToken()).
             if this.InAnalyzerApiMode && this.TryTranslateAnalyzerMemberAccess(member, out var analyzerIdiom) {
@@ -1506,6 +1506,22 @@ partial class CSharpToGSharpTranslator {
                 this.nameAllocator.GetName(memberName)
             } else {
                 this.EmittedName(memberSymbol, memberName)
+            }
+            if memberSymbol is IMethodSymbol{Name: "Deconstruct"} deconstructMethod &&
+                emittedMemberName != deconstructMethod
+                .Name {
+                let isInvocationTarget = member.Parent is InvocationExpressionSyntax invocation &&
+                    invocation.Expression == member
+                let isNameOfTarget = member.Parent is ArgumentSyntax nameOfArg && IsNameOfArgument(nameOfArg)
+                if !isInvocationTarget && !isNameOfTarget && this.TryResolveMigratedProducerDeconstruct(
+                    deconstructMethod,
+                    out _,
+                    out _
+                ) &&
+                    this
+                    .TryGetConvertedDelegateInvoke(member, out var invoke) {
+                    return this.TranslateExactMethodGroupArgument(member, deconstructMethod, invoke)
+                }
             }
             return MemberAccessExpression(target, emittedMemberName, isArrow)
         }

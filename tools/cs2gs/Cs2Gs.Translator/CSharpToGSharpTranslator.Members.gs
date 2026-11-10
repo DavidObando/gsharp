@@ -38,6 +38,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 case method is MethodDeclarationSyntax {
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol importedContractMethod &&
+                        importedContractMethod
+                        .ContainingType
+                        .IsValueType &&
                         EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
                         this
                         .nameAllocator
@@ -72,7 +75,7 @@ partial class CSharpToGSharpTranslator {
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
                         let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
                         if adapter != nil {
-                            yield (adapter, false)
+                            yield (adapter, deconstruct.IsStatic)
                         }
                     }
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
@@ -1373,7 +1376,16 @@ partial class CSharpToGSharpTranslator {
                 body = BlockStatement([]GStatement{BlockStatement(body.Statements, isUnsafe: true)})
             }
             let isAsyncVoidHandler = IsCSharpAsyncVoidHandler(symbol)
-            var isOverride = symbol != nil && symbol.IsOverride
+            var isOverride = symbol != nil &&
+                symbol.IsOverride &&
+                !(
+                EmittedNameAllocator.IsUserRecordDeconstruct(symbol) &&
+                    symbol.OverriddenMethod != nil &&
+                    symbol.OverriddenMethod!!
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !this.TryResolveMigratedProducerDeconstruct(symbol.OverriddenMethod, out _, out _)
+            )
             // Interface members are implicitly abstract in C#; in canonical G# the
             // members of an `interface` carry no modifier (the `open` keyword is for
             // virtual/abstract members of a class). Suppress `open` for them so the

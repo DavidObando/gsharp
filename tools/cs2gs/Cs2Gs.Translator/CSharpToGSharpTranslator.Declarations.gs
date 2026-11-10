@@ -419,6 +419,13 @@ partial class CSharpToGSharpTranslator {
                 this.OutDeclarationRequiresPredeclaration(single, local) {
                 return this.GetPredeclaredOutLocalName(single, local, context)
             }
+            if symbol is IMethodSymbol method && this.TryResolveMigratedProducerDeconstruct(
+                method,
+                out var sourceMethod,
+                out var producerCompilation
+            ) {
+                return EmittedNameAllocator.For(producerCompilation!!).GetName(sourceMethod, context)
+            }
             return this.nameAllocator.GetName(symbol, context)
         }
 
@@ -1584,7 +1591,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            let (baseType, interfaces) = this.MapBaseClause(symbol, node, kind!!)
+            var (baseType, interfaces) = this.MapBaseClause(symbol, node, kind!!)
             let baseConstructorArguments List[GExpression]? = this.MapPrimaryConstructorBaseArguments(node, baseType)
             let typeParameters = this.MapTypeParameters(symbol)
             // A class with `protected` members must be an `open class` in G#
@@ -1650,7 +1657,32 @@ partial class CSharpToGSharpTranslator {
                 otherParts != nil && otherParts.Any(
                     (p TypeDeclarationSyntax) -> p.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword)
                 )
-            )
+            ) ||
+                this.TypeHasUnsafeSignatureMember(mergedMembers)
+            if kind == TypeDeclarationKind.DataClass && symbol != nil {
+                let bridge = this.BuildImportedDeconstructContractBridge(
+                    symbol,
+                    node,
+                    baseType,
+                    interfaces,
+                    typeParameters,
+                    isUnsafe
+                )
+                if bridge != nil {
+                    if node.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax {
+                        this.state.PendingTopLevelDeclarations.Add(bridge)
+                    } else {
+                        members.Insert(0, bridge)
+                    }
+                    baseType = NamedTypeReference(
+                        bridge.Name,
+                        typeParameters.Select(
+                            (parameter TypeParameter) -> cast[GTypeReference](NamedTypeReference(parameter.Name))
+                        )
+                            .ToList()
+                    )
+                }
+            }
             // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
             // C# `partial` modifier onto each standalone G# part. Legacy merge
             // mode drops it from the single merged type (issue #1910), unless

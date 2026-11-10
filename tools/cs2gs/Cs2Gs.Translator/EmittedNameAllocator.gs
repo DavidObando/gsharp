@@ -70,6 +70,32 @@ internal class EmittedNameAllocator {
         }
     }
 
+    func HasRenamedDeconstructContract(method IMethodSymbol?) bool {
+        if method == nil ||
+            method.Name != "Deconstruct" ||
+            method.IsImplicitlyDeclared ||
+            method
+            .DeclaringSyntaxReferences
+            .IsDefaultOrEmpty {
+            return false
+        }
+        lock this.gate {
+            return this.GetContractGroup(Canonical(method)).Any(
+                (member ISymbol) -> member is IMethodSymbol candidate && IsUserRecordDeconstruct(candidate)
+            )
+        }
+    }
+
+    func GetDeconstructContractMembers(method IMethodSymbol) IReadOnlyCollection[IMethodSymbol] {
+        lock this.gate {
+            return this
+                .GetContractGroup(Canonical(method))
+                .OfType[IMethodSymbol]()
+                .Where((member IMethodSymbol) -> !member.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                .ToArray()
+        }
+    }
+
     private init(compilation Compilation) {
         this.compilation = compilation
         this.CollectContractGroups()
@@ -132,14 +158,14 @@ internal class EmittedNameAllocator {
                 }
                 return renamed
             }
-            // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
-            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) &&
-                !contract
-                .OfType[IMethodSymbol]().Any(
-                (member IMethodSymbol) ->
-                member.Name == "Deconstruct" && member.DeclaringSyntaxReferences.IsDefaultOrEmpty
-            ) {
-                let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
+            // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699, #5844).
+            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
+                let taken = HashSet[string](
+                    contract.Where((member ISymbol) -> !member.DeclaringSyntaxReferences.IsDefaultOrEmpty).SelectMany(
+                        this.GetScopeNames
+                    ),
+                    StringComparer.Ordinal
+                )
                 for member in contract {
                     if member is IMethodSymbol method && IsUserRecordDeconstruct(method) {
                         taken.UnionWith(this.GetDeconstructionReservedNames(method))
@@ -150,9 +176,13 @@ internal class EmittedNameAllocator {
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {
-                    this.emittedNames[member] = renamed
+                    this.emittedNames[member] = if member.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                        SourceName(member)
+                    } else {
+                        renamed
+                    }
                 }
-                return renamed
+                return this.emittedNames[symbol!!]
             }
             if contract.Any(IsMetadataVisible) &&
                 (

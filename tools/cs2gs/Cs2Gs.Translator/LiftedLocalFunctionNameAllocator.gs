@@ -330,8 +330,11 @@ internal class LiftedLocalFunctionNameAllocator {
             }
             if recordAdaptersOnly &&
                 !(
-                pair.Key is IMethodSymbol{MethodKind: MethodKind.Ordinary} method &&
-                    EmittedNameAllocator.IsUserRecordDeconstruct(method)
+                pair.Key is IMethodSymbol{MethodKind: MethodKind.Ordinary, Name: "Deconstruct"} method &&
+                    !method.IsImplicitlyDeclared &&
+                    !method
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty
             ) {
                 continue
             }

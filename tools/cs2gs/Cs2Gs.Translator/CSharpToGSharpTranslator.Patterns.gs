@@ -2460,18 +2460,31 @@ partial class CSharpToGSharpTranslator {
                 memberReceiver = EnsureNonNullAssertion(receiver)
             }
             let userDeconstruct = this.UserRecordPatternDeconstruct(recursive)
+            if !receiverAlreadyMatched && this.TryGetSharedRecordPatternTypeGuard(
+                recursive,
+                receiver,
+                receiverType,
+                test,
+                out var sharedTest,
+                out var sharedMemberReceiver
+            ) {
+                test = sharedTest
+                memberReceiver = sharedMemberReceiver
+            }
             // The typed form of the same hazard (`Outer(Inner(var a, _))`): a
             // stored capture's type test narrows it only inside the test
             // block, but a descendant binding reads it after the test, so
             // member reads go through the narrowed `(t as Inner)!!`.
-            if userDeconstruct != nil &&
-                recursive.Type != nil &&
-                isNestedPatternMember &&
-                this
-                .state
-                .StoredPatternCaptures
-                .Contains(receiver!!) {
-                memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type)
+            if recursive.Type != nil && isNestedPatternMember && this.state.StoredPatternCaptures.Contains(receiver!!) {
+                let narrowedType = this.context.GetTypeInfo(recursive.Type).Type
+                memberReceiver = if receiverType != nil && narrowedType != nil && SymbolEqualityComparer.Default.Equals(
+                    receiverType,
+                    narrowedType
+                ) {
+                    EnsureNonNullAssertion(receiver)
+                } else {
+                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type, receiverType)
+                }
             }
             if userDeconstruct != nil {
                 let positionalTest = this.TranslateRecordPositionalPatternTest(
@@ -2515,11 +2528,10 @@ partial class CSharpToGSharpTranslator {
                             subpatternMember
                         ) ??
                             this.TryGetSubpatternMemberType(sub)
-                        memberTest = this.TranslatePatternTest(
-                            memberAccess,
+                        memberTest = this.TranslateRecordPatternMemberSubpatternTest(
                             sub.Pattern,
-                            memberType,
-                            isNestedPatternMember: true
+                            memberAccess,
+                            memberType
                         )
                     } else {
                         // Issue #1971: an extended subpattern (`Start.X: 0`)
@@ -2805,12 +2817,13 @@ partial class CSharpToGSharpTranslator {
         ) GExpression {
             if index == names.Count - 1 {
                 let finalMemberAccess GExpression = MemberAccessExpression(memberReceiver, names[index])
-                if this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(memberPath).Symbol) {
-                    this.state.GSharpNullablePatternReceivers.Add(finalMemberAccess)
-                }
-                this.RegisterPatternMemberShape(this.context.GetSymbolInfo(memberPath).Symbol, finalMemberAccess)
-                let leafType ITypeSymbol? = this.context.GetTypeInfo(memberPath).Type
-                return this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true)
+                let leafSymbol ISymbol? = this.GetPatternMemberSymbol(memberPath)
+                let leafType ITypeSymbol? = this.RegisterPatternMemberSlot(leafSymbol, finalMemberAccess) ??
+                    this
+                    .context
+                    .GetTypeInfo(memberPath)
+                    .Type
+                return this.TranslateRecordPatternMemberSubpatternTest(leafPattern, finalMemberAccess, leafType)
             }
             let link GExpression = MemberAccessExpression(memberReceiver, names[index])
             let declaredType ITypeSymbol? = this.ResolveDeclaredReceiverType(

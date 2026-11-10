@@ -1711,9 +1711,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
-                if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
-                    this.ReportMetadataRecordDeconstruction(deconstruction.Method, node, forEachInfo.ElementType)
-                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method, forEachInfo.ElementType)
+                if !isAwait && !this.UsesRecordDeconstructionAdapter(deconstruction.Method, forEachInfo.ElementType) {
                     if extractions.Count > 0 || conversions.Count > 0 {
                         let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
                         statements.AddRange(extractions)
@@ -2034,9 +2032,11 @@ partial class CSharpToGSharpTranslator {
                 default(IdentifierNameSyntax?)
             }
             let captured = capturedRead != nil
+            let pointerCarrier = this.IsPointerOrFunctionPointerType(sourceType)
             if local == nil ||
                 (
-                (!hasSlot || conversion.IsIdentity) &&
+                !pointerCarrier &&
+                    (!hasSlot || conversion.IsIdentity) &&
                     (
                     inferredType || sourceType == nil || SymbolEqualityComparer.IncludeNullability.Equals(
                         local.Type,
@@ -2094,7 +2094,14 @@ partial class CSharpToGSharpTranslator {
                 // Inferred captures retain platform and widened element types without a new coercion.
                 mappedType = nil
             }
-            let value = cast[GExpression](IdentifierExpression(carrier))
+            var value = cast[GExpression](IdentifierExpression(carrier))
+            if pointerCarrier && sourceType != nil {
+                value = ConversionExpression(
+                    this.typeMapper.Map(sourceType, this.context, single.GetLocation())!!,
+                    value,
+                    isCheckedReferenceCast: true
+                )
+            }
             conversions.Add(
                 LocalDeclarationStatement(
                     if this.IsLocalReassigned(local) {
@@ -3234,7 +3241,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #4356: the member's type lets the nested test guard a
             // nullable member and read it once (TranslatePatternTest).
             this.AddTypedSubpatternGuard(
-                () -> this.TranslatePatternTest(memberAccess, pattern, memberType, isNestedPatternMember: true),
+                () -> this.TranslateRecordPatternMemberSubpatternTest(pattern, memberAccess, memberType),
                 bindings,
                 guards,
                 mutableBindings
