@@ -736,7 +736,9 @@ partial class CSharpToGSharpTranslator {
             }
 
             private func IsTrivialPatternReceiver(expression ExpressionSyntax) bool -> (
-                Unparenthesize(expression) is IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax
+                UnwrapParenthesesAndSuppressions(expression) is (
+                    IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax
+                )
             )
 
             private func TryExtractSingleTopLevelIfLetPattern(

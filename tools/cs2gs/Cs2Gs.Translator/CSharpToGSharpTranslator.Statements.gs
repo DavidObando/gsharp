@@ -6108,7 +6108,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // Both the spill emitter and its short-circuit scope detector use this decision.
-            var candidate GExpression = translated ?? this.TranslateExpression(Unparenthesize(expression))!!
+            var candidate GExpression = translated ?? this.TranslateExpression(expression)!!
             while candidate is ParenthesizedExpression parenthesized {
                 candidate = parenthesized.Inner
             }

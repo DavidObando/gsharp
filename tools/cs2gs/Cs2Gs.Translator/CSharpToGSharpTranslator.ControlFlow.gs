@@ -368,7 +368,7 @@ partial class CSharpToGSharpTranslator {
                 var sourceExpr GExpression = mainReplacement ?? idExpr
                 if scrutineeIsNullable &&
                     sourceExpr is NonNullAssertionExpression nonNullSource &&
-                    object.ReferenceEquals(nonNullSource.Operand, idExpr) {
+                    ExpressionReferencesIdentifier(nonNullSource.Operand, idExpr) {
                     sourceExpr = nonNullSource.Operand
                 }
                 let binderSyntax = mainBinder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -388,7 +388,11 @@ partial class CSharpToGSharpTranslator {
                     .Type
                     .IsReferenceType &&
                     (
-                    (deferScrutineeCapture && scrutineeIsNullable && object.ReferenceEquals(sourceExpr, idExpr)) ||
+                    (
+                        deferScrutineeCapture &&
+                            scrutineeIsNullable &&
+                            ExpressionReferencesIdentifier(sourceExpr, idExpr)
+                    ) ||
                         (
                         binderSyntax?.Parent is VarPatternSyntax &&
                             (
@@ -438,6 +442,20 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 this.state.PatternBindings.Remove(nestedBinder)
+                if wholeValueBinders.Contains(nestedBinder) &&
+                    scrutineeIsNullable &&
+                    projectedInit is NonNullAssertionExpression nonNullProjected &&
+                    ExpressionReferencesIdentifier(nonNullProjected.Operand, idExpr) {
+                    projectedInit = nonNullProjected.Operand
+                }
+                let nestedSyntax = nestedBinder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                let nestedSymbolType = if wholeValueBinders.Contains(nestedBinder) &&
+                    !scrutineeIsNullable &&
+                    nestedSyntax?.Parent !is VarPatternSyntax {
+                    nestedBinder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                } else {
+                    nestedBinder.Type
+                }
                 let nestedBinding = if this.IsLocalReassigned(nestedBinder) {
                     BindingKind.Var
                 } else {
@@ -445,7 +463,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 let nestedName = this.EmittedName(nestedBinder, nestedBinder.Name)
                 var nestedType = this.PromoteIfUsedAsNullable(
-                    this.typeMapper.MapExplicitType(nestedBinder.Type, this.context, clause.GetLocation()),
+                    this.typeMapper.MapExplicitType(nestedSymbolType, this.context, clause.GetLocation()),
                     nestedBinder
                 )
                 if nestedType != nil &&
@@ -453,18 +471,25 @@ partial class CSharpToGSharpTranslator {
                     nestedBinder
                     .Type
                     .IsReferenceType &&
-                    nestedBinder
-                    .DeclaringSyntaxReferences
-                    .FirstOrDefault()
-                    ?.GetSyntax()
-                    ?.Parent is VarPatternSyntax &&
                     (
-                    this.InferredLocalDeclarationIsNullable(nestedBinder) ||
-                        this
-                        .state
-                        .StoredPatternCaptures
-                        .Contains(projectedInit) ||
-                        !this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull
+                    (
+                        wholeValueBinders.Contains(nestedBinder) &&
+                            deferScrutineeCapture &&
+                            scrutineeIsNullable &&
+                            ExpressionReferencesIdentifier(projectedInit, idExpr)
+                    ) ||
+                        (
+                        nestedSyntax?.Parent is VarPatternSyntax &&
+                            (
+                            this.InferredLocalDeclarationIsNullable(nestedBinder) ||
+                                (wholeValueBinders.Contains(nestedBinder) && scrutineeIsNullable) ||
+                                this
+                                .state
+                                .StoredPatternCaptures
+                                .Contains(projectedInit) ||
+                                !this.TryGetVarCaptureStaticNonNull(nestedBinder, out var varIsNonNull) || !varIsNonNull
+                        )
+                    )
                 ) {
                     nestedType = MakeNullable(nestedType)
                 }
@@ -1144,7 +1169,7 @@ partial class CSharpToGSharpTranslator {
         /// guarded block must hoist the scrutinee into a local (so the local
         /// smart-casts) rather than re-emit the expression at each use of `t`.
         private func IsSmartCastableScrutinee(expression ExpressionSyntax?) bool {
-            let unwrapped = Unparenthesize(expression)
+            let unwrapped = UnwrapParenthesesAndSuppressions(expression)
             if !(unwrapped is IdentifierNameSyntax) {
                 return false
             }

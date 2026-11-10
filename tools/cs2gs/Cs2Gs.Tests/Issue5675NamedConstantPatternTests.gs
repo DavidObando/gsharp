@@ -1058,16 +1058,23 @@ namespace Demo
         public Action? OnRead;
         public int A { get { OnRead?.Invoke(); return 1; } }
     }
+    public interface IExplicitRow
+    {
+        int ExplicitA { get; }
+        object Tag { get; }
+    }
     public class BaseRow
     {
         public int Id = 1;
     }
-    public class Row : BaseRow
+    public class Row : BaseRow, IExplicitRow
     {
         public Action? OnRead;
         public int A { get { OnRead?.Invoke(); return 1; } }
+        int IExplicitRow.ExplicitA { get { OnRead?.Invoke(); return 1; } }
         public object Child = new B();
         public object Tag = 3;
+        object IExplicitRow.Tag => Tag;
     }
     public struct StructRow
     {
@@ -1222,6 +1229,65 @@ namespace Demo
                 return "True " + current.Tag;
             return "False " + current.Tag;
         }
+        static string ExplicitInterfaceRecursive(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            current.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is IExplicitRow { ExplicitA: 1, Tag: 3 } matched)
+                return "True " + current.Id + " " + ((Row)matched).Id;
+            return "False " + current.Id;
+        }
+        static string ExplicitInterfaceAnd(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            current.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is IExplicitRow matched and { ExplicitA: 1, Tag: 3 })
+                return "True " + current.Id + " " + ((Row)matched).Id;
+            return "False " + current.Id;
+        }
+        static string CompoundOrAndConversionCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new Row { Id = 9, Tag = 0 }; };
+            if (current is (Row { Id: 1 } or Row { Id: 2 }) and { A: 1, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string LoopTypedNullableSubjectClearedInConjunction()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            while (current is Row { A: 1 } matched && matched == null)
+                return "True";
+            return "False";
+        }
+        static string LoopMultipleWholeValueBindersClearedToNull()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            while (current is { A: 1 } first and var second)
+                return "True " + (first == null ? "null" : first.Id.ToString()) + " " + (second == null ? "null" : second.Id.ToString());
+            return "False";
+        }
+        static string SuppressedSubjectUnusedDesignation()
+        {
+            var current = new Row();
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Tag = 0 }; };
+            if (current! is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Tag;
+            return "False " + current.Tag;
+        }
+        static string IfTypedNullableSubjectClearedInConjunction()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            if (current is Row { A: 1 } matched && matched == null)
+                return "True";
+            return "False";
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1237,8 +1303,17 @@ namespace Demo
             LoopBinaryAndLeftTypeCapture() + " / " +
             BinaryAndParenthesizedLeftTypeCapture() + " / " +
             BinaryAndChainedLeftTypeCapture() + " / " +
-            ParenthesizedSubjectUnusedDesignation();
+            ParenthesizedSubjectUnusedDesignation() + " / " +
+            ExplicitInterfaceRecursive(0) + " / " +
+            ExplicitInterfaceRecursive(3) + " / " +
+            ExplicitInterfaceAnd(0) + " / " +
+            ExplicitInterfaceAnd(3) + " / " +
+            CompoundOrAndConversionCapture() + " / " +
+            LoopTypedNullableSubjectClearedInConjunction() + " / " +
+            LoopMultipleWholeValueBindersClearedToNull() + " / " +
+            SuppressedSubjectUnusedDesignation() + " / " +
+            IfTypedNullableSubjectClearedInConjunction();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True", rejectRedundantAssertions: true)
     }
 }
