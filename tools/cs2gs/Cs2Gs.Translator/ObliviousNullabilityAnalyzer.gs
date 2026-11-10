@@ -7114,17 +7114,28 @@ internal shared class ObliviousNullabilityAnalyzer {
         return true
     }
 
+    internal func TupleContractPositionAcceptsNil(
+        compilation Compilation?,
+        symbol ISymbol?,
+        elementPath IReadOnlyList[int32]?
+    ) bool -> compilation != nil &&
+        symbol != nil &&
+        elementPath != nil &&
+        elementPath.Count > 0 &&
+        TupleContractPositionAcceptsNil(compilation, OwningMember(symbol), EncodeTuplePath(elementPath))
+
     private func TupleContractPositionAcceptsNil(
         compilation Compilation?,
         symbol ISymbol?,
         path string
     ) bool -> IsDeclaredNullablePosition(TuplePositionType(symbol, path)) ||
         (
-        !IsSourceAssembly(compilation, symbol!!.ContainingAssembly) &&
-            IsObliviousConcreteReferencePosition(TuplePositionType(symbol!!.OriginalDefinition, path))
+        symbol != nil &&
+            !IsSourceAssembly(compilation, symbol.ContainingAssembly) &&
+            IsObliviousConcreteReferencePosition(TuplePositionType(symbol.OriginalDefinition, path))
     )
 
-    private func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
+    internal func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
         var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as ITypeSymbol
         if path.Length == 0 {
             return if requireTuple {

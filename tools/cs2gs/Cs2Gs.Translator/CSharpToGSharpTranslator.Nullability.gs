@@ -610,7 +610,14 @@ partial class CSharpToGSharpTranslator {
         private func ResolveValueSink(value ExpressionSyntax?) ISymbol? {
             var node SyntaxNode? = value
             while true {
-                if (node!!.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
+                if (
+                    node!!.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax
+                ) ||
+                    (
+                    node!!.Parent is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                        SyntaxKind.SuppressNullableWarningExpression
+                    )
+                ) {
                     node = node!!.Parent
                     continue
                 }
@@ -1217,9 +1224,14 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "0")
             }
             var node ExpressionSyntax = value
-            let segments = List[string]{"0"}
+            let steps = List[(IsArray bool, Index int32)]{(true, 0)}
             while true {
-                if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
+                if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
+                    (
+                    node.Parent is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                        SyntaxKind.SuppressNullableWarningExpression
+                    )
+                ) {
                     node = cast[ExpressionSyntax](node.Parent)
                     continue
                 }
@@ -1253,14 +1265,14 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         outer = dimension
                     }
-                    segments.Insert(0, "0")
+                    steps.Insert(0, (true, 0))
                     node = outer
                     continue
                 }
                 if node.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
                     let index = tuple.Arguments.IndexOf(argument)
                     if index >= 0 {
-                        segments.Insert(0, index.ToString(CultureInfo.InvariantCulture))
+                        steps.Insert(0, (false, index))
                         node = tuple
                         continue
                     }
@@ -1268,9 +1280,31 @@ partial class CSharpToGSharpTranslator {
                 break
             }
             let (sink, prefix) = this.DirectValueSink(node)
+            var current ITypeSymbol? = ObliviousNullabilityAnalyzer.TuplePositionType(sink, prefix)
             var position = prefix
-            for segment in segments {
-                position = JoinPosition(position, segment)
+            for (isArray, index) in steps {
+                while current is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    position = JoinPosition(position, "0")
+                    current = nullableNamed.TypeArguments[0]
+                }
+                position = JoinPosition(position, index.ToString(CultureInfo.InvariantCulture))
+                if isArray {
+                    current = (current as IArrayTypeSymbol)?.ElementType
+                } else if current is INamedTypeSymbol{IsTupleType: true} tuple &&
+                    index >= 0 &&
+                    index < tuple
+                    .TupleElements
+                    .Length {
+                    current = tuple.TupleElements[index].Type
+                } else {
+                    current = nil
+                }
             }
             return (sink, position)
         }

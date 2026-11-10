@@ -2058,7 +2058,6 @@ partial class CSharpToGSharpTranslator {
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
                 targetParameter is {} tupleParameter &&
-                !ContainsTypeParameter(tupleParameter.OriginalDefinition.Type) &&
                 this
                 .TryBridgeTupleValue(
                 argument.Expression,

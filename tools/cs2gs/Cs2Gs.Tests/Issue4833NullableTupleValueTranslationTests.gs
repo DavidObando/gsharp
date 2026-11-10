@@ -534,6 +534,153 @@ public static class Obj {
         AssertParity(source, printed, "null:2:7|abc:1:8")
     }
 
+    @Fact
+    func CoalescedNullableTuple_PassedToFixedTupleParameter_BridgesLeafAndMatchesRuntime() {
+        const source = `#nullable enable
+public static class FixedCoalesceConsumer {
+    public static string Consume((string Text, int Code) value) => value.Text + ":" + value.Code;
+}
+#nullable disable
+public static class Obj {
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        (string Text, int Code)? maybe = items[1];
+        return (items[0].Text == null ? "null" : items[0].Text) + "|" + FixedCoalesceConsumer.Consume(maybe ?? ("fallback", 9));
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(".Item1!!", printed)
+        AssertParity(source, printed, "null|abc:1")
+    }
+
+    @Fact
+    func PartiallyGenericFixedTupleParameter_ExplicitTypeArgument_BridgesFixedLeafAndMatchesRuntime() {
+        const source = `#nullable enable
+public static class PartiallyGenericConsumer {
+    public static string Consume<T>((string Text, T Code) value) => value.Text + ":" + value.Code;
+}
+#nullable disable
+public static class Obj {
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        return (items[0].Text == null ? "null" : items[0].Text) + "|" + PartiallyGenericConsumer.Consume<int>(items[1]);
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(".Item1!!", printed)
+        AssertParity(source, printed, "null|abc:1")
+    }
+
+    @Fact
+    func ExternalObliviousTupleParameter_OmitsLeafAssertionAndMatchesRuntime() {
+        const librarySource = `namespace ExternalLib {
+    public static class ExternalOblivious {
+        public static string Accept((string Text, int Code) value) => (value.Text ?? "null") + ":" + value.Code;
+    }
+}`
+        const appSource = `using ExternalLib;
+public static class Obj {
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        return ExternalOblivious.Accept(items[0]) + "|" + ExternalOblivious.Accept(items[1]);
+    }
+}`
+        let directory = Path.Combine(AppContext.BaseDirectory, "issue5901-ext", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(directory)
+        try {
+            let libraryPath = Path.Combine(directory, "ExternalObliviousLib.dll")
+            let libraryLoaded = CSharpProjectLoader.LoadInMemory([](string, string){("Lib.cs", librarySource)})
+            Assert.True(
+                libraryLoaded.BoundWithoutErrors,
+                string.Join(Environment.NewLine, libraryLoaded.ErrorDiagnostics)
+            )
+            let emitResult = libraryLoaded.Compilation.WithAssemblyName("ExternalObliviousLib").Emit(libraryPath)
+            Assert.True(emitResult.Success, string.Join(Environment.NewLine, emitResult.Diagnostics))
+            let appBase = CSharpProjectLoader.LoadInMemory([](string, string){("App.cs", appSource)})
+            let appCompilation = appBase.Compilation.AddReferences(MetadataReference.CreateFromFile(libraryPath))
+            let tree = Assert.Single(appCompilation.SyntaxTrees)
+            let model = appCompilation.GetSemanticModel(tree)
+            let document = LoadedDocument(tree.FilePath, tree, model)
+            let context = TranslationContext(appCompilation, model, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.DoesNotContain(
+                context.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+            Assert.DoesNotContain(".Item1!!", printed)
+            using let appStream = MemoryStream()
+            let appEmit = appCompilation.Emit(appStream)
+            Assert.True(appEmit.Success, string.Join(Environment.NewLine, appEmit.Diagnostics))
+            appStream.Position = 0
+            let loadContext = AssemblyLoadContext("issue5901-ext-oracle", isCollectible: true)
+            var oracle string
+            try {
+                let _ = loadContext.LoadFromAssemblyPath(libraryPath)
+                let assembly = loadContext.LoadFromStream(appStream)
+                let method = assembly.GetType("Obj")!!.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!!
+                oracle = Assert.IsType[string](method.Invoke(nil, nil))
+            } finally {
+                loadContext.Unload()
+            }
+            Assert.Equal("null:2|abc:1", oracle)
+            let compiler = FindCompiler()
+            let input = Path.Combine(directory, "Source.gs")
+            let output = Path.Combine(directory, "Source.dll")
+            File.WriteAllText(input, printed + Environment.NewLine + "System.Console.WriteLine(Obj.Run())")
+            let (compileExit, compileLog) = RunDotnet(
+                compiler,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/reference:" + libraryPath,
+                "/out:" + output,
+                input
+            )
+            Assert.True(compileExit == 0, compileLog + Environment.NewLine + printed)
+            let (runExit, stdout) = RunDotnet(output)
+            Assert.True(runExit == 0, stdout)
+            Assert.Equal(Encoding.UTF8.GetBytes(oracle + Environment.NewLine), Encoding.UTF8.GetBytes(stdout))
+        } finally {
+            Directory.Delete(directory, recursive: true)
+        }
+    }
+
+    @Fact
+    func SuppressedArrayAllocation_PromotesTupleLeafAndMatchesRuntime() {
+        const source = `public static class Obj {
+    public static string Run() {
+        var items = new (string, int)[] { ("x", 0), ("abc", 1) }!;
+        items[0] = (null, 2);
+        return (items[0].Item1 == null ? "null" : items[0].Item1) + ":" + items[0].Item2 + "," + items[1].Item1 + ":" + items[1].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("[](string?, int32)", printed)
+        Assert.DoesNotContain("[](string, int32)", printed)
+        AssertParity(source, printed, "null:2,abc:1")
+    }
+
+    @Fact
+    func NullableTupleContainingArray_InitializerAndReplacement_PromoteAllocationsAndMatchRuntime() {
+        const source = `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 0), ("abc", 1) };
+        rows[0] = (null, 2);
+        ((string, int)[] Rows, int Id)? state = (new (string, int)[] { ("init", 1) }, 1);
+        state = (rows, 2);
+        string first = (state.Value.Rows[0].Item1 == null ? "null" : state.Value.Rows[0].Item1) + ":" + state.Value.Id;
+        state = (new (string, int)[] { ("ok", 3) }, 4);
+        return first + "|" + state.Value.Rows[0].Item1 + ":" + state.Value.Rows[0].Item2 + ":" + state.Value.Id;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("[](string?, int32)", printed)
+        Assert.DoesNotContain("[](string, int32)", printed)
+        AssertParity(source, printed, "null:2|ok:3:4")
+    }
+
     shared {
         private func Translate(source string) string {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})
