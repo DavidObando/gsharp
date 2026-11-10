@@ -657,6 +657,12 @@ namespace Demo
         IEnumerator<Box<string>> IEnumerable<Box<string>>.GetEnumerator() { return new List<Box<string>>().GetEnumerator(); }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
+    public class FixedSeq<T>
+    {
+        public FixedSeq(T value) { Value = value; }
+        public T Value;
+        public IEnumerator<FixedSeq<string>> GetEnumerator() { return new List<FixedSeq<string>> { new FixedSeq<string>("ok") }.GetEnumerator(); }
+    }
     public static class P
     {
         private static Dictionary<string, int>? cache;
@@ -669,17 +675,21 @@ namespace Demo
         static T[] MakeArray<T>(T value) => new T[] { value };
         static List<Box<T>> Boxes<T>(T seed) => new List<Box<T>> { new Box<T>(seed) };
         static Seq<T> MakeSeq<T>(T seed) => new Seq<T>(seed);
+        static FixedSeq<T> MakeFixedSeq<T>(T seed) => new FixedSeq<T>(seed);
         static Func<(Dictionary<string, int>, T)>[] Readers<T>(T seed) => new Func<(Dictionary<string, int>, T)>[] { () => (new Dictionary<string, int>(), seed) };
         static void GetOutBox(out Box<Dictionary<string, int>> value) { value = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); }
         static void GetInferredOutBox<T>(T seed, out Box<T> value) { value = new Box<T>(seed); }
+        static void GetOutWithOther<T, U>(T seed, U other, out Box<T> value) { value = new Box<T>(seed); }
         static int VarReassign() { var d = new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
         static int VarReassignArm(bool flag) { var d = new Dictionary<string, int>(); d = flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return d.Count; }
         static int VarReassignAlias() { var a = new Dictionary<string, int>(); var d = a; d = Volatile.Read(ref full!); return d.Count; }
+        static int VarCoalesceReassign() { var d = Volatile.Read(ref cache!) ?? new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
         static int VarNewBoxReassign() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)); b = Volatile.Read(ref fullBox!); return b.Value.Count; }
         static int Element(Dictionary<string, int>[] arr) { arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
         static int VarArrayElement() { var arr = new Dictionary<string, int>[1]; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
         static int ImplicitArrayNonNullElement() { var arr = new[] { new Dictionary<string, int>() }; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
         static int ReassignedVarArray() { var a = new[] { "ok" }; a = new[] { Volatile.Read(ref fullString!) }; return a[0].Length; }
+        static int SelfWrappingObjectArray() { var a = new[] { new object() }; a = new[] { a }; return a.Length; }
         static int ArrayInitializers() { var arr = new Dictionary<string, int>[] { Volatile.Read(ref full!) }; Dictionary<string, int>[] typedImplicit = new[] { Volatile.Read(ref full!) }; return arr[0].Count + typedImplicit[0].Count; }
         static int NullableDelegateArrayElement(Func<Dictionary<string, int>>?[] readers) { readers[0] = () => Volatile.Read(ref full!); return readers[0]!().Count; }
         static int PartiallyInferredDelegateArrayElement() { var fs = Readers(Volatile.Read(ref cache!)); fs[0] = () => (Volatile.Read(ref full!), Volatile.Read(ref cache!)); var pair = fs[0](); return pair.Item1.Count + (pair.Item2 == null ? 1 : 0); }
@@ -687,12 +697,14 @@ namespace Demo
         static int DeepBinaryNestedArray() { var cube = new[] { new[] { new[] { new[] { new[] { new[] { 1 }, new[] { 2 } }, new[] { new[] { 3 }, new[] { 4 } } }, new[] { new[] { new[] { 5 }, new[] { 6 } }, new[] { new[] { 7 }, new[] { 8 } } } }, new[] { new[] { new[] { new[] { 9 }, new[] { 10 } }, new[] { new[] { 11 }, new[] { 12 } } }, new[] { new[] { new[] { 13 }, new[] { 14 } }, new[] { new[] { 15 }, new[] { 16 } } } } }, new[] { new[] { new[] { new[] { new[] { 17 }, new[] { 18 } }, new[] { new[] { 19 }, new[] { 20 } } }, new[] { new[] { new[] { 21 }, new[] { 22 } }, new[] { new[] { 23 }, new[] { 24 } } } }, new[] { new[] { new[] { new[] { 25 }, new[] { 26 } }, new[] { new[] { 27 }, new[] { 28 } } }, new[] { new[] { new[] { 29 }, new[] { 30 } }, new[] { new[] { 31 }, new[] { 32 } } } } } }; return cube[0][0][0][0][0][0]; }
         static int HeterogeneousNestedArrays() { var rows = new[] { (object)new[] { "ok" }, new[] { 1 } }; return rows[0].GetType() == typeof(string[]) && rows[1].GetType() == typeof(int[]) ? 1 : 0; }
         static int OutVarTypedBox() { GetOutBox(out var b); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
+        static int OutVarPartiallyInferredBox() { GetOutWithOther("ok", Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref fullString!); return b.Value.Length; }
         static int PatternTypedBox(object o) { if (o is Box<Dictionary<string, int>> b) { b.Value = Volatile.Read(ref full!); return b.Value.Count; } return 0; }
         static int TypedBox() { Box<Dictionary<string, int>> b = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
         static int TypedBoxMembers() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)) { Value = Volatile.Read(ref full!) }; b.Prop = Volatile.Read(ref full!); b[0] = Volatile.Read(ref full!); b.Items[0] = Volatile.Read(ref full!); return b.Accept(Volatile.Read(ref full!)) + b.Value.Count + b.Prop.Count + b[0].Count + b.Items[0].Count; }
         static int ForEachTypedBox() { var total = 0; foreach (var item in new[] { new Box<Dictionary<string, int>>(new Dictionary<string, int>()) }) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
         static int ForEachTypedBoxList() { var total = 0; foreach (var item in Boxes(new Dictionary<string, int>())) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
         static int ForEachPatternTypedSeq() { var total = 0; foreach (var item in MakeSeq(new Dictionary<string, int>())) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
+        static int ForEachSameDefinitionFixedElement() { var total = 0; foreach (var item in MakeFixedSeq(Volatile.Read(ref cache!))) { item.Value = Volatile.Read(ref fullString!); total += item.Value.Length; } return total; }
         static int CollectionInitializers() { var list = new List<Dictionary<string, int>> { Volatile.Read(ref full!) }; var map = new Dictionary<Dictionary<string, int>, Dictionary<string, int>> { [Volatile.Read(ref full!)] = Volatile.Read(ref full!) }; return list[0].Count + map.Count; }
         static bool VarWidenedByNull(bool flag) { var d = new Dictionary<string, int>(); if (flag) d = null; d = Volatile.Read(ref cache!); return d == null; }
         static bool NullableArrayElement() { Dictionary<string, int>?[] arr = new Dictionary<string, int>?[1]; arr[0] = Volatile.Read(ref cache!); return arr[0] == null; }
@@ -700,8 +712,10 @@ namespace Demo
         static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); return 1; }
         static int ImplicitInferredJaggedArrayElement() { var rows = new[] { Volatile.Read(ref arrayCache!) }; rows[0] = Volatile.Read(ref arrayCache!); return 1; }
         static int AliasedDelegateArrayRow() { var row = new[] { () => Volatile.Read(ref cache!) }; var rows = new[] { row }; return rows[0][0]() == null ? 1 : 0; }
+        static int DelegateArrayConsumedAsObject() { var row = new[] { () => Volatile.Read(ref cache!) }; object[] objects = new[] { row, new object() }; return row[0]() == null && objects.Length == 2 ? 1 : 0; }
         static int MixedSiblingNestedArrays() { var rows = new[] { new[] { "ok" }, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "ok" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
         static int MixedAliasedAndInlineNestedArrays() { var row = new[] { "ok" }; var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "ok" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
+        static int ReassignedAliasedNestedArray() { var row = new[] { "ok" }; row = new[] { "next" }; var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "next" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
         static int SharedAliasedArrayRow() { var row = new[] { "ok" }; var first = new[] { row }; var second = new[] { new[] { Volatile.Read(ref stringCache!) }, row }; return (first[0][0] == "ok" ? 1 : 0) + (second[0][0] == null ? 1 : 0) + (second[1][0] == "ok" ? 1 : 0); }
         static int InferredBoxItemsElement() { var b = Wrap(Volatile.Read(ref cache!)); b.Items[0] = Volatile.Read(ref cache!); return 1; }
         static bool NullableTypedBox() { var b = new Box<Dictionary<string, int>?>(Volatile.Read(ref cache!)); b.Value = Volatile.Read(ref cache!); b.Prop = Volatile.Read(ref cache!); return b.Value == null && b.Prop == null; }
@@ -711,16 +725,20 @@ namespace Demo
         static int ForEachInferredBoxList() { foreach (var item in Boxes(Volatile.Read(ref cache!))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         static int ForEachPatternInferredSeq() { foreach (var item in MakeSeq(Volatile.Read(ref cache!))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         public static string Run() =>
-            VarReassign() + " " + VarReassignArm(true) + " " + VarReassignAlias() + " " + VarNewBoxReassign() + " " +
-            Element(new Dictionary<string, int>[1]) + " " + VarArrayElement() + " " + ImplicitArrayNonNullElement() + " " + ReassignedVarArray() + " " + ArrayInitializers() + " " +
-            NullableDelegateArrayElement(new Func<Dictionary<string, int>>?[1]) + " " + PartiallyInferredDelegateArrayElement() + " " + InlineNestedArrayForEach() + " " + DeepBinaryNestedArray() + " " + HeterogeneousNestedArrays() + " " + OutVarTypedBox() + " " + PatternTypedBox(new Box<Dictionary<string, int>>(new Dictionary<string, int>())) + " " +
-            TypedBox() + " " + TypedBoxMembers() + " " + ForEachTypedBox() + " " + ForEachTypedBoxList() + " " + ForEachPatternTypedSeq() + " " + CollectionInitializers() + " " +
+            VarReassign() + " " + VarReassignArm(true) + " " + VarReassignAlias() + " " + VarCoalesceReassign() + " " + VarNewBoxReassign() + " " +
+            Element(new Dictionary<string, int>[1]) + " " + VarArrayElement() + " " + ImplicitArrayNonNullElement() + " " + ReassignedVarArray() + " " + SelfWrappingObjectArray() + " " + ArrayInitializers() + " " +
+            NullableDelegateArrayElement(new Func<Dictionary<string, int>>?[1]) + " " + PartiallyInferredDelegateArrayElement() + " " + InlineNestedArrayForEach() + " " + DeepBinaryNestedArray() + " " + HeterogeneousNestedArrays() + " " + OutVarTypedBox() + " " + OutVarPartiallyInferredBox() + " " + PatternTypedBox(new Box<Dictionary<string, int>>(new Dictionary<string, int>())) + " " +
+            TypedBox() + " " + TypedBoxMembers() + " " + ForEachTypedBox() + " " + ForEachTypedBoxList() + " " + ForEachPatternTypedSeq() + " " + ForEachSameDefinitionFixedElement() + " " + CollectionInitializers() + " " +
             VarWidenedByNull(true) + " " + NullableArrayElement() + " " + InferredArrayElement() + " " + ImplicitInferredArrayElement() + " " +
-            ImplicitInferredJaggedArrayElement() + " " + AliasedDelegateArrayRow() + " " + MixedSiblingNestedArrays() + " " + MixedAliasedAndInlineNestedArrays() + " " + SharedAliasedArrayRow() + " " + InferredBoxItemsElement() + " " + NullableTypedBox() + " " + DeconstructedBox() + " " + OutVarInferredBox() + " " + ForEachInferredBox() + " " + ForEachInferredBoxList() + " " + ForEachPatternInferredSeq();
+            ImplicitInferredJaggedArrayElement() + " " + AliasedDelegateArrayRow() + " " + DelegateArrayConsumedAsObject() + " " + MixedSiblingNestedArrays() + " " + MixedAliasedAndInlineNestedArrays() + " " + ReassignedAliasedNestedArray() + " " + SharedAliasedArrayRow() + " " + InferredBoxItemsElement() + " " + NullableTypedBox() + " " + DeconstructedBox() + " " + OutVarInferredBox() + " " + ForEachInferredBox() + " " + ForEachInferredBoxList() + " " + ForEachPatternInferredSeq();
     }
 }`)
         Assert.Contains("var d = Dictionary[string, int32]()\n        d = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("d = if flag { Volatile.Read(&full)!! } else { Dictionary[string, int32]() }\n", printed)
+        Assert.Contains(
+            "var d = Volatile.Read(&cache) ?? Dictionary[string, int32]()\n        d = Volatile.Read(&full)!!\n",
+            printed
+        )
         Assert.Contains("b = Volatile.Read(&fullBox)!!\n", printed)
         Assert.Contains("arr[0] = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("var a = []string{\"ok\"}\n        a = []string{Volatile.Read(&fullString)!!}\n", printed)
@@ -729,12 +747,17 @@ namespace Demo
         Assert.Contains("readers[0] = () -> Volatile.Read(&full)!!\n", printed)
         Assert.Contains("fs[0] = () -> (Volatile.Read(&full)!!, Volatile.Read(&cache))\n", printed)
         Assert.Contains("GetOutBox(out var b)\n        b!!.Value = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains(
+            "GetOutWithOther(\"ok\", Volatile.Read(&cache), out var b)\n        b!!.Value = Volatile.Read(&fullString)!!\n",
+            printed
+        )
         Assert.Contains("b.Value = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Prop = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b[0] = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Items[0] = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Accept(Volatile.Read(&full)!!)", printed)
         Assert.Contains("item!!.Value = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("item.Value = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("List[Dictionary[string, int32]]{ Volatile.Read(&full)!! }", printed)
         Assert.Contains("[Volatile.Read(&full)!!] = Volatile.Read(&full)!!", printed)
         Assert.Contains("d = Volatile.Read(&cache)\n", printed)
@@ -745,6 +768,10 @@ namespace Demo
         Assert.Contains("[][]string?{[]string?{\"ok\"}, []string?{Volatile.Read(&stringCache)}}", printed)
         Assert.Contains(
             "let row = []string?{\"ok\"}\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
+            printed
+        )
+        Assert.Contains(
+            "var row = []string?{\"ok\"}\n        row = []string?{\"next\"}\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
             printed
         )
         Assert.Contains(
@@ -760,7 +787,10 @@ namespace Demo
             printed
         )
         Assert.Contains("item!!.Value = Volatile.Read(&cache)\n", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 2 2 1 2 1 1 1 1 1 1 5 1 1 1 2 True True 1 1 1 1 2 2 3 1 True 1 1 1 1 1")
+        RunsAs(
+            printed,
+            "1 1 1 1 1 1 1 1 2 1 2 1 2 1 1 1 1 2 1 1 5 1 1 1 2 2 True True 1 1 1 1 1 2 2 2 3 1 True 1 1 1 1 1"
+        )
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference
