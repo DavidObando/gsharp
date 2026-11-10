@@ -1634,6 +1634,23 @@ class CSharpTypeMapper {
             !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType) {
             return mapped
         }
+        if mapped is TupleTypeReference &&
+            declaredType is INamedTypeSymbol{
+            OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+            TypeArguments: {Length: 1}
+        } nullableTuple {
+            path.Add(0)
+            let promoted = this.PromoteTupleTypeArguments(
+                mapped,
+                nullableTuple.TypeArguments[0],
+                symbol,
+                context,
+                path,
+                nullablePositions
+            )
+            path.RemoveAt(path.Count - 1)
+            return promoted
+        }
         if mapped is TupleTypeReference tuple &&
             declaredType is INamedTypeSymbol{IsTupleType: true} tupleType &&
             tuple

@@ -4583,10 +4583,22 @@ partial class CSharpToGSharpTranslator {
                     array,
                     arrayExpression
                 ) as ArrayTypeReference
+                let (sink, position) = this.ResolveArrayStorageSink(arrayExpression)
+                let baseElement = (promotedArray ?? mappedArray).ElementType
+                let promotedElement = this.PromoteTupleTypeArguments(
+                    baseElement,
+                    array.ElementType,
+                    sink,
+                    position
+                        .Split('.')
+                        .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                        .ToList()
+                ) ??
+                    baseElement
                 return if nullableElementSyntax {
-                    MakeNullable((promotedArray ?? mappedArray).ElementType)
+                    MakeNullable(promotedElement)
                 } else {
-                    (promotedArray ?? mappedArray).ElementType
+                    promotedElement
                 }
             }
             if arrayType is INamedTypeSymbol{IsGenericType: true} generic && generic.TypeArguments.Length == 1 {

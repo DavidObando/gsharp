@@ -367,7 +367,9 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 // Keep nullable tuple storage even when the initializer is non-null.
-                if this.context.GetDeclaredSymbol(declarator) is ILocalSymbol tupleStorage &&
+                if (binding == BindingKind.Var || hasExplicitType) && this.context.GetDeclaredSymbol(
+                    declarator
+                ) is ILocalSymbol tupleStorage &&
                     tupleStorage
                     .Type
                     .TypeKind != TypeKind.Delegate &&

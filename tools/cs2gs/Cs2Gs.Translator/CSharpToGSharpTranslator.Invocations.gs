@@ -2057,6 +2057,19 @@ partial class CSharpToGSharpTranslator {
             )
             if !IsNameOfArgument(argument) &&
                 !isXunitNullAssertion &&
+                targetParameter is {} tupleParameter &&
+                this
+                .TryBridgeTupleValue(
+                argument.Expression,
+                translated,
+                targetType,
+                tupleParameter,
+                out var bridgedArgumentTuple
+            ) {
+                return bridgedArgumentTuple
+            }
+            if !IsNameOfArgument(argument) &&
+                !isXunitNullAssertion &&
                 (targetRequiresNonNull || hasUserDefinedConversion) &&
                 targetParameter is {} parameter &&
                 targetType != nil {
@@ -6243,6 +6256,7 @@ partial class CSharpToGSharpTranslator {
             sink ISymbol?,
             sinkTypeOverride ITypeSymbol? = nil
         ) ITypeSymbol? {
+            var sink = sink
             let tupleIndices = List[int32]()
             let node Microsoft.CodeAnalysis.SyntaxNode? = OutermostTransparentNode(value, tupleIndices)
             var sinkType ITypeSymbol? = sinkTypeOverride ?? ObliviousNullabilityAnalyzer.SymbolValueType(sink)
@@ -6252,6 +6266,27 @@ partial class CSharpToGSharpTranslator {
                 default(ITypeSymbol?)
             }
             let path = List[int32]()
+            if node is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax assignment && assignment.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression
+            ) &&
+                ObliviousNullabilityAnalyzer
+                .TryResolveTupleContainerSource(
+                assignment.Left,
+                this.context.SemanticModel,
+                out var containerTarget,
+                out var containerType,
+                out var containerPrefix,
+                unwrapSuppressions: true
+            ) &&
+                containerPrefix.Length > 0 {
+                sink = containerTarget
+                sinkType = containerType
+                for component in containerPrefix.Split('.') {
+                    if int32.TryParse(component, out var prefixIndex) {
+                        path.Add(prefixIndex)
+                    }
+                }
+            }
             if node!!.Parent is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -6262,6 +6297,10 @@ partial class CSharpToGSharpTranslator {
                 path.Add(0)
             }
             for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                while sinkType is IArrayTypeSymbol arraySink {
+                    sinkType = arraySink.ElementType
+                    path.Add(0)
+                }
                 while sinkType is INamedTypeSymbol nullableNamed &&
                     nullableNamed
                     .OriginalDefinition
