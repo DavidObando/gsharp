@@ -1074,7 +1074,12 @@ namespace Demo
         int IExplicitRow.ExplicitA { get { OnRead?.Invoke(); return 1; } }
         public object Child = new B();
         public object Tag = 3;
+        public object BaseTag { get => Tag; set => Tag = value; }
         object IExplicitRow.Tag => Tag;
+    }
+    public class DerivedRow : Row
+    {
+        public new object Tag = 99;
     }
     public struct StructRow
     {
@@ -1288,6 +1293,34 @@ namespace Demo
                 return "True";
             return "False";
         }
+        static string HiddenBaseRecursive(int nextBaseTag)
+        {
+            var current = new DerivedRow { Id = 1, Tag = 99 };
+            current.BaseTag = 3;
+            current.OnRead = () =>
+            {
+                var next = new DerivedRow { Id = 2, Tag = 3 };
+                next.BaseTag = nextBaseTag;
+                current = next;
+            };
+            if (current is Row { A: 1, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id + " " + matched.Tag + " " + current.Tag;
+            return "False " + current.Id + " " + current.BaseTag + " " + current.Tag;
+        }
+        static string HiddenBaseAnd(int nextBaseTag)
+        {
+            var current = new DerivedRow { Id = 1, Tag = 99 };
+            current.BaseTag = 3;
+            current.OnRead = () =>
+            {
+                var next = new DerivedRow { Id = 2, Tag = 3 };
+                next.BaseTag = nextBaseTag;
+                current = next;
+            };
+            if (current is Row matched and { A: 1, Tag: 3 })
+                return "True " + current.Id + " " + matched.Id + " " + matched.Tag + " " + current.Tag;
+            return "False " + current.Id + " " + current.BaseTag + " " + current.Tag;
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1312,8 +1345,12 @@ namespace Demo
             LoopTypedNullableSubjectClearedInConjunction() + " / " +
             LoopMultipleWholeValueBindersClearedToNull() + " / " +
             SuppressedSubjectUnusedDesignation() + " / " +
-            IfTypedNullableSubjectClearedInConjunction();
+            IfTypedNullableSubjectClearedInConjunction() + " / " +
+            HiddenBaseRecursive(0) + " / " +
+            HiddenBaseRecursive(3) + " / " +
+            HiddenBaseAnd(0) + " / " +
+            HiddenBaseAnd(3);
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3", rejectRedundantAssertions: true)
     }
 }
