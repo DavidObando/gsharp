@@ -2896,7 +2896,15 @@ partial class CSharpToGSharpTranslator {
                 !SymbolEqualityComparer
                 .Default
                 .Equals(UnwrapNullablePatternType(receiverType), UnwrapNullablePatternType(narrowedType))
-            if (userDeconstruct != nil || requiresTypeNarrowing) &&
+            let isCachedRecordPatternReceiver = receiver is IdentifierExpression receiverIdentifier &&
+                this.RecordPatternDecisionOwner(recursive) is {} decisionOwner &&
+                this
+                .recordPatternReceiverCaches
+                .TryGetValue(decisionOwner, out var activeReceiverCaches) && activeReceiverCaches.Any(
+                (entry(Path string, Flag string, Value string, Type GTypeReference)) ->
+                entry.Value == receiverIdentifier.Name
+            )
+            if (userDeconstruct != nil || (isCachedRecordPatternReceiver && requiresTypeNarrowing)) &&
                 recursive.Type != nil &&
                 isNestedPatternMember &&
                 this
