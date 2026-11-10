@@ -258,38 +258,184 @@ public static class Consumer {
     }
 
     @Theory
-    @InlineData(false)
-    @InlineData(true)
-    func ImportedTupleReturnContracts_OnlyEquivalentShapesSharePositionalTaint(reordered bool) {
-        let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", `#nullable enable
+    @InlineData("direct")
+    @InlineData("reordered")
+    @InlineData("intermediate")
+    @InlineData("widened-interface")
+    @InlineData("wrapped")
+    @InlineData("nested-reordered")
+    @InlineData("contravariant-self-first")
+    @InlineData("contravariant-exact-first")
+    @InlineData("unconstrained-extra")
+    @InlineData("unconstrained-extra-switch")
+    @InlineData("base-typed-reordered")
+    @InlineData("base-typed-extra")
+    @InlineData("fixed-contract-sinkless-and-base-typed")
+    @InlineData("repeated-type-parameter")
+    @InlineData("implicit-reordered")
+    @InlineData("nested-containing")
+    @InlineData("nested-contravariant")
+    func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
+        let baseReturn = switch mode {
+            case "widened-interface": "ICarrier<object, (string? Text, int Code)>"
+            case "wrapped": "Carrier<((string? Text, int Code) Data, int Marker)>"
+            case "nested-reordered": "IOut<Carrier<(string? Text, int Code), (string Keep, int Code)>>"
+            case "nested-containing": "Outer<(string? Text, int Code)>.Inner"
+            case "fixed-contract-sinkless-and-base-typed": "ExtraDerived<(string Extra, int Code), (string? Text, int Code), (string Keep, int Code)>"
+            case "contravariant-self-first",
+            "contravariant-exact-first": "ICarrier<IContra<Recursive>, (string? Text, int Code)>"
+            case "nested-contravariant": "IContra<ICarrier<string, (string? Text, int Code)>>"
+            default: "Carrier<(string? Text, int Code), (string Keep, int Code)>"
+        }
+        let recursiveInterfaces = if mode == "contravariant-exact-first" {
+            "IContra<Recursive>, IContra<IContra<Recursive>>"
+        } else {
+            "IContra<IContra<Recursive>>, IContra<Recursive>"
+        }
+        let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", (`#nullable enable
 namespace Contract4718;
+public interface IOut<out T> { }
+public interface IContra<in T> { }
+public class Recursive : ` + "$recursiveInterfaces" + ` { }
+public interface ICarrier<out X, Y> { }
+public class Derived<T> : ICarrier<string, T> { }
+public class RecursiveDerived<T> : ICarrier<Recursive, T> { }
+public class ContraDerived<T> : IContra<ICarrier<object, T>> { }
+public class Outer<T> {
+    public class Inner { }
+}
+public class NestedDerived<T> : Outer<T>.Inner {
+    public NestedDerived(T value = default!) { }
+}
+public class Carrier<T> { }
+public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
-public class Reordered<X, Y> : Carrier<Y, X> { }
+public class Both<T> : Carrier<T, T> {
+    public Both(T value = default!) { }
+}
+public class Reordered<X, Y> : Carrier<Y, X> {
+    public Reordered(X first = default!, Y second = default!) { }
+}
+public class Intermediate<X, Y> : Reordered<X, Y> { }
+public class WrappedOut<X, Y> : IOut<Reordered<X, Y>> { }
+public class ExtraDerived<X, Y, Z> : Carrier<Y, Z> {
+    public ExtraDerived(X extra = default!, Z keep = default!) { }
+}
 public abstract class RowsBase {
-    public abstract Carrier<(string? Text, int Code), (string Keep, int Code)> Rows();
-}`)}, assemblyName: "Contract4718")
+    public abstract ` + "$baseReturn" + ` Rows();
+}`))}, assemblyName: "Contract4718")
         using let image = MemoryStream()
         let emitted = library.Compilation.Emit(image)
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
         let bytes = image.ToArray()
-        let returnType = if reordered {
-            "Reordered<(string Keep, int Code), (string Text, int Code)>"
-        } else {
-            "Carrier<(string Text, int Code), (string Keep, int Code)>"
+        let derived = switch mode {
+            case "intermediate": "Intermediate"
+            case "nested-reordered": "WrappedOut"
+            default: "Reordered"
+        }
+        let returnType = switch mode {
+            case "direct",
+            "base-typed-reordered",
+            "base-typed-extra",
+            "repeated-type-parameter": "Carrier<(string Text, int Code), (string Keep, int Code)>"
+            case "widened-interface": "Derived<(string Text, int Code)>"
+            case "nested-containing": "NestedDerived<(string Text, int Code)>"
+            case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
+            case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
+            case "wrapped": "Wrapped<(string Text, int Code)>"
+            case "unconstrained-extra",
+            "unconstrained-extra-switch",
+            "fixed-contract-sinkless-and-base-typed": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
+            default: "$derived<(string Keep, int Code), (string Text, int Code)>"
+        }
+        let extraCreationType = "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
+        let cleanCreationType = "ExtraDerived<(string Extra, int Code), (string Untainted, int Code), (string Keep, int Code)>"
+        let reorderedCreationType = "Reordered<(string Keep, int Code), (string Text, int Code)>"
+        let body = switch mode {
+            case "unconstrained-extra": "string extra = null; return new $returnType((extra, 1), (extra, 2));"
+            case "unconstrained-extra-switch": "string extra = null; return 0 switch { _ => new $returnType(((extra), 1), ((extra), 2)) };"
+            case "base-typed-reordered": "string extra = null; $returnType local = new $reorderedCreationType((\"keep\", 1), (extra, 2)); return local;"
+            case "base-typed-extra": "string extra = null; Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $extraCreationType((extra, 1), (extra, 2));"
+            case "fixed-contract-sinkless-and-base-typed": "string extra = null; _ = new $returnType((extra, 1), (\"keep\", 2)).ToString(); Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $returnType((\"fixed\", 1), (\"keep\", 2));"
+            case "repeated-type-parameter": "string text = null; Carrier<(string Text, int Code), (string Text, int Code)> both = new Both<(string Text, int Code)>((text, 1)); _ = both; return new $reorderedCreationType((\"keep\", 1), (text, 2));"
+            case "implicit-reordered": "return new();"
+            case "nested-containing": "string text = null; Outer<(string Text, int Code)>.Inner local = new $returnType((text, 1)); _ = local; return new $returnType();"
+            default: "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
 public sealed class Producer : RowsBase {
     public override ` + "$returnType" + ` Rows() {
-        return new ` + "$returnType" + `();
+        ` + "$body" + `
     }
 }`), CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(bytes)).ToArray())
-        let expected = if reordered {
-            "Reordered[(Keep string, Code int32), (Text string, Code int32)]"
-        } else {
-            "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+        let expected = switch mode {
+            case "direct",
+            "base-typed-reordered",
+            "base-typed-extra",
+            "repeated-type-parameter": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
+            case "widened-interface": "Derived[(Text string?, Code int32)]"
+            case "nested-containing": "NestedDerived[(Text string?, Code int32)]"
+            case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
+            case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
+            case "wrapped": "Wrapped[(Text string?, Code int32)]"
+            case "unconstrained-extra",
+            "unconstrained-extra-switch": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
+            case "fixed-contract-sinkless-and-base-typed": "ExtraDerived[(Extra string, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
+            default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
+        let expectedExtraCreation = "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
         Assert.Contains("override func Rows() " + expected, printed)
-        Assert.Contains("return " + expected + "()", printed)
+        if mode == "unconstrained-extra" {
+            Assert.Contains("return $expected(", printed)
+            Assert.Contains("(extra, 1)", printed)
+            Assert.Contains("(extra!!, 2)", printed)
+        } else if mode == "unconstrained-extra-switch" {
+            Assert.Contains("$expected(", printed)
+            Assert.Contains("((extra), 1)", printed)
+            Assert.Contains("((extra)!!, 2)", printed)
+        } else if mode == "base-typed-reordered" {
+            Assert.Contains(
+                "local $expected = Reordered[(Keep string, Code int32), (Text string?, Code int32)](",
+                printed
+            )
+            Assert.Contains("(extra, 2)", printed)
+        } else if mode == "base-typed-extra" {
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Untainted string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains("return $expectedExtraCreation(", printed)
+            Assert.Contains("(extra, 1)", printed)
+            Assert.Contains("(extra!!, 2)", printed)
+            Assert.DoesNotContain("Untainted string?", printed)
+        } else if mode == "fixed-contract-sinkless-and-base-typed" {
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Text string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Untainted string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains("return $expected(", printed)
+            Assert.Contains("(\"fixed\", 1)", printed)
+            Assert.DoesNotContain("Untainted string?", printed)
+        } else if mode == "repeated-type-parameter" {
+            Assert.Contains(
+                "both Carrier[(Text string?, Code int32), (Text string?, Code int32)] = Both[(Text string?, Code int32)](",
+                printed
+            )
+            Assert.Contains("(text, 1)", printed)
+        } else if mode == "nested-containing" {
+            Assert.Contains(
+                "local Outer[(Text string?, Code int32)].Inner = NestedDerived[(Text string?, Code int32)]((text, 1))",
+                printed
+            )
+            Assert.Contains("return $expected()", printed)
+        } else {
+            Assert.Contains("return $expected()", printed)
+        }
+        Assert.DoesNotContain("Keep string?", printed)
         let directory = Path.Combine(".local", "issue4718-import-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(directory)
         try {

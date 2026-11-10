@@ -333,7 +333,7 @@ internal partial class OverloadResolver {
         return BoundFunctionPointerInvocationExpression(syntax, pointer, finalArguments, functionPointerType)
     }
 
-    private func TryBindFunctionTypeArguments(
+    internal func TryBindFunctionTypeArguments(
         calleeName string,
         functionType FunctionTypeSymbol,
         syntax CallExpressionSyntax,
@@ -526,7 +526,7 @@ internal partial class OverloadResolver {
             }
             if GetLambdaArgumentSyntax(argSyntax) is {} lambdaSyntax &&
                 bindLambdaWithTarget != nil &&
-                IsUntypedArrowLambda(lambdaSyntax) &&
+                (IsUntypedArrowLambda(lambdaSyntax) || argument is BoundErrorExpression) &&
                 MemberLookup
                 .TryGetLambdaTargetFunctionTypeFromSymbol(functionType.ParameterTypes[i], out var lambdaTarget) {
                 argument = if argSyntax != nil &&

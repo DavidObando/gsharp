@@ -594,12 +594,19 @@ partial class CSharpToGSharpTranslator {
             if type == nil || typeSymbol == nil {
                 return type
             }
-            let sink ISymbol? = this.ResolveValueSink(creation)
-            return if sink == nil {
-                type
-            } else {
-                this.PromoteTupleTypeArguments(type, typeSymbol, sink, List[int32]())
-            }
+            let sink ISymbol? = ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(
+                creation,
+                this.context.SemanticModel
+            )
+            return this.typeMapper.PromoteTupleTypeArguments(
+                type,
+                typeSymbol,
+                sink,
+                this.context,
+                List[int32](),
+                typeSymbol as INamedTypeSymbol,
+                creation
+            )
         }
 
         // The declaration a freshly built value flows into: the local/field being

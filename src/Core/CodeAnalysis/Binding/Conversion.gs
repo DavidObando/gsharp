@@ -394,7 +394,7 @@ class Conversion {
                 return !invariant || !FunctionTypeSymbol.ContainsOptionalContract(source)
             }
             var sourceElements = source.GetElementPositions()
-            if TryProjectPlatformArgumentsToSupertype(
+            if TryProjectTypeArgumentsToSupertype(
                 source,
                 target,
                 out var projected,
@@ -412,7 +412,7 @@ class Conversion {
                 let variance = if invariant {
                     TypeParameterVariance.None
                 } else {
-                    OptionalContractPositionVariance(targetShape, i)
+                    GetPositionVariance(targetShape, i)
                 }
                 let compatible = if variance == TypeParameterVariance.In {
                     HaveCompatibleOptionalContracts(targetElements[i], sourceElements[i])
@@ -523,7 +523,7 @@ class Conversion {
             )
         }
 
-        private func OptionalContractPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
+        internal func GetPositionVariance(target TypeSymbol, index int32) TypeParameterVariance {
             let target = UnwrapNullableForVariance(target) ?? target
             if target is FunctionTypeSymbol function {
                 if index < function
@@ -546,7 +546,13 @@ class Conversion {
             if TupleTypeSymbol.TryGetTupleShape(target, out _) {
                 return TypeParameterVariance.Out
             }
-            if target is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol or MapTypeSymbol {
+            if target is SliceTypeSymbol or
+                ArrayTypeSymbol or
+                RectangularArrayTypeSymbol or
+                MapTypeSymbol ||
+                target
+                .ClrType
+                ?.IsArray == true {
                 return TypeParameterVariance.None
             }
             if NativeSliceTypes.TryGetElement(target, out _, out var isReadOnly) {
@@ -662,7 +668,7 @@ class Conversion {
             // and variant projections were already decided by the mismatch arm.
             if !(from is NullableTypeSymbol) &&
                 !(from is PlatformTypeSymbol) &&
-                TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
+                TryProjectTypeArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments) &&
                 !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to) &&
                 projectedArguments.Length == targetArguments
                 .Length {
@@ -2392,56 +2398,71 @@ class Conversion {
                 typeParameters.Length != toArgs.Length {
                 return false
             }
-            for var i = 0; i < typeParameters.Length; i++ {
-                let fromArg = fromArgs[i]
-                let toArg = toArgs[i]
-                if fromArg == toArg {
-                    continue
-                }
-                switch typeParameters[i].Variance {
-                    case TypeParameterVariance.Out {
-                        // CLR generic-interface variance (ECMA-335 II.9.7) is
-                        // defined only for REFERENCE-typed type arguments; the
-                        // emitter (MethodBodyEmitter.IsReferenceCompatible, which
-                        // calls back into this same method) emits no cast/box for
-                        // a variance conversion, so a value-type argument (a
-                        // primitive, enum, or user struct) would produce
-                        // unverifiable/unsound IL even though it boxes implicitly
-                        // to `object` (ADR-0045). Reject before considering
-                        // `Classify` at all — a value-type argument on either
-                        // side means the two constructed interfaces are genuinely
-                        // different CLR types, not variance-compatible ones.
-                        // Covariant: the source argument must implicitly
-                        // convert to the target argument (string -> object).
-                        // #4420: an element conversion that needs ADR-0186 §4's
-                        // nil check (`string!` -> `object`) is not variance: a
-                        // variance conversion reads every element through the
-                        // target view with no per-element check point.
-                        if !IsVariantArgumentRelated(fromArg, toArg, nominalOnly, allowPlatformNilCheck: false) {
-                            return false
-                        }
-                    }
-                    case TypeParameterVariance.In {
-                        // Same reference-type-only restriction as the `Out` case
-                        // above, applied symmetrically to the contravariant slot.
-                        // Contravariant: the TARGET argument must implicitly
-                        // convert to the SOURCE argument (object -> string),
-                        // so the narrower interface accepts the wider one.
-                        // #4420: symmetric to the covariant arm. A view that
-                        // writes `string!` (possibly nil) into a sink declared
-                        // non-null `object` has no per-element check point.
-                        if !IsVariantArgumentRelated(toArg, fromArg, nominalOnly, allowPlatformNilCheck: false) {
-                            return false
-                        }
-                    }
-                    default {
-                        // Invariant: the arguments must be identical (already
-                        // ruled out above by the `fromArg == toArg` fast path).
-                        return false
-                    }
+            let active = activeConstructedReferenceConversions ?? {
+                let created = List[(From TypeSymbol, To TypeSymbol)]()
+                activeConstructedReferenceConversions = created
+                created
+            }
+            for pair in active {
+                if pair.From == from && pair.To == to {
+                    return false
                 }
             }
-            return true
+            active.Add((from, to))
+            try {
+                for var i = 0; i < typeParameters.Length; i++ {
+                    let fromArg = fromArgs[i]
+                    let toArg = toArgs[i]
+                    if fromArg == toArg {
+                        continue
+                    }
+                    switch typeParameters[i].Variance {
+                        case TypeParameterVariance.Out {
+                            // CLR generic-interface variance (ECMA-335 II.9.7) is
+                            // defined only for REFERENCE-typed type arguments; the
+                            // emitter (MethodBodyEmitter.IsReferenceCompatible, which
+                            // calls back into this same method) emits no cast/box for
+                            // a variance conversion, so a value-type argument (a
+                            // primitive, enum, or user struct) would produce
+                            // unverifiable/unsound IL even though it boxes implicitly
+                            // to `object` (ADR-0045). Reject before considering
+                            // `Classify` at all — a value-type argument on either
+                            // side means the two constructed interfaces are genuinely
+                            // different CLR types, not variance-compatible ones.
+                            // Covariant: the source argument must implicitly
+                            // convert to the target argument (string -> object).
+                            // #4420: an element conversion that needs ADR-0186 §4's
+                            // nil check (`string!` -> `object`) is not variance: a
+                            // variance conversion reads every element through the
+                            // target view with no per-element check point.
+                            if !IsVariantArgumentRelated(fromArg, toArg, nominalOnly, allowPlatformNilCheck: false) {
+                                return false
+                            }
+                        }
+                        case TypeParameterVariance.In {
+                            // Same reference-type-only restriction as the `Out` case
+                            // above, applied symmetrically to the contravariant slot.
+                            // Contravariant: the TARGET argument must implicitly
+                            // convert to the SOURCE argument (object -> string),
+                            // so the narrower interface accepts the wider one.
+                            // #4420: symmetric to the covariant arm. A view that
+                            // writes `string!` (possibly nil) into a sink declared
+                            // non-null `object` has no per-element check point.
+                            if !IsVariantArgumentRelated(toArg, fromArg, nominalOnly, allowPlatformNilCheck: false) {
+                                return false
+                            }
+                        }
+                        default {
+                            // Invariant: the arguments must be identical (already
+                            // ruled out above by the `fromArg == toArg` fast path).
+                            return false
+                        }
+                    }
+                }
+                return true
+            } finally {
+                active.RemoveAt(active.Count - 1)
+            }
         }
 
         /// Issue #1162/#2516: symbolic slice-to-interface conversion shared by
@@ -2749,7 +2770,7 @@ class Conversion {
         /// @param source The source type.
         /// @param target The target type.
         /// @returns `true` when the target view is the same reference.
-        private func ProvesNominalReference(source TypeSymbol, target TypeSymbol) bool {
+        internal func ProvesNominalReference(source TypeSymbol, target TypeSymbol) bool {
             let sourceShape = source.StripToBareShape()
             let targetShape = target.StripToBareShape()
             if !IsReferenceLikeTarget(sourceShape) || !IsReferenceLikeTarget(targetShape) {
@@ -3978,6 +3999,9 @@ class Conversion {
         /// @param clrArgumentBoundary Whether CLR applicability already admitted reference annotations.
         /// @param nominalOnly Whether the caller already classified the pair, so variant arguments use only the nominal proof.
         /// @returns Whether the symbolic hierarchy and variance admit the relation.
+        @ThreadStatic
+        private var activeConstructedReferenceConversions List[(From TypeSymbol, To TypeSymbol)]?
+
         private func TryClassifyConstructedImportedReferenceConversion(
             from TypeSymbol?,
             to TypeSymbol?,
@@ -3991,46 +4015,61 @@ class Conversion {
                 targetOpen.IsValueType {
                 return false
             }
-            // Issue #3501 (Track A6 keystone): a VALUE-TYPE source converting to a
-            // variant INTERFACE target is C#'s boxing conversion composed with
-            // interface variance (`ImmutableArray[IMethodSymbol]` →
-            // `IEnumerable[ISymbol]`); the emitter's struct→interface arm already
-            // boxes, and the boxed reference is runtime-assignment-compatible with
-            // the variant interface, so only classification was missing. Non-
-            // interface targets keep the value-type exclusion.
-            // Closed CLR signatures have no symbolic owner vector to map.
-            // Project their real hierarchy; symbolic sources must
-            // keep the owner-aware path and never fall back to erased probes.
-            if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
-                (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
-                ClrTypeUtilities
-                .AreSame(sourceOpen, targetOpen) {
-                return AreConstructedReferenceArgumentsCompatible(
-                    sourceTypeArguments,
-                    targetArguments,
-                    targetOpen,
-                    clrArgumentBoundary,
-                    nominalOnly
-                )
+            let active = activeConstructedReferenceConversions ?? {
+                let created = List[(From TypeSymbol, To TypeSymbol)]()
+                activeConstructedReferenceConversions = created
+                created
             }
-            if from is not ImportedTypeSymbol importedSource {
-                return false
-            }
-            for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
-                importedSource,
-                targetOpen
-            ) {
-                if AreConstructedReferenceArgumentsCompatible(
-                    arguments,
-                    targetArguments,
-                    targetOpen,
-                    clrArgumentBoundary,
-                    nominalOnly
-                ) {
-                    return true
+            for pair in active {
+                if pair.From == from && pair.To == to {
+                    return false
                 }
             }
-            return false
+            active.Add((from, to))
+            try {
+                // Issue #3501 (Track A6 keystone): a VALUE-TYPE source converting to a
+                // variant INTERFACE target is C#'s boxing conversion composed with
+                // interface variance (`ImmutableArray[IMethodSymbol]` →
+                // `IEnumerable[ISymbol]`); the emitter's struct→interface arm already
+                // boxes, and the boxed reference is runtime-assignment-compatible with
+                // the variant interface, so only classification was missing. Non-
+                // interface targets keep the value-type exclusion.
+                // Closed CLR signatures have no symbolic owner vector to map.
+                // Project their real hierarchy; symbolic sources must
+                // keep the owner-aware path and never fall back to erased probes.
+                if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
+                    (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
+                    ClrTypeUtilities
+                    .AreSame(sourceOpen, targetOpen) {
+                    return AreConstructedReferenceArgumentsCompatible(
+                        sourceTypeArguments,
+                        targetArguments,
+                        targetOpen,
+                        clrArgumentBoundary,
+                        nominalOnly
+                    )
+                }
+                if from is not ImportedTypeSymbol importedSource {
+                    return false
+                }
+                for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                    importedSource,
+                    targetOpen
+                ) {
+                    if AreConstructedReferenceArgumentsCompatible(
+                        arguments,
+                        targetArguments,
+                        targetOpen,
+                        clrArgumentBoundary,
+                        nominalOnly
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            } finally {
+                active.RemoveAt(active.Count - 1)
+            }
         }
 
         private func AreConstructedReferenceArgumentsCompatible(
@@ -4390,7 +4429,7 @@ class Conversion {
             // A projection onto the source's own definition that yields the same argument pairs
             // as the same-shape comparison below is decided there, so each pair is related once.
             if !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from)) &&
-                TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
+                TryProjectTypeArgumentsToSupertype(from, to, out var projected, out var supertypeArguments) &&
                 (AnyContainsPlatformType(projected) || AnyContainsPlatformType(supertypeArguments)) &&
                 !IsSameShapeComparison(from, to, projected, supertypeArguments) {
                 var hasIllegalProjection = false
@@ -4895,7 +4934,7 @@ class Conversion {
         /// supertype (an implemented CLR interface or an imported base class)
         /// onto [`to`](paramref). The supertype either IS the target's
         /// definition, or reaches it through its own CLR hierarchy, which the
-        /// imported arm of (cref:TryProjectPlatformArgumentsToSupertype)
+        /// imported arm of (cref:TryProjectTypeArgumentsToSupertype)
         /// walks; an imported symbol is never a same-compilation one, so that
         /// recursion is one level.
         /// @param implemented The substituted imported supertype.
@@ -4912,7 +4951,9 @@ class Conversion {
             targetArguments ImmutableArray[TypeSymbol],
             out projected ImmutableArray[TypeSymbol],
             out projectedTargetArguments ImmutableArray[TypeSymbol],
-            includeCallableContracts bool = false
+            includeCallableContracts bool = false,
+            includeAllPositions bool = false,
+            acceptProjection Func[ImmutableArray[TypeSymbol], bool]? = nil
         ) bool {
             projectedTargetArguments = targetArguments
             if TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr) &&
@@ -4929,17 +4970,19 @@ class Conversion {
             ) &&
                 implementedArguments.Length == targetArguments.Length {
                 projected = implementedArguments
-                return true
+                return acceptProjection?.Invoke(projected) ?? true
             }
             projected = ImmutableArray[TypeSymbol].Empty
             return !(implemented is StructSymbol) &&
                 !(implemented is InterfaceSymbol) &&
-                TryProjectPlatformArgumentsToSupertype(
+                TryProjectTypeArgumentsToSupertype(
                 implemented,
                 to,
                 out projected,
                 out projectedTargetArguments,
-                includeCallableContracts
+                includeCallableContracts,
+                includeAllPositions,
+                acceptProjection
             )
         }
 
@@ -4970,13 +5013,18 @@ class Conversion {
         /// @param to The conversion target.
         /// @param projected The source's arguments at the target's definition.
         /// @param targetArguments The target's arguments.
+        /// @param includeCallableContracts Include inferred optional callable contracts.
+        /// @param includeAllPositions Project stated-nullability positions even when no platform or optional contract exists.
+        /// @param acceptProjection Select a projection, or continue through the remaining constructed views.
         /// @returns `true` when a projection was found.
-        private func TryProjectPlatformArgumentsToSupertype(
+        internal func TryProjectTypeArgumentsToSupertype(
             from TypeSymbol?,
             to TypeSymbol?,
             out projected ImmutableArray[TypeSymbol],
             out targetArguments ImmutableArray[TypeSymbol],
-            includeCallableContracts bool = false
+            includeCallableContracts bool = false,
+            includeAllPositions bool = false,
+            acceptProjection Func[ImmutableArray[TypeSymbol], bool]? = nil
         ) bool {
             var from = from
             var to = to
@@ -4987,7 +5035,7 @@ class Conversion {
             if from == nil || to == nil || IsValueTypeLikeFrom(to) {
                 return false
             }
-            if includeCallableContracts && to is InterfaceSymbol targetInterface {
+            if (includeCallableContracts || includeAllPositions) && to is InterfaceSymbol targetInterface {
                 for candidate in GetSourceInterfaceHierarchy(from) {
                     if object.ReferenceEquals(
                         candidate.Definition ?? candidate,
@@ -4995,7 +5043,9 @@ class Conversion {
                     ) {
                         projected = GetEffectiveInterfaceTypeArguments(candidate)
                         targetArguments = GetEffectiveInterfaceTypeArguments(targetInterface)
-                        return projected.Length == targetArguments.Length
+                        if projected.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true) {
+                            return true
+                        }
                     }
                 }
             }
@@ -5009,7 +5059,8 @@ class Conversion {
                     TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected) &&
                     projected.Length == effectiveTargetArguments.Length &&
                     (
-                    AnyContainsPlatformType(projected) ||
+                    includeAllPositions ||
+                        AnyContainsPlatformType(projected) ||
                         AnyContainsPlatformType(effectiveTargetArguments) ||
                         (
                         includeCallableContracts &&
@@ -5021,7 +5072,7 @@ class Conversion {
                     )
                 ) {
                     targetArguments = effectiveTargetArguments
-                    return true
+                    return acceptProjection?.Invoke(projected) ?? true
                 }
             }
             if !TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr) ||
@@ -5035,14 +5086,15 @@ class Conversion {
                 targetClr.GetGenericTypeDefinition()
             }
             let positions = from.GetElementPositions()
-            if positions.IsDefaultOrEmpty {
+            if positions.IsDefaultOrEmpty && !includeAllPositions {
                 return false
             }
             // Hot path: ordinary generic upcasts carry no platform position, so
             // decline before any hierarchy walk. The vectors are checked rather
             // than the outer types, because a flags-annotated array hides its
             // element from the outer-type test.
-            if !AnyContainsPlatformType(positions) &&
+            if !includeAllPositions &&
+                !AnyContainsPlatformType(positions) &&
                 !AnyContainsPlatformType(targetArguments) &&
                 (
                 !includeCallableContracts ||
@@ -5068,7 +5120,9 @@ class Conversion {
                             targetArguments,
                             out projected,
                             out var interfaceTargetArguments,
-                            includeCallableContracts
+                            includeCallableContracts,
+                            includeAllPositions,
+                            acceptProjection
                         ) {
                             targetArguments = interfaceTargetArguments
                             return true
@@ -5103,7 +5157,9 @@ class Conversion {
                             targetArguments,
                             out projected,
                             out var classTargetArguments,
-                            includeCallableContracts
+                            includeCallableContracts,
+                            includeAllPositions,
+                            acceptProjection
                         ) {
                             targetArguments = classTargetArguments
                             return true
@@ -5120,7 +5176,9 @@ class Conversion {
                                     targetArguments,
                                     out projected,
                                     out var interfaceTargetArguments,
-                                    includeCallableContracts
+                                    includeCallableContracts,
+                                    includeAllPositions,
+                                    acceptProjection
                                 ) {
                                     targetArguments = interfaceTargetArguments
                                     return true
@@ -5131,12 +5189,34 @@ class Conversion {
                 }
                 return false
             }
-            let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) ||
-                ((from is NullabilityAnnotatedTypeSymbol and {ClrType: {IsSZArray: true}}))
+            let sourceIsArray = (from is SliceTypeSymbol or ArrayTypeSymbol) || from.ClrType?.IsSZArray == true
             if sourceIsArray {
                 if targetArguments.Length == 1 && positions.Length == 1 && IsArrayElementInterface(targetDefinition) {
                     projected = positions
-                    return true
+                    return acceptProjection?.Invoke(projected) ?? true
+                }
+                return false
+            }
+            // Preserve nullability stated on imported base and interface type arguments.
+            if includeAllPositions && MemberLookup.GetProjectionReceiverImportedType(from) is {} importedReceiver &&
+                importedReceiver.ClrType is {} receiverClr {
+                for candidate in SupertypesOf(receiverClr).Prepend(receiverClr) {
+                    if !candidate.IsGenericType || !ClrTypeUtilities.AreSame(
+                        candidate.GetGenericTypeDefinition(),
+                        targetDefinition
+                    ) ||
+                        !MemberLookup.TryGetSymbolicDeclaringContext(
+                        importedReceiver,
+                        candidate,
+                        out _,
+                        out var declaredArguments
+                    ) {
+                        continue
+                    }
+                    projected = declaredArguments
+                    if projected.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true) {
+                        return true
+                    }
                 }
                 return false
             }
@@ -5168,7 +5248,7 @@ class Conversion {
                 // apparent `string! -> string`.
                 projected = positions
                 targetArguments = to.GetElementPositions()
-                return positions.Length == targetArguments.Length
+                return positions.Length == targetArguments.Length && (acceptProjection?.Invoke(projected) ?? true)
             }
             for candidate in SupertypesOf(sourceDefinition) {
                 var candidateDefinition Type
@@ -5207,7 +5287,9 @@ class Conversion {
                     )
                 }
                 projected = builder.MoveToImmutable()
-                return true
+                if acceptProjection?.Invoke(projected) ?? true {
+                    return true
+                }
             }
             return false
         }

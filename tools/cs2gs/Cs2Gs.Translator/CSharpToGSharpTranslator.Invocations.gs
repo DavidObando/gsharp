@@ -6324,10 +6324,58 @@ partial class CSharpToGSharpTranslator {
                 path.Add(index)
             }
             if tupleIndices.Count != 0 {
+                var target = sink
+                var targetPath IReadOnlyList[int32] = path
+                if sink is IParameterSymbol parameter &&
+                    node!!.Parent is ArgumentSyntax{Parent: ArgumentListSyntax{Parent: {} call}} {
+                    let receiverTarget ISymbol? = switch call {
+                        case InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax member}: this
+                            .context
+                            .GetSymbolInfo(member.Expression)
+                            .Symbol
+                        case creation is BaseObjectCreationExpressionSyntax: ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(
+                            creation,
+                            this.context.SemanticModel
+                        )
+                        default: default(ISymbol?)
+                    }
+                    let receiverType = switch call {
+                        case creation is BaseObjectCreationExpressionSyntax: this
+                            .context
+                            .GetTypeInfo(creation)
+                            .Type as INamedTypeSymbol
+                        default: ObliviousNullabilityAnalyzer.SymbolValueType(receiverTarget) as INamedTypeSymbol
+                    }
+                    if receiverType != nil && ObliviousNullabilityAnalyzer.TryGetGenericReceiverTuplePath(
+                        receiverType,
+                        parameter,
+                        out _,
+                        out var receiverPath
+                    ) {
+                        let combinedPath = receiverPath!!.Concat(path).ToList()
+                        if call is BaseObjectCreationExpressionSyntax creation {
+                            return if ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
+                                this.context.Compilation,
+                                receiverTarget,
+                                receiverType,
+                                combinedPath,
+                                this.context.SiblingCompilations,
+                                creation
+                            ) {
+                                sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
+                            } else {
+                                sinkType
+                            }
+                        } else if receiverTarget != nil {
+                            target = receiverTarget
+                            targetPath = combinedPath
+                        }
+                    }
+                }
                 return if ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                     this.context.Compilation,
-                    sink,
-                    path,
+                    target,
+                    targetPath,
                     this.context.SiblingCompilations
                 ) {
                     sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)

@@ -344,6 +344,7 @@ class Issue4756TupleOverrideContractTests {
     @InlineData("generic-subclass", true)
     @InlineData("source-subclass", true)
     @InlineData("nullable-subclass", false)
+    @InlineData("nullable-generic-subclass", false)
     func CovariantTaskOverride_ProjectsOnlyTheContractResult(shape string, accepted bool) {
         using let fixture = NativeSliceLanguageTests.Fixture()
         let annotation = if accepted {
@@ -371,7 +372,7 @@ class Issue4756TupleOverrideContractTests {
         )
         let sourceReturn = switch shape {
             case "nongeneric-base": "Task[Box]"
-            case "generic-subclass": "GenericRowsTask[Box?]"
+            case "generic-subclass", "nullable-generic-subclass": "GenericRowsTask[Box?]"
             case "source-subclass": "SourceTask"
             default: "RowsTask"
         }
