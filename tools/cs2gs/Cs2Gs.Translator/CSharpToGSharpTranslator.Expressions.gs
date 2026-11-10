@@ -1507,6 +1507,12 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.EmittedName(memberSymbol, memberName)
             }
+            if member.Expression is BaseExpressionSyntax &&
+                memberSymbol is IMethodSymbol{Name: "Deconstruct"} baseDeconstruct &&
+                this
+                .TryGetImportedBaseDeconstructHelperName(member, baseDeconstruct, out var baseHelperName) {
+                return MemberAccessExpression(target, baseHelperName, isArrow)
+            }
             if memberSymbol is IMethodSymbol{Name: "Deconstruct"} deconstructMethod &&
                 emittedMemberName != deconstructMethod
                 .Name {

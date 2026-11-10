@@ -2826,7 +2826,9 @@ partial class CSharpToGSharpTranslator {
                 return this.TranslateRecordPatternMemberSubpatternTest(leafPattern, finalMemberAccess, leafType)
             }
             let link GExpression = MemberAccessExpression(memberReceiver, names[index])
-            let declaredType ITypeSymbol? = this.ResolveDeclaredReceiverType(
+            let intermediateSymbol ISymbol? = this.GetPatternMemberSymbol(intermediateExprs[index])
+            let declaredType ITypeSymbol? = this.RegisterPatternMemberSlot(intermediateSymbol, link) ??
+                this.ResolveDeclaredReceiverType(
                 this.context.GetTypeInfo(intermediateExprs[index]).Type,
                 intermediateExprs[index]
             )
@@ -2846,6 +2848,57 @@ partial class CSharpToGSharpTranslator {
                 (sharedPrefixes != nil && declaredType?.IsReferenceType == true)
             if gsharpNullableLink {
                 this.state.GSharpNullablePatternReceivers.Add(link)
+            }
+            if this.RecordPatternDecisionOwner(leafPattern) is {} owner &&
+                this
+                .DecisionSubtreeRunsUserRecordDeconstruct(owner, leafPattern) {
+                let parentPath = if leafPattern.Parent is SubpatternSyntax parentSub {
+                    this.RecordPatternDecisionPath(parentSub.Parent!!, owner)
+                } else {
+                    ""
+                }
+                let linkSteps = "prop:" + string.Join(
+                    "/prop:",
+                    this.SplitPatternMemberPathKeys(intermediateExprs[index])
+                )
+                let intermediatePath = if parentPath.Length == 0 {
+                    linkSteps
+                } else {
+                    parentPath + "/" + linkSteps
+                }
+                if this.TryWrapRecordPatternReceiverCache(
+                    owner,
+                    intermediatePath,
+                    intermediateExprs[index],
+                    link,
+                    declaredType,
+                    (local GExpression) -> {
+                        let nextReceiver = if nullableValueLink || declaredType?.IsReferenceType == true {
+                            cast[GExpression](NonNullAssertionExpression(local))
+                        } else {
+                            local
+                        }
+                        let next = this.TranslateExtendedPropertyLink(
+                            names,
+                            intermediateExprs,
+                            index + 1,
+                            nextReceiver,
+                            memberPath,
+                            leafPattern,
+                            sharedPrefixes
+                        )
+                        return if nullableValueLink || declaredType?.IsReferenceType == true {
+                            cast[GExpression](
+                                BinaryExpression(BinaryExpression(local, "!=", LiteralExpression.Null()), "&&", next)
+                            )
+                        } else {
+                            next
+                        }
+                    },
+                    out var cachedIntermediate
+                ) {
+                    return cachedIntermediate!!
+                }
             }
             let rest(GExpression) -> GExpression = func (local GExpression) GExpression {
                 let next = this.TranslateExtendedPropertyLink(

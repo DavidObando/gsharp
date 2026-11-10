@@ -426,7 +426,8 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return EmittedNameAllocator.For(producerCompilation!!).GetName(sourceMethod, context)
             }
-            return this.nameAllocator.GetName(symbol, context)
+            let allocated = this.nameAllocator.GetName(symbol, context)
+            return this.DisambiguateAgainstMigratedProducerDeconstruct(symbol, allocated)
         }
 
         private func EmittedName(

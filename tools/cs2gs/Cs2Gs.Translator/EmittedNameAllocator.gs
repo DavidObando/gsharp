@@ -96,6 +96,12 @@ internal class EmittedNameAllocator {
         }
     }
 
+    func GetAllDeconstructContractMembers(method IMethodSymbol) IReadOnlyCollection[IMethodSymbol] {
+        lock this.gate {
+            return this.GetContractGroup(Canonical(method)).OfType[IMethodSymbol]().ToArray()
+        }
+    }
+
     private init(compilation Compilation) {
         this.compilation = compilation
         this.CollectContractGroups()

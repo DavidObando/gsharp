@@ -58,15 +58,18 @@ namespace RecordDeconstruction {
 namespace Producer {
     public interface IParts { void Deconstruct(out int x, out int y); }
     public record R : IParts {
+        public int deconstruct;
         public int X = 2, Y = 3, Z = 4;
-        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public virtual void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
 }`
         let consumer = if shape == "unqualified" {
             `
 namespace RecordDeconstruction {
     public record Child : Producer.R {
+        public int deconstruct2 = 9;
         public delegate void Parts(out int x, out int y);
+        public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
         public Parts Save() => Deconstruct;
     }
     public static class Probe {
@@ -74,7 +77,9 @@ namespace RecordDeconstruction {
             var child = new Child();
             var saved = child.Save();
             saved(out var x, out var y);
-            return $"{x},{y}";
+            Producer.R asBase = child;
+            var (bx, by) = asBase;
+            return $"{x},{y},{bx},{by},{child.deconstruct2}";
         }
     }
 }`
@@ -575,13 +580,15 @@ namespace RecordDeconstruction {
         public static string Run() {
             R? r = new R();
             R.Hook = () => r = null;
-            var matched = false;
-            try { matched = r is PATTERN; }
-            catch (System.NullReferenceException) { return "threw"; }
+            string first;
+            try { first = (r is PATTERN).ToString(); }
+            catch (System.NullReferenceException) { first = "threw"; }
             R.Hook = null;
             R plain = new R();
             var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
-            return $"{matched},{subtypeMiss}";
+            object boxed = new R();
+            var boxedMatch = boxed is PATTERN;
+            return $"{first},{subtypeMiss},{boxedMatch}";
         }
     }
 }`).Replace(
@@ -807,6 +814,7 @@ namespace External {
     public interface IParts {
         int Count { get; }
         int Reset();
+        int Deconstruct(int scale);
         void Deconstruct(out int x, out int y);
     }
     public record Base {
@@ -842,14 +850,14 @@ namespace RecordDeconstruction {
             if overrideBase {
                 ""
             } else {
-                "public int X, Y; public int Count => X + Y; public int Reset() => Count * 2;"
+                "public int X, Y; public int Count => X + Y; public int Reset() => Count * 2; public int Deconstruct(int scale) => (X + Y) * scale;"
             }
         )
         let part2 = (`
 using External;
 namespace RecordDeconstruction {
     public partial record R {
-        public OVERRIDE void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public OVERRIDE void Deconstruct(out int x, out int y) { BODY }
     }
     EXTRA_TYPES
     public static class Probe {
@@ -881,6 +889,13 @@ namespace RecordDeconstruction {
                 ""
             }
         ).Replace(
+            "BODY",
+            if overrideBase {
+                "base.Deconstruct(out var bx, out var by); x = by * 10; y = bx;"
+            } else {
+                "x = Y * 10; y = X;"
+            }
+        ).Replace(
             "EXTRA_TYPES",
             if overrideBase {
                 "public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }"
@@ -889,6 +904,7 @@ namespace RecordDeconstruction {
                     public int X, Y;
                     public int Count => X + Y;
                     public int Reset() => Count;
+                    public int Deconstruct(int scale) => (X + Y) * scale;
                     public void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
                 }`
             }
@@ -897,7 +913,7 @@ namespace RecordDeconstruction {
             if overrideBase {
                 "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; var extra = $\"{dx},{dy}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var extra = $\"{cx},{cy},{contract.Count},{contract.Reset()}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var extra = $\"{cx},{cy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
@@ -1334,6 +1350,7 @@ namespace RecordDeconstruction {
             "var (x, y, z) = new R { X = 2, Y = 3, Z = 4 };"
         }
         Verify((`
+#nullable enable
 namespace RecordDeconstruction {
     public record R {
         public int X;
@@ -1341,15 +1358,34 @@ namespace RecordDeconstruction {
         public int Z;
         public void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
+    public record struct RS {
+        public int X;
+        public int Y;
+        public int Z;
+        public void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
     public static class Extensions {
-        public static void Deconstruct(this R component0, out int x, out int y, out int z) {
+        public static void Deconstruct(this R? component0, out int x, out int y, out int z) {
+            if (component0 is null) { x = -1; y = -2; z = -3; return; }
             x = component0.Y * 10; y = component0.X; z = component0.Z * 50;
+        }
+        public static void Deconstruct(this ref RS r, out int x, out int y, out int z) {
+            r.X += 100;
+            x = r.X; y = r.Y; z = r.Z;
+        }
+        public static void Deconstruct(this in RS r, out int x, out int y, out int z, out int w) {
+            x = r.X; y = r.Y; z = r.Z; w = r.X + r.Y + r.Z;
         }
     }
     public static class Probe {
         public static string Run() {
             BODY
-            return $"{x},{y},{z}";
+            R? absent = null;
+            var (nx, ny, nz) = absent;
+            var rs = new RS { X = 2, Y = 3, Z = 4 };
+            var (ix, iy, iz, iw) = rs;
+            rs.Deconstruct(out var rx, out var ry, out var rz);
+            return $"{x},{y},{z},{nx},{ny},{nz},{ix},{iy},{iz},{iw},{rx},{ry},{rz},{rs.X}";
         }
     }
 }`).Replace("BODY", body))
@@ -1378,6 +1414,20 @@ namespace RecordDeconstruction {
     }
     public class DerivedHolder : Holder {
         public new R Child = new R { X = 4, Y = 5 };
+    }
+    public class OuterHolder {
+        public static int Reads;
+        private Holder inner = new Holder();
+        public Holder Inner { get { Reads++; return inner; } }
+    }
+    public interface ICarrier<T> {
+        R Child { get; }
+    }
+    public class Carrier : ICarrier<int>, ICarrier<string> {
+        private R first = new R { X = 2, Y = 3 };
+        private R second = new R { X = 7, Y = 8 };
+        R ICarrier<int>.Child => first;
+        R ICarrier<string>.Child => second;
     }
     public record Outer {
         public R First = new R { X = 2, Y = 3 };
@@ -1408,7 +1458,23 @@ namespace RecordDeconstruction {
                 Outer(R(var ox, var oy), _, _) => ox + oy,
                 _ => -1
             };
-            return $"{result},{firstCalls},{firstNull},{hiddenResult},{overloadResult},{R.Calls}";
+            Holder.Current = new Holder();
+            var dottedResult = new OuterHolder() switch {
+                OuterHolder { Inner.Child: R(0, _) } => 0,
+                OuterHolder { Inner: { Child: R(var dx, var dy) } } => dx + dy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            object carrier = new Carrier();
+            var carrierResult = carrier switch {
+                ICarrier<int> { Child: R(0, _) } => 0,
+                ICarrier<string> { Child: R(var cx, var cy) } => cx + cy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            var items = new[] { new R { X = 1, Y = 9 }, new R { X = 2, Y = 1 }, new R { X = 5, Y = 3 } };
+            var listMatch = items is [_, R(0, _), ..] or [.., R(30, 5)];
+            return $"{result},{firstCalls},{firstNull},{hiddenResult},{overloadResult},{dottedResult},{OuterHolder.Reads},{carrierResult},{listMatch},{R.Calls}";
         }
     }
 }`).Replace("HOOK", hook))
