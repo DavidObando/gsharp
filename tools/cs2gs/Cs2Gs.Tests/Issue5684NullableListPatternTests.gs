@@ -148,7 +148,7 @@ namespace Demo
             Positive("a") + " " + Positive(null) + " " + Negative("a") + " " + Negative(null) + " " + NilGuard("bb");
     }
 }`, "1 0 1 0 2")
-        Assert.Contains("return current!!.Length", printed)
+        Assert.DoesNotContain("current!!", printed)
     }
 
     @Fact

@@ -4156,6 +4156,11 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(nil)
         }
+        if syntax.RefKindModifier.Text == "in" && !RefCapabilities.IsDirectlyAddressableForImplicitIn(operand) {
+            let spilledIn = conversions.CreateImplicitInReference(operand, operand.Type)
+            spilledIn.AnchorSyntax(syntax)
+            return spilledIn
+        }
         return BoundAddressOfExpression(
             syntax,
             operand,
@@ -5733,15 +5738,7 @@ internal partial class ExpressionBinder {
                     )
                 )
                 case imported is BoundClrPropertyAccessExpression: cast[BoundExpression](
-                    BoundClrPropertyAccessExpression(
-                        imported.Syntax,
-                        savedReceiver,
-                        imported.Member,
-                        imported.Type,
-                        imported.StaticContainerType,
-                        imported.ConstrainedReceiverTypeParameter,
-                        imported.ConstrainedInterfaceType
-                    )
+                    imported.WithReceiver(savedReceiver)
                 )
                 default: propertyTarget
             }

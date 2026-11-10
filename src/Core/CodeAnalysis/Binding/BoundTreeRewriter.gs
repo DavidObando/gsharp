@@ -1761,15 +1761,7 @@ abstract class BoundTreeRewriter {
         return if receiver == node.Receiver {
             node
         } else {
-            BoundClrPropertyAccessExpression(
-                node.Syntax,
-                receiver,
-                node.Member,
-                node.Type,
-                node.StaticContainerType,
-                node.ConstrainedReceiverTypeParameter,
-                node.ConstrainedInterfaceType
-            )
+            node.WithReceiver(receiver)
         }
     }
 

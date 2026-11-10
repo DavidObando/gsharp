@@ -7124,7 +7124,7 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if this.PatternLocalUsesNullableStorage(expression) {
-                return false
+                return this.IsGSharpFlowNarrowedLocal(expression)
             }
             // Issue #5582: decide a `var` capture once. The pattern-binding shortcut asks the same decision.
             let captureIsNonNull = this.VarCaptureIsNonNull(expression)

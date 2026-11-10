@@ -49,6 +49,33 @@ class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpressi
         init;
     }
 
+    internal prop DeclaredType TypeSymbol? {
+        get;
+        init;
+    }
+
+    internal prop EffectiveDeclaredType TypeSymbol -> DeclaredType ?? _type
+
+    internal func WithReceiver(receiver BoundExpression?) BoundClrPropertyAccessExpression -> WithSyntaxAndReceiver(
+        Syntax,
+        receiver
+    )
+
+    internal func WithSyntaxAndReceiver(
+        syntax SyntaxNode?,
+        receiver BoundExpression?
+    ) BoundClrPropertyAccessExpression -> BoundClrPropertyAccessExpression(
+        syntax,
+        receiver,
+        Member,
+        _type,
+        StaticContainerType,
+        ConstrainedReceiverTypeParameter,
+        ConstrainedInterfaceType,
+        IsAddressableStaticField,
+        IsReadOnlySubmissionGlobal
+    ){NarrowedType = NarrowedType, DeclaredType = DeclaredType}
+
     /// Gets a value indicating whether this is a static (cref:FieldInfo)
     /// read whose storage the emitter may address in place (`ldsflda`) —
     /// ADR-0156 Phase 2 (issue #3185): a top-level global of a prior interactive

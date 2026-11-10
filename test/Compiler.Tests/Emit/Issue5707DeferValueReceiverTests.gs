@@ -658,6 +658,171 @@ if source.value is Counter c { Console.WriteLine(c.n) }
 `, "1\n1\n1\n1\n", fixture.AssemblyPath)
     }
 
+    @Fact
+    func ImportedReadonlyNullableFieldsAndProperties_RetainTypeTestNarrowingForCallsAndReads() {
+        using let fixture = CSharpFixture(`#nullable enable
+namespace Imported5707 {
+    public struct Counter {
+        public int n;
+        public void Bump() { n++; }
+        public int Plus(int delta) => n + delta;
+    }
+    public class BaseBox {
+        public readonly object? inheritedValue;
+        public object? InheritedProp { get; }
+        public BaseBox(object? value) {
+            inheritedValue = value;
+            InheritedProp = value;
+        }
+    }
+    public sealed class Box {
+        public readonly object? value;
+        public object? Prop { get; }
+        public Box(object? value) {
+            this.value = value;
+            Prop = value;
+        }
+    }
+    public sealed class OuterBox<T> {
+        public readonly T inner;
+        public OuterBox(T inner) { this.inner = inner; }
+    }
+}`)
+        AssertRuns(`import System
+import System.Linq.Expressions
+import System.Runtime.CompilerServices
+import System.Threading.Tasks
+import Imported5707
+
+class DerivedBox : BaseBox {
+    init(value object?) : base(value) {}
+    func RunInherited() {
+        if inheritedValue is Counter {
+            defer inheritedValue.Bump()
+            Console.WriteLine(inheritedValue.Plus(10))
+        }
+        if this.inheritedValue is Counter && base.inheritedValue is Counter {
+            Console.WriteLine(this.inheritedValue.n + base.inheritedValue.n)
+        }
+        if InheritedProp is string {
+            Console.WriteLine(InheritedProp.Length)
+        }
+    }
+}
+
+func TakeIn(in c Counter) int32 {
+    return c.n + 5
+}
+
+func Observe(in view string?, out target string?) string {
+    target = nil
+    return view ?? "nil"
+}
+
+func ReadTupleLength[T ITuple struct](x object) int32 {
+    if x is T {
+        return x.Length
+    }
+    return -1
+}
+
+class SourceBox {
+    let value object?
+    init(value object?) { this.value = value }
+}
+
+func EarlyReturn(box Box, source SourceBox) int32 {
+    if !(box.value is Counter) {
+        return -1
+    }
+    defer box.value.Bump()
+    let copy Counter = box.value
+    let boxSum = copy.n + box.value.n + TakeIn(box.value)
+    if source.value is Counter {
+        return boxSum + TakeIn(in source.value)
+    }
+    return boxSum
+}
+
+async func RunAsync(box Box) Task {
+    if box.value is Counter {
+        defer box.value.Bump()
+        await Task.Delay(1)
+    }
+}
+
+let imported = Box(Counter())
+let tree Expression[(Box) -> int32] = (b Box) -> if b.value is Counter { b.value.n + 7 } else { 0 }
+Console.WriteLine(tree.Compile()(imported))
+if imported.value is Counter {
+    defer imported.value.Bump()
+    Console.WriteLine(TakeIn(in imported.value))
+}
+if imported.value is Counter c {
+    Console.WriteLine(c.n)
+}
+if imported.Prop is Counter && imported.Prop.Plus(2) == 3 {
+    Console.WriteLine(imported.Prop.n)
+}
+let nested = OuterBox[Box](Box(Counter()))
+if nested.inner.value is Counter {
+    defer nested.inner.value.Bump()
+}
+if nested.inner.value is Counter c {
+    Console.WriteLine(c.n)
+}
+Console.WriteLine(EarlyReturn(imported, SourceBox(Counter{n: 4})))
+if imported.value is Counter c {
+    Console.WriteLine(c.n)
+}
+RunAsync(imported).GetAwaiter().GetResult()
+if imported.value is Counter c {
+    Console.WriteLine(c.n)
+}
+let derived = DerivedBox(Counter())
+derived.RunInherited()
+if derived.inheritedValue is Counter c {
+    Console.WriteLine(c.n)
+}
+let textBox = DerivedBox("hello")
+textBox.RunInherited()
+var aliased string? = "initial"
+if aliased != nil {
+    Console.WriteLine(Observe(in aliased, out aliased))
+}
+if imported.value is Counter {
+    let handle = readonly managed(imported.value)
+    if *handle is Counter c {
+        Console.WriteLine(c.n)
+    }
+}
+Console.WriteLine(ReadTupleLength[ValueTuple[int32, int32]](ValueTuple.Create(10, 20)))
+let propBox = Box(Counter())
+if propBox.Prop is Counter {
+    propBox.Prop.Bump()
+}
+if propBox.Prop is Counter {
+    defer propBox.Prop.Bump()
+}
+if propBox.Prop is Counter c {
+    Console.WriteLine(c.n)
+}
+func CaptureBlockOwner() int32 {
+    var localCounter = Counter{n: 11}
+    let fieldHandle = managed(({
+        let _ = 0
+        localCounter
+    }).n)
+    *fieldHandle = 12
+    return localCounter.n
+}
+Console.WriteLine(CaptureBlockOwner())
+`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\nnil\n3\n2\n2\n12\n", fixture.AssemblyPath, Path.Combine(
+                AppContext.BaseDirectory,
+                "Gsharp.Runtime.Values.dll"
+            ))
+    }
+
     shared {
         private func AssertRuns(source string, expected string, references ...string) {
             let directory = Path.Combine(AppContext.BaseDirectory, "Issue5707", Guid.NewGuid().ToString("N"))

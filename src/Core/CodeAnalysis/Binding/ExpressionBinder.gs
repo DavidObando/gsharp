@@ -2339,7 +2339,7 @@ internal partial class ExpressionBinder {
             )
         }
         let clrAccess BoundClrPropertyAccessExpression? = node as BoundClrPropertyAccessExpression
-        if clrAccess == nil {
+        if clrAccess == nil || clrAccess.NarrowedType != nil {
             return node
         }
         if !SmartCastStability.TryGetStableMemberPath(clrAccess, out var clrPath, out _) {
@@ -2350,7 +2350,8 @@ internal partial class ExpressionBinder {
             "a successful stable CLR member-path lookup has a path",
             expression: "clrPath"
         )
-        let clrNarrowed TypeSymbol? = TryGetNarrowedType(stableClrPath, clrAccess.Type, clrAccess.Syntax?.Location)
+        let declaredClrType = clrAccess.EffectiveDeclaredType
+        let clrNarrowed TypeSymbol? = TryGetNarrowedType(stableClrPath, declaredClrType, clrAccess.Syntax?.Location)
         if clrNarrowed == nil {
             return node
         }
@@ -2358,10 +2359,12 @@ internal partial class ExpressionBinder {
             clrAccess.Syntax,
             clrAccess.Receiver,
             clrAccess.Member,
-            clrAccess.Type,
+            declaredClrType,
             clrAccess.StaticContainerType,
             clrAccess.ConstrainedReceiverTypeParameter,
-            clrAccess.ConstrainedInterfaceType
+            clrAccess.ConstrainedInterfaceType,
+            clrAccess.IsAddressableStaticField,
+            clrAccess.IsReadOnlySubmissionGlobal
         )
         let makeNarrowedClrProperty(TypeSymbol) -> BoundExpression = (
             narrowedType TypeSymbol
@@ -2372,9 +2375,11 @@ internal partial class ExpressionBinder {
             narrowedType,
             clrAccess.StaticContainerType,
             clrAccess.ConstrainedReceiverTypeParameter,
-            clrAccess.ConstrainedInterfaceType
-        ){NarrowedType = narrowedType}
-        return BuildNarrowedRead(clrBaseRead, clrAccess.Type, clrNarrowed, makeNarrowedClrProperty)
+            clrAccess.ConstrainedInterfaceType,
+            clrAccess.IsAddressableStaticField,
+            clrAccess.IsReadOnlySubmissionGlobal
+        ){NarrowedType = narrowedType, DeclaredType = declaredClrType}
+        return BuildNarrowedRead(clrBaseRead, declaredClrType, clrNarrowed, makeNarrowedClrProperty)
     }
 
     /// ADR-0069 / issue #700: when binding an `&&` expression,
@@ -3601,21 +3606,25 @@ internal partial class ExpressionBinder {
         switch member {
             case clrProp is PropertyInfo when GetVisibleGetter(clrProp, fromDerivedType: true) != nil {
                 bound = ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrPropertyAccessExpression(
-                        nil,
-                        receiver,
-                        clrProp,
-                        GetInheritedClrMemberType(receiver!!.Type, clrProp)
+                    ApplyMemberNarrowing(
+                        BoundClrPropertyAccessExpression(
+                            nil,
+                            receiver,
+                            clrProp,
+                            GetInheritedClrMemberType(receiver!!.Type, clrProp)
+                        )
                     )
                 )
                 return true
             }
             case clrFld is FieldInfo {
-                bound = BoundClrPropertyAccessExpression(
-                    nil,
-                    receiver,
-                    clrFld,
-                    GetInheritedClrMemberType(receiver!!.Type, clrFld)
+                bound = ApplyMemberNarrowing(
+                    BoundClrPropertyAccessExpression(
+                        nil,
+                        receiver,
+                        clrFld,
+                        GetInheritedClrMemberType(receiver!!.Type, clrFld)
+                    )
                 )
                 return true
             }
@@ -5783,23 +5792,28 @@ internal partial class ExpressionBinder {
 
         internal func TryGetAddressedStorageType(
             expression BoundExpression,
-            @NotNullWhen(true) out storageType TypeSymbol?
+            @NotNullWhen(true) out storageType TypeSymbol?,
+            useEffectiveNullability bool = false
         ) bool {
             var current = expression
             while current is BoundBlockExpression block {
                 current = block.Expression
             }
             if current is BoundConditionalExpression conditional {
-                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue) ||
-                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse) ||
-                    !ConditionalStorageTypesMatch(nestedTrue, nestedFalse, requireExactNullability: true) {
+                if !TryGetAddressedStorageType(conditional.WhenTrue, out var nestedTrue, useEffectiveNullability) ||
+                    !TryGetAddressedStorageType(conditional.WhenFalse, out var nestedFalse, useEffectiveNullability) ||
+                    !ConditionalStorageTypesMatch(
+                    nestedTrue,
+                    nestedFalse,
+                    requireExactNullability: !useEffectiveNullability
+                ) {
                     storageType = nil
                     return false
                 }
                 storageType = MergeConditionalStorageType(nestedTrue, nestedFalse)
                 return true
             }
-            storageType = AddressedLeafStorageType(current, useEffectiveNullability: false)
+            storageType = AddressedLeafStorageType(current, useEffectiveNullability: useEffectiveNullability)
             return true
         }
 
@@ -5808,6 +5822,10 @@ internal partial class ExpressionBinder {
             useEffectiveNullability bool = true,
             binderCtx BinderContext? = nil
         ) TypeSymbol {
+            var current = current
+            while current is BoundBlockExpression block {
+                current = block.Expression
+            }
             switch current {
                 case bve is BoundVariableExpression {
                     let declaredType = bve.Variable.Type
@@ -5847,14 +5865,8 @@ internal partial class ExpressionBinder {
                         declaredFieldType
                     }
                 }
-                case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
-                    let declaredFieldType = if access.Receiver != nil {
-                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType ?? access.Receiver.Type, field)
-                    } else if access.StaticContainerType != nil {
-                        MemberLookup.GetClrFieldTypeSymbol(access.StaticContainerType, field)
-                    } else {
-                        ClrNullability.GetFieldTypeSymbol(field)
-                    }
+                case BoundClrPropertyAccessExpression{Member: FieldInfo} access {
+                    let declaredFieldType = access.EffectiveDeclaredType
                     return if useEffectiveNullability {
                         ApplyEffectiveReferenceNullability(declaredFieldType, access.Type)
                     } else {
