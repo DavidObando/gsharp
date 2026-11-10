@@ -1353,9 +1353,49 @@ namespace Demo
         }
         static string NullableClearedBeforeAndNotNull()
         {
+            Row? first = new Row { Id = 1 };
+            first.OnRead = () => { first = null; };
+            Row? second = new Row { Id = 1 };
+            second.OnRead = () => { second = null; };
+            Row? third = new Row { Id = 1 };
+            third.OnRead = () => { third = null; };
+            Row? fourth = new Row { Id = 1 };
+            fourth.OnRead = () => { fourth = null; };
+            return (first is { A: 1 } and not null) + " " + (second is { A: 1 } and not (null)) + " " + (third is { A: 1 } and not (null or null)) + " " + (fourth is { A: 1 } and DerivedRow);
+        }
+        static string HiddenBaseTypedAndTyped(int nextBaseTag)
+        {
+            var current = new DerivedRow { Id = 1, Tag = 99 };
+            current.BaseTag = 3;
+            current.OnRead = () =>
+            {
+                var next = new DerivedRow { Id = 2, Tag = 3 };
+                next.BaseTag = nextBaseTag;
+                current = next;
+            };
+            if (current is Row matched and Row { A: 1, Tag: 3 })
+                return "True " + current.Id + " " + matched.Id + " " + matched.Tag + " " + current.Tag;
+            return "False " + current.Id + " " + current.BaseTag + " " + current.Tag;
+        }
+        static int SwitchMultiArmClearedToNull()
+        {
             Row? current = new Row { Id = 1 };
             current.OnRead = () => { current = null; };
-            return (current is { A: 1 } and not null).ToString() + " " + (current is { A: 1 } and DerivedRow).ToString();
+            return current switch
+            {
+                { A: 0 } => 0,
+                { A: 1 } => 1,
+                _ => -1,
+            };
+        }
+        static string DelayedCompoundOrAndConversionCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new BaseRow { Id = 9 }; };
+            if (current is ((not null and Row { A: 1 }) or Row { A: 2 }) and { Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
         }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
@@ -1390,8 +1430,12 @@ namespace Demo
             DowncastThenBaseRecursive(0, 3) + " / " +
             RefParameterSubject(0) + " / " +
             RefParameterSubject(3) + " / " +
-            NullableClearedBeforeAndNotNull();
+            NullableClearedBeforeAndNotNull() + " / " +
+            HiddenBaseTypedAndTyped(0) + " / " +
+            HiddenBaseTypedAndTyped(3) + " / " +
+            SwitchMultiArmClearedToNull() + " / " +
+            DelayedCompoundOrAndConversionCapture();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True False", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1", rejectRedundantAssertions: true)
     }
 }

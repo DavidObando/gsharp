@@ -674,65 +674,111 @@ partial class CSharpToGSharpTranslator {
             let nullableResultType GTypeReference? = this.NullableReferenceSwitchResultType(node)
             let arms = List[SwitchArm]()
             var hasTotalArm = false
-            for arm in node.Arms {
-                // Issue #1730: the pattern's bindings must be installed BEFORE the
-                // `when` guard is translated, since the guard can reference them
-                // (`Circle { Radius: var r } when r > 0 => ...`). Translating the
-                // guard first (the prior order) resolved `r` while it was still
-                // out of scope.
-                let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
-                let usedDesignators = HashSet[string](StringComparer.Ordinal)
-                let guards = List[GExpression]()
-                let mutableBindings = List[(Symbol ILocalSymbol, MatchedValue GExpression)]()
-                this.RegisterProjectedSwitchPatternBindings(arm.Pattern, node.GoverningExpression)
-                let pattern GPattern? = this.TranslateSwitchPattern(
-                    arm.Pattern,
-                    subject,
-                    bindings,
-                    usedDesignators,
-                    guards,
-                    mutableBindings,
-                    node.GoverningExpression
+            let liveSubjectSwitch = node.Arms.Any(
+                (arm SwitchExpressionArmSyntax) -> this.PatternScrutineeMayChangeDuringMatch(
+                    node.GoverningExpression,
+                    arm.Pattern
                 )
-                for (symbol, replacement) in bindings {
-                    this.state.PatternBindings[symbol] = replacement
-                }
-                for (symbol, matchedValue) in mutableBindings {
-                    this.state.PatternBindings[symbol] = matchedValue
-                }
-                var guard_ GExpression?
-                var body GExpression?
-                try {
-                    // Issue #991: C# `when` guards now have a canonical G# form.
-                    // Issue #1943: a typed positional/property subpattern that
-                    // has no room in its `TypePattern` GPattern node (a
-                    // constant/relational/nested test) was collected into
-                    // `guards` above instead; AND it together with any explicit
-                    // `when` clause (`case Point p when p.X == 0 && p.Y == 0 &&
-                    // <user guard>:`).
-                    guard_ = this.TranslateSwitchPatternGuard(arm.WhenClause, guards, mutableBindings)
-                    this.UseMutableSwitchPatternLocals(mutableBindings)
-                    body = this.TranslateSwitchArmExpression(arm.Expression, nullableResultType)
-                    body = this.MaterializeMutableSwitchPatternLocals(body, mutableBindings, arm.Pattern)
-                } finally {
-                    for (symbol, _) in bindings {
-                        this.state.PatternBindings.Remove(symbol)
+            )
+            let multiArmLiveSwitch = liveSubjectSwitch && node.Arms.Count(
+                (arm SwitchExpressionArmSyntax) -> arm.Pattern is not(
+                    Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .DiscardPatternSyntax or
+                        Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .VarPatternSyntax
+                )
+            ) > 1
+            let previousSwitchCache = this.activeSwitchEvaluationCache
+            let switchCache(
+                Declarations List[GStatement],
+                NullGuard List[(Flag string, Value string)],
+                Members List[(ReceiverKey string, Member ISymbol, Flag string, Value string)]
+            )? = if multiArmLiveSwitch {
+                (
+                    List[GStatement](),
+                    List[(Flag string, Value string)](),
+                    List[(ReceiverKey string, Member ISymbol, Flag string, Value string)]()
+                )
+            } else {
+                default(
+                    (
+                        Declarations List[GStatement],
+                        NullGuard List[(Flag string, Value string)],
+                        Members List[(ReceiverKey string, Member ISymbol, Flag string, Value string)]
+                    )?
+                )
+            }
+            this.activeSwitchEvaluationCache = switchCache
+            try {
+                for arm in node.Arms {
+                    // Issue #1730: the pattern's bindings must be installed BEFORE the
+                    // `when` guard is translated, since the guard can reference them
+                    // (`Circle { Radius: var r } when r > 0 => ...`). Translating the
+                    // guard first (the prior order) resolved `r` while it was still
+                    // out of scope.
+                    let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
+                    let usedDesignators = HashSet[string](StringComparer.Ordinal)
+                    let guards = List[GExpression]()
+                    let mutableBindings = List[(Symbol ILocalSymbol, MatchedValue GExpression)]()
+                    this.RegisterProjectedSwitchPatternBindings(arm.Pattern, node.GoverningExpression)
+                    let pattern GPattern? = this.TranslateSwitchPattern(
+                        arm.Pattern,
+                        subject,
+                        bindings,
+                        usedDesignators,
+                        guards,
+                        mutableBindings,
+                        node.GoverningExpression
+                    )
+                    for (symbol, replacement) in bindings {
+                        this.state.PatternBindings[symbol] = replacement
                     }
-                    for (symbol, _) in mutableBindings {
-                        this.state.PatternBindings.Remove(symbol)
+                    for (symbol, matchedValue) in mutableBindings {
+                        this.state.PatternBindings[symbol] = matchedValue
                     }
+                    var guard_ GExpression?
+                    var body GExpression?
+                    try {
+                        // Issue #991: C# `when` guards now have a canonical G# form.
+                        // Issue #1943: a typed positional/property subpattern that
+                        // has no room in its `TypePattern` GPattern node (a
+                        // constant/relational/nested test) was collected into
+                        // `guards` above instead; AND it together with any explicit
+                        // `when` clause (`case Point p when p.X == 0 && p.Y == 0 &&
+                        // <user guard>:`).
+                        guard_ = this.TranslateSwitchPatternGuard(arm.WhenClause, guards, mutableBindings)
+                        this.UseMutableSwitchPatternLocals(mutableBindings)
+                        body = this.TranslateSwitchArmExpression(arm.Expression, nullableResultType)
+                        body = this.MaterializeMutableSwitchPatternLocals(body, mutableBindings, arm.Pattern)
+                    } finally {
+                        for (symbol, _) in bindings {
+                            this.state.PatternBindings.Remove(symbol)
+                        }
+                        for (symbol, _) in mutableBindings {
+                            this.state.PatternBindings.Remove(symbol)
+                        }
+                    }
+                    arms.Add(SwitchArm(pattern, body, guard_))
+                    // A guarded discard (`case _ when …`) can still fail at run
+                    // time, so — mirroring gsc's own exhaustiveness rule
+                    // (diagnostics.md GS0176: "a guarded discard … does not act
+                    // as a total/default arm") — only an unguarded discard/`default`
+                    // arm counts as total. `pattern` is `null` for a real C#
+                    // discard (`_ =>`); it is a `DiscardPattern` node (not `null`)
+                    // for a `var v =>` arm, which also always matches (it never
+                    // narrows, so it is total too — see `TranslatePattern`'s
+                    // `VarPatternSyntax` case above).
+                    hasTotalArm |= guard_ == nil &&
+                        (pattern == nil || (pattern is DiscardPattern || pattern is VarPattern))
                 }
-                arms.Add(SwitchArm(pattern, body, guard_))
-                // A guarded discard (`case _ when …`) can still fail at run
-                // time, so — mirroring gsc's own exhaustiveness rule
-                // (diagnostics.md GS0176: "a guarded discard … does not act
-                // as a total/default arm") — only an unguarded discard/`default`
-                // arm counts as total. `pattern` is `null` for a real C#
-                // discard (`_ =>`); it is a `DiscardPattern` node (not `null`)
-                // for a `var v =>` arm, which also always matches (it never
-                // narrows, so it is total too — see `TranslatePattern`'s
-                // `VarPatternSyntax` case above).
-                hasTotalArm |= guard_ == nil && (pattern == nil || (pattern is DiscardPattern || pattern is VarPattern))
+            } finally {
+                this.activeSwitchEvaluationCache = previousSwitchCache
             }
             // Issue #1962: a C# switch expression can be exhaustive purely by
             // its TYPE arms (e.g. every case of a sealed hierarchy is covered,
@@ -759,7 +805,11 @@ partial class CSharpToGSharpTranslator {
                 )
                 arms.Add(SwitchArm(nil, unmatchedThrow, nil))
             }
-            return this.WrapRecordPatternDecision(node, SwitchExpression(subject, arms))
+            var wrapped GExpression? = this.WrapRecordPatternDecision(node, SwitchExpression(subject, arms))
+            if switchCache is {} activeCache && activeCache.Declarations.Count > 0 {
+                wrapped = BlockExpression(activeCache.Declarations, wrapped)
+            }
+            return wrapped
         }
 
         private func NullableReferenceSwitchResultType(
@@ -2604,9 +2654,26 @@ partial class CSharpToGSharpTranslator {
                 guards.Add(this.TranslatePatternTest(local, pattern, inputType))
                 return VarPattern(temp)
             }
-            if receiverSyntax.Parent is SwitchExpressionSyntax && this.PatternScrutineeMayChangeDuringMatch(
-                receiverSyntax,
-                pattern
+            if receiverSyntax.Parent is SwitchExpressionSyntax switchParent &&
+                pattern is not(
+                Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .DiscardPatternSyntax or
+                    Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VarPatternSyntax
+            ) &&
+                switchParent
+                .Arms
+                .Any(
+                (arm SwitchExpressionArmSyntax) -> this.PatternScrutineeMayChangeDuringMatch(
+                    receiverSyntax,
+                    arm.Pattern
+                )
             ) {
                 this.AddTypedSubpatternGuard(
                     () -> this.TranslatePatternTest(receiver, pattern, inputType, receiverSyntax),
