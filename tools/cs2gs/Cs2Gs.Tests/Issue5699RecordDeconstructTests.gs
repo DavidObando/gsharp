@@ -857,6 +857,12 @@ namespace External {
     public interface IB {
         void Deconstruct(out int x, out int y);
     }
+    public interface IHasCount {
+        int Count { get; }
+    }
+    public interface IDerivedParts : IHasCount {
+        void Deconstruct(out int x, out int y);
+    }
     public record Base {
         public int X, Y;
         public Base() { }
@@ -1018,6 +1024,10 @@ namespace RecordDeconstruction {
                 public record DualExplicit : External.IA, External.IB {
                     void External.IA.Deconstruct(out int x, out int y) { x = 70; y = 7; }
                     void External.IB.Deconstruct(out int x, out int y) { x = 80; y = 8; }
+                }
+                public record DerivedPartsRec : External.IDerivedParts {
+                    public int Count => 9;
+                    void External.IDerivedParts.Deconstruct(out int x, out int y) { x = 90; y = 9; }
                 }`
             }
         ).Replace(
@@ -1025,7 +1035,7 @@ namespace RecordDeconstruction {
             if overrideBase {
                 "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; External.IDerivedParts dp = new DerivedPartsRec(); var (dpx, dpy) = dp; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{dpx},{dpy},{dp.Count},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})

@@ -941,12 +941,14 @@ partial class CSharpToGSharpTranslator {
             if owner == nil {
                 return false
             }
-            for member in iface.GetMembers() {
-                if member is not IMethodSymbol ifaceMethod || ifaceMethod.Name != "Deconstruct" {
-                    return false
-                }
-                if owner.FindImplementationForInterfaceMember(ifaceMethod) == nil {
-                    return false
+            for candidateIface in[]INamedTypeSymbol{iface}.Concat(iface.AllInterfaces) {
+                for member in candidateIface.GetMembers() {
+                    if member is not IMethodSymbol ifaceMethod || ifaceMethod.Name != "Deconstruct" {
+                        return false
+                    }
+                    if owner.FindImplementationForInterfaceMember(ifaceMethod) == nil {
+                        return false
+                    }
                 }
             }
             return true
