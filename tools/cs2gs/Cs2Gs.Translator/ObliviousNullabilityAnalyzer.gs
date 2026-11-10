@@ -5622,13 +5622,20 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func ResolveCreationTupleSink(creation BaseObjectCreationExpressionSyntax, model SemanticModel) ISymbol? {
         var node SyntaxNode = creation
-        while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
-            (
-            node.Parent is ConditionalExpressionSyntax conditional &&
-                (conditional.WhenTrue == node || conditional.WhenFalse == node)
-        ) ||
-            (node.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node) {
-            node = node.Parent!!
+        while true {
+            if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
+                (
+                node.Parent is ConditionalExpressionSyntax conditional &&
+                    (conditional.WhenTrue == node || conditional.WhenFalse == node)
+            ) {
+                node = node.Parent!!
+                continue
+            }
+            if node.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node && arm.Parent != nil {
+                node = arm.Parent!!
+                continue
+            }
+            break
         }
         return switch node.Parent {
             case EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declarator}: model.GetDeclaredSymbol(

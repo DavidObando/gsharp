@@ -267,6 +267,7 @@ public static class Consumer {
     @InlineData("contravariant-self-first")
     @InlineData("contravariant-exact-first")
     @InlineData("unconstrained-extra")
+    @InlineData("unconstrained-extra-switch")
     @InlineData("nested-contravariant")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
@@ -319,13 +320,14 @@ public abstract class RowsBase {
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
             case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
             case "wrapped": "Wrapped<(string Text, int Code)>"
-            case "unconstrained-extra": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
+            case "unconstrained-extra",
+            "unconstrained-extra-switch": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
             default: "$derived<(string Keep, int Code), (string Text, int Code)>"
         }
-        let body = if mode == "unconstrained-extra" {
-            "string extra = null; return new $returnType((extra, 1), (extra, 2));"
-        } else {
-            "return new $returnType();"
+        let body = switch mode {
+            case "unconstrained-extra": "string extra = null; return new $returnType((extra, 1), (extra, 2));"
+            case "unconstrained-extra-switch": "string extra = null; return 0 switch { _ => new $returnType(((extra), 1), ((extra), 2)) };"
+            default: "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
 public sealed class Producer : RowsBase {
@@ -339,7 +341,8 @@ public sealed class Producer : RowsBase {
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
             case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
             case "wrapped": "Wrapped[(Text string?, Code int32)]"
-            case "unconstrained-extra": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
+            case "unconstrained-extra",
+            "unconstrained-extra-switch": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
             default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
         Assert.Contains("override func Rows() " + expected, printed)
@@ -347,6 +350,10 @@ public sealed class Producer : RowsBase {
             Assert.Contains("return $expected(", printed)
             Assert.Contains("(extra, 1)", printed)
             Assert.Contains("(extra!!, 2)", printed)
+        } else if mode == "unconstrained-extra-switch" {
+            Assert.Contains("$expected(", printed)
+            Assert.Contains("((extra), 1)", printed)
+            Assert.Contains("((extra)!!, 2)", printed)
         } else {
             Assert.Contains("return $expected()", printed)
         }
