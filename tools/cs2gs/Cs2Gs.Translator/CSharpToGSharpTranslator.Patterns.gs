@@ -2475,7 +2475,13 @@ partial class CSharpToGSharpTranslator {
             // stored capture's type test narrows it only inside the test
             // block, but a descendant binding reads it after the test, so
             // member reads go through the narrowed `(t as Inner)!!`.
-            if recursive.Type != nil && isNestedPatternMember && this.state.StoredPatternCaptures.Contains(receiver!!) {
+            if userDeconstruct != nil &&
+                recursive.Type != nil &&
+                isNestedPatternMember &&
+                this
+                .state
+                .StoredPatternCaptures
+                .Contains(receiver!!) {
                 let narrowedType = this.context.GetTypeInfo(recursive.Type).Type
                 memberReceiver = if receiverType != nil && narrowedType != nil && SymbolEqualityComparer.Default.Equals(
                     receiverType,
