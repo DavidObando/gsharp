@@ -2157,6 +2157,16 @@ public partial class Demo
         }
         return s.Length + 8;
     }
+    public static int WhileConditionHoistsOutReferencePattern(ref string? s, object probe)
+    {
+        s = null;
+        while (!(probe is Box y && s != null))
+        {
+            y = new Box();
+            s = "abc";
+        }
+        return s.Length + 30;
+    }
     public static int WhileLoopWithLambdaBreak(ref string? s, Box box)
     {
         s = null;
@@ -2419,6 +2429,7 @@ public partial class Demo
             WhileConditionRunsAccessor(ref text, new Lazy<int>(() => 1)) + "," +
             WhileLoopWithNestedBreak(ref text, new Box()) + "," +
             WhileConditionHoistsOutPattern(ref text, 1) + "," +
+            WhileConditionHoistsOutReferencePattern(ref text, new Box()) + "," +
             WhileLoopWithLambdaBreak(ref text, new Box()) + "," +
             WhileLoopWithNonTerminalSwitchBreak(ref text, new Box(), 0) + "," +
             WhileLoopInSwitchGotoFunction(ref text, new Box(), 2) + "," +
@@ -2449,7 +2460,8 @@ public partial class Demo
         Assert.Contains("return s!!.Length + 5", printed)
         Assert.Contains("return s!!.Length + 6", printed)
         Assert.Contains("return s.Length + 7", printed)
-        Assert.Contains("return s!!.Length + 8", printed)
+        Assert.Contains("return s.Length + 8", printed)
+        Assert.Contains("return s!!.Length + 30", printed)
         Assert.Contains("return s.Length + 9", printed)
         Assert.Contains("return s.Length + 10", printed)
         Assert.Contains("return s!!.Length + 11", printed)

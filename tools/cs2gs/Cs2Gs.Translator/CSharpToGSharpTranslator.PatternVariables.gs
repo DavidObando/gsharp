@@ -1625,15 +1625,18 @@ partial class CSharpToGSharpTranslator {
             if this.ClauseRequiresOutPredeclaration(condition) || ClauseContainsAssignment(condition) {
                 return true
             }
-            let hasPatternVariables = condition
+            let hasFallbackLoss = condition
                 .DescendantNodesAndSelf(
                 (node SyntaxNode) -> !(
                     node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
                 )
             )
                 .OfType[IsPatternExpressionSyntax]()
-                .Any((isPattern IsPatternExpressionSyntax) -> PatternUsesNativeVariableSyntax(isPattern.Pattern))
-            if hasPatternVariables && !this.ConditionUsesNativePatternVariables(condition) {
+                .Any(
+                (isPattern IsPatternExpressionSyntax) -> PatternUsesNativeVariableSyntax(isPattern.Pattern) &&
+                    this.FallbackPatternBinderLosesHeaderNarrowing(isPattern, condition)
+            )
+            if hasFallbackLoss && !this.ConditionUsesNativePatternVariables(condition) {
                 return true
             }
             if !this.ClauseRequiresOutPredeclaration(condition) && this.ConditionUsesNativePatternVariables(condition) {
@@ -1647,6 +1650,53 @@ partial class CSharpToGSharpTranslator {
                 return true
             }
             return this.ForConditionRequiresHoist(condition)
+        }
+
+        private func FallbackPatternBinderLosesHeaderNarrowing(
+            isPattern IsPatternExpressionSyntax,
+            condition ExpressionSyntax
+        ) bool {
+            let stripped = StripTopLevelNegation(isPattern.Pattern, out var negated)
+            if negated || stripped is not DeclarationPatternSyntax declaration {
+                return true
+            }
+            let receiverType = this.context.GetTypeInfo(isPattern.Expression).Type
+            let targetType = this.context.GetTypeInfo(declaration.Type).Type
+            if receiverType == nil ||
+                targetType == nil ||
+                !targetType.IsValueType ||
+                !IsBuiltInRegionConversionType(receiverType) ||
+                !IsBuiltInRegionConversionType(targetType) {
+                return true
+            }
+            let resolved = this.ResolveExpressionRegionReceiverTypes(isPattern.Expression, condition)
+            return resolved == nil || resolved.Count == 0 || !resolved.All(IsBuiltInRegionConversionType)
+        }
+
+        private func IsBuiltInRegionConversionType(type ITypeSymbol) bool {
+            let unwrapped = if type is INamedTypeSymbol nullable &&
+                nullable
+                .OriginalDefinition
+                .SpecialType == SpecialType.System_Nullable_T &&
+                nullable
+                .TypeArguments
+                .Length == 1 {
+                nullable.TypeArguments[0]
+            } else {
+                type
+            }
+            if unwrapped.TypeKind == TypeKind.Enum {
+                return false
+            }
+            let special = unwrapped.SpecialType
+            return special == SpecialType.System_Object ||
+                special == SpecialType.System_String ||
+                special == SpecialType.System_Boolean ||
+                special == SpecialType.System_Char ||
+                special == SpecialType.System_Decimal ||
+                (special >= SpecialType.System_SByte && special <= SpecialType.System_Double) ||
+                special == SpecialType.System_IntPtr ||
+                special == SpecialType.System_UIntPtr
         }
 
         private func LoopContainsEmittedBreak(loop StatementSyntax) bool {
