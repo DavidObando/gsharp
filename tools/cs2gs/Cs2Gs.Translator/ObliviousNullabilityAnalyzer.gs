@@ -5698,11 +5698,28 @@ internal shared class ObliviousNullabilityAnalyzer {
         for argument in arguments {
             if argument.Parameter is {RefKind: not RefKind.None} refParameter {
                 // Roslyn can associate a ref-conditional argument operation with its value syntax.
-                let refArgument = argument.Syntax.AncestorsAndSelf().OfType[ArgumentSyntax]().FirstOrDefault()
-                if refArgument is ArgumentSyntax{RefKindKeyword: {RawKind: not 0}} sourceArgument {
+                let refArgument = argument
+                    .Syntax
+                    .AncestorsAndSelf()
+                    .TakeWhile((node SyntaxNode) -> node != call)
+                    .OfType[ArgumentSyntax]()
+                    .FirstOrDefault()
+                let refExpression ExpressionSyntax? = if refArgument is ArgumentSyntax{
+                    RefKindKeyword: {RawKind: not 0}
+                } sourceArgument {
+                    sourceArgument.Expression
+                } else if call is InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess} &&
+                    argument
+                    .Value
+                    ?.Syntax == memberAccess.Expression {
+                    memberAccess.Expression
+                } else {
+                    default(ExpressionSyntax?)
+                }
+                if refExpression != nil {
                     CollectRefTupleStorage(
                         refParameter,
-                        sourceArgument.Expression,
+                        refExpression,
                         model,
                         tupleTainted,
                         tupleContractEdges,
@@ -5714,18 +5731,21 @@ internal shared class ObliviousNullabilityAnalyzer {
                     CollectMethodTypeParameterPaths(refParameter.OriginalDefinition.Type, string.Empty, paramPaths)
                     if paramPaths.Count > 0 {
                         let resolvedSources = EnumerateTupleContainerSources(
-                            sourceArgument.Expression,
+                            refExpression,
                             model,
                             unwrapSuppressions: true,
                             HashSet[ISymbol](SymbolEqualityComparer.Default)
                         ).ToList()
                         for (typeParameter, paramPath) in paramPaths {
-                            if CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(typeParameter) {
-                                continue
-                            }
                             for resolved in resolvedSources {
                                 let fullPath = CombineTuplePaths(resolved.Prefix, paramPath)
                                 if TuplePositionType(resolved.StorageType, paramPath) is {} subType {
+                                    let hasNestedTupleLeaves = subType is INamedTypeSymbol{IsTupleType: true} ||
+                                        HasNestedTupleSlots(subType)
+                                    if !hasNestedTupleLeaves &&
+                                        CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(typeParameter) {
+                                        continue
+                                    }
                                     if !sharedTypeParameterStorages.TryGetValue(typeParameter, out var entries) {
                                         entries = List[(Symbol ISymbol, Type ITypeSymbol, Path string, IsOutput bool)]()
                                         sharedTypeParameterStorages.Add(typeParameter, entries)
@@ -5757,41 +5777,49 @@ internal shared class ObliviousNullabilityAnalyzer {
             CollectGenericReceiverTupleArgumentFlow(call, argument, model, tupleTainted, tupleEdges, tupleScalarEdges)
         }
         for entries in sharedTypeParameterStorages.Values {
-            for var i = 1; i < entries.Count; i++ {
-                let first = entries[0]
-                let second = entries[i]
-                let edges = if first.IsOutput || second.IsOutput {
+            let representativeIndex = entries.FindIndex(
+                (entry(Symbol ISymbol, Type ITypeSymbol, Path string, IsOutput bool)) -> !entry.IsOutput
+            )
+            if representativeIndex < 0 {
+                continue
+            }
+            let representative = entries[representativeIndex]
+            for var i = 0; i < entries.Count; i++ {
+                if i == representativeIndex {
+                    continue
+                }
+                let current = entries[i]
+                let edges = if current.IsOutput {
                     tupleEdges
                 } else {
                     tupleContractEdges
                 }
-                if first.Type is INamedTypeSymbol{IsTupleType: true} || HasNestedTupleSlots(first.Type) {
+                if representative.Type is INamedTypeSymbol{IsTupleType: true} ||
+                    HasNestedTupleSlots(representative.Type) {
                     AddTupleContractPair(
-                        first.Symbol,
-                        first.Type,
-                        second.Symbol,
-                        second.Type,
+                        representative.Symbol,
+                        representative.Type,
+                        current.Symbol,
+                        current.Type,
                         tupleTainted,
                         edges,
-                        secondPrefix: second.Path,
-                        bidirectional: !first.IsOutput && !second.IsOutput,
-                        firstPrefix: first.Path
+                        secondPrefix: current.Path,
+                        bidirectional: !current.IsOutput,
+                        firstPrefix: representative.Path
                     )
-                } else if first
+                } else if representative
                     .Path
                     .Length > 0 &&
-                    second
+                    current
                     .Path
                     .Length > 0 &&
-                    IsEligibleTupleLeaf(first.Type) &&
-                    IsEligibleTupleLeaf(second.Type) {
-                    let firstKey = TupleElementKey(first.Symbol, first.Path)
-                    let secondKey = TupleElementKey(second.Symbol, second.Path)
-                    if !first.IsOutput {
-                        edges.Add((secondKey, firstKey))
-                    }
-                    if !second.IsOutput {
-                        edges.Add((firstKey, secondKey))
+                    IsEligibleTupleLeaf(representative.Type) &&
+                    IsEligibleTupleLeaf(current.Type) {
+                    let representativeKey = TupleElementKey(representative.Symbol, representative.Path)
+                    let currentKey = TupleElementKey(current.Symbol, current.Path)
+                    edges.Add((currentKey, representativeKey))
+                    if !current.IsOutput {
+                        edges.Add((representativeKey, currentKey))
                     }
                 }
             }
@@ -7087,7 +7115,11 @@ internal shared class ObliviousNullabilityAnalyzer {
             if argument.Parameter is not{} parameter || ReducedExtensionParameter(parameter).Ordinal != ordinal {
                 continue
             }
-            let syntax = argument.Syntax.AncestorsAndSelf().OfType[ArgumentSyntax]().FirstOrDefault()
+            let syntax = argument
+                .Syntax
+                .AncestorsAndSelf()
+                .OfType[ArgumentSyntax]()
+                .FirstOrDefault((candidate ArgumentSyntax) -> candidate.Parent == invocation.ArgumentList)
             return syntax?.Expression ?? argument.Value?.Syntax as ExpressionSyntax
         }
         return nil

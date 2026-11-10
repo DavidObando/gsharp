@@ -947,21 +947,32 @@ public static class Obj {
     @InlineData("explicit-leaf")
     @InlineData("inferred-leaf")
     @InlineData("whole-tuple")
+    @InlineData("whole-notnull")
+    @InlineData("whole-out-first")
+    @InlineData("whole-ref-first")
+    @InlineData("leaf-out-first")
+    @InlineData("leaf-ref-first")
     func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
-        let method = if shape == "whole-tuple" {
-            "private static void Keep<T>(ref T a, ref T b) { }"
-        } else {
-            "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
+        let method = switch shape {
+            case "whole-tuple": "private static void Keep<T>(ref T a, ref T b) { }"
+            case "whole-notnull": "private static void Keep<T>(ref T a, ref T b) where T : notnull { }"
+            case "whole-out-first": "private static void Keep<T>(out T a, ref T b) { a = b; }"
+            case "whole-ref-first": "private static void Keep<T>(ref T b, out T a) { a = b; }"
+            case "leaf-out-first": "private static void Keep<T>(out (T, int) a, ref (T, int) b) { a = b; }"
+            case "leaf-ref-first": "private static void Keep<T>(ref (T, int) b, out (T, int) a) { a = b; }"
+            default: "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
         }
-        let taintedCall = if shape == "explicit-leaf" {
-            "Keep<string>(ref a, ref b);"
-        } else {
-            "Keep(ref a, ref b);"
+        let taintedCall = switch shape {
+            case "explicit-leaf": "Keep<string>(ref a, ref b);"
+            case "whole-out-first" or "leaf-out-first": "Keep(out a, ref b);"
+            case "whole-ref-first" or "leaf-ref-first": "Keep(ref b, out a);"
+            default: "Keep(ref a, ref b);"
         }
-        let cleanCall = if shape == "explicit-leaf" {
-            "Keep<string>(ref cleanA, ref cleanB);"
-        } else {
-            "Keep(ref cleanA, ref cleanB);"
+        let cleanCall = switch shape {
+            case "explicit-leaf": "Keep<string>(ref cleanA, ref cleanB);"
+            case "whole-out-first" or "leaf-out-first": "Keep(out cleanA, ref cleanB);"
+            case "whole-ref-first" or "leaf-ref-first": "Keep(ref cleanB, out cleanA);"
+            default: "Keep(ref cleanA, ref cleanB);"
         }
         let source = `public static class Obj {
     ` + method + `
@@ -983,7 +994,15 @@ public static class Obj {
             Assert.Contains("Keep[string?](&a, &b)", printed)
             Assert.Contains("Keep[string](&cleanA, &cleanB)", printed)
         }
-        AssertParity(source, printed, "x:null:keep:stay")
+        let expected = if shape.Contains("out-", StringComparison.Ordinal) || shape.Contains(
+            "ref-first",
+            StringComparison.Ordinal
+        ) {
+            "null:null:stay:stay"
+        } else {
+            "x:null:keep:stay"
+        }
+        AssertParity(source, printed, expected)
     }
 
     @Theory
@@ -995,6 +1014,7 @@ public static class Obj {
     @InlineData("conditional-return")
     @InlineData("chained-return")
     @InlineData("extension-parameter")
+    @InlineData("extension-receiver-nested")
     func Issue5880_GenericRefReturnTupleStorage_PreservesCSharpOutput(shape string) {
         let source = switch shape {
             case "explicit-call": `public static class Obj {
@@ -1083,6 +1103,20 @@ public static class Obj {
         return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
     }
 }`
+            case "extension-receiver-nested": `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this int tag, ref (T, int) value) => ref value;
+}
+public static class Obj {
+    private static ref (T, int) Forward<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Forward(ref 1.Borrow(ref row));
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Forward(ref 2.Borrow(ref clean));
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
             default: `public static class Obj {
     private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
     public static string Run() {
@@ -1104,6 +1138,29 @@ public static class Obj {
             "null:keep:2"
         }
         AssertParity(source, printed, expected)
+    }
+
+    @Fact
+    func Issue5880_NestedRefExtensionReceiver_ResolvesReceiverStorage() {
+        const source = `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this ref (T, int) value) => ref value;
+}
+public static class Obj {
+    private static void Consume<T>(ref (T, int) value) { }
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref row.Borrow();
+        alias = (null, 1);
+        Consume(ref row.Borrow());
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref clean.Borrow();
+        Consume(ref clean.Borrow());
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var row (string?, int32)", printed)
+        Assert.Contains("let ref cleanAlias (string, int32)", printed)
     }
 
     @Theory
