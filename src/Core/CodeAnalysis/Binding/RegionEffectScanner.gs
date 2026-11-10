@@ -393,8 +393,8 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.RelationalPattern {
                 let relational = cast[RelationalPatternSyntax](node)
                 // The binder converts the operand to the subject's type, which a conversion operator can do (W4).
-                if Active() && relational.Expression !is LiteralExpressionSyntax {
-                    current.Conversions.Add(RegionConversion(nil, nil, false))
+                if Active() && UnwrapParentheses(relational.Expression) !is LiteralExpressionSyntax {
+                    RecordConversion(relational.Expression, patternSubject)
                 }
                 // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`.
                 // Record them as operator candidates, including a literal value.
@@ -554,15 +554,30 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypeOrConstantPattern {
                 let pattern = cast[TypeOrConstantPatternSyntax](node)
-                RecordPatternTest(pattern.Expression, TypeTest("", pattern.CandidateType, true))
-                constantPatternDepth++
-                Visit(pattern.Expression)
-                constantPatternDepth--
+                if pattern.PropertyPattern == nil {
+                    RecordPatternTest(pattern.Expression, TypeTest("", pattern.CandidateType, true))
+                    constantPatternDepth++
+                    Visit(pattern.Expression)
+                    constantPatternDepth--
+                }
                 let outer = patternSubject
                 let outerIsOperatorForm = patternSubjectIsOperatorForm
                 patternSubject = TypeOrigin(pattern.CandidateType)
                 patternSubjectIsOperatorForm = false
                 Visit(pattern.PropertyPattern)
+                patternSubject = outer
+                patternSubjectIsOperatorForm = outerIsOperatorForm
+            }
+            case SyntaxKind.BinaryPattern {
+                let binary = cast[BinaryPatternSyntax](node)
+                Visit(binary.Left)
+                let outer = patternSubject
+                let outerIsOperatorForm = patternSubjectIsOperatorForm
+                if binary.OperatorToken.Text == "and" && TryNarrowPatternSubject(binary.Left) is {} narrowed {
+                    patternSubject = narrowed
+                    patternSubjectIsOperatorForm = false
+                }
+                Visit(binary.Right)
                 patternSubject = outer
                 patternSubjectIsOperatorForm = outerIsOperatorForm
             }
@@ -594,7 +609,6 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.IsExpression {
                 let isExpression = cast[IsExpressionSyntax](node)
-                RecordTypeTests(isExpression.Expression, isExpression.Pattern)
                 Visit(isExpression.Expression)
                 let outer = patternSubject
                 let outerIsOperatorForm = patternSubjectIsOperatorForm
@@ -603,20 +617,23 @@ internal sealed class RegionEffectScanner {
                 Visit(isExpression.Pattern)
                 patternSubject = outer
                 patternSubjectIsOperatorForm = outerIsOperatorForm
+                RecordTypeTests(isExpression.Expression, isExpression.Pattern)
             }
             case SyntaxKind.SwitchStatement {
                 let switchStatement = cast[SwitchStatementSyntax](node)
                 Visit(switchStatement.Expression)
+                let subject = BuildPath(switchStatement.Expression)
+                let subjectIsOperatorForm = IsOperatorForm(switchStatement.Expression)
                 for switchCase in switchStatement.Cases {
-                    RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     Push()
                     let outer = patternSubject
                     let outerIsOperatorForm = patternSubjectIsOperatorForm
-                    patternSubject = BuildPath(switchStatement.Expression)
-                    patternSubjectIsOperatorForm = IsOperatorForm(switchStatement.Expression)
+                    patternSubject = subject
+                    patternSubjectIsOperatorForm = subjectIsOperatorForm
                     Visit(switchCase.Value)
                     patternSubject = outer
                     patternSubjectIsOperatorForm = outerIsOperatorForm
+                    RecordTypeTests(switchStatement.Expression, switchCase.Value)
                     VisitCondition(switchCase.Guard)
                     Visit(switchCase.Body)
                     Pop()
@@ -626,16 +643,18 @@ internal sealed class RegionEffectScanner {
                 let switchExpression = cast[SwitchExpressionSyntax](node)
                 let merge = BeginMerge(node)
                 Visit(switchExpression.Expression)
+                let subject = BuildPath(switchExpression.Expression)
+                let subjectIsOperatorForm = IsOperatorForm(switchExpression.Expression)
                 for arm in switchExpression.Arms {
-                    RecordTypeTests(switchExpression.Expression, arm.Value)
                     Push()
                     let outer = patternSubject
                     let outerIsOperatorForm = patternSubjectIsOperatorForm
-                    patternSubject = BuildPath(switchExpression.Expression)
-                    patternSubjectIsOperatorForm = IsOperatorForm(switchExpression.Expression)
+                    patternSubject = subject
+                    patternSubjectIsOperatorForm = subjectIsOperatorForm
                     Visit(arm.Value)
                     patternSubject = outer
                     patternSubjectIsOperatorForm = outerIsOperatorForm
+                    RecordTypeTests(switchExpression.Expression, arm.Value)
                     VisitCondition(arm.Guard)
                     Visit(arm.Result)
                     Pop()
@@ -1323,6 +1342,8 @@ internal sealed class RegionEffectScanner {
             let name = current.TypeTests[i].Name
             if IsDeclared(name) {
                 SetOrigin(name, nil)
+                current.TypeTests.RemoveAt(i)
+            } else if CandidateUnlessDeclared(current.TypeTests[i]) == nil {
                 current.TypeTests.RemoveAt(i)
             }
         }
@@ -2073,7 +2094,7 @@ internal sealed class RegionEffectScanner {
         if inner is LambdaExpressionSyntax or FunctionLiteralExpressionSyntax {
             return RegionArgumentForm.FunctionLiteral
         }
-        if IsPureStringForm(inner) {
+        if IsPureStringForm(inner) || IsPureBooleanForm(inner) {
             return RegionArgumentForm.Path
         }
         if IsStringForm(inner) {
@@ -2105,6 +2126,44 @@ internal sealed class RegionEffectScanner {
             IsPureStringForm(binary.Right)
     }
 
+    // A boolean literal, an `is` test, or `!`, `&&`, `||`, `==` or `!=` of such operands only.
+    private func IsPureBooleanForm(expression ExpressionSyntax?) bool {
+        let inner = UnwrapParentheses(expression)
+        if inner is IsExpressionSyntax {
+            return true
+        }
+        if inner is LiteralExpressionSyntax literal {
+            return literal
+                .LiteralToken
+                .Kind == SyntaxKind.TrueKeyword ||
+                literal
+                .LiteralToken
+                .Kind == SyntaxKind.FalseKeyword
+        }
+        if inner is UnaryExpressionSyntax unary && unary.OperatorToken.Kind == SyntaxKind.BangToken {
+            return IsPureBooleanForm(unary.Operand)
+        }
+        if inner is BinaryExpressionSyntax binary {
+            if binary
+                .OperatorToken
+                .Kind == SyntaxKind.AmpersandAmpersandToken ||
+                binary
+                .OperatorToken
+                .Kind == SyntaxKind.PipePipeToken {
+                return true
+            }
+            if binary
+                .OperatorToken
+                .Kind == SyntaxKind.EqualsEqualsToken ||
+                binary
+                .OperatorToken
+                .Kind == SyntaxKind.BangEqualsToken {
+                return IsPureBooleanForm(binary.Left) && IsPureBooleanForm(binary.Right)
+            }
+        }
+        return false
+    }
+
     private func IsStringForm(expression ExpressionSyntax?) bool {
         let inner = UnwrapParentheses(expression)
         if inner is InterpolatedStringExpressionSyntax {
@@ -2126,7 +2185,7 @@ internal sealed class RegionEffectScanner {
             inner = parenthesized.Expression
         }
         if inner is BinaryExpressionSyntax binary {
-            return IsOperatorCandidate(binary)
+            return binary.OperatorToken.Kind != SyntaxKind.QuestionQuestionToken
         }
         return inner is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary)
     }
@@ -2151,7 +2210,8 @@ internal sealed class RegionEffectScanner {
         }
         var builtInByForm = inner is BinaryExpressionSyntax ||
             inner is LiteralExpressionSyntax ||
-            inner is InterpolatedStringExpressionSyntax
+            inner is InterpolatedStringExpressionSyntax ||
+            IsPureBooleanForm(inner)
         if inner is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary) {
             builtInByForm = true
         }
@@ -2244,6 +2304,7 @@ internal sealed class RegionEffectScanner {
         let builtInByForm = arm is BinaryExpressionSyntax ||
             arm is LiteralExpressionSyntax ||
             arm is InterpolatedStringExpressionSyntax ||
+            IsPureBooleanForm(arm) ||
             (arm is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary))
         current.Conversions.Add(RegionConversion(path, target, builtInByForm))
     }
@@ -2695,6 +2756,15 @@ internal sealed class RegionEffectScanner {
                         ImmutableArray[RegionReceiverStep].Empty
                     )
                 }
+                if IsPureBooleanForm(expression) {
+                    return RegionReceiverPath(
+                        nil,
+                        false,
+                        nil,
+                        "System.Boolean",
+                        ImmutableArray[RegionReceiverStep].Empty
+                    )
+                }
                 return nil
             }
         }
@@ -2846,7 +2916,10 @@ internal sealed class RegionEffectScanner {
         CollectSubjectTypePatterns(pattern, tested)
         var all = 0
         for node in pattern.DescendantNodesAndSelf() {
-            if node is TypePatternSyntax || node is TypeOrConstantPatternSyntax {
+            if node is TypePatternSyntax {
+                all++
+            } else if node is TypeOrConstantPatternSyntax candidate &&
+                CandidateUnlessDeclared(TypeTest("", candidate.CandidateType, true)) != nil {
                 all++
             }
         }
@@ -2868,8 +2941,29 @@ internal sealed class RegionEffectScanner {
         for node in tested {
             if node is TypePatternSyntax typePattern {
                 current.TypeTests.Add(TypeTest(name, typePattern.Type, false))
-            } else if node is TypeOrConstantPatternSyntax candidate {
-                current.TypeTests.Add(TypeTest(name, candidate.CandidateType, true))
+            } else if node is TypeOrConstantPatternSyntax candidate &&
+                CandidateUnlessDeclared(TypeTest(name, candidate.CandidateType, true)) is {} typeTest {
+                current.TypeTests.Add(typeTest)
+            }
+        }
+    }
+
+    private func TryNarrowPatternSubject(pattern PatternSyntax) RegionReceiverPath? {
+        switch pattern {
+            case parenthesized is ParenthesizedPatternSyntax {
+                return TryNarrowPatternSubject(parenthesized.Pattern)
+            }
+            case typePattern is TypePatternSyntax {
+                return TypeOrigin(typePattern.Type)
+            }
+            case candidate is TypeOrConstantPatternSyntax when candidate.PropertyPattern != nil {
+                return TypeOrigin(candidate.CandidateType)
+            }
+            case binary is BinaryPatternSyntax when binary.OperatorToken.Text == "and" {
+                return TryNarrowPatternSubject(binary.Right) ?? TryNarrowPatternSubject(binary.Left)
+            }
+            default {
+                return nil
             }
         }
     }
@@ -2931,8 +3025,13 @@ internal sealed class RegionEffectScanner {
                 CollectSubjectTypePatterns(binary.Left, tested)
                 CollectSubjectTypePatterns(binary.Right, tested)
             }
-            case TypePatternSyntax, TypeOrConstantPatternSyntax {
+            case TypePatternSyntax {
                 tested.Add(pattern)
+            }
+            case candidate is TypeOrConstantPatternSyntax {
+                if CandidateUnlessDeclared(TypeTest("", candidate.CandidateType, true)) != nil {
+                    tested.Add(pattern)
+                }
             }
             default { }
         }

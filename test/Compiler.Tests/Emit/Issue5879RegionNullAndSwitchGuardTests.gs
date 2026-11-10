@@ -109,6 +109,33 @@ Console.WriteLine(Probe())
                 ),
                 false
             }
+            for negated in[]string{
+                "if !(value is nil) { return -1 }",
+                "if value !is nil { return -1 }",
+                "if !(value is (cast[object?](nil))) { return -1 }",
+                "const Local C? = nil\n        if !(value is (Local)) { return -1 }",
+                "const Local C? = nil\n        if !(value is (Local)) || (value is 1.5) { return -1 }",
+                "if !(value is string s and { Length: 2 }) { } else { return -1 }",
+                "let matches = value is nil\n        if !matches { return -1 }",
+                "switch value { case _ when !(value is nil) { return -1 } default { } }"
+            } {
+                yield []object{"negated_safe_" + negated, Loop(negated), false}
+            }
+            for unsafePattern in[]string{
+                "if !(value is 0) { }",
+                "if !(value is nil or 0) { }",
+                "let xs = []int32{1}\n        if !(xs is [1]) { }"
+            } {
+                yield []object{"negated_unsafe_" + unsafePattern, Loop(unsafePattern, true), true}
+            }
+            yield []object{
+                "negated_unsafe_property_pattern_getter",
+                Loop("if !(value is Prober { Flag: 1 }) { }", true).Replace(
+                    "class C {}",
+                    "class C {}\nclass Prober {\n    var Callback () -> void\n    prop Flag int32 { get { Callback() return 1 } }\n}"
+                ),
+                true
+            }
             for body in[]string{
                 "var Local C? = nil\n        Local = replacement\n        let matches = value is (Local)",
                 "const First C? = nil\n        var Local = First\n        Local = replacement\n        let matches = value is (Local)",
