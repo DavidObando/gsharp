@@ -693,7 +693,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsPatternQualifiesForNativeVariables(isPattern IsPatternExpressionSyntax) bool {
-            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) || this.PatternRequiresLoweredListTest(
+            if !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true) ||
+                this.PatternScrutineeMayChangeDuringMatch(isPattern) || this.PatternRequiresLoweredListTest(
                 isPattern.Pattern,
                 this.ResolveDeclaredReceiverType(
                     this.context.GetTypeInfo(isPattern.Expression).Type,
