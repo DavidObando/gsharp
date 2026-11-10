@@ -28,7 +28,7 @@ internal partial class ExpressionBinder {
             )
             return BoundErrorExpression(syntax)
         }
-        let location = BindExpression(syntax.Arguments[0])
+        let location = ManagedReferenceOrigins.StorageLocation(BindExpression(syntax.Arguments[0]))
         if location is BoundErrorExpression {
             return location
         }

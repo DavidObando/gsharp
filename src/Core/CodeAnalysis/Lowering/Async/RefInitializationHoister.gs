@@ -309,17 +309,7 @@ shared class RefInitializationHoister {
                         } else {
                             HoistIfNeeded(owner, prelude, captureComponents)
                         }
-                        return BoundClrPropertyAccessExpression(
-                            clrProp.Syntax,
-                            receiver,
-                            clrProp.Member,
-                            clrProp.Type,
-                            clrProp.StaticContainerType,
-                            clrProp.ConstrainedReceiverTypeParameter,
-                            clrProp.ConstrainedInterfaceType,
-                            clrProp.IsAddressableStaticField,
-                            clrProp.IsReadOnlySubmissionGlobal
-                        )
+                        return clrProp.WithReceiver(receiver)
                     }
                 }
                 case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression address} dereference {

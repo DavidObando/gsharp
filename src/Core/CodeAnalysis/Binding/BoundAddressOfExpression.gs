@@ -30,10 +30,11 @@ class BoundAddressOfExpression : BoundExpression {
         Operand = operand
         IsUnmanaged = unmanaged
         IsReadOnly = isReadOnly || RefCapabilities.IsReadOnlyReference(operand)
+        let pointeeType = ExpressionBinder.AddressedLeafStorageType(operand, useEffectiveNullability: true)
         _type = if unmanaged {
-            cast[TypeSymbol](PointerTypeSymbol.Get(operand.Type))
+            cast[TypeSymbol](PointerTypeSymbol.Get(pointeeType))
         } else {
-            cast[TypeSymbol](ByRefTypeSymbol.Get(operand.Type))
+            cast[TypeSymbol](ByRefTypeSymbol.Get(pointeeType))
         }
     }
 

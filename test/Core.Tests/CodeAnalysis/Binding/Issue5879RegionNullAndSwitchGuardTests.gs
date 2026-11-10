@@ -105,6 +105,120 @@ Probe()
                 ),
                 false
             }
+            for negated in[]string{
+                "if !(value is nil) { return -1 }",
+                "if !((value is nil)) { return -1 }",
+                "if value !is nil { return -1 }",
+                "if value is not nil { return -1 }",
+                "if !(value is not nil) { } else { return -1 }",
+                "if value !is not nil { } else { return -1 }",
+                "if !(value is (nil)) { return -1 }",
+                "if value is not (nil) { return -1 }",
+                "if !(value is (cast[object?](nil))) { return -1 }",
+                "if value is not (cast[object?](nil)) { return -1 }",
+                "if value !is (cast[object?](nil)) { return -1 }",
+                "const Local C? = nil\n        if !(value is (Local)) { return -1 }",
+                "const Local C? = nil\n        if value is not (Local) { return -1 }",
+                "const Local C? = nil\n        if value !is (Local) { return -1 }",
+                "const Local C? = nil\n        if !(value is (Local)) || (value is 1.5) { return -1 }",
+                "if !(value is string) { } else { return -1 }",
+                "if !(value is string s) { } else { return -1 }",
+                "if value !is string s { } else { return -1 }",
+                "if value is not string s { } else { return -1 }",
+                "if !(value is var v) { return -1 }",
+                "if !(value is _) { return -1 }",
+                "if !(value is {}) { } else { return -1 }",
+                "if value is not {} { } else { return -1 }",
+                "if !(value is nil or string) { return -1 }",
+                "if !(value is not nil and string) { } else { return -1 }",
+                "if !(value is string s and { Length: 2 }) { } else { return -1 }",
+                "if !(value is C { }) { } else { return -1 }",
+                "if (value is nil) == false { return -1 }",
+                "if (value is not nil) == true { return -1 }",
+                "if !((value is nil) && (value is not string)) { return -1 }",
+                "if !((value is nil) || (value is string)) { return -1 }",
+                "let matches = !(value is nil)\n        if matches { return -1 }",
+                "let matches = value is nil\n        if !matches { return -1 }",
+                "switch value { case _ when !(value is nil) { return -1 } default { } }"
+            } {
+                yield []object{"negated_safe_" + negated, Loop(negated), false}
+            }
+            for unsafePattern in[]string{
+                "if !(value is 0) { }",
+                "if value is not 0 { }",
+                "if !(value is (cast[object?](0))) { }",
+                "const Local int32 = 0\n        if !(value is (Local)) { }",
+                "if !(value is nil or 0) { }",
+                "if !(value is not nil and 0) { }",
+                "let xs = []int32{1}\n        if !(xs is [1]) { }"
+            } {
+                yield []object{"negated_unsafe_" + unsafePattern, Loop(unsafePattern, true), true}
+            }
+            yield []object{
+                "negated_unsafe_property_pattern_getter",
+                Loop("if !(value is Prober { Flag: 1 }) { }", true).Replace(
+                    "class C {}",
+                    "class C {}\nclass Prober {\n    var Callback () -> void\n    prop Flag int32 { get { Callback() return 1 } }\n}"
+                ),
+                true
+            }
+            yield []object{"relational_equality_subject_conversion_on_ref", `class Target {}
+class Source { var Callback () -> void }
+func operator implicit(src Source) Target { src.Callback() return Target() }
+func operator ==(left Target, right Target) bool -> false
+func operator !=(left Target, right Target) bool -> true
+func Read(ref text string?, src Source, target Target) int32 {
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        if !(src is == target) { }
+        if i == 1 { return length }
+    }
+    return 0
+}
+func Probe() int32 {
+    var text string? = "ok"
+    let src = Source{Callback: () -> { text = nil }}
+    return Read(ref text, src, Target())
+}
+Probe()
+`, true}
+            for hiddenBody in[]string{
+                "if items is DerivedList and var DerivedList { let c = items.Count }",
+                "const DerivedList C? = nil\n        if items is DerivedList { let c = items.Count }",
+                "const DerivedList C? = nil\n        if items is DerivedList {} { let c = items.Count }",
+                "const DerivedList C? = nil\n        for var j = 0; j < 1; j++ {\n            if items is DerivedList { let c = items.Count }\n        }",
+                "const DerivedList C? = nil\n        for var j = 0; j < 1; j++ {\n            if items is DerivedList matched { let c = items.Count }\n        }"
+            } {
+                yield []object{"hidden_count_" + hiddenBody, HiddenCount(hiddenBody), true}
+            }
+            for basePattern in[]string{
+                "if value is Derived d and Base and { Flag: 1 } { }",
+                "if cast[Derived](value) is Base and { Flag: 1 } { }"
+            } {
+                yield []object{"hidden_base_flag_" + basePattern, `open class Base {
+    var Callback () -> void
+    prop Flag int32 { get { Callback() return 1 } }
+}
+class Derived : Base {
+    var Flag int32 = 1
+}
+func Read() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    let derived = Derived{Callback: clear}
+    let value object = derived
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        PATTERN
+        if i == 1 { return length }
+    }
+    return 0
+}
+Read()
+`.Replace("PATTERN", basePattern), true}
+            }
             for declaration in[]string{
                 "var Local C? = nil\n        Local = replacement",
                 "const First C? = nil\n        var Local = First\n        Local = replacement",
@@ -193,6 +307,27 @@ Probe()
                 source.Replace("func Read(", "func Read[T](").Replace("Read(nil", "Read[int32](nil")
             }
         }
+
+        private func HiddenCount(body string) string -> `import System.Collections.Generic
+class C {}
+class DerivedList : List[int32] {
+    var Callback () -> void
+    prop Count int32 { get { Callback() return 0 } }
+}
+func Read() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    let items List[int32] = DerivedList{Callback: clear}
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        BODY
+        if i == 1 { return length }
+    }
+    return 0
+}
+Read()
+`.Replace("BODY", body)
 
         private func NullChars(conversion string, inLoop bool, rejected bool = true) string {
             let declaration = if inLoop {

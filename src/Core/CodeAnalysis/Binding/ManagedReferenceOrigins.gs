@@ -13,6 +13,56 @@ import System.Linq
 import System.Reflection
 
 internal shared class ManagedReferenceOrigins {
+    internal func StorageLocation(expression BoundExpression) BoundExpression {
+        var current = expression
+        if current is BoundUnaryExpression{IsNarrowingUnwrap: true} unwrap {
+            current = unwrap.Operand
+        }
+        return switch current {
+            case block is BoundBlockExpression: if StorageLocation(block.Expression) is var inner &&
+                !object.ReferenceEquals(inner, block.Expression) {
+                BoundBlockExpression(block.Syntax, block.Statements, inner)
+            } else {
+                block
+            }
+            case variable is BoundVariableExpression when BinderContext.NarrowedReadChangesRuntimeType(
+                variable.Variable.Type,
+                variable.NarrowedType
+            ): BoundVariableExpression(variable.Syntax, variable.Variable)
+            case field is BoundFieldAccessExpression when BinderContext.NarrowedReadChangesRuntimeType(
+                field.SubstitutedType ?? field.Field.Type,
+                field.NarrowedType
+            ): if field.InterfaceType is {} owner {
+                BoundFieldAccessExpression(field.Syntax, field.Field, owner, field.SubstitutedType, narrowedType: nil)
+            } else {
+                BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: nil
+                )
+            }
+            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo &&
+                BinderContext.NarrowedReadChangesRuntimeType(
+                field.EffectiveDeclaredType,
+                field.NarrowedType
+            ): BoundClrPropertyAccessExpression(
+                field.Syntax,
+                field.Receiver,
+                field.Member,
+                field.EffectiveDeclaredType,
+                field.StaticContainerType,
+                field.ConstrainedReceiverTypeParameter,
+                field.ConstrainedInterfaceType,
+                field.IsAddressableStaticField,
+                field.IsReadOnlySubmissionGlobal
+            )
+            default: current
+        }
+    }
+
     internal func Rejection(expression BoundExpression) string? {
         if (expression.Type is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol) ||
             TypeSymbol.IsByRefLike(expression.Type) {
@@ -170,15 +220,11 @@ internal shared class ManagedReferenceOrigins {
                     field.NarrowedType
                 )
             }
-            case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo} field when !Binder
-                .IsReferenceTypeForConstraint(receiver.Type) {
-                return BoundClrPropertyAccessExpression(
-                    field.Syntax,
-                    PrepareAliases(receiver, references),
-                    field.Member,
-                    field.Type,
-                    field.StaticContainerType
-                )
+            case BoundClrPropertyAccessExpression{
+                Receiver: {} receiver,
+                Member: FieldInfo
+            } field when !Binder.IsReferenceTypeForConstraint(receiver.Type) {
+                return field.WithReceiver(PrepareAliases(receiver, references))
             }
             case block is BoundBlockExpression {
                 return BoundBlockExpression(
@@ -199,10 +245,12 @@ internal shared class ManagedReferenceOrigins {
         references ReferenceResolver
     ) BoundExpression {
         if alias.ManagedReferenceStorage == nil {
-            let origin = Invariant.Required(
-                alias.ManagedReferenceOrigin,
-                "origin checking rejected unknown borrowed aliases",
-                expression: "alias.ManagedReferenceOrigin"
+            let origin = StorageLocation(
+                Invariant.Required(
+                    alias.ManagedReferenceOrigin,
+                    "origin checking rejected unknown borrowed aliases",
+                    expression: "alias.ManagedReferenceOrigin"
+                )
             )
             ManagedReferenceTypes.TryResolveDefinition(
                 references,
@@ -273,6 +321,8 @@ internal shared class ManagedReferenceOrigins {
         receiver.Type
     ) {
         default(string?)
+    } else if BinderContext.NarrowedReadChangesRuntimeType(StorageLocation(receiver).Type, receiver.Type) {
+        "boxed value storage cannot be retained as a struct owner"
     } else {
         Rejection(receiver)
     }

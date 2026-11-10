@@ -3409,11 +3409,13 @@ internal partial class ExpressionBinder {
                     baseField!!.Accessibility
                 )
             }
-            return BoundFieldAccessExpression(
-                member,
-                BoundVariableExpression(nil, fieldReadThisParameter),
-                baseFieldDeclaringType,
-                baseField!!
+            return ApplyMemberNarrowing(
+                BoundFieldAccessExpression(
+                    member,
+                    BoundVariableExpression(nil, fieldReadThisParameter),
+                    baseFieldDeclaringType,
+                    baseField!!
+                )
             )
         }
         if searchBase == nil || !TypeMemberModel.TryGetProperty(
@@ -3840,11 +3842,13 @@ internal partial class ExpressionBinder {
             return false
         }
         let receiver = BoundVariableExpression(nil, thisParameter)
-        result = BoundClrPropertyAccessExpression(
-            member,
-            receiver,
-            clrField,
-            GetInheritedClrMemberType(thisParameter.Type, clrField)
+        result = ApplyMemberNarrowing(
+            BoundClrPropertyAccessExpression(
+                member,
+                receiver,
+                clrField,
+                GetInheritedClrMemberType(thisParameter.Type, clrField)
+            )
         )
         return true
     }

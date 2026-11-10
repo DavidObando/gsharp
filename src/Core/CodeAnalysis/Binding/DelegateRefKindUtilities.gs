@@ -193,7 +193,7 @@ internal shared class DelegateRefKindUtilities {
             if hasDefault {
                 for lit in literals {
                     let litParam = lit.Function.Parameters[i]
-                    if !litParam.HasExplicitDefaultValue || !object.Equals(
+                    if !litParam.HasExplicitDefaultValue || !FunctionTypeSymbol.DefaultValuesEqual(
                         litParam.ExplicitDefaultValue,
                         firstParam.ExplicitDefaultValue
                     ) ||

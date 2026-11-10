@@ -5636,6 +5636,8 @@ internal class MemberLookup {
             for member in path.Members {
                 receiverType = if receiverType is NullableTypeSymbol nullable {
                     nullable.UnderlyingType
+                } else if receiverType is PlatformTypeSymbol platform {
+                    platform.UnderlyingType
                 } else {
                     receiverType
                 }

@@ -809,17 +809,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     if object.ReferenceEquals(inner, clrLink.Receiver) {
                         return clrLink
                     }
-                    return BoundClrPropertyAccessExpression(
-                        clrLink.Syntax,
-                        inner,
-                        clrLink.Member,
-                        clrLink.Type,
-                        clrLink.StaticContainerType,
-                        clrLink.ConstrainedReceiverTypeParameter,
-                        clrLink.ConstrainedInterfaceType,
-                        clrLink.IsAddressableStaticField,
-                        clrLink.IsReadOnlySubmissionGlobal
-                    )
+                    return clrLink.WithReceiver(inner)
                 }
             }
             default {
@@ -914,20 +904,27 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     narrowedType: nil
                 )
             }
-            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo info:
+            case property is BoundPropertyAccessExpression when property.NarrowedType != nil:
+            BoundPropertyAccessExpression(
+                property.Syntax,
+                property.Receiver,
+                property.StructType,
+                property.Property,
+                property.SubstitutedType,
+                narrowedType: nil,
+                property.InterfaceType
+            )
+            case clrAccess is BoundClrPropertyAccessExpression when clrAccess.NarrowedType != nil:
             BoundClrPropertyAccessExpression(
-                field.Syntax,
-                field.Receiver,
-                field.Member,
-                MemberLookup.GetClrFieldTypeSymbol(
-                    field.Receiver?.Type ?? field.StaticContainerType ?? TypeSymbol.Error,
-                    info
-                ),
-                field.StaticContainerType,
-                field.ConstrainedReceiverTypeParameter,
-                field.ConstrainedInterfaceType,
-                field.IsAddressableStaticField,
-                field.IsReadOnlySubmissionGlobal
+                clrAccess.Syntax,
+                clrAccess.Receiver,
+                clrAccess.Member,
+                clrAccess.EffectiveDeclaredType,
+                clrAccess.StaticContainerType,
+                clrAccess.ConstrainedReceiverTypeParameter,
+                clrAccess.ConstrainedInterfaceType,
+                clrAccess.IsAddressableStaticField,
+                clrAccess.IsReadOnlySubmissionGlobal
             )
             default: receiver
         }

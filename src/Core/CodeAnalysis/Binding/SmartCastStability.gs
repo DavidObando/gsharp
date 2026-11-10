@@ -310,6 +310,8 @@ internal shared class SmartCastStability {
         // Conversion.HasCheckedReferenceConversion.
         let declaredCore = if declared is NullableTypeSymbol declaredNullableCore {
             declaredNullableCore.UnderlyingType
+        } else if declared is PlatformTypeSymbol declaredPlatformCore {
+            declaredPlatformCore.UnderlyingType
         } else {
             declared
         }

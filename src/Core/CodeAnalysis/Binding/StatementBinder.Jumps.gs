@@ -2218,6 +2218,9 @@ internal partial class StatementBinder {
                 )
             } else if syntax.IsRefReturn && fnIsRefReturning {
                 isRefReturn = true
+                if expression != nil {
+                    expression = ManagedReferenceOrigins.StorageLocation(expression)
+                }
             }
         }
         if function?.IsExpressionInitializer == true {
@@ -2278,16 +2281,36 @@ internal partial class StatementBinder {
                 if expression == nil {
                     Diagnostics.ReportMissingReturnExpression(syntax.ReturnKeyword.Location, function!!.Type)
                 } else {
-                    expression = conversions.BindConversion(
-                        Invariant.Required(
-                            syntax.Expression,
-                            "a return expression is present",
-                            expression: "syntax.Expression"
+                    let returnValue = expression
+                    if isRefReturn &&
+                        IsLvalueForRefReturn(returnValue) &&
+                        returnValue.Type != TypeSymbol.Error &&
+                        function!!.Type != TypeSymbol.Error &&
+                        !ByRefStorageMatching
+                        .AreSameStorageType(returnValue.Type, function!!.Type, out _, out _, out _) {
+                        Diagnostics.ReportCannotConvert(
+                            Invariant.Required(
+                                syntax.Expression,
+                                "a return expression is present",
+                                expression: "syntax.Expression"
+                            )
+                                .Location,
+                            returnValue.Type,
+                            function!!.Type
                         )
-                            .Location,
-                        expression,
-                        function!!.Type
-                    )
+                        expression = BoundErrorExpression(syntax.Expression)
+                    } else {
+                        expression = conversions.BindConversion(
+                            Invariant.Required(
+                                syntax.Expression,
+                                "a return expression is present",
+                                expression: "syntax.Expression"
+                            )
+                                .Location,
+                            returnValue,
+                            function!!.Type
+                        )
+                    }
                 }
             }
         }

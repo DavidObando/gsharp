@@ -3261,13 +3261,7 @@ shared class SpillSequenceSpiller {
                 access,
                 access.Receiver!!,
                 func (recv BoundExpression) BoundExpression {
-                    return BoundClrPropertyAccessExpression(
-                        nil,
-                        recv,
-                        access.Member,
-                        access.Type,
-                        access.StaticContainerType
-                    )
+                    return access.WithSyntaxAndReceiver(nil, recv)
                 }
             )
         }
@@ -3803,16 +3797,8 @@ shared class SpillSequenceSpiller {
             )
             case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo &&
                 clrField.Receiver != nil &&
-                !Binder.IsReferenceTypeForConstraint(clrField.Receiver.Type): BoundClrPropertyAccessExpression(
-                clrField.Syntax,
-                PreserveStorageReceiver(clrField.Receiver!!),
-                clrField.Member,
-                clrField.Type,
-                clrField.StaticContainerType,
-                clrField.ConstrainedReceiverTypeParameter,
-                clrField.ConstrainedInterfaceType,
-                clrField.IsAddressableStaticField,
-                clrField.IsReadOnlySubmissionGlobal
+                !Binder.IsReferenceTypeForConstraint(clrField.Receiver.Type): clrField.WithReceiver(
+                PreserveStorageReceiver(clrField.Receiver!!)
             )
             default: receiver
         }
