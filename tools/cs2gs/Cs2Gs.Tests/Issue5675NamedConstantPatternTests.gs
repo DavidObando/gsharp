@@ -1146,6 +1146,45 @@ namespace Demo
                 _ => "False",
             };
         }
+        static bool NegatedGuardClearedToNull()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            if (current is not { A: 1 } matched)
+                return false;
+            return object.ReferenceEquals(matched, null);
+        }
+        static string BinaryAndLeftTypeCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            if (current is Row matched and { A: 1, Tag: 3 })
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string ParenthesizedSwitchSubjectWithWhenGuard()
+        {
+            var current = new Row { Id = 2, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            bool ResetCurrent() { current = new Row { Id = 99, Tag = 99 }; return true; }
+            return (current) switch
+            {
+                { Child: B { A: 1 }, Tag: 3 } matched when matched.Id == 2 && ResetCurrent() => "True " + current.Id + " " + matched.Id,
+                _ => "False",
+            };
+        }
+        static int SwitchArmNullableClearedReassigned()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            return current switch
+            {
+                { A: 1 } matched => (matched = new Row { Id = 7 }).Id,
+                _ => -1,
+            };
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1153,8 +1192,12 @@ namespace Demo
             NullableSubjectClearedOnLastProperty() + " / " +
             NullableStructSubject() + " / " +
             NonNullableStructSubject() + " / " +
-            SwitchExprWithWhenGuard();
+            SwitchExprWithWhenGuard() + " / " +
+            NegatedGuardClearedToNull() + " / " +
+            BinaryAndLeftTypeCapture() + " / " +
+            ParenthesizedSwitchSubjectWithWhenGuard() + " / " +
+            SwitchArmNullableClearedReassigned();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7", rejectRedundantAssertions: true)
     }
 }

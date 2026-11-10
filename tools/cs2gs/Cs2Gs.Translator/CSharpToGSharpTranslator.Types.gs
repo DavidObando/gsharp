@@ -973,8 +973,13 @@ partial class CSharpToGSharpTranslator {
         private func UseMutableSwitchPatternLocals(
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]
         ) {
-            for (symbol, _) in mutableBindings {
-                this.state.PatternBindings[symbol] = IdentifierExpression(this.EmittedName(symbol, symbol.Name))
+            for (symbol, matchedValue) in mutableBindings {
+                let localId = IdentifierExpression(this.EmittedName(symbol, symbol.Name))
+                if this.state.StoredPatternCaptures.Contains(matchedValue) {
+                    this.state.StoredPatternCaptures.Add(localId)
+                    this.state.HoistedNullableGuardLocals.Add(symbol)
+                }
+                this.state.PatternBindings[symbol] = localId
             }
         }
 
@@ -1010,17 +1015,27 @@ partial class CSharpToGSharpTranslator {
         ) List[GStatement] {
             let declarations = List[GStatement](mutableBindings.Count)
             for (symbol, matchedValue) in mutableBindings {
+                let nullableCapture = this.state.StoredPatternCaptures.Contains(matchedValue)
                 let symbolSyntax = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                let symbolType = if symbolSyntax?.Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax {
+                let symbolType = if !nullableCapture &&
+                    symbolSyntax?.Parent is not Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .VarPatternSyntax {
                     symbol.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
                 } else {
                     symbol.Type
+                }
+                var declaredType = this.typeMapper.Map(symbolType, this.context, pattern.GetLocation())
+                if nullableCapture && symbol.Type.IsReferenceType {
+                    declaredType = MakeNullable(declaredType)
                 }
                 declarations.Add(
                     LocalDeclarationStatement(
                         BindingKind.Var,
                         this.EmittedName(symbol, symbol.Name),
-                        this.typeMapper.Map(symbolType, this.context, pattern.GetLocation()),
+                        declaredType,
                         initializer: matchedValue
                     )
                 )
@@ -3214,9 +3229,8 @@ partial class CSharpToGSharpTranslator {
                         .CSharp
                         .Syntax
                         .VarPatternSyntax
-                    if nullableCapture &&
-                        matched is NonNullAssertionExpression nonNullMatched &&
-                        object.ReferenceEquals(nonNullMatched.Operand, receiver) {
+                    if matched is NonNullAssertionExpression nonNullMatched &&
+                        ExpressionReferencesIdentifier(nonNullMatched.Operand, receiver) {
                         matched = nonNullMatched.Operand
                     }
                     let captureName = if isReassigned && mutableBindings != nil && binderSyntax != nil {

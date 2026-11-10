@@ -1499,19 +1499,39 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let localName string? = this.EmittedName(designation, designation!!.Identifier)
-            let localSymbolType = if designation!!.Parent !is VarPatternSyntax ||
-                (this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) && inputIsNonNull) {
+            let nullablePostMatchCapture = binder.Type.IsReferenceType && this.ScrutineeStorageIsNullableInGSharp(
+                isPattern!!.Expression
+            ) &&
+                ExpressionReferencesIdentifier(replacement, receiver)
+            if nullablePostMatchCapture &&
+                replacement is NonNullAssertionExpression nonNullReplacement &&
+                ExpressionReferencesIdentifier(nonNullReplacement.Operand, receiver) {
+                replacement = nonNullReplacement.Operand
+            }
+            let localSymbolType = if !nullablePostMatchCapture &&
+                (
+                designation!!.Parent !is VarPatternSyntax ||
+                    (this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) && inputIsNonNull)
+            ) {
                 binder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
             } else {
                 binder.Type
             }
-            let localType GTypeReference? = this.PromoteIfUsedAsNullable(
+            var localType GTypeReference? = this.PromoteIfUsedAsNullable(
                 this.typeMapper.Map(localSymbolType, this.context, designation!!.GetLocation()),
                 binder
             )
+            if nullablePostMatchCapture {
+                localType = MakeNullable(localType)
+                this.state.HoistedNullableGuardLocals.Add(binder)
+            }
+            let localId = IdentifierExpression(localName)
+            if nullablePostMatchCapture {
+                this.state.StoredPatternCaptures.Add(localId)
+            }
             statements.Add(IfStatement(Negate(positiveTest), then))
             statements.Add(LocalDeclarationStatement(BindingKind.Var, localName, localType, replacement))
-            this.state.PatternBindings[binder] = IdentifierExpression(localName)
+            this.state.PatternBindings[binder] = localId
             for var i = patternIndex + 1; i < terms.Count; i++ {
                 statements.Add(IfStatement(this.TranslateExpression(terms[i]), then))
             }
