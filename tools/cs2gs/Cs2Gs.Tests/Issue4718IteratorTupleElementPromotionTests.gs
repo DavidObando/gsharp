@@ -270,6 +270,7 @@ public static class Consumer {
     @InlineData("unconstrained-extra-switch")
     @InlineData("base-typed-reordered")
     @InlineData("base-typed-extra")
+    @InlineData("fixed-contract-sinkless-and-base-typed")
     @InlineData("repeated-type-parameter")
     @InlineData("implicit-reordered")
     @InlineData("nested-containing")
@@ -280,6 +281,7 @@ public static class Consumer {
             case "wrapped": "Carrier<((string? Text, int Code) Data, int Marker)>"
             case "nested-reordered": "IOut<Carrier<(string? Text, int Code), (string Keep, int Code)>>"
             case "nested-containing": "Outer<(string? Text, int Code)>.Inner"
+            case "fixed-contract-sinkless-and-base-typed": "ExtraDerived<(string Extra, int Code), (string? Text, int Code), (string Keep, int Code)>"
             case "contravariant-self-first",
             "contravariant-exact-first": "ICarrier<IContra<Recursive>, (string? Text, int Code)>"
             case "nested-contravariant": "IContra<ICarrier<string, (string? Text, int Code)>>"
@@ -342,7 +344,8 @@ public abstract class RowsBase {
             case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
             case "wrapped": "Wrapped<(string Text, int Code)>"
             case "unconstrained-extra",
-            "unconstrained-extra-switch": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
+            "unconstrained-extra-switch",
+            "fixed-contract-sinkless-and-base-typed": "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
             default: "$derived<(string Keep, int Code), (string Text, int Code)>"
         }
         let extraCreationType = "ExtraDerived<(string Extra, int Code), (string Text, int Code), (string Keep, int Code)>"
@@ -353,6 +356,7 @@ public abstract class RowsBase {
             case "unconstrained-extra-switch": "string extra = null; return 0 switch { _ => new $returnType(((extra), 1), ((extra), 2)) };"
             case "base-typed-reordered": "string extra = null; $returnType local = new $reorderedCreationType((\"keep\", 1), (extra, 2)); return local;"
             case "base-typed-extra": "string extra = null; Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $extraCreationType((extra, 1), (extra, 2));"
+            case "fixed-contract-sinkless-and-base-typed": "string extra = null; _ = new $returnType((extra, 1), (\"keep\", 2)).ToString(); Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $returnType((\"fixed\", 1), (\"keep\", 2));"
             case "repeated-type-parameter": "string text = null; Carrier<(string Text, int Code), (string Text, int Code)> both = new Both<(string Text, int Code)>((text, 1)); _ = both; return new $reorderedCreationType((\"keep\", 1), (text, 2));"
             case "implicit-reordered": "return new();"
             case "nested-containing": "string text = null; Outer<(string Text, int Code)>.Inner local = new $returnType((text, 1)); _ = local; return new $returnType();"
@@ -376,6 +380,7 @@ public sealed class Producer : RowsBase {
             case "wrapped": "Wrapped[(Text string?, Code int32)]"
             case "unconstrained-extra",
             "unconstrained-extra-switch": "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
+            case "fixed-contract-sinkless-and-base-typed": "ExtraDerived[(Extra string, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
             default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }
         let expectedExtraCreation = "ExtraDerived[(Extra string?, Code int32), (Text string?, Code int32), (Keep string, Code int32)]"
@@ -402,6 +407,18 @@ public sealed class Producer : RowsBase {
             Assert.Contains("return $expectedExtraCreation(", printed)
             Assert.Contains("(extra, 1)", printed)
             Assert.Contains("(extra!!, 2)", printed)
+            Assert.DoesNotContain("Untainted string?", printed)
+        } else if mode == "fixed-contract-sinkless-and-base-typed" {
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Text string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains(
+                "ExtraDerived[(Extra string?, Code int32), (Untainted string, Code int32), (Keep string, Code int32)](",
+                printed
+            )
+            Assert.Contains("return $expected(", printed)
+            Assert.Contains("(\"fixed\", 1)", printed)
             Assert.DoesNotContain("Untainted string?", printed)
         } else if mode == "repeated-type-parameter" {
             Assert.Contains(

@@ -113,6 +113,59 @@ class Issue5865ArrayOverrideDriverTests {
     }
 
     @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func RecursiveContravariantInterfaceWithoutExactMatchValidatesRemainingViews(reverse bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let validInterfaces = if reverse {
+            "IContra<object>, IContra<IContra<Recursive>>"
+        } else {
+            "IContra<IContra<Recursive>>, IContra<object>"
+        }
+        let validName = "contra-valid-" + reverse.ToString()
+        let validNative = fixture.CompileCSharp(
+            "#nullable enable\nnamespace Contra5865;\n" +
+                "public interface IContra<in T> {}\n" +
+                "public sealed class Recursive : $validInterfaces {}\n" +
+                "public abstract class Contract { public abstract IContra<Recursive> Read(); }\n" +
+                "public static class Observer { public static int Probe(Contract rows) => rows.Read() != null ? 1 : 0; }",
+            validName
+        )
+        let dll = fixture.Compile(
+            "package Contra5865\nclass Rows : Contract {\noverride func Read() Recursive -> Recursive()\n}\n" +
+                "System.Console.Write(Observer.Probe(Rows()))",
+            validName + "-rows",
+            true,
+            "/r:" + validNative
+        )
+        IlVerifier.Verify(dll, []string{validNative})
+        Assert.Equal(Encoding.UTF8.GetBytes("1"), fixture.RunBytes(dll))
+
+        let invalidInterfaces = if reverse {
+            "IContra<object, Box?>, IContra<IContra<Recursive, Box>, Box>"
+        } else {
+            "IContra<IContra<Recursive, Box>, Box>, IContra<object, Box?>"
+        }
+        let invalidName = "contra-invalid-" + reverse.ToString()
+        let invalidNative = fixture.CompileCSharp(
+            "#nullable enable\nnamespace ContraInvalid5865;\n" +
+                "public sealed class Box {}\n" +
+                "public interface IContra<in T, out U> {}\n" +
+                "public sealed class Recursive : $invalidInterfaces {}\n" +
+                "public abstract class Contract { public abstract IContra<Recursive, Box> Read(); }",
+            invalidName
+        )
+        let (code, diagnostics) = fixture.TryCompile(
+            "package ContraInvalid5865\nclass Rows : Contract {\noverride func Read() Recursive -> Recursive()\n}",
+            invalidName + "-rows",
+            false,
+            "/r:" + invalidNative
+        )
+        Assert.NotEqual(0, code)
+        Assert.Contains("error GS0185", diagnostics, StringComparison.Ordinal)
+    }
+
+    @Theory
     @InlineData("array")
     @InlineData("rectangular")
     @InlineData("jagged")

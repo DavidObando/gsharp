@@ -887,6 +887,18 @@ internal shared class ExternalClrOverrideResolver {
         contract TypeSymbol,
         implementation TypeSymbol,
         invariant bool = false
+    ) bool -> ReturnNullabilityConforms(
+        contract,
+        implementation,
+        invariant,
+        List[(Contract TypeSymbol, Implementation TypeSymbol, Invariant bool)]()
+    )
+
+    private func ReturnNullabilityConforms(
+        contract TypeSymbol,
+        implementation TypeSymbol,
+        invariant bool,
+        inProgress List[(Contract TypeSymbol, Implementation TypeSymbol, Invariant bool)]
     ) bool {
         if contract.ReferenceNullability == ReferenceNullabilityKind.NotNull &&
             implementation.ReferenceNullability == ReferenceNullabilityKind.Nullable ||
@@ -897,67 +909,79 @@ internal shared class ExternalClrOverrideResolver {
         ) {
             return false
         }
-        let valueShape = GetReturnValueShape(contract)
-        let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out _)
-        let isTuple = TupleTypeSymbol.TryGetTupleShape(valueShape, out _)
         let contractPositions = contract.GetElementPositions()
         if contractPositions.IsDefaultOrEmpty {
             return true
         }
-        if !isTuple {
-            let views = ImmutableArray.CreateBuilder[ImmutableArray[TypeSymbol]]()
-            let _ = Conversion.TryProjectTypeArgumentsToSupertype(
-                implementation,
-                contract,
-                out _,
-                out _,
-                includeAllPositions: true,
-                acceptProjection: (positions ImmutableArray[TypeSymbol]) -> {
-                    views.Add(positions)
-                    return false
-                }
-            )
-            if views.Count > 0 {
-                // Exact interface implementations take precedence over variance-compatible views.
-                let exact = views.Any(
-                    (positions ImmutableArray[TypeSymbol]) -> ReturnPositionsMatchRuntime(
-                        valueShape,
-                        contractPositions,
-                        positions,
-                        exact: true
-                    )
-                )
-                var matched = false
-                for positions in views {
-                    if !ReturnPositionsMatchRuntime(valueShape, contractPositions, positions, exact) {
-                        continue
-                    }
-                    matched = true
-                    if !ReturnPositionsNullabilityConforms(
-                        valueShape,
-                        contractPositions,
-                        positions,
-                        invariant,
-                        isTask
-                    ) {
-                        return false
-                    }
-                }
-                return matched
+        for active in inProgress {
+            if active.Invariant == invariant && active.Contract == contract && active.Implementation == implementation {
+                return true
             }
         }
-        let implementationPositions = if !isTuple {
-            GetReturnTypeArgumentPositions(valueShape, implementation)
-        } else {
-            implementation.GetElementPositions()
+        inProgress.Add((contract, implementation, invariant))
+        try {
+            let valueShape = GetReturnValueShape(contract)
+            let isTask = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(valueShape, out _, out _)
+            let isTuple = TupleTypeSymbol.TryGetTupleShape(valueShape, out _)
+            if !isTuple {
+                let views = ImmutableArray.CreateBuilder[ImmutableArray[TypeSymbol]]()
+                let _ = Conversion.TryProjectTypeArgumentsToSupertype(
+                    implementation,
+                    contract,
+                    out _,
+                    out _,
+                    includeAllPositions: true,
+                    acceptProjection: (positions ImmutableArray[TypeSymbol]) -> {
+                        views.Add(positions)
+                        return false
+                    }
+                )
+                if views.Count > 0 {
+                    // Exact interface implementations take precedence over variance-compatible views.
+                    let exact = views.Any(
+                        (positions ImmutableArray[TypeSymbol]) -> ReturnPositionsMatchRuntime(
+                            valueShape,
+                            contractPositions,
+                            positions,
+                            exact: true
+                        )
+                    )
+                    var matched = false
+                    for positions in views {
+                        if !ReturnPositionsMatchRuntime(valueShape, contractPositions, positions, exact) {
+                            continue
+                        }
+                        matched = true
+                        if !ReturnPositionsNullabilityConforms(
+                            valueShape,
+                            contractPositions,
+                            positions,
+                            invariant,
+                            isTask,
+                            inProgress
+                        ) {
+                            return false
+                        }
+                    }
+                    return matched
+                }
+            }
+            let implementationPositions = if !isTuple {
+                GetReturnTypeArgumentPositions(valueShape, implementation)
+            } else {
+                implementation.GetElementPositions()
+            }
+            return ReturnPositionsNullabilityConforms(
+                valueShape,
+                contractPositions,
+                implementationPositions,
+                invariant,
+                isTask,
+                inProgress
+            )
+        } finally {
+            inProgress.RemoveAt(inProgress.Count - 1)
         }
-        return ReturnPositionsNullabilityConforms(
-            valueShape,
-            contractPositions,
-            implementationPositions,
-            invariant,
-            isTask
-        )
     }
 
     private func ReturnPositionsMatchRuntime(
@@ -997,7 +1021,8 @@ internal shared class ExternalClrOverrideResolver {
         contractPositions ImmutableArray[TypeSymbol],
         implementationPositions ImmutableArray[TypeSymbol],
         invariant bool,
-        isTask bool
+        isTask bool,
+        inProgress List[(Contract TypeSymbol, Implementation TypeSymbol, Invariant bool)]
     ) bool {
         if contractPositions.Length != implementationPositions.Length {
             return false
@@ -1012,12 +1037,18 @@ internal shared class ExternalClrOverrideResolver {
                 Conversion.GetPositionVariance(valueShape, i)
             }
             let compatible = if variance == TypeParameterVariance.In {
-                ReturnNullabilityConforms(implementationPositions[i], contractPositions[i])
+                ReturnNullabilityConforms(
+                    implementationPositions[i],
+                    contractPositions[i],
+                    invariant: false,
+                    inProgress: inProgress
+                )
             } else {
                 ReturnNullabilityConforms(
                     contractPositions[i],
                     implementationPositions[i],
-                    invariant: variance == TypeParameterVariance.None
+                    invariant: variance == TypeParameterVariance.None,
+                    inProgress: inProgress
                 )
             }
             if !compatible {

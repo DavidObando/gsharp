@@ -1626,7 +1626,8 @@ class CSharpTypeMapper {
         symbol ISymbol?,
         context TranslationContext,
         path List[int32],
-        createdType INamedTypeSymbol? = nil
+        createdType INamedTypeSymbol? = nil,
+        creation BaseObjectCreationExpressionSyntax? = nil
     ) GTypeReference? {
         var mapped = mapped
         if path.Count == 0 &&
@@ -1642,7 +1643,8 @@ class CSharpTypeMapper {
                 symbol,
                 context,
                 path,
-                createdType
+                createdType,
+                creation
             )
             path.RemoveAt(path.Count - 1)
             if !object.ReferenceEquals(element, array.ElementType) {
@@ -1666,7 +1668,8 @@ class CSharpTypeMapper {
                     symbol,
                     context,
                     path,
-                    createdType
+                    createdType,
+                    creation
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(element, tuple.ElementTypes[i])
@@ -1679,7 +1682,7 @@ class CSharpTypeMapper {
             }
         }
         if mapped is NamedTypeReference named && declaredType is INamedTypeSymbol declaredNamed {
-            mapped = this.PromoteNamedTypeChain(named, declaredNamed, symbol, context, path, createdType)
+            mapped = this.PromoteNamedTypeChain(named, declaredNamed, symbol, context, path, createdType, creation)
         }
         let isTainted = if createdType != nil {
             ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
@@ -1687,7 +1690,8 @@ class CSharpTypeMapper {
                 symbol,
                 createdType,
                 path,
-                context.SiblingCompilations
+                context.SiblingCompilations,
+                creation
             )
         } else {
             ObliviousNullabilityAnalyzer.IsTupleElementTainted(
@@ -1710,7 +1714,8 @@ class CSharpTypeMapper {
         symbol ISymbol?,
         context TranslationContext,
         path List[int32],
-        createdType INamedTypeSymbol?
+        createdType INamedTypeSymbol?,
+        creation BaseObjectCreationExpressionSyntax?
     ) NamedTypeReference {
         var containingType GTypeReference? = named.ContainingType
         if containingType is NamedTypeReference containingNamed &&
@@ -1721,7 +1726,8 @@ class CSharpTypeMapper {
                 symbol,
                 context,
                 path,
-                createdType
+                createdType,
+                creation
             )
         }
         let offset = if declaredNamed.ContainingType is INamedTypeSymbol parent {
@@ -1741,7 +1747,8 @@ class CSharpTypeMapper {
                     symbol,
                     context,
                     path,
-                    createdType
+                    createdType,
+                    creation
                 )
                 path.RemoveAt(path.Count - 1)
                 argumentsChanged |= !object.ReferenceEquals(argument, named.TypeArguments[i])

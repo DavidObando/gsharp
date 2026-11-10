@@ -5604,17 +5604,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 createdScalarEdges
             )
             for key in createdTainted {
-                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, key.Path) {
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, key.Path, creation) {
                     tupleTainted.Add(TupleElementKey(mappedTarget, mappedPath))
                 }
             }
             for (targetKey, sourceKey) in createdEdges {
-                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path) {
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path, creation) {
                     tupleEdges.Add((TupleElementKey(mappedTarget, mappedPath), sourceKey))
                 }
             }
             for (targetKey, scalarSource) in createdScalarEdges {
-                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path) {
+                for (mappedTarget, mappedPath) in MapCreationTupleTargets(sink, createdType, targetKey.Path, creation) {
                     tupleScalarEdges.Add((TupleElementKey(mappedTarget, mappedPath), scalarSource))
                 }
             }
@@ -5667,11 +5667,23 @@ internal shared class ObliviousNullabilityAnalyzer {
         sink ISymbol?,
         createdType INamedTypeSymbol,
         createdPath IReadOnlyList[int32],
-        siblingCompilations IReadOnlyList[CSharpCompilation]? = nil
+        siblingCompilations IReadOnlyList[CSharpCompilation]? = nil,
+        creation BaseObjectCreationExpressionSyntax? = nil
     ) bool {
-        let targets = MapCreationTupleTargets(sink, createdType, createdPath)
+        if compilation == nil || createdPath.Count == 0 {
+            return false
+        }
+        RegisterSourceAssemblies(compilation, siblingCompilations)
+        let targets = MapCreationTupleTargets(sink, createdType, EncodeTuplePath(createdPath), creation)
         for (targetSymbol, targetPath) in targets {
-            if !IsTupleElementTainted(compilation, targetSymbol, targetPath, siblingCompilations) {
+            if !IsTupleElementTaintedCore(
+                compilation,
+                targetSymbol,
+                targetPath,
+                siblingCompilations,
+                HashSet[ScalarQuery](ScalarQueryComparer.Instance),
+                HashSet[TupleElementQuery](TupleElementQueryComparer.Instance)
+            ) {
                 return false
             }
         }
@@ -5681,23 +5693,12 @@ internal shared class ObliviousNullabilityAnalyzer {
     internal func MapCreationTupleTargets(
         sink ISymbol?,
         createdType INamedTypeSymbol,
-        createdPath IReadOnlyList[int32]
-    ) IReadOnlyList[(Target ISymbol, Path IReadOnlyList[int32])] {
-        let mapped = MapCreationTupleTargets(sink, createdType, EncodeTuplePath(createdPath))
-        let result = List[(Target ISymbol, Path IReadOnlyList[int32])](mapped.Count)
-        for (target, mappedPath) in mapped {
-            result.Add((target, DecodeTuplePath(mappedPath)))
-        }
-        return result
-    }
-
-    internal func MapCreationTupleTargets(
-        sink ISymbol?,
-        createdType INamedTypeSymbol,
-        createdPath string
+        createdPath string,
+        creation BaseObjectCreationExpressionSyntax? = nil
     ) IReadOnlyList[(Target ISymbol, Path string)] {
+        let fallbackPath = CreationScopedTuplePath(creation, createdPath)
         if sink == nil || SymbolValueType(sink) is not INamedTypeSymbol sinkType {
-            return [](Target ISymbol, Path string){(createdType, createdPath)}
+            return [](Target ISymbol, Path string){(createdType, fallbackPath)}
         }
         if SymbolEqualityComparer.Default.Equals(
             NormalizeContractTupleNames(createdType),
@@ -5722,24 +5723,31 @@ internal shared class ObliviousNullabilityAnalyzer {
         if matches.Count > 0 {
             return matches
         }
-        return [](Target ISymbol, Path string){(createdType, createdPath)}
+        return [](Target ISymbol, Path string){(createdType, fallbackPath)}
     }
 
-    private func DecodeTuplePath(path string) IReadOnlyList[int32] {
-        if path.Length == 0 {
-            return Array.Empty[int32]()
+    private func CreationScopedTuplePath(creation BaseObjectCreationExpressionSyntax?, path string) string {
+        if creation == nil {
+            return path
         }
-        let parts = path.Split('.')
-        let result = List[int32](parts.Length)
-        for part in parts {
-            if int32.TryParse(part, out var index) {
-                result.Add(index)
-            }
-        }
-        return result
+        let file = creation.SyntaxTree.FilePath ?? string.Empty
+        let span = creation.SpanStart.ToString(CultureInfo.InvariantCulture)
+        return "creation@" + file + "#" + span + ":" + path
     }
 
-    private func ResolveCreationTupleSink(creation BaseObjectCreationExpressionSyntax, model SemanticModel) ISymbol? {
+    private func StripCreationTupleScope(path string) string {
+        if !path.StartsWith("creation@", StringComparison.Ordinal) {
+            return path
+        }
+        let separator = path.LastIndexOf(':')
+        return if separator < 0 {
+            path
+        } else {
+            path.Substring(separator + 1)
+        }
+    }
+
+    internal func ResolveCreationTupleSink(creation BaseObjectCreationExpressionSyntax, model SemanticModel) ISymbol? {
         var node SyntaxNode = creation
         while true {
             if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
@@ -5765,8 +5773,12 @@ internal shared class ObliviousNullabilityAnalyzer {
                 SyntaxKind.SimpleAssignmentExpression
             ) &&
                 assignment.Right == node: ResolveAssignable(assignment.Left, model)
+            case argument is ArgumentSyntax: (model.GetOperation(argument) as IArgumentOperation)?.Parameter
             case returnStatement is ReturnStatementSyntax: OwningMember(
                 model.GetEnclosingSymbol(returnStatement.SpanStart)
+            )
+            case yieldStatement is YieldStatementSyntax: OwningMember(
+                model.GetEnclosingSymbol(yieldStatement.SpanStart)
             )
             case arrow is ArrowExpressionClauseSyntax: OwningMember(model.GetDeclaredSymbol(arrow.Parent!!))
             default: default(ISymbol?)
@@ -6989,8 +7001,9 @@ internal shared class ObliviousNullabilityAnalyzer {
     )
 
     private func TuplePositionType(symbol ISymbol?, path string, requireTuple bool = false) ITypeSymbol? {
+        let strippedPath = StripCreationTupleScope(path)
         var type ITypeSymbol? = SymbolValueType(symbol) ?? symbol as INamedTypeSymbol
-        if path.Length == 0 {
+        if strippedPath.Length == 0 {
             return if requireTuple {
                 default(ITypeSymbol?)
             } else {
@@ -6998,7 +7011,7 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
         }
         var crossesTuple = false
-        for component in path.Split('.') {
+        for component in strippedPath.Split('.') {
             if type is IArrayTypeSymbol array && component == "0" {
                 type = array.ElementType
                 continue
@@ -9587,6 +9600,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         template ITypeSymbol? = nil,
         receiver INamedTypeSymbol? = nil
     )(Owner ISymbol?, Path string) {
+        if path.StartsWith("creation@", StringComparison.Ordinal) {
+            return (symbol, path)
+        }
         var template = template
         template ??= SymbolValueType(Canonical(symbol))
         let indexes = path.Split('.')

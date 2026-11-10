@@ -6294,7 +6294,10 @@ partial class CSharpToGSharpTranslator {
                             .context
                             .GetSymbolInfo(member.Expression)
                             .Symbol
-                        case creation is BaseObjectCreationExpressionSyntax: this.ResolveValueSink(creation)
+                        case creation is BaseObjectCreationExpressionSyntax: ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(
+                            creation,
+                            this.context.SemanticModel
+                        )
                         default: default(ISymbol?)
                     }
                     let receiverType = switch call {
@@ -6311,13 +6314,14 @@ partial class CSharpToGSharpTranslator {
                         out var receiverPath
                     ) {
                         let combinedPath = receiverPath!!.Concat(path).ToList()
-                        if call is BaseObjectCreationExpressionSyntax {
+                        if call is BaseObjectCreationExpressionSyntax creation {
                             return if ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
                                 this.context.Compilation,
                                 receiverTarget,
                                 receiverType,
                                 combinedPath,
-                                this.context.SiblingCompilations
+                                this.context.SiblingCompilations,
+                                creation
                             ) {
                                 sinkType!!.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.Annotated)
                             } else {
