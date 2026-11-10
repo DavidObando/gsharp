@@ -6099,8 +6099,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
-            if expression.Parent is IsPatternExpressionSyntax decision && this.RecordPatternRunsUserCode(
-                decision.Pattern
+            if expression.Parent is IsPatternExpressionSyntax decision &&
+                (
+                this.RecordPatternRunsUserCode(decision.Pattern) ||
+                    (
+                    UnwrapParenthesesAndSuppressions(expression) is IdentifierNameSyntax identifier &&
+                        this.IsByReferenceVariable(this.context.GetSymbolInfo(identifier).Symbol) &&
+                        decision
+                        .Pattern
+                        .DescendantNodesAndSelf()
+                        .Any(this.PatternNodeRunsUserCode)
+                )
             ) {
                 return false
             }

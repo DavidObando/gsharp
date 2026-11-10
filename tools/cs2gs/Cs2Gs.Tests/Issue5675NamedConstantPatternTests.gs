@@ -1321,6 +1321,42 @@ namespace Demo
                 return "True " + current.Id + " " + matched.Id + " " + matched.Tag + " " + current.Tag;
             return "False " + current.Id + " " + current.BaseTag + " " + current.Tag;
         }
+        static string DowncastThenBaseRecursive(int initialBaseTag, int nextBaseTag)
+        {
+            var initial = new DerivedRow { Id = 1, Tag = 99 };
+            initial.BaseTag = initialBaseTag;
+            BaseRow current = initial;
+            initial.OnRead = () =>
+            {
+                var next = new DerivedRow { Id = 2, Tag = 99 };
+                next.BaseTag = nextBaseTag;
+                current = next;
+            };
+            if (current is DerivedRow and Row { A: 1, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id + " " + matched.Tag;
+            return "False " + current.Id;
+        }
+        static Row refSlot = new Row();
+        static string MatchRefSubject(ref Row current)
+        {
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Tag;
+        }
+        static string RefParameterSubject(int nextTag)
+        {
+            refSlot = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            refSlot.Child = child;
+            child.OnRead = () => { refSlot = new Row { Id = 2, Tag = nextTag }; };
+            return MatchRefSubject(ref refSlot);
+        }
+        static string NullableClearedBeforeAndNotNull()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            return (current is { A: 1 } and not null).ToString() + " " + (current is { A: 1 } and DerivedRow).ToString();
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1349,8 +1385,13 @@ namespace Demo
             HiddenBaseRecursive(0) + " / " +
             HiddenBaseRecursive(3) + " / " +
             HiddenBaseAnd(0) + " / " +
-            HiddenBaseAnd(3);
+            HiddenBaseAnd(3) + " / " +
+            DowncastThenBaseRecursive(3, 0) + " / " +
+            DowncastThenBaseRecursive(0, 3) + " / " +
+            RefParameterSubject(0) + " / " +
+            RefParameterSubject(3) + " / " +
+            NullableClearedBeforeAndNotNull();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True False", rejectRedundantAssertions: true)
     }
 }
