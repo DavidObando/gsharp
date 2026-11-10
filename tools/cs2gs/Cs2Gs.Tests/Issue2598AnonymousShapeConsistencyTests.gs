@@ -8,6 +8,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import Microsoft.CodeAnalysis
 import System
 import System.Diagnostics
 import System.IO
@@ -18,6 +19,56 @@ import System.Threading.Tasks
 import Xunit
 
 class Issue2598AnonymousShapeConsistencyTests {
+    @Theory
+    @InlineData("where TOperation : MigrationOperation")
+    @InlineData("where TOperation : class")
+    @InlineData("where TOperation : notnull")
+    func AnonymousProjectedStorage_PreservesImportedNonNullConstraints(constraint string) {
+        let compiler = FindCompiler()
+        Assert.NotNull(compiler)
+        let workDir = NewDirectory("constraints")
+        try {
+            let contractPath = Path.Combine(workDir, "Contracts.dll")
+            let contract = CSharpProjectLoader.LoadInMemory([](string, Source string){("Contracts.cs", `#nullable enable
+namespace Contracts {
+    public class MigrationOperation { }
+    public sealed class AddColumnOperation : MigrationOperation { }
+    public sealed class OperationBuilder<TOperation> CONSTRAINT { }
+    public static class Builder {
+        public static OperationBuilder<AddColumnOperation> Column<T>() => new();
+    }
+}`.Replace("CONSTRAINT", constraint))})
+            Assert.True(contract.BoundWithoutErrors, string.Join(Environment.NewLine, contract.ErrorDiagnostics))
+            {
+                using let image = File.Create(contractPath)
+                let emitted = contract.Compilation.Emit(image)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            }
+            let project = CSharpProjectLoader.LoadInMemory([](string, Source string){("Consumer.cs", `#nullable disable
+using Contracts;
+public static class Consumer {
+    public static object Make() => new { Id = Builder.Column<int>() };
+}`)}, CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(contractPath)).ToArray())
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Contains("OperationBuilder[AddColumnOperation]", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("OperationBuilder[AddColumnOperation?]", printed, StringComparison.Ordinal)
+            let sourcePath = Path.Combine(workDir, "Consumer.gs")
+            let outputPath = Path.Combine(workDir, "Consumer.dll")
+            File.WriteAllText(sourcePath, printed)
+            let (exit, output) = RunDotnet(
+                "\"$compiler\" /target:library /targetframework:net10.0 /reference:\"$contractPath\" " +
+                    "/out:\"$outputPath\" \"$sourcePath\""
+            )
+            Assert.True(exit == 0, "Translated anonymous storage must compile with zero errors:\n" + output)
+            Assert.DoesNotContain("error GS0152", output, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(workDir, recursive: true)
+        }
+    }
+
     @Fact
     func Translator_UsesStableOrderedShapeNamesAcrossDocumentsAndProjects() {
         let translated = Translate(("A.Tools.cs", ToolsSource), ("B.Hosting.cs", HostingSource))

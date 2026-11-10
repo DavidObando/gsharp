@@ -463,6 +463,17 @@ internal class ConversionClassifier {
         targetType TypeSymbol
     ) bool -> HasUserDefinedImplicitConversionForTypes(sourceType, targetType)
 
+    /// Checks whether an implicit or explicit conversion operator applies.
+    /// @param sourceType The source type.
+    /// @param targetType The conversion target.
+    /// @param allowExplicit Whether explicit operators can apply.
+    /// @returns Whether a conversion operator can apply.
+    func HasUserDefinedConversion(
+        sourceType TypeSymbol,
+        targetType TypeSymbol,
+        allowExplicit bool
+    ) bool -> HasUserDefinedConversionForTypes(sourceType, targetType, allowExplicit)
+
     /// Core `BindConversion` overload: classifies the conversion from
     /// [`expression`](paramref)'s static type to [`type`](paramref),
     /// surfaces the appropriate diagnostic when the classification is
@@ -493,7 +504,7 @@ internal class ConversionClassifier {
             expression = reboundSibling
         }
         let beforeVersion = expressionNarrowingVersion?.Invoke() ?? 0
-        let result = BindConversionCore(
+        var result = BindConversionCore(
             diagnosticLocation,
             expression,
             type,
@@ -501,6 +512,16 @@ internal class ConversionClassifier {
             callParameter,
             trackNarrowing
         )
+        // Preserve the requested static contract after identity conversions and runtime-equivalent function adapters.
+        if type != nil && result.Type is {} resultType && resultType != TypeSymbol.Error && !object.ReferenceEquals(
+            resultType,
+            type
+        ) &&
+            FunctionTypeSymbol.ContainsOptionalContract(resultType) &&
+            TypeSymbol
+            .AreRuntimeEquivalentIgnoringReferenceNullability(resultType, type) {
+            result = BoundConversionExpression(nil, type, result, binderCtx.IsCheckedContext)
+        }
         if !allowExplicit &&
             expression.Type != TypeSymbol.Error &&
             result.Type != TypeSymbol.Error &&
@@ -1207,6 +1228,15 @@ internal class ConversionClassifier {
                 resolvedUserMethodGroup.MethodTypeArguments
             ){ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch, HasTargetDelegateType = true}
             expression = this.createUserMethodGroupAdapter(resolvedUserMethodGroup)
+        }
+        if expression is BoundFunctionLiteralExpression &&
+            expression.Type != nil &&
+            type != nil &&
+            MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _) &&
+            !Conversion
+            .HaveCompatibleOptionalContracts(expression.Type, type) {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type)
+            return BoundErrorExpression(expression.Syntax)
         }
         if expression is BoundFunctionLiteralExpression literal &&
             type is FunctionTypeSymbol targetFunctionType &&
@@ -5851,25 +5881,29 @@ internal class ConversionClassifier {
         /// @param sourceType The source type.
         /// @param targetType The target type.
         /// @returns `true` when an implicit conversion operator applies.
-        func HasUserDefinedImplicitConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol) bool {
+        func HasUserDefinedImplicitConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol) bool ->
+        HasUserDefinedConversionForTypes(sourceType, targetType, allowExplicit: false)
+
+        /// Checks symbolic, lifted and imported conversion operators through the binder's shared resolution.
+        /// @param sourceType The source type.
+        /// @param targetType The conversion target.
+        /// @param allowExplicit Whether explicit operators can apply.
+        /// @returns Whether a conversion operator can apply.
+        func HasUserDefinedConversionForTypes(sourceType TypeSymbol, targetType TypeSymbol, allowExplicit bool) bool {
             if sourceType is NullableTypeSymbol liftedSource &&
-                TryResolveLiftedUserDefinedSymbolConversion(
-                liftedSource,
-                targetType,
-                allowExplicit: false,
-                out _,
-                out _
-            ) {
+                TryResolveLiftedUserDefinedSymbolConversion(liftedSource, targetType, allowExplicit, out _, out _) {
                 return true
             }
-            if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit: false, out _) {
+            if TryResolveUserDefinedSymbolConversion(sourceType, targetType, allowExplicit, out _) {
                 return true
             }
-            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod) &&
-                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
-                sourceType,
-                targetType,
-                symbolicMethod!!
+            if TryResolveSymbolicImportedConversion(sourceType, targetType, out var symbolicMethod, allowExplicit) &&
+                (
+                allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                    sourceType,
+                    targetType,
+                    symbolicMethod!!
+                )
             ) {
                 return true
             }
@@ -5878,11 +5912,17 @@ internal class ConversionClassifier {
                 ClrOperatorResolution.TryResolveConversionForTypes(
                 sourceType,
                 targetType,
-                allowExplicit: false,
+                allowExplicit,
                 out var method,
                 out _
             ) &&
-                BoundClrConversionCallExpression.CanApplyImplicitClrConversion(sourceType, targetType, method!!)
+                (
+                allowExplicit || BoundClrConversionCallExpression.CanApplyImplicitClrConversion(
+                    sourceType,
+                    targetType,
+                    method!!
+                )
+            )
         }
 
         /// ADR-0087 §3 R5 / issue #765: when a method is invoked on a constructed

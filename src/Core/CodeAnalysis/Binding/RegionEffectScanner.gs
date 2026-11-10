@@ -48,11 +48,16 @@ internal sealed class RegionEffectScanner {
             Aliases = Dictionary[string, string?]()
             LocalAliases = HashSet[string]()
             Origins = Dictionary[string, RegionReceiverPath?]()
+            Constants = Dictionary[string, RegionConstantValue]()
         }
 
         /// Gets the receiver path of each local of the scope whose type the entry scope can resolve: its declared
         /// type, its initializer or the collection it iterates. A local without an entry has no path.
         prop Origins Dictionary[string, RegionReceiverPath?] {
+            get;
+        }
+
+        prop Constants Dictionary[string, RegionConstantValue] {
             get;
         }
 
@@ -192,6 +197,7 @@ internal sealed class RegionEffectScanner {
         if name.Length > 0 && scopes.Count > 0 {
             scopes[scopes.Count - 1].Names.Add(name)
             scopes[scopes.Count - 1].Kinds[name] = declaration
+            scopes[scopes.Count - 1].Constants.Remove(name)
             if declaration != "local" {
                 patternNames.Add(name)
             }
@@ -1174,6 +1180,11 @@ internal sealed class RegionEffectScanner {
 
     private func VisitVariableDeclaration(declaration VariableDeclarationSyntax) {
         Visit(declaration.Initializer)
+        let constant = if declaration.Keyword?.Kind == SyntaxKind.ConstKeyword && !declaration.HasRefKindModifier {
+            BuildConstantValue(declaration.Initializer, TypeOrigin(declaration.TypeClause))
+        } else {
+            default(RegionConstantValue?)
+        }
         let origin = if declaration.TypeClause != nil {
             TypeOrigin(declaration.TypeClause)
         } else if declaration.Initializer is RefArgumentExpressionSyntax {
@@ -1209,6 +1220,13 @@ internal sealed class RegionEffectScanner {
         }
         Declare(declaration.Identifier)
         SetOrigin(name, origin)
+        if constant is {} knownConstant && scopes.Count > 0 {
+            scopes[scopes.Count - 1].Constants[name] = if TypeOrigin(declaration.TypeClause) is {} targetType {
+                knownConstant.Through(targetType)
+            } else {
+                knownConstant
+            }
+        }
         if declaration.HasRefKindModifier && scopes.Count > 0 {
             if Active() {
                 current.ContainsAliasTake = true
@@ -1384,7 +1402,8 @@ internal sealed class RegionEffectScanner {
                 },
                 conversion.SourceIsBuiltInByForm,
                 conversion.SourceIsNil,
-                conversion.OperatorArms
+                conversion.OperatorArms,
+                conversion.AllowExplicit
             )
         }
         for var i = readsBefore; i < current.MemberReads.Count; i++ {
@@ -1414,11 +1433,7 @@ internal sealed class RegionEffectScanner {
                 },
                 test.ValueIsNull,
                 CandidateUnlessDeclared(test.Candidate),
-                if test.ConstantValuePath?.RootName is {} root && IsDeclared(root) {
-                    default(RegionReceiverPath?)
-                } else {
-                    test.ConstantValuePath
-                }
+                RebaseConstantValue(test.ConstantValue)
             )
         }
         for var i = nilComparesBefore; i < current.NilCompareOperandPaths.Count; i++ {
@@ -2118,15 +2133,20 @@ internal sealed class RegionEffectScanner {
 
     // A value converted to the type of [`target`](paramref). An operator or a literal has a built-in value when
     // its operands do (the operator itself is classified as an operator).
-    private func RecordConversion(value ExpressionSyntax, target RegionReceiverPath?) {
+    private func RecordConversion(value ExpressionSyntax, target RegionReceiverPath?, allowExplicit bool = false) {
         var inner ExpressionSyntax = value
         while inner is ParenthesizedExpressionSyntax parenthesized {
             inner = parenthesized.Expression
         }
+        if inner is DefaultExpressionSyntax{TypeClause: nil} {
+            return
+        }
         // `nil` stores the null value of a reference or nullable target without an operator. The consumer checks
         // the target, since a non-nullable value type takes `nil` only through a conversion operator.
         if IsNilLiteral(inner) {
-            current.Conversions.Add(RegionConversion(nil, target, false, sourceIsNil: true))
+            current.Conversions.Add(
+                RegionConversion(nil, target, false, sourceIsNil: true, allowExplicit: allowExplicit)
+            )
             return
         }
         var builtInByForm = inner is BinaryExpressionSyntax ||
@@ -2135,7 +2155,7 @@ internal sealed class RegionEffectScanner {
         if inner is UnaryExpressionSyntax unary && IsUnaryOperatorCandidate(unary) {
             builtInByForm = true
         }
-        current.Conversions.Add(RegionConversion(BuildPath(value), target, builtInByForm))
+        current.Conversions.Add(RegionConversion(BuildPath(value), target, builtInByForm, allowExplicit: allowExplicit))
     }
 
     // An element of an array, a stack allocation or a map literal, converted to its element, key or value type
@@ -2461,6 +2481,14 @@ internal sealed class RegionEffectScanner {
         receiverIsRoot bool,
         receiverPath RegionReceiverPath?
     ) {
+        if receiver == nil && IsIntrinsicCast(call) {
+            let operand = call.Arguments[0]
+            Visit(operand)
+            if Active() {
+                RecordConversion(operand, TypeOrigin(call.TypeArgumentList!!.Arguments[0]), allowExplicit: true)
+            }
+            return
+        }
         if Active() {
             current.ContainsCall = true
         }
@@ -2592,6 +2620,19 @@ internal sealed class RegionEffectScanner {
     // The name of a plain variable operand: a name, through parentheses and `!!`. Otherwise `nil`.
     // ---------------------------------------------------------------- receiver paths
 
+    private func IsIntrinsicCast(call CallExpressionSyntax) bool -> call.Callee == nil &&
+        call.ConversionTypeClause == nil &&
+        call
+        .Identifier
+        .ValueText == "cast" &&
+        call
+        .TypeArgumentList
+        ?.Arguments
+        .Count == 1 &&
+        call
+        .Arguments
+        .Count == 1
+
     // The path of an expression whose type the consumer resolves at the entry scope, or `nil`. A local of the
     // region stands for its origin; a name of the entry scope, a named call and a literal are roots.
     private func BuildPath(expression ExpressionSyntax?) RegionReceiverPath? {
@@ -2609,6 +2650,9 @@ internal sealed class RegionEffectScanner {
                 return OriginOf(name.IdentifierToken.ValueText)
             }
             case call is CallExpressionSyntax {
+                if IsIntrinsicCast(call) {
+                    return TypeOrigin(call.TypeArgumentList!!.Arguments[0])
+                }
                 if call.Callee != nil || call.TypeArgumentList != nil || IsDeclared(call.Identifier.ValueText) {
                     return nil
                 }
@@ -2630,6 +2674,9 @@ internal sealed class RegionEffectScanner {
                     return nil
                 }
                 return RegionReceiverPath(nil, false, nil, type, ImmutableArray[RegionReceiverStep].Empty)
+            }
+            case defaultValue is DefaultExpressionSyntax {
+                return TypeOrigin(defaultValue.TypeClause)
             }
             case index is IndexExpressionSyntax {
                 return BuildPath(index.Target)?.Append(RegionReceiverStepKind.Index, nil)
@@ -2660,6 +2707,59 @@ internal sealed class RegionEffectScanner {
         case accessor is AccessorExpressionSyntax:
         AppendPath(BuildConstantValuePath(accessor.LeftPart), accessor.RightPart)
         default: default(RegionReceiverPath?)
+    }
+
+    private func BuildConstantValue(
+        expression ExpressionSyntax?,
+        contextualType RegionReceiverPath? = nil
+    ) RegionConstantValue? {
+        switch UnwrapParentheses(expression) {
+            case literal is LiteralExpressionSyntax when literal.LiteralToken.Kind == SyntaxKind.NilKeyword {
+                return RegionConstantValue(nil, ImmutableArray[RegionReceiverPath].Empty)
+            }
+            case defaultValue is DefaultExpressionSyntax {
+                let target = TypeOrigin(defaultValue.TypeClause) ?? contextualType
+                return if target == nil {
+                    default(RegionConstantValue?)
+                } else {
+                    RegionConstantValue(nil, ImmutableArray.Create(target))
+                }
+            }
+            case call is CallExpressionSyntax when IsIntrinsicCast(call) {
+                return BuildConstantValue(call.Arguments[0], TypeOrigin(call.TypeArgumentList!!.Arguments[0]))?.Through(
+                    TypeOrigin(call.TypeArgumentList!!.Arguments[0])!!
+                )
+            }
+            case name is NameExpressionSyntax when DeclaringFrame(name.IdentifierToken.ValueText) >= 0 {
+                let frame = scopes[DeclaringFrame(name.IdentifierToken.ValueText)]
+                return if frame.Constants.TryGetValue(name.IdentifierToken.ValueText, out var constant) {
+                    constant
+                } else {
+                    default(RegionConstantValue?)
+                }
+            }
+            default {
+                return if BuildConstantValuePath(expression) is {} path {
+                    RegionConstantValue(path, ImmutableArray[RegionReceiverPath].Empty)
+                } else {
+                    default(RegionConstantValue?)
+                }
+            }
+        }
+    }
+
+    private func RebaseConstantValue(value RegionConstantValue?) RegionConstantValue? {
+        if value == nil {
+            return nil
+        }
+        if value.Path?.RootName is not{} root || !IsDeclared(root) {
+            return value
+        }
+        let frame = scopes[DeclaringFrame(root)]
+        if value.Path!!.Steps.Length != 0 || !frame.Constants.TryGetValue(root, out var constant) {
+            return nil
+        }
+        return RegionConstantValue(constant.Path, constant.Targets.AddRange(value.Targets))
     }
 
     // The path of the part that follows a dot after [`prefix`](paramref).
@@ -2793,7 +2893,7 @@ internal sealed class RegionEffectScanner {
                 },
                 isNull,
                 tested,
-                BuildConstantValuePath(unwrapped)
+                BuildConstantValue(unwrapped)
             )
         )
     }

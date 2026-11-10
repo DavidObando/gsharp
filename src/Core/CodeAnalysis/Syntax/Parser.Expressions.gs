@@ -420,7 +420,27 @@ open partial class Parser {
             left = FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand)
         } else if unaryOperatorPrecedence != 0 && unaryOperatorPrecedence >= parentPrecedence {
             let operatorToken = NextToken()
-            var operand = ParseBinaryExpression(unaryOperatorPrecedence)
+            let magnitude = if operatorToken.Kind == SyntaxKind.MinusToken && Current.RequiresInt64Negation {
+                Current
+            } else {
+                default(SyntaxToken?)
+            }
+            let savedMagnitude = allowedInt64Magnitude
+            allowedInt64Magnitude = magnitude
+            var operand ExpressionSyntax
+            try {
+                operand = ParseBinaryExpression(unaryOperatorPrecedence)
+            } finally {
+                allowedInt64Magnitude = savedMagnitude
+            }
+            if magnitude != nil &&
+                !(operand is LiteralExpressionSyntax{LiteralToken: var operandToken} && operandToken == magnitude) {
+                Diagnostics.ReportInvalidNumber(
+                    magnitude.Location,
+                    magnitude.Text,
+                    GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.Int64
+                )
+            }
             // ADR-0061: support `&<cond> ? <lvalue> : <lvalue>` as a bare
             // address-of of a conditional lvalue. Without this special case,
             // a stray `?` after `&x` would otherwise be unparseable (there is

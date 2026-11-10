@@ -25,6 +25,7 @@ open partial class Parser {
 
     private var tokens ImmutableArray[SyntaxToken]
     private var position int32
+    private var allowedInt64Magnitude SyntaxToken?
 
     private var stopAtTopLevelLogical bool
 
@@ -562,6 +563,13 @@ open partial class Parser {
 
     private func NextToken() SyntaxToken {
         let current = Current
+        if current.RequiresInt64Negation && current != allowedInt64Magnitude {
+            Diagnostics.ReportInvalidNumber(
+                current.Location,
+                current.Text,
+                GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.Int64
+            )
+        }
         position++
         return current
     }

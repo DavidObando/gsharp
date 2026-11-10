@@ -22,6 +22,19 @@ open partial class Parser {
     }
 
     private func ParseMapEntries() SeparatedSyntaxList[MapEntrySyntax] {
+        let savedSuppress = suppressTrailingObjectInitializer
+        let savedStructLiteral = suppressStructLiteral
+        suppressTrailingObjectInitializer = 0
+        suppressStructLiteral = 0
+        try {
+            return ParseMapEntriesCore()
+        } finally {
+            suppressTrailingObjectInitializer = savedSuppress
+            suppressStructLiteral = savedStructLiteral
+        }
+    }
+
+    private func ParseMapEntriesCore() SeparatedSyntaxList[MapEntrySyntax] {
         let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode]()
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken
         while parseNext && Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {
@@ -535,6 +548,19 @@ open partial class Parser {
     }
 
     private func ParseArrayInitializerElements(allowSpread bool) SeparatedSyntaxList[ExpressionSyntax] {
+        let savedSuppress = suppressTrailingObjectInitializer
+        let savedStructLiteral = suppressStructLiteral
+        suppressTrailingObjectInitializer = 0
+        suppressStructLiteral = 0
+        try {
+            return ParseArrayInitializerElementsCore(allowSpread)
+        } finally {
+            suppressTrailingObjectInitializer = savedSuppress
+            suppressStructLiteral = savedStructLiteral
+        }
+    }
+
+    private func ParseArrayInitializerElementsCore(allowSpread bool) SeparatedSyntaxList[ExpressionSyntax] {
         let nodesAndSeparators = ImmutableArray.CreateBuilder[SyntaxNode]()
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken
         while parseNext && Current.Kind != SyntaxKind.CloseBraceToken && Current.Kind != SyntaxKind.EndOfFileToken {

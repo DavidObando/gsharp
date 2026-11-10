@@ -1958,12 +1958,12 @@ internal partial class MethodBodyEmitter {
             this.EmitSymbolicTupleElementAccess(
                 access.TupleType,
                 access.Index,
-                () -> this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly),
+                () -> this.EmitTupleReceiver(access.Receiver, addressOnly),
                 addressOnly: addressOnly
             )
             return
         }
-        this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: addressOnly)
+        this.EmitTupleReceiver(access.Receiver, addressOnly)
         var remainingIndex = access.Index
         while remainingIndex >= 7 {
             this.il.OpCode(ILOpCode.Ldflda)
@@ -1986,6 +1986,15 @@ internal partial class MethodBodyEmitter {
         let field = clrType!!.GetField(fieldName) ??
             throw InvalidOperationException("ValueTuple type '${clrType!!.FullName}' has no public field '$fieldName'.")
         this.il.Token(this.outer.memberRefs.GetFieldReference(field))
+    }
+
+    private func EmitTupleReceiver(receiver BoundExpression, addressOnly bool) {
+        if addressOnly {
+            // An explicit reference must retain the receiver's storage, never a defensive copy.
+            this.EmitExplicitFieldReceiver(receiver)
+        } else {
+            this.EmitInstanceReceiver(receiver)
+        }
     }
 
     private func EmitSymbolicTupleElementAccess(
@@ -2257,14 +2266,14 @@ internal partial class MethodBodyEmitter {
                 }
             }
             case fa is BoundFieldAccessExpression {
-                this.EmitFieldAddress(fa)
+                this.EmitFieldAddress(fa, preserveStorage: true)
             }
             case tuple is BoundTupleElementAccessExpression {
                 this.EmitTupleElementAccess(tuple, addressOnly: true)
             }
             case BoundClrPropertyAccessExpression{Member: FieldInfo field} access {
                 if access.Receiver != nil {
-                    this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: true)
+                    this.EmitExplicitFieldReceiver(access.Receiver)
                 }
                 this.il.OpCode(
                     if field.IsStatic {
@@ -2346,7 +2355,8 @@ internal partial class MethodBodyEmitter {
     /// evaluation stack. The result is a managed pointer (`T&`)
     /// with the same verifier type as either branch.
     /// @param node The conditional address-of bound node.
-    private func EmitConditionalAddress(node BoundConditionalAddressExpression) {
+    /// @param preserveReceiverStorage Emit each receiver's physical storage rather than its slot address.
+    private func EmitConditionalAddress(node BoundConditionalAddressExpression, preserveReceiverStorage bool = false) {
         let falseLabel = this.il.DefineLabel()
         let doneLabel = this.il.DefineLabel()
         // <cond>
@@ -2354,13 +2364,21 @@ internal partial class MethodBodyEmitter {
         // brfalse falseLabel
         this.il.Branch(ILOpCode.Brfalse, falseLabel)
         // <addr of WhenTrue>
-        this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenTrueOperand))
+        if preserveReceiverStorage {
+            this.EmitExplicitFieldReceiver(node.WhenTrueOperand)
+        } else {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenTrueOperand))
+        }
         // br doneLabel
         this.il.Branch(ILOpCode.Br, doneLabel)
         // falseLabel:
         this.il.MarkLabel(falseLabel)
         // <addr of WhenFalse>
-        this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenFalseOperand))
+        if preserveReceiverStorage {
+            this.EmitExplicitFieldReceiver(node.WhenFalseOperand)
+        } else {
+            this.EmitAddressOf(BoundAddressOfExpression(nil, node.WhenFalseOperand))
+        }
         // doneLabel:
         this.il.MarkLabel(doneLabel)
     }
