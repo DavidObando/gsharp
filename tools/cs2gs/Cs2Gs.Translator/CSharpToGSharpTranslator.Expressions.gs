@@ -6291,7 +6291,8 @@ partial class CSharpToGSharpTranslator {
         ) List[int32] {
             var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(targetSymbol)
             let targetPath = List[int32]()
-            let outermost = OutermostTransparentNode(value)
+            let tupleIndices = List[int32]()
+            let outermost = OutermostTransparentNode(value, tupleIndices)
             if outermost is Microsoft
                 .CodeAnalysis
                 .CSharp
@@ -6315,7 +6316,25 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
             }
-            for index in path {
+            if outermost?.Parent is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .YieldStatementSyntax &&
+                current is INamedTypeSymbol{TypeArguments: {Length: 1}} envelope {
+                current = envelope.TypeArguments[0]
+                targetPath.Add(0)
+            }
+            let combined = List[int32](tupleIndices.Count + path.Count)
+            for var i = tupleIndices.Count - 1; i >= 0; i-- {
+                combined.Add(tupleIndices[i])
+            }
+            combined.AddRange(path)
+            for index in combined {
+                while current is IArrayTypeSymbol arraySink {
+                    targetPath.Add(0)
+                    current = arraySink.ElementType
+                }
                 while current is INamedTypeSymbol nullableNamed &&
                     nullableNamed
                     .OriginalDefinition

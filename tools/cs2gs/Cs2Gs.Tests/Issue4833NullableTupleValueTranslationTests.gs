@@ -472,6 +472,68 @@ public static class Obj {
         AssertParity(source, printed, "null:4,abc:1")
     }
 
+    @Fact
+    func ArrayElementWithNestedNullableTuple_PassedToFixedTupleParameter_BridgesLeafAndMatchesRuntime() {
+        const source = `#nullable enable
+public static class FixedNestedTupleConsumer {
+    public static string Consume(((string Text, int Code)? Nested, int Id) value) =>
+        value.Nested.HasValue ? value.Nested.Value.Text + ":" + value.Nested.Value.Code + ":" + value.Id : "none:" + value.Id;
+}
+#nullable disable
+public static class Obj {
+    public static string Run() {
+        var items = new ((string Text, int Code)? Nested, int Id)[] {
+            (("x", 1), 2),
+            (("abc", 3), 4)
+        };
+        items[0] = ((null, 5), 6);
+        return (items[0].Nested.Value.Text == null ? "null" : items[0].Nested.Value.Text) + ":" + items[0].Id + "|" + FixedNestedTupleConsumer.Consume(items[1]);
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(".Item1!!", printed)
+        AssertParity(source, printed, "null:6|abc:3:4")
+    }
+
+    @Fact
+    func PromotedArrayElementTuple_YieldedFromObliviousIterator_OmitsLeafAssertionAndMatchesRuntime() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    private static IEnumerable<(string Text, int Code)> Rows() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        yield return items[0];
+        yield return items[1];
+    }
+    public static string Run() {
+        string output = "";
+        foreach (var row in Rows()) {
+            output += (row.Text ?? "null") + ":" + row.Code + ",";
+        }
+        return output;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain(".Item1!!", printed)
+        AssertParity(source, printed, "null:2,abc:1,")
+    }
+
+    @Fact
+    func PromotedArrayElementTuple_InsideTupleLiteralArgument_OmitsLeafAssertionAndMatchesRuntime() {
+        const source = `public static class Obj {
+    private static string Consume(((string Text, int Code) Row, int Id) value) =>
+        (value.Row.Text ?? "null") + ":" + value.Row.Code + ":" + value.Id;
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        return Consume((items[0], 7)) + "|" + Consume((items[1], 8));
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain(".Item1!!", printed)
+        AssertParity(source, printed, "null:2:7|abc:1:8")
+    }
+
     shared {
         private func Translate(source string) string {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})

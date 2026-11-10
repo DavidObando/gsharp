@@ -1277,11 +1277,31 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         var source TupleElementKey
         if elementPath != nil && elementPath.Count > 0 {
-            if !TryResolveTupleStorageSource(expression, model, out var symbol, out _, out var prefix) {
+            if !TryResolveTupleStorageSource(expression, model, out var symbol, out var tupleType, out var prefix) {
                 return false
             }
+            var current ITypeSymbol? = tupleType
             for index in elementPath {
+                while current is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    prefix = AppendTuplePath(prefix, 0)
+                    current = nullableNamed.TypeArguments[0]
+                }
                 prefix = AppendTuplePath(prefix, index)
+                current = if current is INamedTypeSymbol{IsTupleType: true} tuple &&
+                    index >= 0 &&
+                    index < tuple
+                    .TupleElements
+                    .Length {
+                    tuple.TupleElements[index].Type
+                } else {
+                    default(ITypeSymbol?)
+                }
             }
             source = TupleElementKey(symbol, prefix)
         } else if !TryResolveTupleElementSource(expression, model, out source) {
