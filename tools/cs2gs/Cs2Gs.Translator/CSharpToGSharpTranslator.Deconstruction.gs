@@ -37,8 +37,19 @@ partial class CSharpToGSharpTranslator {
         ] = Dictionary[SyntaxNode, List[(Path string, Flag string, Value string, Type GTypeReference)]]()
         private let recordPatternTypeGuards Dictionary[
             SyntaxNode,
-            List[(Path string, Type ITypeSymbol, Flag string)]
-        ] = Dictionary[SyntaxNode, List[(Path string, Type ITypeSymbol, Flag string)]]()
+            List[(Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)]
+        ] = Dictionary[
+            SyntaxNode,
+            List[(Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)]
+        ]()
+        private let importedProtectedDeconstructHookNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
+        private let importedBaseDeconstructHelperNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
         private let pendingNestedBridges Dictionary[SyntaxNode, GMember] = Dictionary[SyntaxNode, GMember]()
 
         private func RecordDeconstructionAdapterName(method IMethodSymbol) string {
@@ -48,14 +59,37 @@ partial class CSharpToGSharpTranslator {
             return this.RecordDeconstructionAdapterName(method, this.context.Compilation)
         }
 
+        private func IsSecondarySameTypeContractOverload(
+            method IMethodSymbol,
+            contractMembers IReadOnlyCollection[IMethodSymbol]
+        ) bool {
+            let original = method.OriginalDefinition
+            return original.ExplicitInterfaceImplementations.IsDefaultOrEmpty && contractMembers.Any(
+                (candidate IMethodSymbol) -> candidate
+                    .ExplicitInterfaceImplementations
+                    .IsDefaultOrEmpty &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(candidate.ContainingType, original.ContainingType) && string.CompareOrdinal(
+                    candidate.ToDisplayString(),
+                    original.ToDisplayString()
+                ) < 0
+            )
+        }
+
         private func RecordDeconstructionAdapterName(method IMethodSymbol, compilation Compilation) string {
             var original = (
                 (method.ReducedFrom ?? method).PartialDefinitionPart ?? (method.ReducedFrom ?? method)
             ).OriginalDefinition
             let allocator = EmittedNameAllocator.For(compilation)
             let contractMembers = allocator.GetDeconstructContractMembers(original)
-            if contractMembers.Count > 1 {
-                original = contractMembers.OrderBy(
+            let isSecondaryOverload = this.IsSecondarySameTypeContractOverload(original, contractMembers)
+            let primaryContractMembers = contractMembers.Where(
+                (candidate IMethodSymbol) -> !this.IsSecondarySameTypeContractOverload(candidate, contractMembers)
+            )
+                .ToArray()
+            if primaryContractMembers.Length > 1 && !isSecondaryOverload {
+                original = primaryContractMembers.OrderBy(
                     (candidate IMethodSymbol) -> candidate.ToDisplayString(),
                     StringComparer.Ordinal
                 )
@@ -120,8 +154,8 @@ partial class CSharpToGSharpTranslator {
             }
             var helperSuffix = 2
             var assignedName = name
-            let membersToReserve = if contractMembers.Count > 0 {
-                contractMembers
+            let membersToReserve = if !isSecondaryOverload && primaryContractMembers.Length > 0 {
+                cast[IReadOnlyCollection[IMethodSymbol]](primaryContractMembers)
             } else {
                 cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
             }
@@ -190,21 +224,46 @@ partial class CSharpToGSharpTranslator {
             owner SyntaxNode,
             path string,
             matchedType ITypeSymbol,
+            requiresConversion bool,
             site RecursivePatternSyntax,
             declarations List[GStatement]?
-        ) string {
+        )(Flag string, Value string?) {
             let unwrapped = UnwrapNullablePatternType(matchedType)
             if !this.recordPatternTypeGuards.TryGetValue(owner, out var guards) {
-                guards = List[(Path string, Type ITypeSymbol, Flag string)]()
+                guards = List[
+                    (Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)
+                ]()
                 this.recordPatternTypeGuards.Add(owner, guards)
             }
-            for entry in guards {
+            for var i = 0; i < guards.Count; i++ {
+                let entry = guards[i]
                 if entry.Path == path && SymbolEqualityComparer.Default.Equals(entry.Type, unwrapped) {
-                    return entry.Flag
+                    if requiresConversion && entry.Value == nil {
+                        let value = this.AllocateRecordScopedLocalName("matchedValue", site)
+                        var storageType = this.typeMapper.Map(unwrapped, this.context, site.GetLocation())
+                        if unwrapped.IsReferenceType {
+                            storageType = MakeNullable(storageType)
+                        }
+                        guards[i] = (entry.Path, entry.Type, entry.Flag, value, storageType)
+                        if owner is IsPatternExpressionSyntax && declarations != nil {
+                            declarations.Add(LocalDeclarationStatement(BindingKind.Var, value, storageType))
+                        }
+                        return (entry.Flag, value)
+                    }
+                    return (entry.Flag, entry.Value)
                 }
             }
             let flag = this.AllocateRecordScopedLocalName("matchedType", site)
-            guards.Add((path, unwrapped, flag))
+            var value string? = nil
+            var storageType GTypeReference? = nil
+            if requiresConversion {
+                value = this.AllocateRecordScopedLocalName("matchedValue", site)
+                storageType = this.typeMapper.Map(unwrapped, this.context, site.GetLocation())
+                if unwrapped.IsReferenceType {
+                    storageType = MakeNullable(storageType)
+                }
+            }
+            guards.Add((path, unwrapped, flag, value, storageType))
             if owner is IsPatternExpressionSyntax && declarations != nil {
                 declarations.Add(
                     LocalDeclarationStatement(
@@ -214,8 +273,11 @@ partial class CSharpToGSharpTranslator {
                         LiteralExpression.Bool(false)
                     )
                 )
+                if value != nil {
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, value, storageType))
+                }
             }
-            return flag
+            return (flag, value)
         }
 
         private func TryGetSharedRecordPatternTypeGuard(
@@ -276,45 +338,64 @@ partial class CSharpToGSharpTranslator {
             if matchedType == nil {
                 return false
             }
-            let guardFlag = this.GetOrCreateRecordPatternTypeGuard(owner, path, matchedType, positional!!, declarations)
+            let narrowedType = if recursive.Type != nil {
+                this.context.GetTypeInfo(recursive.Type).Type
+            } else {
+                default(ITypeSymbol?)
+            }
+            let requiresConversion = recursive.Type != nil &&
+                narrowedType != nil &&
+                (
+                receiverType == nil || !SymbolEqualityComparer.Default.Equals(
+                    UnwrapNullablePatternType(receiverType),
+                    UnwrapNullablePatternType(narrowedType)
+                )
+            )
+            let (guardFlag, guardValue) = this.GetOrCreateRecordPatternTypeGuard(
+                owner,
+                path,
+                matchedType,
+                requiresConversion,
+                positional!!,
+                declarations
+            )
             let flagExpr = IdentifierExpression(guardFlag)
+            let assignStatements = List[GStatement]()
+            if guardValue != nil && receiver != nil && recursive.Type != nil {
+                assignStatements.Add(
+                    AssignmentStatement(
+                        IdentifierExpression(guardValue),
+                        this.BuildPatternNarrowingReplacement(
+                            receiver,
+                            receiverSyntax: nil,
+                            recursive.Type,
+                            receiverType
+                        )
+                    )
+                )
+            }
+            assignStatements.Add(AssignmentStatement(flagExpr, LiteralExpression.Bool(true)))
             guardedTest = ParenthesizedExpression(
                 BinaryExpression(
                     flagExpr,
                     "||",
-                    BlockExpression(
-                        []GStatement{
-                            IfStatement(
-                                currentTest,
-                                BlockStatement(
-                                    []GStatement{AssignmentStatement(flagExpr, LiteralExpression.Bool(true))}
-                                )
-                            )
-                        },
-                        flagExpr
-                    )
+                    BlockExpression([]GStatement{IfStatement(currentTest, BlockStatement(assignStatements))}, flagExpr)
                 )
             )
             if receiver != nil {
-                let narrowedType = if recursive.Type != nil {
-                    this.context.GetTypeInfo(recursive.Type).Type
-                } else {
-                    default(ITypeSymbol?)
-                }
-                if recursive.Type != nil &&
-                    narrowedType != nil &&
-                    (
-                    receiverType == nil || !SymbolEqualityComparer.Default.Equals(
-                        UnwrapNullablePatternType(receiverType),
-                        UnwrapNullablePatternType(narrowedType)
-                    )
-                ) {
-                    guardedMemberReceiver = this.BuildPatternNarrowingReplacement(
-                        receiver,
-                        receiverSyntax: nil,
-                        recursive.Type,
-                        receiverType
-                    )
+                if guardValue != nil {
+                    let valueExpr = IdentifierExpression(guardValue)
+                    guardedMemberReceiver = if matchedType.IsReferenceType {
+                        EnsureNonNullAssertion(valueExpr)
+                    } else {
+                        valueExpr
+                    }
+                    if recursive.Designation is SingleVariableDesignationSyntax recVar &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(recVar) is {} recBound {
+                        this.state.PatternBindings[recBound] = guardedMemberReceiver!!
+                    }
                 } else if this.IsGSharpNullablePatternReceiver(receiver) ||
                     receiverType?.NullableAnnotation == Microsoft
                     .CodeAnalysis
@@ -462,7 +543,7 @@ partial class CSharpToGSharpTranslator {
             let arguments = List[GExpression]()
             let elements = List[GExpression]()
             var receiver GExpression = ThisExpression()
-            if method.ContainingType.IsValueType {
+            if method.ContainingType.IsValueType && explicitInterfaceType == nil {
                 // C# deconstruction calls a struct receiver copy; an explicit Deconstruct call can mutate the original.
                 var receiverName = "receiver"
                 for var suffix = 2; occupied.Contains(receiverName); suffix++ {
@@ -472,29 +553,11 @@ partial class CSharpToGSharpTranslator {
                 statements.Add(LocalDeclarationStatement(BindingKind.Var, receiverName, initializer: receiver))
                 receiver = IdentifierExpression(receiverName)
             }
-            if explicitInterfaceType != nil {
+            if explicitInterfaceType != nil && !method.ContainingType.IsValueType {
                 receiver = ParenthesizedExpression(
                     ConversionExpression(explicitInterfaceType, receiver, isCheckedReferenceCast: true)
                 )
             }
-            let isUnsafeType = ownerIsUnsafe || method.Parameters.Any(
-                (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
-            ) ||
-                this
-                .TypeHasUnsafeSignatureMember(
-                method
-                    .ContainingType
-                    .DeclaringSyntaxReferences
-                    .Select((reference SyntaxReference) -> reference.GetSyntax())
-                    .OfType[TypeDeclarationSyntax]()
-                    .SelectMany((declaration TypeDeclarationSyntax) -> declaration.Members)
-            ) ||
-                method
-                .ContainingType
-                .DeclaringSyntaxReferences
-                .Select((reference SyntaxReference) -> reference.GetSyntax())
-                .OfType[TypeDeclarationSyntax]()
-                .Any((declaration TypeDeclarationSyntax) -> declaration.Modifiers.Any(SyntaxKind.UnsafeKeyword))
             for var i = 0; i < method.Parameters.Length; i++ {
                 let parameter = method.Parameters[i]
                 let type = types[i]
@@ -506,11 +569,7 @@ partial class CSharpToGSharpTranslator {
                 occupied.Add(name)
                 let element = IdentifierExpression(name)
                 statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
-                if isUnsafeType {
-                    arguments.Add(OutArgumentExpression("out", name))
-                } else {
-                    arguments.Add(UnaryExpression("&", element))
-                }
+                arguments.Add(OutArgumentExpression("out", name))
                 elements.Add(
                     if method.Parameters.Length > 1 && IsPointerOrFunctionPointerType(parameter.Type) {
                         cast[GExpression](
@@ -554,6 +613,118 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        private func BuildConstructedInterfaceDeconstructionAdapters(method IMethodSymbol) IEnumerable[
+            MethodDeclaration
+        ] {
+            let results = List[MethodDeclaration]()
+            if method.IsExtensionMethod ||
+                method.IsStatic ||
+                !method.ReturnsVoid ||
+                method.Arity != 0 ||
+                method.IsPartialDefinition ||
+                !method
+                .ExplicitInterfaceImplementations
+                .IsDefaultOrEmpty ||
+                method
+                .ContainingType
+                .TypeKind == TypeKind.Interface ||
+                this.BuildRecordDeconstructionAdapter(method) == nil {
+                return results
+            }
+            let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let types = this.MapRecordDeconstructionParameterTypes(method)
+            let resultType = this.RecordDeconstructionResultType(method, types)
+            let methodAdapterName = this.RecordDeconstructionAdapterName(method)
+            let seenKeys = HashSet[string](StringComparer.Ordinal)
+            for iface in method.ContainingType.AllInterfaces {
+                for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                    if !this.nameAllocator.HasRenamedDeconstructContract(slot) &&
+                        !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) {
+                        continue
+                    }
+                    if !SymbolEqualityComparer.Default.Equals(
+                        method.ContainingType.FindImplementationForInterfaceMember(slot),
+                        method
+                    ) {
+                        continue
+                    }
+                    let slotAdapterName = this.RecordDeconstructionAdapterName(slot)
+                    if slotAdapterName == methodAdapterName && !method.ContainingType.IsValueType {
+                        continue
+                    }
+                    let mappedIface = this.typeMapper.Map(iface, this.context, syntaxNode?.GetLocation())
+                    if mappedIface == nil {
+                        continue
+                    }
+                    let key = GSharpPrinter.RenderTypeReference(mappedIface) + ":" + slotAdapterName
+                    if !seenKeys.Add(key) {
+                        continue
+                    }
+                    let occupied = HashSet[string](StringComparer.Ordinal)
+                    for typeParameter in method.ContainingType.TypeParameters {
+                        occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
+                    }
+                    let statements = List[GStatement]()
+                    let arguments = List[GExpression]()
+                    let elements = List[GExpression]()
+                    for var i = 0; i < method.Parameters.Length; i++ {
+                        let parameter = method.Parameters[i]
+                        let type = types[i]
+                        let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
+                        var name = stem
+                        for var suffix = 2; occupied.Contains(name); suffix++ {
+                            name = stem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                        }
+                        occupied.Add(name)
+                        let element = IdentifierExpression(name)
+                        statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                        arguments.Add(OutArgumentExpression("out", name))
+                        elements.Add(
+                            if method.Parameters.Length > 1 && IsPointerOrFunctionPointerType(parameter.Type) {
+                                cast[GExpression](
+                                    ConversionExpression(
+                                        NamedTypeReference("nuint"),
+                                        element,
+                                        isCheckedReferenceCast: true
+                                    )
+                                )
+                            } else {
+                                cast[GExpression](element)
+                            }
+                        )
+                    }
+                    statements.Add(
+                        ExpressionStatement(
+                            InvocationExpression(
+                                MemberAccessExpression(ThisExpression(), this.EmittedName(method, method.Name)),
+                                arguments
+                            )
+                        )
+                    )
+                    statements.Add(
+                        ReturnStatement(
+                            if elements.Count == 1 {
+                                elements[0]
+                            } else {
+                                TupleLiteralExpression(elements)
+                            }
+                        )
+                    )
+                    results.Add(
+                        MethodDeclaration(
+                            slotAdapterName,
+                            Array.Empty[Parameter](),
+                            resultType,
+                            BlockStatement(statements),
+                            visibility: Visibility.Default,
+                            explicitInterfaceType: mappedIface
+                        )
+                    )
+                }
+            }
+            return results
+        }
+
         private func BuildExtensionRecordDeconstructionAdapter(method IMethodSymbol) MethodDeclaration? {
             if !method.IsExtensionMethod ||
                 method.Name != "Deconstruct" ||
@@ -589,15 +760,6 @@ partial class CSharpToGSharpTranslator {
             for typeParameter in signature.TypeParameters {
                 occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
             }
-            let isUnsafeExtension = signature.Parameters.Any(
-                (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
-            ) ||
-                signature
-                .ContainingType
-                .DeclaringSyntaxReferences
-                .Select((reference SyntaxReference) -> reference.GetSyntax())
-                .OfType[TypeDeclarationSyntax]()
-                .Any((declaration TypeDeclarationSyntax) -> declaration.Modifiers.Any(SyntaxKind.UnsafeKeyword))
             for var i = 0; i < outputParameters.Count; i++ {
                 let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
                 var name = stem
@@ -607,11 +769,7 @@ partial class CSharpToGSharpTranslator {
                 occupied.Add(name)
                 let element = IdentifierExpression(name)
                 statements.Add(LocalDeclarationStatement(BindingKind.Var, name, outputTypes[i]))
-                if isUnsafeExtension {
-                    arguments.Add(OutArgumentExpression("out", name))
-                } else {
-                    arguments.Add(UnaryExpression("&", element))
-                }
+                arguments.Add(OutArgumentExpression("out", name))
                 elements.Add(
                     if outputParameters.Count > 1 && IsPointerOrFunctionPointerType(outputParameters[i].Type) {
                         cast[GExpression](
@@ -944,29 +1102,48 @@ partial class CSharpToGSharpTranslator {
         )
 
         private func ImportedProtectedDeconstructHookName(method IMethodSymbol) string {
-            let owner = method.ContainingType
+            let original = method.OriginalDefinition
+            if this.importedProtectedDeconstructHookNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
             let occupied = HashSet[string](
                 ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
                     (member ISymbol) -> this.EmittedName(member, member.Name)!!
                 ),
                 StringComparer.Ordinal
             )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
             let ordinal = owner
                 .GetMembers("Deconstruct")
                 .OfType[IMethodSymbol]()
                 .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
-                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, method))
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
                 .Count()
             const stem = "deconstructBridge"
             var candidateName = stem
             var remaining = ordinal
-            for var suffix = 2; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
                 if !occupied.Contains(candidateName) {
                     remaining--
                 }
                 candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
-            return candidateName
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.importedProtectedDeconstructHookNames[original] = assignedName
+            return assignedName
         }
 
         private func BuildImportedProtectedDeconstructHook(
@@ -1096,7 +1273,7 @@ partial class CSharpToGSharpTranslator {
             let returnType = if signature.ReturnsVoid {
                 default(GTypeReference?)
             } else if syntax != nil {
-                this.MapReturnType(signature, syntax)
+                this.MapReturnType(signature, syntax, preserveEnvelope: true)
             } else {
                 this.typeMapper.Map(signature.ReturnType, this.context, location: nil)
             }
@@ -1131,10 +1308,11 @@ partial class CSharpToGSharpTranslator {
                 arguments,
                 typeArguments
             )
+            let isRefReturn = signature.ReturnsByRef || signature.ReturnsByRefReadonly
             let bodyStatement GStatement = if signature.ReturnsVoid {
                 ExpressionStatement(call)
             } else {
-                ReturnStatement(call)
+                ReturnStatement(call, isRef: isRefReturn)
             }
             return MethodDeclaration(
                 emittedMethodName,
@@ -1145,34 +1323,55 @@ partial class CSharpToGSharpTranslator {
                 visibility: visibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                explicitInterfaceType: explicitInterfaceType
+                explicitInterfaceType: explicitInterfaceType,
+                isRefReturn: isRefReturn,
+                isReadOnlyRefReturn: signature.ReturnsByRefReadonly
             )
         }
 
         private func ImportedBaseDeconstructHelperName(method IMethodSymbol) string {
-            let owner = method.ContainingType
+            let original = method.OriginalDefinition
+            if this.importedBaseDeconstructHelperNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
             let occupied = HashSet[string](
                 ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
                     (member ISymbol) -> this.EmittedName(member, member.Name)!!
                 ),
                 StringComparer.Ordinal
             )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
             let ordinal = this
                 .GetImportedDeconstructContractMethods(owner)
                 .Where((candidate IMethodSymbol) -> candidate.IsOverride)
                 .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
-                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, method))
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
                 .Count()
             const stem = "baseDeconstruct"
             var candidateName = stem
             var remaining = ordinal
-            for var suffix = 2; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
                 if !occupied.Contains(candidateName) {
                     remaining--
                 }
                 candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
             }
-            return candidateName
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.importedBaseDeconstructHelperNames[original] = assignedName
+            return assignedName
         }
 
         private func TryGetImportedBaseDeconstructHelperName(
@@ -1242,6 +1441,33 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        private func SelectsBaseCopyConstructor(symbol INamedTypeSymbol, baseCopyCtor IMethodSymbol) bool {
+            for ctor in symbol.InstanceConstructors {
+                if ctor.IsImplicitlyDeclared {
+                    continue
+                }
+                for reference in ctor.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is ConstructorDeclarationSyntax{Initializer: {} initializer} &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(
+                        (
+                            this
+                                .context
+                                .Compilation
+                                .GetSemanticModel(reference.SyntaxTree)
+                                .GetSymbolInfo(initializer)
+                                .Symbol as IMethodSymbol
+                        )?.OriginalDefinition,
+                        baseCopyCtor.OriginalDefinition
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
         private func BuildImportedDeconstructContractBridge(
             symbol INamedTypeSymbol,
             node TypeDeclarationSyntax,
@@ -1255,29 +1481,54 @@ partial class CSharpToGSharpTranslator {
             }
             let bridgeName = this.AllocateImportedDeconstructBridgeName(symbol)
             let bridgeMembers = List[GMember]()
+            var bridgeIsUnsafe = isUnsafe
             if symbol.BaseType is {} baseSymbol && baseSymbol.SpecialType != SpecialType.System_Object {
-                let accessibleConstructors = baseSymbol
-                    .InstanceConstructors
-                    .Where(
-                    (ctor IMethodSymbol) -> this
-                        .context
-                        .Compilation
-                        .IsSymbolAccessibleWithin(ctor, symbol) &&
-                        !(
-                        ctor
-                            .Parameters
-                            .Length == 1 &&
-                            ctor
-                            .Parameters[0]
-                            .RefKind == RefKind.None &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(ctor.Parameters[0].Type, baseSymbol)
+                let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                let isSourceOrMigratedBase = !baseSymbol
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty ||
+                    (
+                    compilations != nil && ObliviousNullabilityAnalyzer.RunSourceDeclarations(
+                        baseSymbol.OriginalDefinition,
+                        compilations
                     )
+                        .Any()
                 )
-                    .ToList()
+                let accessibleConstructors = List[IMethodSymbol]()
+                for ctor in baseSymbol.InstanceConstructors {
+                    if !this.context.Compilation.IsSymbolAccessibleWithin(ctor, symbol) {
+                        continue
+                    }
+                    let isBaseCopyCtor = ctor
+                        .Parameters
+                        .Length == 1 &&
+                        ctor
+                        .Parameters[0]
+                        .RefKind == RefKind.None &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(ctor.Parameters[0].Type, baseSymbol)
+                    if isBaseCopyCtor {
+                        if !this.SelectsBaseCopyConstructor(symbol, ctor) {
+                            continue
+                        }
+                        if isSourceOrMigratedBase {
+                            this.context.ReportUnsupported(
+                                node,
+                                "record Deconstruct bridge cannot forward an explicit base copy-constructor call to a source record."
+                            )
+                            return nil
+                        }
+                    }
+                    accessibleConstructors.Add(ctor)
+                }
                 if accessibleConstructors.Any((ctor IMethodSymbol) -> ctor.Parameters.Length > 0) {
                     for ctor in accessibleConstructors {
+                        if ctor.Parameters.Any(
+                            (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                        ) {
+                            bridgeIsUnsafe = true
+                        }
                         let ctorSyntax = ctor
                             .DeclaringSyntaxReferences
                             .FirstOrDefault()
@@ -1330,7 +1581,6 @@ partial class CSharpToGSharpTranslator {
                 )
                     .ToList()
             )
-            var bridgeIsUnsafe = isUnsafe
             let bridgeInterfaces = List[GTypeReference]()
             let seenBridgeInterfaces = HashSet[string](StringComparer.Ordinal)
             for method in contractMethods {
@@ -2581,6 +2831,9 @@ partial class CSharpToGSharpTranslator {
                             LiteralExpression.Bool(false)
                         )
                     )
+                    if guard_.Value != nil {
+                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, guard_.Value!!, guard_.StorageType))
+                    }
                 }
             }
             if this.recordPatternReceiverCaches.TryGetValue(owner, out var receiverCaches) {

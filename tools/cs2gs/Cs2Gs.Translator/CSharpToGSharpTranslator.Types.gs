@@ -2804,6 +2804,26 @@ partial class CSharpToGSharpTranslator {
                     elements.Count,
                     sliceIndex
                 )
+                if this.RecordPatternDecisionOwner(element) is {} owner &&
+                    this
+                    .DecisionSubtreeRunsUserRecordDeconstruct(owner, element) {
+                    let elementType = this.GetListPatternElementType(
+                        listPattern,
+                        if this.context.SemanticModel.GetOperation(listPattern) is IPatternOperation op {
+                            op.InputType
+                        } else {
+                            default(ITypeSymbol?)
+                        }
+                    )
+                    this.AddTypedSubpatternGuard(
+                        () -> this.TranslateRecordPatternMemberSubpatternTest(element, elementReceiver, elementType),
+                        bindings,
+                        guards,
+                        mutableBindings
+                    )
+                    translated.Add(DiscardPattern())
+                    continue
+                }
                 translated.Add(
                     this.TranslatePattern(
                         element,

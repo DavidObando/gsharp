@@ -1683,23 +1683,33 @@ partial class CSharpToGSharpTranslator {
                         )
                     }
                 }
+                let emittedForwarderKeys = HashSet[string](StringComparer.Ordinal)
+                let emittedAdapterKeys = HashSet[string](StringComparer.Ordinal)
                 for (slot, impl) in this.GetInheritedRenamedDeconstructInterfaceContracts(symbol) {
-                    members.Add(
-                        this.BuildDeconstructContractForwardingMethod(
-                            slot,
-                            this.EmittedName(slot, slot.Name)!!,
-                            ThisExpression(),
-                            this.EmittedName(impl, impl.Name)!!,
-                            isOpen: kind == TypeDeclarationKind.Class && !symbol.IsSealed,
-                            isOverride: false
-                        )
+                    let forwarder = this.BuildDeconstructContractForwardingMethod(
+                        slot,
+                        this.EmittedName(slot, slot.Name)!!,
+                        ThisExpression(),
+                        this.EmittedName(impl, impl.Name)!!,
+                        isOpen: kind == TypeDeclarationKind.Class && !symbol.IsSealed,
+                        isOverride: false
                     )
+                    let forwarderKey = forwarder.Name + "(" + string.Join(
+                        ",",
+                        forwarder.Parameters.Select(
+                            (p Parameter) -> p.RefKind + ":" + GSharpPrinter.RenderTypeReference(p.Type)
+                        )
+                    ) +
+                        ")"
+                    if emittedForwarderKeys.Add(forwarderKey) {
+                        members.Add(forwarder)
+                    }
                     let adapter = this.BuildRecordDeconstructionAdapter(
                         slot,
                         forceConcreteImplementation: true,
                         ownerIsUnsafe: isUnsafe
                     )
-                    if adapter != nil {
+                    if adapter != nil && emittedAdapterKeys.Add(adapter.Name) {
                         members.Add(adapter)
                     }
                 }

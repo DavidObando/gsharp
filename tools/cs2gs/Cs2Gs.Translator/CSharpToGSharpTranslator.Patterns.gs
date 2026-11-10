@@ -2142,12 +2142,7 @@ partial class CSharpToGSharpTranslator {
                     elements.Count,
                     sliceIndex
                 )
-                let elementTest = this.TranslatePatternTest(
-                    elementReceiver,
-                    element,
-                    elementType,
-                    isNestedPatternMember: true
-                )
+                let elementTest = this.TranslateRecordPatternMemberSubpatternTest(element, elementReceiver, elementType)
                 test = BinaryExpression(test, "&&", elementTest)
             }
             if lengthCapture != nil {
@@ -2248,7 +2243,8 @@ partial class CSharpToGSharpTranslator {
             suffixCount int32,
             receiverType ITypeSymbol?
         ) GExpression? {
-            if slice.Pattern == nil || this.IsDiscardPattern(slice.Pattern) {
+            let innerPattern = slice.Pattern
+            if innerPattern == nil || this.IsDiscardPattern(innerPattern) {
                 return nil
             }
             let sliceType ITypeSymbol? = this.GetProjectedSlicePatternType(
@@ -2257,17 +2253,16 @@ partial class CSharpToGSharpTranslator {
                 (receiverType as IArrayTypeSymbol)?.ElementType
             ) ??
                 receiverType
-            if slice.Pattern is DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax variable} &&
+            if innerPattern is DeclarationPatternSyntax{Designation: SingleVariableDesignationSyntax variable} &&
                 this
                 .context
                 .GetDeclaredSymbol(variable) is {} boundSymbol {
                 this.RegisterProjectedPatternBinding(boundSymbol, sliceType)
             }
-            return this.TranslatePatternTest(
+            return this.TranslateRecordPatternMemberSubpatternTest(
+                innerPattern,
                 BuildSliceExpression(receiver, prefixCount, suffixCount),
-                slice.Pattern,
-                sliceType,
-                isNestedPatternMember: true
+                sliceType
             )
         }
 

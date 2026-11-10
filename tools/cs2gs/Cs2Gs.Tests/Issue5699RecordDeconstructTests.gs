@@ -613,13 +613,19 @@ namespace RecordDeconstruction {
             string singleOutcome;
             try { singleOutcome = (rSingle is R(1, _) { Value: 3 }).ToString(); }
             catch (System.NullReferenceException) { singleOutcome = "threw"; }
+            object? boxedCleared = new R();
+            R.Hook = () => boxedCleared = null;
+            var boxedClearedMatch = boxedCleared is PATTERN;
+            object? boxedSingleCleared = new R();
+            R.Hook = () => boxedSingleCleared = null;
+            var boxedSingleClearedMatch = boxedSingleCleared is R(1, _) { Value: 3 };
             R.Hook = null;
             R plain = new R();
             var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
             var inheritedSubtypeMiss = plain is R(0, _) or Sub(1, _) { Extra: 9 };
             object boxed = new R();
             var boxedMatch = boxed is PATTERN;
-            return $"{first},{singleOutcome},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
+            return $"{first},{singleOutcome},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
         }
     }
 }`).Replace(
@@ -1690,7 +1696,28 @@ namespace RecordDeconstruction {
     @Fact
     func UnsafeSameArityPointerOverloadsAndCovariantPatternCache_PreserveParity() {
         Verify(`
+#nullable enable
 namespace RecordDeconstruction {
+    public interface IGenericParts<T> {
+        void Deconstruct(out T x, out int y);
+    }
+    public record MultiParts : IGenericParts<int>, IGenericParts<string> {
+        public int Num = 7;
+        public string Text = "hi";
+        public void Deconstruct(out int x, out int y) { x = Num; y = Num * 2; }
+        public void Deconstruct(out string x, out int y) { x = Text; y = Text.Length; }
+    }
+    public interface IBoxedParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public record struct BoxedCounter : IBoxedParts {
+        public int Count;
+        public void Deconstruct(out int x, out int y) {
+            Count++;
+            x = Count;
+            y = Count * 10;
+        }
+    }
     public unsafe record OverloadedPtr {
         public static int[] IntCells = new[] { 11 };
         public static long[] LongCells = new[] { 22L };
@@ -1714,12 +1741,27 @@ namespace RecordDeconstruction {
             a = 5;
             b = 6;
         }
+        public static void Deconstruct(this R r, out int x, out int y, out int z) {
+            x = r.X + 10;
+            y = r.Y + 20;
+            z = r.X + r.Y;
+        }
+        public static void Deconstruct(this R r, int* x, out int y, out int z) {
+            y = -1;
+            z = -2;
+        }
     }
     public record R {
         public int X;
         public int Y;
         public static int Calls;
-        public void Deconstruct(out int x, out int y) { Calls++; x = Y * 10; y = X; }
+        public static System.Action? ClearFirst;
+        public void Deconstruct(out int x, out int y) {
+            Calls++;
+            x = Y * 10;
+            y = X;
+            ClearFirst?.Invoke();
+        }
     }
     public record D : R {
         public int Extra = 9;
@@ -1750,10 +1792,31 @@ namespace RecordDeconstruction {
             long* elp;
             int ela, elb;
             UnsafeExtensions.Deconstruct(item, out elp, out ela, out elb);
+            var (rx, ry, rz) = new R { X = 2, Y = 3 };
+            var mp = new MultiParts();
+            int mi1, mi2;
+            mp.Deconstruct(out mi1, out mi2);
+            string ms1;
+            int ms2;
+            mp.Deconstruct(out ms1, out ms2);
+            IGenericParts<int> gpi = mp;
+            var (gix, giy) = gpi;
+            IGenericParts<string> gps = mp;
+            var (gsx, gsy) = gps;
+            var bc = new BoxedCounter { Count = 1 };
+            var (bc1, _) = bc;
+            var (bc2, _) = bc;
+            IBoxedParts bp = new BoxedCounter { Count = 1 };
+            var (bp1, _) = bp;
+            var (bp2, _) = bp;
+            R?[] listItems = new R?[] { new R { X = 2, Y = 1 } };
+            R.ClearFirst = () => listItems[0] = null;
+            var listMatched = listItems is [R(0, _)] or [R(10, 2)];
+            R.ClearFirst = null;
             Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
             var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
             var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
-            return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{matched},{untypedCovariant}";
+            return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{listMatched},{matched},{untypedCovariant}";
         }
     }
 }`)
@@ -1766,6 +1829,22 @@ namespace ExternalContracts {
     public interface IParts {
         void Deconstruct(out int x, out int y);
     }
+    public interface IAsyncDeconstruct {
+        System.Threading.Tasks.Task<int> Deconstruct(int delta);
+    }
+    public interface IRefDeconstruct {
+        ref int Deconstruct();
+        ref readonly int Deconstruct(short tag);
+    }
+    public record ProtectedBase {
+        protected virtual void Deconstruct(out int x, out int y) { x = 1; y = 2; }
+    }
+    public unsafe record UnsafeCtorBase {
+        public int Value;
+        public UnsafeCtorBase() { Value = 5; }
+        public UnsafeCtorBase(int* p) { Value = *p; }
+    }
+    public record CopyableBase(int X);
     public record struct MutatingStruct(int X, int Y) {
         public void Deconstruct(out int x, out int y) {
             X += 100;
@@ -1811,15 +1890,54 @@ namespace RecordDeconstruction {
         public StringDerived(GenericBase<int> other) : base(other) { }
         public void Deconstruct(out int x, out int y) { x = Value; y = Value + 1; }
     }
+    public record ProtectedHookCollision : ExternalContracts.ProtectedBase {
+        public int Seed = 9;
+        protected override void Deconstruct(out int x, out int y) { x = Seed; y = Seed + 1; }
+        public int Compute() {
+            void deconstructBridge(out int a, out int b) {
+                Bounce<int>(0, out a, out b);
+            }
+            void Bounce<T>(int depth, out int a, out int b) {
+                if (depth > 0) {
+                    deconstructBridge(out a, out b);
+                    return;
+                }
+                Deconstruct(out a, out b);
+            }
+            deconstructBridge(out var x, out var y);
+            return x + y;
+        }
+    }
+    public record AsyncAndRefRecord : ExternalContracts.IAsyncDeconstruct, ExternalContracts.IRefDeconstruct {
+        public int Cell = 30;
+        public async System.Threading.Tasks.Task<int> Deconstruct(int delta) {
+            await System.Threading.Tasks.Task.Yield();
+            return Cell + delta;
+        }
+        public ref int Deconstruct() => ref Cell;
+        public ref readonly int Deconstruct(short tag) => ref Cell;
+    }
+    public record SafeDerivedFromUnsafeBase : ExternalContracts.UnsafeCtorBase, ExternalContracts.IParts {
+        public void Deconstruct(out int x, out int y) { x = Value; y = Value * 3; }
+    }
+    public record CopyCtorDerived : ExternalContracts.CopyableBase, ExternalContracts.IParts {
+        public int Extra;
+        public CopyCtorDerived(int x, int extra) : base(x) { Extra = extra; }
+        public CopyCtorDerived(ExternalContracts.CopyableBase other, int extra) : base(other) { Extra = extra; }
+        public void Deconstruct(out int x, out int y) { x = X; y = Extra; }
+    }
     public interface ISourceParts {
         void Deconstruct(out int x, out int y);
     }
-    public record SourceRecord : ISourceParts {
+    public interface ISourceParts2 {
+        void Deconstruct(out int x, out int y);
+    }
+    public record SourceRecord : ISourceParts, ISourceParts2 {
         public int X = 2;
         public int Y = 3;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
-    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts { }
+    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts, ISourceParts2 { }
     public class KeywordDerived : ExternalContracts.KeywordBase {
         public override int func() => 42;
     }
@@ -1836,9 +1954,23 @@ namespace RecordDeconstruction {
             var (sx, sy) = StructHolder.Current;
             var (sx2, sy2) = StructHolder.Current;
             ExternalContracts.KeywordBase kb = new KeywordDerived();
-            ISourceParts sp = new InheritedMetadataParts();
+            var im = new InheritedMetadataParts();
+            ISourceParts sp = im;
+            ISourceParts2 sp2 = im;
             var (ix, iy) = sp;
-            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy}";
+            var (ix2, iy2) = sp2;
+            var hookVal = new ProtectedHookCollision().Compute();
+            var asyncRef = new AsyncAndRefRecord();
+            ExternalContracts.IAsyncDeconstruct ia = asyncRef;
+            var asyncVal = ia.Deconstruct(3).GetAwaiter().GetResult();
+            ExternalContracts.IRefDeconstruct ir = asyncRef;
+            ir.Deconstruct() += 5;
+            var refRoVal = ir.Deconstruct((short)1);
+            ExternalContracts.IParts unsafeBridge = new SafeDerivedFromUnsafeBase();
+            var (ubx, uby) = unsafeBridge;
+            ExternalContracts.IParts copyBridge = new CopyCtorDerived(new CopyCtorDerived(12, 1), 99);
+            var (cbx, cby) = copyBridge;
+            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby}";
         }
     }
 }`

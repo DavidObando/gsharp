@@ -95,6 +95,9 @@ partial class CSharpToGSharpTranslator {
                         if adapter != nil {
                             yield (adapter, deconstruct.IsStatic)
                         }
+                        for interfaceAdapter in this.BuildConstructedInterfaceDeconstructionAdapters(deconstruct) {
+                            yield (interfaceAdapter, false)
+                        }
                     }
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
                         method
