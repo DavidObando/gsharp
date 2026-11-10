@@ -4376,6 +4376,9 @@ partial class CSharpToGSharpTranslator {
                         tuplePath
                     )
                 }
+                if this.IsExplicitlyTypedPatternLocal(local) {
+                    return true
+                }
                 return this.state.EmittedLocalTypeClauses.Contains(local)
             }
             if !IsImplicitlyTypedLocal(local) &&
@@ -4610,47 +4613,113 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func IsExplicitlyTypedPatternLocal(local ILocalSymbol) bool -> switch local
+            .DeclaringSyntaxReferences
+            .FirstOrDefault()
+            ?.GetSyntax() {
+            case SingleVariableDesignationSyntax{
+                Parent: Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationPatternSyntax declarationPattern
+            }: !declarationPattern
+                .Type
+                .IsVar
+            case SingleVariableDesignationSyntax{
+                Parent: RecursivePatternSyntax recursivePattern
+            }: recursivePattern.Type != nil &&
+                !recursivePattern.Type!!.IsVar
+            default: false
+        }
+
         private func ResolveReceiverTypeArgument(
             typeParameter ITypeParameterSymbol,
             receiverType ITypeSymbol?
         ) ITypeSymbol? {
-            var receiverType = receiverType
-            while receiverType is IArrayTypeSymbol arrayReceiver {
-                receiverType = arrayReceiver.ElementType
-            }
-            if receiverType is ITypeParameterSymbol {
-                return receiverType
-            }
-            if typeParameter.TypeParameterKind != TypeParameterKind.Type ||
-                typeParameter.ContainingType is not INamedTypeSymbol declaringType {
-                return nil
-            }
-            let targetDefinition = declaringType.OriginalDefinition
-            var current = receiverType as INamedTypeSymbol
-            while current != nil {
-                var owner INamedTypeSymbol? = current
-                while owner != nil {
-                    if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, targetDefinition) &&
-                        typeParameter.Ordinal < owner
-                        .TypeArguments
-                        .Length {
-                        return owner.TypeArguments[typeParameter.Ordinal]
-                    }
-                    owner = owner.ContainingType
+            var currentReceiver = receiverType
+            let visitedTypes = HashSet[ITypeSymbol](SymbolEqualityComparer.Default)
+            while currentReceiver != nil && visitedTypes.Add(currentReceiver) {
+                while currentReceiver is IArrayTypeSymbol arrayReceiver {
+                    currentReceiver = arrayReceiver.ElementType
                 }
-                current = current.BaseType
+                if currentReceiver is ITypeParameterSymbol {
+                    return currentReceiver
+                }
+                if typeParameter.TypeParameterKind != TypeParameterKind.Type ||
+                    typeParameter.ContainingType is not INamedTypeSymbol declaringType {
+                    return nil
+                }
+                let targetDefinition = declaringType.OriginalDefinition
+                var current = currentReceiver as INamedTypeSymbol
+                while current != nil {
+                    var owner INamedTypeSymbol? = current
+                    while owner != nil {
+                        if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, targetDefinition) &&
+                            typeParameter.Ordinal < owner
+                            .TypeArguments
+                            .Length {
+                            return owner.TypeArguments[typeParameter.Ordinal]
+                        }
+                        owner = owner.ContainingType
+                    }
+                    current = current.BaseType
+                }
+                if currentReceiver is INamedTypeSymbol namedReceiver {
+                    for iface in namedReceiver.AllInterfaces {
+                        if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, targetDefinition) &&
+                            typeParameter.Ordinal < iface
+                            .TypeArguments
+                            .Length {
+                            return iface.TypeArguments[typeParameter.Ordinal]
+                        }
+                    }
+                    currentReceiver = this.TryGetSequenceElementType(namedReceiver)
+                    continue
+                }
+                break
             }
-            if receiverType is INamedTypeSymbol namedReceiver {
-                for iface in namedReceiver.AllInterfaces {
-                    if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, targetDefinition) &&
-                        typeParameter.Ordinal < iface
-                        .TypeArguments
-                        .Length {
-                        return iface.TypeArguments[typeParameter.Ordinal]
+            return nil
+        }
+
+        private func TryGetSequenceElementType(sequenceType INamedTypeSymbol) ITypeSymbol? {
+            if IsGenericEnumerableInterface(sequenceType) && sequenceType.TypeArguments.Length == 1 {
+                return sequenceType.TypeArguments[0]
+            }
+            for iface in sequenceType.AllInterfaces {
+                if IsGenericEnumerableInterface(iface) && iface.TypeArguments.Length == 1 {
+                    return iface.TypeArguments[0]
+                }
+            }
+            for member in sequenceType.GetMembers("GetEnumerator") {
+                if member is IMethodSymbol{IsStatic: false, Parameters: {Length: 0}} getEnumerator {
+                    for currentMember in getEnumerator.ReturnType.GetMembers("Current") {
+                        if currentMember is IPropertySymbol{IsStatic: false} currentProp {
+                            return currentProp.Type
+                        }
                     }
                 }
             }
             return nil
+        }
+
+        private func IsGenericEnumerableInterface(type INamedTypeSymbol) bool {
+            let special = type.OriginalDefinition.SpecialType
+            if special == SpecialType.System_Collections_Generic_IEnumerable_T ||
+                special == SpecialType.System_Collections_Generic_IEnumerator_T ||
+                special == SpecialType.System_Collections_Generic_IList_T ||
+                special == SpecialType.System_Collections_Generic_ICollection_T ||
+                special == SpecialType.System_Collections_Generic_IReadOnlyList_T ||
+                special == SpecialType.System_Collections_Generic_IReadOnlyCollection_T {
+                return true
+            }
+            return (
+                type
+                    .OriginalDefinition
+                    .MetadataName == "IAsyncEnumerable`1" ||
+                    type
+                    .OriginalDefinition
+                    .MetadataName == "IAsyncEnumerator`1"
+            ) &&
+                type
+                .ContainingNamespace
+                ?.ToDisplayString() == "System.Collections.Generic"
         }
 
         private func MentionedTypeParameterKind(type ITypeSymbol?, kind TypeParameterKind) bool -> switch type {
@@ -4965,6 +5034,19 @@ partial class CSharpToGSharpTranslator {
             if this.ImplicitArrayHasDeclaredTargetSlot(implicitArray) {
                 return true
             }
+            for peer in this.GetPeerImplicitArrays(implicitArray) {
+                if !this.SingleImplicitArrayDelegateSlotIsDeclared(peer, memo, tuplePath) {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func SingleImplicitArrayDelegateSlotIsDeclared(
+            implicitArray ImplicitArrayCreationExpressionSyntax,
+            memo Dictionary[ILocalSymbol, bool]? = nil,
+            tuplePath List[int32]? = nil
+        ) bool {
             let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
             this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
             if leaves.Count == 0 {
@@ -5075,7 +5157,8 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsUncastAnonymousFunctionOperand(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            visitedLocals HashSet[ILocalSymbol]? = nil
         ) bool {
             var unwrapped = Unparenthesize(expression)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -5084,13 +5167,137 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil || unwrapped is CastExpressionSyntax {
                 return false
             }
-            if IsNullOrDefaultLiteral(unwrapped) || IsNullOrSuppressedNull(unwrapped) {
+            if IsNullOrDefaultLiteral(unwrapped) ||
+                IsNullOrSuppressedNull(unwrapped) ||
+                unwrapped is ImplicitArrayCreationExpressionSyntax {
                 return true
             }
             if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
-                return operands.Count > 0 && operands.All(this.IsUncastAnonymousFunctionOperand)
+                return operands.Count > 0 && operands.All(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.IsUncastAnonymousFunctionOperand(operand, visitedLocals)
+                )
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if activeVisited.Add(aliasedLocal) {
+                    return this.IsUncastAnonymousFunctionOperand(aliasInit, activeVisited)
+                }
             }
             return unwrapped is AnonymousFunctionExpressionSyntax lambda && !this.LambdaHasExplicitDelegateCast(lambda)
+        }
+
+        private func CollectUnderlyingImplicitArrays(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            results List[ImplicitArrayCreationExpressionSyntax],
+            visitedLocals HashSet[ILocalSymbol]? = nil
+        ) {
+            var unwrapped = Unparenthesize(expression)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
+                results.Add(implicitArray)
+                return
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                for operand in operands {
+                    this.CollectUnderlyingImplicitArrays(operand, results, visitedLocals)
+                }
+                return
+            }
+            if this
+                .context
+                .GetSymbolInfo(unwrapped)
+                .Symbol is ILocalSymbol aliasedLocal &&
+                IsImplicitlyTypedLocal(aliasedLocal) &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(aliasedLocal) &&
+                aliasedLocal
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} aliasInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if activeVisited.Add(aliasedLocal) {
+                    this.CollectUnderlyingImplicitArrays(aliasInit, results, activeVisited)
+                }
+            }
+        }
+
+        private func GetPeerImplicitArrays(implicitArray ImplicitArrayCreationExpressionSyntax) List[
+            ImplicitArrayCreationExpressionSyntax
+        ] {
+            var root = implicitArray
+            var depth = 0
+            while true {
+                let outermost = OutermostTransparentNode(root)
+                if outermost?.Parent is not InitializerExpressionSyntax outerInitializer || !outerInitializer.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+                ) {
+                    break
+                }
+                var rootOuter = outerInitializer
+                while rootOuter.Parent is InitializerExpressionSyntax parentOuter && parentOuter.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression
+                ) {
+                    rootOuter = parentOuter
+                }
+                if rootOuter.Parent is not ImplicitArrayCreationExpressionSyntax parentImplicitArray {
+                    break
+                }
+                root = parentImplicitArray
+                depth++
+            }
+            if depth == 0 {
+                return List[ImplicitArrayCreationExpressionSyntax]{implicitArray}
+            }
+            var currentLevel = List[ImplicitArrayCreationExpressionSyntax]{root}
+            for var d = 0; d < depth; d++ {
+                let nextLevel = List[ImplicitArrayCreationExpressionSyntax]()
+                for currentArray in currentLevel {
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(currentArray.Initializer, leaves)
+                    for leaf in leaves {
+                        this.CollectUnderlyingImplicitArrays(leaf, nextLevel)
+                    }
+                }
+                currentLevel = nextLevel
+            }
+            if currentLevel.Count == 0 {
+                currentLevel.Add(implicitArray)
+            }
+            return currentLevel
+        }
+
+        private func ImplicitArrayLeavesYieldNilableArrayReference(
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) bool {
+            let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+            this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+            let emptyPath = List[int32]()
+            return leaves.Any(
+                (
+                    leaf Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                ) -> this.TupleElementYieldsNilableBeyondItsCSharpType(leaf, emptyPath)
+            )
         }
 
         private func PromoteInferredDelegateArrayElementType(
@@ -5101,29 +5308,61 @@ partial class CSharpToGSharpTranslator {
             if elementType == nil || elementTypeSymbol == nil {
                 return elementType
             }
+            if this.ImplicitArrayHasDeclaredTargetSlot(implicitArray) {
+                return elementType
+            }
+            let peers = this.GetPeerImplicitArrays(implicitArray)
             if elementType is ArrayTypeReference nestedArrayRef &&
                 elementTypeSymbol is IArrayTypeSymbol nestedArraySymbol {
-                let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
-                this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+                let nestedImplicitArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                for peer in peers {
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(peer.Initializer, leaves)
+                    for leaf in leaves {
+                        this.CollectUnderlyingImplicitArrays(leaf, nestedImplicitArrays)
+                    }
+                }
                 var promotedInner GTypeReference? = nestedArrayRef.ElementType
-                for leaf in leaves {
-                    if Unparenthesize(leaf) is ImplicitArrayCreationExpressionSyntax nestedImplicitArray {
-                        promotedInner = this.PromoteInferredDelegateArrayElementType(
-                            promotedInner,
-                            nestedArraySymbol.ElementType,
-                            nestedImplicitArray
-                        )
-                    }
+                for nestedImplicitArray in nestedImplicitArrays {
+                    promotedInner = this.PromoteInferredDelegateArrayElementType(
+                        promotedInner,
+                        nestedArraySymbol.ElementType,
+                        nestedImplicitArray
+                    )
                 }
-                if promotedInner != nil && !object.ReferenceEquals(promotedInner, nestedArrayRef.ElementType) {
-                    return ArrayTypeReference(promotedInner, nestedArrayRef.Rank){
-                        IsNullable = nestedArrayRef.IsNullable
-                    }
+                let outerIsNullable = nestedArrayRef.IsNullable ||
+                    (
+                    nestedArraySymbol.NullableAnnotation != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated &&
+                        peers.Any(this.ImplicitArrayLeavesYieldNilableArrayReference)
+                )
+                let finalInner = promotedInner ?? nestedArrayRef.ElementType
+                if !object.ReferenceEquals(finalInner, nestedArrayRef.ElementType) ||
+                    outerIsNullable != nestedArrayRef.IsNullable {
+                    return ArrayTypeReference(finalInner, nestedArrayRef.Rank){IsNullable = outerIsNullable}
                 }
+                return elementType
+            }
+            var promoted GTypeReference? = elementType
+            for peer in peers {
+                promoted = this.PromoteSingleImplicitArrayElementType(promoted, elementTypeSymbol, peer)
+            }
+            return promoted
+        }
+
+        private func PromoteSingleImplicitArrayElementType(
+            elementType GTypeReference?,
+            elementTypeSymbol ITypeSymbol?,
+            implicitArray ImplicitArrayCreationExpressionSyntax
+        ) GTypeReference? {
+            if elementType == nil || elementTypeSymbol == nil {
+                return elementType
             }
             let delegateType = UnwrapExpressionTreeDelegateType(elementTypeSymbol) as INamedTypeSymbol
             let invoke = delegateType?.DelegateInvokeMethod
-            if this.ImplicitArrayDelegateSlotIsDeclared(implicitArray) {
+            if this.SingleImplicitArrayDelegateSlotIsDeclared(implicitArray) {
                 return elementType
             }
             if invoke == nil {
