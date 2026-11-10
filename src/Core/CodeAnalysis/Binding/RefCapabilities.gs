@@ -674,7 +674,10 @@ internal shared class RefCapabilities {
             Variable: ParameterSymbol{IsReceiverParameter: true}
         } receiver: !Binder.IsReferenceTypeForConstraint(receiver.Type) && receiver.NarrowedType == nil
         case variable is BoundVariableExpression: (
-            variable.NarrowedType == nil || variable.NarrowedType == variable.Variable.Type
+            variable.NarrowedType == nil || !BinderContext.NarrowedReadChangesRuntimeType(
+                variable.Variable.Type,
+                variable.NarrowedType
+            )
         ) &&
             variable.Variable is not(GlobalVariableSymbol and {IsConst: true}) &&
             variable.Variable is not(LocalVariableSymbol and {IsConst: true})
@@ -683,12 +686,19 @@ internal shared class RefCapabilities {
             .IsConst == true: false
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsLiteral ||
             (field.IsStatic && field.IsInitOnly): false
-        case BoundFieldAccessExpression{Receiver: {} receiver} access: access.NarrowedType == nil &&
+        case BoundFieldAccessExpression{Receiver: {} receiver} access: (
+            access.NarrowedType == nil || !BinderContext.NarrowedReadChangesRuntimeType(
+                access.SubstitutedType ?? access.Field.Type,
+                access.NarrowedType
+            )
+        ) &&
             (Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver))
-        case BoundClrPropertyAccessExpression{
-            Member: FieldInfo,
-            Receiver: {} receiver
-        } access: access.NarrowedType == nil &&
+        case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} receiver} access: (
+            access.NarrowedType == nil || !BinderContext.NarrowedReadChangesRuntimeType(
+                access.EffectiveDeclaredType,
+                access.NarrowedType
+            )
+        ) &&
             (Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver))
         case _ is BoundBlockExpression or _ is BoundConditionalExpression: false
         default: ExpressionBinder.IsLvalue(value)

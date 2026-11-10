@@ -1191,6 +1191,9 @@ internal class BinderContext {
             if declaredType == narrowedType {
                 return false
             }
+            if declaredType is PlatformTypeSymbol platform && platform.UnderlyingType == narrowedType {
+                return false
+            }
             if declaredType is NullableTypeSymbol nullable && nullable.UnderlyingType == narrowedType {
                 return NullableLifting.IsValueTypeNullable(nullable) || NullableLifting.IsUserValueTypeNullable(
                     nullable
