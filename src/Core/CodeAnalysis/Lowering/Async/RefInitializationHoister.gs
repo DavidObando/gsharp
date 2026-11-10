@@ -159,6 +159,32 @@ shared class RefInitializationHoister {
                 case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                     return HoistOperand(address.Operand, prelude, captureComponents: true)
                 }
+                case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                    for statement in block.Statements {
+                        prelude.Add(RewriteStatement(statement))
+                    }
+                    return HoistOperand(
+                        BoundDereferenceExpression(dereference.Syntax, block.Expression),
+                        prelude,
+                        captureComponents: true
+                    )
+                }
+                case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} dereference {
+                    return HoistOperand(
+                        BoundDereferenceExpression(
+                            dereference.Syntax,
+                            BoundConditionalAddressExpression(
+                                conditional.Syntax,
+                                conditional.Condition,
+                                BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue),
+                                BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse),
+                                dereference.Type
+                            )
+                        ),
+                        prelude,
+                        captureComponents: true
+                    )
+                }
                 case dereference is BoundDereferenceExpression when SideEffectSpiller.IsNativeSliceElementOperand(
                     dereference.Operand
                 ) {

@@ -564,6 +564,13 @@ internal partial class ExpressionBinder {
         case BoundDereferenceExpression{Operand: BoundAddressOfExpression inner}: CanReconstructAddressAcrossSuspension(
             inner.Operand
         )
+        case BoundDereferenceExpression{Operand: BoundBlockExpression block}: CanReconstructAddressAcrossSuspension(
+            BoundDereferenceExpression(block.Syntax, block.Expression)
+        )
+        case BoundDereferenceExpression{
+            Operand: BoundConditionalExpression cond
+        }: CanReconstructAddressAcrossSuspension(BoundDereferenceExpression(cond.WhenTrue.Syntax, cond.WhenTrue)) &&
+            CanReconstructAddressAcrossSuspension(BoundDereferenceExpression(cond.WhenFalse.Syntax, cond.WhenFalse))
         case BoundDereferenceExpression{
             Operand: BoundConditionalAddressExpression cond
         }: CanReconstructAddressAcrossSuspension(cond.WhenTrueOperand) &&

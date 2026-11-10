@@ -796,7 +796,18 @@ func Main() {
         blockSteps++
         right
     }).Code += 7
-    Console.WriteLine("${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}")
+    var pickCalls = 0
+    let pick = () -> {
+        pickCalls++
+        return pickCalls == 1
+    }
+    (*(pick() ? &left : &right)).Code += 3
+    var derefBlockSteps = 0
+    (*({
+        derefBlockSteps++
+        &right
+    })).Code += 4
+    Console.WriteLine("${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}:${pickCalls}:${derefBlockSteps}")
 
     var ref whole = row
     whole.Text = "via-ref"
@@ -812,7 +823,7 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n15:27:1:1\nclosed:33\nasync-fallback:5\n"
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n18:31:1:1:1:1\nclosed:33\nasync-fallback:5\n"
             ),
             fixture.RunBytes(dll)
         )

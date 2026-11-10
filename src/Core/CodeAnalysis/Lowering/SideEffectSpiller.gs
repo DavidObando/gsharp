@@ -631,11 +631,51 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
             }
+            case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                statements.AddRange(block.Statements)
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(dereference.Syntax, block.Expression),
+                    statements,
+                    captureComponents: true
+                )
+            }
+            case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} dereference {
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(
+                        dereference.Syntax,
+                        BoundConditionalAddressExpression(
+                            conditional.Syntax,
+                            conditional.Condition,
+                            BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue),
+                            BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse),
+                            dereference.Type
+                        )
+                    ),
+                    statements,
+                    captureComponents: true
+                )
+            }
             case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(dereference.Operand) {
                 return BoundDereferenceExpression(
                     dereference.Syntax,
                     this.SpillNativeSliceElementOperand(dereference.Operand, statements, captureComponents)
                 )
+            }
+            case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
+                dereference.Operand.Type
+            ) {
+                let operand = this.MaybeSpill(
+                    dereference.Operand,
+                    !IsStableLocalRead(dereference.Operand) &&
+                        (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)),
+                    "ptr",
+                    statements
+                )
+                return if object.ReferenceEquals(operand, dereference.Operand) {
+                    dereference
+                } else {
+                    BoundDereferenceExpression(dereference.Syntax, operand)
+                }
             }
             case tuple is BoundTupleElementAccessExpression {
                 // Capture owners and indices before the RHS, without copying tuple storage.
@@ -1084,9 +1124,22 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         receiver = address.Operand
                         continue
                     }
+                    case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                        receiver = BoundDereferenceExpression(dereference.Syntax, block.Expression)
+                        continue
+                    }
+                    case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} {
+                        return IsInPlaceStorageWriteReceiver(
+                            BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue)
+                        ) &&
+                            IsInPlaceStorageWriteReceiver(
+                            BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse)
+                        )
+                    }
                     case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(
                         dereference.Operand
-                    ) {
+                    ) ||
+                        TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type) {
                         return true
                     }
                     case block is BoundBlockExpression {
