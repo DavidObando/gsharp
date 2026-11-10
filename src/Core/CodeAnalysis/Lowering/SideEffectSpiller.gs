@@ -457,6 +457,54 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
+    protected override func RewriteIndirectAssignmentExpression(
+        node BoundIndirectAssignmentExpression
+    ) BoundExpression {
+        if !(
+            node.Pointer is BoundAddressOfExpression{
+                Operand: BoundTupleElementAccessExpression originalTuple,
+                IsUnmanaged: false
+            } address
+        ) ||
+            !IsInPlaceStorageWriteReceiver(originalTuple.Receiver) {
+            return base.RewriteIndirectAssignmentExpression(node)
+        }
+        let rewrittenReceiver = this.RewriteExpression(originalTuple.Receiver)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        let capturedReceiver = this.CapturePropertyStorageReceiver(rewrittenReceiver, statements)
+        var value = if !object.ReferenceEquals(capturedReceiver, originalTuple.Receiver) {
+            ReceiverSubstitutionRewriter.Replace(node.Value, originalTuple.Receiver, capturedReceiver)
+        } else {
+            node.Value
+        }
+        value = this.RewriteExpression(value)
+        let spillValue = SideEffectAnalyzer.HasObservableSideEffect(value)
+        if spillValue {
+            this.ProbeStorageReceiver(capturedReceiver, statements)
+            value = this.MaybeSpill(value, true, "val", statements)
+        }
+        let capturedTuple = if object.ReferenceEquals(capturedReceiver, originalTuple.Receiver) {
+            originalTuple
+        } else {
+            BoundTupleElementAccessExpression(
+                originalTuple.Syntax,
+                capturedReceiver,
+                originalTuple.TupleType,
+                originalTuple.Index
+            )
+        }
+        if !spillValue && statements.Count == 0 && object.ReferenceEquals(capturedTuple, originalTuple) &&
+            object.ReferenceEquals(value, node.Value) {
+            return node
+        }
+        let assignment = BoundIndirectAssignmentExpression(node.Syntax, address.Update(capturedTuple), value)
+        return if statements.Count == 0 {
+            assignment
+        } else {
+            BoundBlockExpression(node.Syntax, statements.ToImmutable(), assignment)
+        }
+    }
+
     internal func CapturePropertyStorageReceiver(
         receiver BoundExpression,
         statements ImmutableArray[BoundStatement].Builder,

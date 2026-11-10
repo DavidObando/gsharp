@@ -684,6 +684,9 @@ partial class SemanticModel {
         case property is BoundPropertyReferenceOperationExpression: property.Instance
         case field is BoundFieldAccessExpression: field.Receiver
         case tuple is BoundTupleElementAccessExpression: tuple.Receiver
+        case BoundIndirectAssignmentExpression{
+            Pointer: BoundAddressOfExpression{Operand: BoundTupleElementAccessExpression tuple}
+        }: tuple.Receiver
         case call is BoundCallExpression when call
             .Function
             .IsExtension &&

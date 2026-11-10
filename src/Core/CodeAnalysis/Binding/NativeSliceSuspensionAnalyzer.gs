@@ -70,6 +70,7 @@ internal class NativeSliceSuspensionAnalyzer : BoundTreeWalker {
         case block is BoundBlockExpression: IsNativeLocation(block.Expression)
         case address is BoundAddressOfExpression: IsNativeLocation(address.Operand)
         case dereference is BoundDereferenceExpression: IsNativeLocation(dereference.Operand)
+        case tuple is BoundTupleElementAccessExpression: IsNativeLocation(tuple.Receiver)
         case BoundFieldAccessExpression{Receiver: {} receiver}: IsNativeLocation(receiver)
         case BoundClrPropertyAccessExpression{Receiver: {} receiver}: IsNativeLocation(receiver)
         case variable is BoundVariableExpression: nativeLocations.Contains(variable.Variable)

@@ -3454,7 +3454,12 @@ internal partial class StatementBinder {
         let unknownWrite = if indirectCall {
             MayBeMutatedByUnknownWrite(mayMutateAnyRoot, effects.ContainsPointerWrite, path)
         } else {
-            MayBeMutatedByUnknownWrite(mayMutateAnyRoot && !IsByReferenceRoot(root), effects.ContainsPointerWrite, path)
+            MayBeMutatedByUnknownWrite(
+                mayMutateAnyRoot && !IsByReferenceRoot(root),
+                effects.ContainsPointerWrite,
+                path
+            ) ||
+                (mayMutateAnyRoot && MayBeMutatedByEscapedClosure(root))
         }
         if unknownWrite {
             return RegionKillDecision(

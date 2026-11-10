@@ -1220,6 +1220,33 @@ shared class SpillSequenceSpiller {
                     )
                 }
                 case indirectAssign is BoundIndirectAssignmentExpression {
+                    if indirectAssign.Pointer is BoundAddressOfExpression{
+                        Operand: BoundTupleElementAccessExpression tuple,
+                        IsUnmanaged: false
+                    } address &&
+                        SideEffectSpiller
+                        .IsInPlaceStorageWriteReceiver(tuple.Receiver) {
+                        return SpillTwoOperand(
+                            indirectAssign,
+                            tuple.Receiver,
+                            indirectAssign.Value,
+                            func (recv BoundExpression, val BoundExpression) BoundExpression {
+                                return BoundIndirectAssignmentExpression(
+                                    nil,
+                                    address.Update(
+                                        BoundTupleElementAccessExpression(
+                                            tuple.Syntax,
+                                            recv,
+                                            tuple.TupleType,
+                                            tuple.Index
+                                        )
+                                    ),
+                                    val
+                                )
+                            },
+                            preserveReceiverStorage: true
+                        )
+                    }
                     return SpillTwoOperand(
                         indirectAssign,
                         indirectAssign.Pointer,
