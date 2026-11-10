@@ -865,10 +865,13 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         protected override func RewriteExpression(node BoundExpression) BoundExpression {
             return if object.ReferenceEquals(node, this.target) ||
                 (
-                this.target.Syntax != nil &&
-                    object.ReferenceEquals(node.Syntax, this.target.Syntax) &&
-                    node.Kind == this.target.Kind &&
-                    node.Type == this.target.Type
+                this.target.Syntax != nil && object.ReferenceEquals(node.Syntax, this.target.Syntax) &&
+                    node.Kind == this
+                    .target
+                    .Kind &&
+                    node.Type == this
+                    .target
+                    .Type
             ) {
                 this.replacement
             } else {
