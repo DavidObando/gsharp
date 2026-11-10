@@ -4034,46 +4034,51 @@ class CSharpTypeMapper {
             ) {
                 return true
             }
-            for var i = 0; i < parameter.ConstraintTypes.Length; i++ {
-                let constraintType = parameter.ConstraintTypes[i]
-                if constraintType is ITypeParameterSymbol boundParameter {
-                    let seen = visited ?? HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default)
-                    if !seen.Add(parameter) {
+            var seen = visited
+            if seen != nil && !seen.Add(parameter) {
+                return false
+            }
+            try {
+                for var i = 0; i < parameter.ConstraintTypes.Length; i++ {
+                    let constraintType = parameter.ConstraintTypes[i]
+                    if constraintType is ITypeParameterSymbol boundParameter {
+                        if owner != nil &&
+                            boundParameter.Ordinal >= 0 &&
+                            boundParameter.Ordinal < owner
+                            .TypeParameters
+                            .Length &&
+                            boundParameter.Ordinal < owner
+                            .TypeArguments
+                            .Length &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(owner.TypeParameters[boundParameter.Ordinal], boundParameter) &&
+                            !owner
+                            .TypeArguments[boundParameter.Ordinal]
+                            .IsReferenceType {
+                            return true
+                        }
+                        seen ??= HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default){parameter}
+                        if TypeParameterForbidsNullableReferenceArgument(boundParameter, owner, seen) {
+                            return true
+                        }
                         continue
                     }
-                    if owner != nil &&
-                        boundParameter.Ordinal >= 0 &&
-                        boundParameter.Ordinal < owner
-                        .TypeParameters
-                        .Length &&
-                        boundParameter.Ordinal < owner
-                        .TypeArguments
-                        .Length &&
-                        SymbolEqualityComparer
-                        .Default
-                        .Equals(owner.TypeParameters[boundParameter.Ordinal], boundParameter) &&
-                        !owner
-                        .TypeArguments[boundParameter.Ordinal]
-                        .IsReferenceType {
+                    if isSourceDeclared ||
+                        i >= parameter
+                        .ConstraintNullableAnnotations
+                        .Length ||
+                        parameter.ConstraintNullableAnnotations[i] != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
                         return true
                     }
-                    if TypeParameterForbidsNullableReferenceArgument(boundParameter, owner, seen) {
-                        return true
-                    }
-                    continue
                 }
-                if isSourceDeclared ||
-                    i >= parameter
-                    .ConstraintNullableAnnotations
-                    .Length ||
-                    parameter.ConstraintNullableAnnotations[i] != Microsoft
-                    .CodeAnalysis
-                    .NullableAnnotation
-                    .Annotated {
-                    return true
-                }
+                return false
+            } finally {
+                seen?.Remove(parameter)
             }
-            return false
         }
 
         private func AnonymousShapeKey(properties IReadOnlyList[IPropertySymbol]) string -> string.Join(

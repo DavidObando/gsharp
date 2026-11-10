@@ -92,11 +92,18 @@ namespace Contracts {
         where TBase : MigrationOperation?
         where TOperation : TBase {
     }
+    public sealed class MultiBoundBox<A, B, C, D>
+        where A : class?
+        where B : class
+        where C : A, B
+        where D : C {
+    }
     public static class Builder {
         public static void Consume<T>(T value) where T : notnull { }
         public static StrictPairBuilder<MigrationOperation, AddColumnOperation> StrictPair() => new();
         public static FlexiblePairBuilder<MigrationOperation, AddColumnOperation> FlexibleNonNull() => new();
         public static FlexiblePairBuilder<MigrationOperation?, AddColumnOperation?> FlexibleNullable() => new();
+        public static MultiBoundBox<object, object, string, string> MultiBound() => new();
     }
 }`)})
             Assert.True(contract.BoundWithoutErrors, string.Join(Environment.NewLine, contract.ErrorDiagnostics))
@@ -123,6 +130,7 @@ public static class Consumer {
     }
     public static object StrictAnon() => new { Pair = Builder.StrictPair() };
     public static object FlexibleAnon() => new { Pair = Builder.FlexibleNonNull() };
+    public static object MultiBoundAnon() => new { Box = Builder.MultiBound() };
 }`)}, CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(contractPath)).ToArray())
             Assert.True(loaded.BoundWithoutErrors, string.Join(Environment.NewLine, loaded.ErrorDiagnostics))
             let compilation = loaded.Compilation.WithOptions(
@@ -145,6 +153,8 @@ public static class Consumer {
                 printed,
                 StringComparison.Ordinal
             )
+            Assert.Contains("MultiBoundBox[object?, object, string, string]", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("MultiBoundBox[object?, object, string, string?]", printed, StringComparison.Ordinal)
             let sourcePath = Path.Combine(workDir, "Consumer.gs")
             let outputPath = Path.Combine(workDir, "Consumer.dll")
             File.WriteAllText(sourcePath, printed)
