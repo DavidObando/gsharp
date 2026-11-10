@@ -7,6 +7,7 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Text
+import System.Collections.Generic
 import System.Collections.Immutable
 
 /// PR #4273 (Copilot review, on the fix for issue #4271): the single
@@ -39,10 +40,23 @@ internal shared class ClosureCaptureLegalityChecker {
         captured ImmutableArray[VariableSymbol],
         diagnostics DiagnosticBag,
         location TextLocation
-    ) {
+    ) bool {
+        var rejected = false
+        var reportedSyntheticByRefLike HashSet[TypeSymbol]? = nil
         for capturedVariable in captured {
-            CheckCapturedVariable(capturedVariable, diagnostics, location)
+            if TypeSymbol.IsByRefLike(capturedVariable.Type) && IsCompilerGeneratedTemporary(capturedVariable) {
+                let seen = reportedSyntheticByRefLike ?? HashSet[TypeSymbol]()
+                reportedSyntheticByRefLike = seen
+                if !seen.Add(capturedVariable.Type) {
+                    rejected = true
+                    continue
+                }
+            }
+            if CheckCapturedVariable(capturedVariable, diagnostics, location) {
+                rejected = true
+            }
         }
+        return rejected
     }
 
     /// Issue #5591: whether a closure may not capture [`variable`](paramref),
@@ -50,6 +64,9 @@ internal shared class ClosureCaptureLegalityChecker {
     /// @param variable The variable a closure would capture.
     /// @returns `true` when the capture would be rejected.
     func RejectsCapture(variable VariableSymbol) bool -> CheckCapturedVariable(variable, nil, default(TextLocation))
+
+    private func IsCompilerGeneratedTemporary(variable VariableSymbol) bool -> variable.DeclaringSyntax == nil &&
+        variable is not ParameterSymbol{IsReceiverParameter: true}
 
     private func CheckCapturedVariable(
         capturedVariable VariableSymbol,
@@ -59,11 +76,12 @@ internal shared class ClosureCaptureLegalityChecker {
         if ManagedReferenceOrigins.IsScopedHandle(capturedVariable) {
             diagnostics?.ReportManagedReference(location, "a scoped managed-reference value cannot be captured")
         } else if TypeSymbol.IsByRefLike(capturedVariable.Type) {
-            diagnostics?.ReportByRefLikeEscape(
-                location,
-                capturedVariable.Type,
+            let reason = if IsCompilerGeneratedTemporary(capturedVariable) {
+                "be captured by a closure"
+            } else {
                 "be captured by a closure (variable '${capturedVariable.Name}')"
-            )
+            }
+            diagnostics?.ReportByRefLikeEscape(location, capturedVariable.Type, reason)
         } else if capturedVariable.Type is ByRefTypeSymbol {
             diagnostics?.ReportByRefCannotEscape(
                 location,

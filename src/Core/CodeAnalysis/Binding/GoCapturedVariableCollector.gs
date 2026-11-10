@@ -7,7 +7,6 @@ package GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Symbols
 import System.Collections.Generic
 import System.Collections.Immutable
-import System.Reflection
 
 /// Computes the capture set of a `go` statement's (shaped) goroutine
 /// expression — the same walk `Emit.SlotPlanner.CollectCapturedVariables`
@@ -26,103 +25,19 @@ import System.Reflection
 /// guarantees the checked set and the actually-captured set can never drift
 /// apart.
 internal shared class GoCapturedVariableCollector {
-    private class GlobalStorageWalker : BoundTreeWalker {
-        let References HashSet[BoundVariableExpression] = HashSet[BoundVariableExpression](
-            ReferenceEqualityComparer.Instance
-        )
-
-        override func VisitExpression(node BoundExpression?) {
-            // Only the spawned receiver denotes live storage; argument expressions retain their value-capture semantics.
-            switch node {
-                case call is BoundUserInstanceCallExpression {
-                    this.RecordReceiver(call.Receiver)
-                }
-                case call is BoundImportedInstanceCallExpression {
-                    this.RecordReceiver(call.Receiver)
-                }
-                case call is BoundBaseClassCallExpression {
-                    this.RecordReceiver(call.Receiver)
-                }
-                case block is BoundBlockExpression {
-                    this.VisitExpression(block.Expression)
-                }
-                case call is BoundImportedCallExpression when call
-                    .Arguments
-                    .Length == 1 &&
-                    call
-                    .Function
-                    .ImportedClass
-                    .ClassType
-                    .FullName == "Gsharp.Concurrency.GoroutineRuntime" &&
-                    (call.Function.Name == "Wrap" || call.Function.Name == "Discard") {
-                    this.VisitExpression(call.Arguments[0])
-                }
-            }
-        }
-
-        private func RecordReceiver(receiver BoundExpression) {
-            if Binder.IsReferenceTypeForConstraint(receiver.Type) {
-                return
-            }
-            switch receiver {
-                case variable is BoundVariableExpression when
-                (variable.Variable is GlobalVariableSymbol or ImplicitStaticFieldVariableSymbol) &&
-                    !Binder.IsReferenceTypeForConstraint(variable.Variable.Type) &&
-                    !ClosureCaptureLegalityChecker.RejectsCapture(variable.Variable) {
-                    this.References.Add(variable)
-                }
-                case BoundFieldAccessExpression{Receiver: {} owner} {
-                    this.RecordReceiver(owner)
-                }
-                case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: {} owner} {
-                    this.RecordReceiver(owner)
-                }
-                case BoundTupleElementAccessExpression{Receiver: var owner} {
-                    this.RecordReceiver(owner)
-                }
-                case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
-                    this.RecordReceiver(address.Operand)
-                }
-                case BoundDereferenceExpression{Operand: BoundConditionalAddressExpression address} {
-                    this.RecordReceiver(address.WhenTrueOperand)
-                    this.RecordReceiver(address.WhenFalseOperand)
-                }
-            }
-        }
-    }
-
-    // A storage receiver stays live even when another read captures the same global by value.
-    func CollectLiveGlobalStorageReferences(expression BoundExpression) HashSet[BoundVariableExpression] {
-        let collector = GlobalStorageWalker()
-        collector.VisitExpression(expression)
-        return collector.References
-    }
-
-    func CollectLiveGlobalStorageReferences(statement BoundStatement) HashSet[BoundVariableExpression] {
-        let collector = GlobalStorageWalker()
-        collector.VisitStatement(statement)
-        return collector.References
-    }
-
     private class Walker : BoundTreeWalker {
         private let seen HashSet[VariableSymbol]
         private let declared HashSet[VariableSymbol]
         private let captured ImmutableArray[VariableSymbol].Builder
-        private let written HashSet[VariableSymbol]?
-        private let liveGlobalStorage HashSet[BoundVariableExpression]?
 
         init(
             seen HashSet[VariableSymbol],
             declared HashSet[VariableSymbol],
-            captured ImmutableArray[VariableSymbol].Builder,
-            written HashSet[VariableSymbol]? = nil,
-            liveGlobalStorage HashSet[BoundVariableExpression]? = nil
+            captured ImmutableArray[VariableSymbol].Builder
         ) {
             this.seen = seen
             this.declared = declared
             this.captured = captured
-            this.written = written
-            this.liveGlobalStorage = liveGlobalStorage
         }
 
         override func VisitExpression(node BoundExpression?) {
@@ -130,9 +45,7 @@ internal shared class GoCapturedVariableCollector {
                 return
             }
             if node is BoundVariableExpression ve {
-                if this.liveGlobalStorage?.Contains(ve) != true {
-                    this.CaptureIfFree(ve.Variable)
-                }
+                this.CaptureIfFree(ve.Variable)
                 return
             }
             // Issue #3323: BoundTreeWalker (matching BoundTreeRewriter) treats a
@@ -163,43 +76,36 @@ internal shared class GoCapturedVariableCollector {
         }
 
         protected override func VisitAssignmentExpression(node BoundAssignmentExpression) {
-            this.RecordMutationTarget(node.Variable)
+            this.CaptureIfFree(node.Variable)
             base.VisitAssignmentExpression(node)
         }
 
         protected override func VisitFieldAssignmentExpression(node BoundFieldAssignmentExpression) {
             if node.Receiver != nil {
-                this.RecordMutationTarget(node.Receiver)
+                this.CaptureIfFree(node.Receiver)
             }
             base.VisitFieldAssignmentExpression(node)
         }
 
         protected override func VisitIndexAssignmentExpression(node BoundIndexAssignmentExpression) {
             if node.Target != nil {
-                this.RecordMutationTarget(node.Target)
+                this.CaptureIfFree(node.Target)
             }
             base.VisitIndexAssignmentExpression(node)
         }
 
         protected override func VisitClrIndexAssignmentExpression(node BoundClrIndexAssignmentExpression) {
             if node.Target != nil {
-                this.RecordMutationTarget(node.Target)
+                this.CaptureIfFree(node.Target)
             }
             base.VisitClrIndexAssignmentExpression(node)
-        }
-
-        protected override func VisitAddressOfExpression(node BoundAddressOfExpression) {
-            if this.TryGetRootVariable(node.Operand) is {} variable {
-                this.written?.Add(variable)
-            }
-            base.VisitAddressOfExpression(node)
         }
 
         protected override func VisitVariableDeclaration(node BoundVariableDeclaration) {
             if node.Initializer != nil {
                 this.VisitExpression(node.Initializer)
             }
-            this.DeclareVariable(node.Variable)
+            this.declared.Add(node.Variable)
         }
 
         // Issue #5591: `?.` evaluates its receiver into a synthetic capture
@@ -210,10 +116,10 @@ internal shared class GoCapturedVariableCollector {
         // into the closure, so the child dereferenced nil.
         protected override func VisitNullConditionalAccessExpression(node BoundNullConditionalAccessExpression) {
             if node.Capture != nil {
-                this.DeclareVariable(node.Capture)
+                this.declared.Add(node.Capture)
             }
             if node.ResultSlot != nil {
-                this.DeclareVariable(node.ResultSlot)
+                this.declared.Add(node.ResultSlot)
             }
             base.VisitNullConditionalAccessExpression(node)
         }
@@ -223,35 +129,23 @@ internal shared class GoCapturedVariableCollector {
         // same three forms.
         override func VisitPattern(node BoundPattern?) {
             if node is BoundDiscardPattern{Variable: not nil} varPattern {
-                this.DeclareVariable(varPattern.Variable!!)
+                this.declared.Add(varPattern.Variable!!)
             }
             if node is BoundTypePattern typePattern && typePattern.Variable != nil {
-                this.DeclareVariable(typePattern.Variable)
+                this.declared.Add(typePattern.Variable)
             }
             if node is BoundSlicePattern slicePattern && slicePattern.Variable != nil {
-                this.DeclareVariable(slicePattern.Variable)
+                this.declared.Add(slicePattern.Variable)
             }
             base.VisitPattern(node)
         }
 
-        private func DeclareVariable(variable VariableSymbol) {
-            this.declared.Add(variable)
-            this.written?.Add(variable)
-        }
-
-        private func RecordMutationTarget(variable VariableSymbol) {
-            this.CaptureIfFree(variable)
-            this.written?.Add(variable)
-        }
-
-        private func TryGetRootVariable(operand BoundExpression?) VariableSymbol? -> switch operand {
-            case BoundVariableExpression{Variable: var variable}: variable
-            case BoundFieldAccessExpression{Receiver: {} receiver}: this.TryGetRootVariable(receiver)
-            case BoundTupleElementAccessExpression{Receiver: var receiver}: this.TryGetRootVariable(receiver)
-            default: default(VariableSymbol?)
-        }
-
         private func CaptureIfFree(variable VariableSymbol) {
+            // Globals use static storage unless capture legality rejects the variable (#5708, #5836).
+            if (variable is GlobalVariableSymbol or ImplicitStaticFieldVariableSymbol) &&
+                !ClosureCaptureLegalityChecker.RejectsCapture(variable) {
+                return
+            }
             if !this.declared.Contains(variable) && this.seen.Add(variable) {
                 this.captured.Add(variable)
             }
@@ -265,35 +159,8 @@ internal shared class GoCapturedVariableCollector {
         let seen = HashSet[VariableSymbol]()
         let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
         let declared = HashSet[VariableSymbol]()
-        let collector = GoCapturedVariableCollector.Walker(
-            seen,
-            declared,
-            captured,
-            liveGlobalStorage: CollectLiveGlobalStorageReferences(expression)
-        )
+        let collector = GoCapturedVariableCollector.Walker(seen, declared, captured)
         collector.VisitExpression(expression)
         return captured.ToImmutable()
-    }
-
-    func CollectCapturedVariables(statement BoundStatement) ImmutableArray[VariableSymbol] {
-        let seen = HashSet[VariableSymbol]()
-        let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
-        let declared = HashSet[VariableSymbol]()
-        let collector = GoCapturedVariableCollector.Walker(
-            seen,
-            declared,
-            captured,
-            liveGlobalStorage: CollectLiveGlobalStorageReferences(statement)
-        )
-        collector.VisitStatement(statement)
-        return captured.ToImmutable()
-    }
-
-    func CollectWrittenVariables(statement BoundStatement, written HashSet[VariableSymbol]) {
-        let seen = HashSet[VariableSymbol]()
-        let captured = ImmutableArray.CreateBuilder[VariableSymbol]()
-        let declared = HashSet[VariableSymbol]()
-        let collector = GoCapturedVariableCollector.Walker(seen, declared, captured, written)
-        collector.VisitStatement(statement)
     }
 }

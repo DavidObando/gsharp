@@ -148,6 +148,79 @@ scope {
         Assert.Equal(TextSpan(source.IndexOf(operand), operand.Length), error.Location.Span)
     }
 
+    @Theory
+    @InlineData("UseSpan(MakeSpan(), { let _ = 0 x = 1 x })", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(extra: 1, value: text.AsSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan({ let s = text.AsSpan() s }, 1)", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(default(ReadOnlySpan[char]), 1)", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(spanLocal, 1)", "System.ReadOnlySpan[char]", " (variable 'spanLocal')")
+    @InlineData("items.AsSpan().Clear()", "System.Span[int32]", "")
+    @InlineData("default(Span[int32]).Clear()", "System.Span[int32]", "")
+    @InlineData("(*&(choose ? spanA : spanB)).Clear()", "System.Span[int32]", " (variable 'spanA')")
+    @InlineData("MakeWindow().Run()", "Window", "")
+    @InlineData("MakeWindow().counter.Bump()", "Window", "")
+    @InlineData("MakeWindow().pair.Item1.Bump()", "Window", "")
+    @InlineData("worker.AcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("Worker.StaticAcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("indirectSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("base.AcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseUtf8(u8\"abc\")", "System.ReadOnlySpan[uint8]", "")
+    func ByRefLikeGoOperands_ReportGS0219AtTheCall(operand string, typeName string, variableSuffix string) {
+        let source = `package Issue5836
+import System
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+ref struct Window {
+    var counter Counter
+    var pair (Counter, int32)
+    func Run() {}
+}
+func MakeSpan() ReadOnlySpan[char] -> "abc".AsSpan()
+func MakeWindow() Window -> Window{counter: Counter{}, pair: (Counter{}, 0)}
+func UseSpan(value ReadOnlySpan[char], extra int32) {}
+func UseUtf8(value ReadOnlySpan[byte]) {}
+var x int32 = 0
+open class Parent {
+    open func AcceptSpan(value ReadOnlySpan[char]) {}
+}
+class Worker : Parent {
+    shared { func StaticAcceptSpan(value ReadOnlySpan[char]) {} }
+    func Run(choose bool) {
+        let text = "abc"
+        let spanLocal = text.AsSpan()
+        let items = []int32{1}
+        let other = []int32{2}
+        var spanA = items.AsSpan()
+        var spanB = other.AsSpan()
+        let worker = Worker()
+        let indirectSpan = func(value ReadOnlySpan[char]) {}
+        scope {
+            go ` + operand + `
+        }
+    }
+}
+`
+        let errors = BindErrors(source)
+        Assert.NotEmpty(errors)
+        Assert.All(
+            errors,
+            func (error Diagnostic) {
+                Assert.Equal("GS0219", error.Id)
+                Assert.Equal(TextSpan(source.IndexOf("go ") + 3, operand.Length), error.Location.Span)
+            }
+        )
+        Assert.Equal(
+            "By-ref-like type '" +
+                typeName +
+                "' is a `ref struct` and cannot be captured by a closure" +
+                variableSuffix +
+                ".",
+            errors[0].Message
+        )
+    }
+
     shared {
         private func BindErrors(source string, references ReferenceResolver? = nil)[]Diagnostic {
             let tree = SyntaxTree.Parse(SourceText.From(source))
