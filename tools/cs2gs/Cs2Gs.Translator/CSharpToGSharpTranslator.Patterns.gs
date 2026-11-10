@@ -782,11 +782,11 @@ partial class CSharpToGSharpTranslator {
         private func UsesNativeBooleanPatternTest(
             isPattern IsPatternExpressionSyntax
         ) bool -> !PatternIntroducesBinding(isPattern.Pattern) &&
-            !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _) && !this.PatternRequiresValueEquality(
-            isPattern.Pattern
+            !this.PatternScrutineeMayChangeDuringMatch(isPattern) && !this.PatternMentionsConditionalAccessType(
+            isPattern.Pattern,
+            out _
         ) &&
-            !this
-            .PatternRequiresLoweredListTest(
+            !this.PatternRequiresValueEquality(isPattern.Pattern) && !this.PatternRequiresLoweredListTest(
             isPattern.Pattern,
             this.ResolveDeclaredReceiverType(this.context.GetTypeInfo(isPattern.Expression).Type, isPattern.Expression)
         ) &&
@@ -909,7 +909,8 @@ partial class CSharpToGSharpTranslator {
                                 receiverType,
                                 isPattern.Expression,
                                 isNestedPatternMember: true
-                            )
+                            ),
+                            outerBlockWrapped: true
                         ),
                         captureName: if this.RecordPatternRunsUserCode(isPattern.Pattern) {
                             this.AllocateRecordScopedLocalName("scrutinee", isPattern)
@@ -1031,16 +1032,41 @@ partial class CSharpToGSharpTranslator {
         private func MaterializeFallbackPatternBindings(
             isPattern IsPatternExpressionSyntax,
             receiver GExpression?,
-            test GExpression
+            test GExpression,
+            outerBlockWrapped bool = false
         ) GExpression {
             // Reassigned binders need real writable locals. Bindings whose
             // scrutinee moved into a short-circuit block need the same treatment
             // so later conjuncts and selected branches do not reference a
-            // block-local spill.
+            // block-local spill. A binder that aliases a mutable or closure-assigned
+            // scrutinee also needs its own local when read after the pattern.
             let crossesShortCircuitBoundary = this.state.ShortCircuitSpillDeclarations != nil
+            let scope_ = this.state.CurrentBodyScope ?? isPattern.SyntaxTree.GetRoot()
+            let scrutineeSymbol = if UnwrapParenthesesAndSuppressions(
+                isPattern.Expression
+            ) is IdentifierNameSyntax scrutineeId {
+                this.context.GetSymbolInfo(scrutineeId).Symbol
+            } else {
+                default(ISymbol?)
+            }
+            let scrutineeMutable = (scrutineeSymbol is ILocalSymbol || scrutineeSymbol is IParameterSymbol) &&
+                (
+                this.IsSymbolReassigned(scrutineeSymbol, scope_) || this.IsClosureAssignedVariable(scrutineeSymbol) ||
+                    this.IsByReferenceVariable(scrutineeSymbol)
+            )
             let materializedBinders = this
                 .EnumeratePatternBinders(isPattern.Pattern)
-                .Where((binder ILocalSymbol) -> crossesShortCircuitBoundary || this.IsLocalReassigned(binder))
+                .Where(
+                (binder ILocalSymbol) -> crossesShortCircuitBoundary || this.IsLocalReassigned(binder) ||
+                    (
+                    scrutineeMutable && this.ReadsSymbol(scope_, binder) &&
+                        this
+                        .state
+                        .PatternBindings
+                        .TryGetValue(binder, out var boundReplacement) &&
+                        ExpressionReferencesIdentifier(boundReplacement, receiver)
+                )
+            )
                 .ToList()
             if materializedBinders.Count == 0 {
                 return test
@@ -1059,6 +1085,7 @@ partial class CSharpToGSharpTranslator {
                 return test
             }
             StripTopLevelNegation(isPattern.Pattern, out var negated)
+            let receiverType ITypeSymbol? = this.context.GetTypeInfo(isPattern.Expression).Type
             let assignments = List[GStatement](materializedBinders.Count)
             for binder in materializedBinders {
                 if !this.state.PatternBindings.TryGetValue(binder, out var replacement) {
@@ -1068,7 +1095,10 @@ partial class CSharpToGSharpTranslator {
                     )
                     continue
                 }
-                if negated {
+                if negated && object.ReferenceEquals(replacement, receiver) && !SymbolEqualityComparer.Default.Equals(
+                    UnwrapNullable(receiverType),
+                    binder.Type
+                ) {
                     replacement = this.BuildNegatedPatternBindingValue(binder, receiver, isPattern.Expression)
                 }
                 var storageType GTypeReference? = this.typeMapper.Map(
@@ -1083,11 +1113,16 @@ partial class CSharpToGSharpTranslator {
                 let local = IdentifierExpression(name)
                 declarations.Add(LocalDeclarationStatement(BindingKind.Var, name, storageType))
                 assignments.Add(AssignmentStatement(local, replacement))
+                let gscNarrowsAssignedLocal = !negated &&
+                    !outerBlockWrapped &&
+                    !crossesShortCircuitBoundary &&
+                    !this.IsLocalReassigned(binder) && !this.IsClosureAssignedVariable(binder)
                 this
                     .state
                     .PatternBindings[binder] = if binder
                     .Type
                     .IsReferenceType &&
+                    !gscNarrowsAssignedLocal &&
                     binder.NullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
@@ -2300,6 +2335,71 @@ partial class CSharpToGSharpTranslator {
             isNestedPatternMember bool = false,
             receiverAlreadyMatched bool = false
         ) GExpression {
+            if !receiverAlreadyMatched && recursive.Type != nil && this.ScrutineeMayLoseNarrowingInPattern(
+                receiverSyntax
+            ) &&
+                !this.IsConditionalAccessAnalyzerType(recursive.Type) && !this.IsPlainAccessAnalyzerType(
+                recursive.Type,
+                out _
+            ) &&
+                !this
+                .IsVariableReferenceAnalyzerType(recursive.Type, out _) {
+                let testedType ITypeSymbol? = this.context.GetTypeInfo(recursive.Type).Type
+                let strippedReceiverType ITypeSymbol? = UnwrapNullable(receiverType)
+                if testedType != nil && strippedReceiverType != nil && !SymbolEqualityComparer.Default.Equals(
+                    strippedReceiverType,
+                    UnwrapNullable(testedType)
+                ) {
+                    let assignable = IsAssignableNonNull(strippedReceiverType, testedType)
+                    if !assignable || recursive.Designation is SingleVariableDesignationSyntax {
+                        let temp = this.NewSpillName()
+                        let local = IdentifierExpression(temp)
+                        if recursive.Designation is SingleVariableDesignationSyntax recDesignation &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(recDesignation) is {} recSymbol {
+                            this.state.PatternBindings[recSymbol] = local
+                        }
+                        let subReceiver = if assignable {
+                            receiver
+                        } else {
+                            local
+                        }
+                        let subReceiverSyntax = if assignable {
+                            receiverSyntax
+                        } else {
+                            default(ExpressionSyntax?)
+                        }
+                        let subReceiverType = if assignable {
+                            receiverType
+                        } else {
+                            testedType
+                        }
+                        let rest = this.TranslateRecursivePatternTest(
+                            subReceiver,
+                            recursive,
+                            subReceiverSyntax,
+                            subReceiverType,
+                            isNestedPatternMember: !assignable || isNestedPatternMember,
+                            receiverAlreadyMatched: true
+                        )
+                        if recursive.Designation is SingleVariableDesignationSyntax recDesignationAfter &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(recDesignationAfter) is {} recSymbolAfter {
+                            this.state.PatternBindings[recSymbolAfter] = local
+                        }
+                        return BinaryExpression(
+                            PatternTestExpression(
+                                receiver,
+                                this.BuildPatternTypeTest(temp, recursive.Type, recursive, designationAfterType: true)
+                            ),
+                            "&&",
+                            rest
+                        )
+                    }
+                }
+            }
             // Bind the designator (`is { } x`, `is Circle c`) to the narrowed
             // receiver so later references read the matched value (ADR-0069 smart
             // cast). `is { } x` narrows away only nullability; `is Circle c`
@@ -2486,6 +2586,7 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             if recursive.PropertyPatternClause != nil {
+                let receiverMayBeNilInGSharp = this.ScrutineeStorageIsNullableInGSharp(receiverSyntax)
                 let sharedPrefixes Dictionary[string, GExpression]? = if recursive.PropertyPatternClause!!
                     .Subpatterns
                     .Count((sub SubpatternSyntax) -> sub.NameColon == nil && sub.ExpressionColon != nil) > 1 {
@@ -2532,6 +2633,22 @@ partial class CSharpToGSharpTranslator {
                             memberReceiver,
                             sharedPrefixes
                         )
+                    }
+                    if receiverMayBeNilInGSharp && this.ScrutineeMayLoseNarrowingInPattern(receiverSyntax) &&
+                        sub
+                        .DescendantNodesAndSelf().Any(this.PatternNodeRunsUserCode) {
+                        memberReceiver = EnsureNonNullAssertion(receiver)
+                        if recursive.Designation is SingleVariableDesignationSyntax recVarAfter &&
+                            this
+                            .context
+                            .GetDeclaredSymbol(recVarAfter) is {} recBoundAfter &&
+                            this
+                            .state
+                            .PatternBindings
+                            .TryGetValue(recBoundAfter, out var currentBinding) &&
+                            object.ReferenceEquals(currentBinding, receiver) {
+                            this.state.PatternBindings[recBoundAfter] = memberReceiver!!
+                        }
                     }
                     test = if test == nil {
                         memberTest
@@ -5494,7 +5611,109 @@ partial class CSharpToGSharpTranslator {
             return this.typeMapper.Map(type, this.context, expression.GetLocation())
         }
 
+        // Issue #5837: C# keeps a local or parameter subject in place while it evaluates a pattern.
+        // A subpattern that runs user code can replace a closure-assigned or by-reference subject.
+        private func PatternScrutineeMayChangeDuringMatch(
+            isPattern IsPatternExpressionSyntax
+        ) bool -> this.PatternScrutineeMayChangeDuringMatch(isPattern.Expression, isPattern.Pattern)
+
+        private func PatternScrutineeMayChangeDuringMatch(scrutinee ExpressionSyntax?, pattern PatternSyntax?) bool {
+            if scrutinee == nil || pattern == nil || PatternReadsScrutineeAtMostOnce(pattern) {
+                return false
+            }
+            if !this.ScrutineeMayLoseNarrowingInPattern(scrutinee) {
+                return false
+            }
+            return pattern.DescendantNodesAndSelf().Any(this.PatternNodeRunsUserCode)
+        }
+
+        private func ScrutineeMayLoseNarrowingInPattern(scrutinee ExpressionSyntax?) bool {
+            if UnwrapParenthesesAndSuppressions(scrutinee) is not IdentifierNameSyntax identifier {
+                return false
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
+            return this.IsClosureAssignedVariable(symbol) || this.IsByReferenceVariable(symbol)
+        }
+
+        private func ScrutineeStorageIsNullableInGSharp(scrutinee ExpressionSyntax?) bool {
+            if UnwrapParenthesesAndSuppressions(scrutinee) is not IdentifierNameSyntax identifier {
+                return false
+            }
+            let symbol ISymbol? = this.context.GetSymbolInfo(identifier).Symbol
+            if symbol is ILocalSymbol local &&
+                this
+                .state
+                .EmittedLocalStorageAcceptsNil
+                .TryGetValue(local, out var acceptsNil) {
+                return acceptsNil
+            }
+            let declaredType ITypeSymbol? = switch symbol {
+                case local is ILocalSymbol: local.Type
+                case parameter is IParameterSymbol: parameter.Type
+                default: default(ITypeSymbol?)
+            }
+            return declaredType?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated ||
+                IsNullableValueType(declaredType) ||
+                this.ShouldPromoteToNullableReference(symbol)
+        }
+
+        private func PatternNodeRunsUserCode(node SyntaxNode) bool -> switch node {
+            case subpattern is SubpatternSyntax: this.SubpatternRunsUserCode(subpattern)
+            case listPattern is ListPatternSyntax: this.NodeMayWriteReferenceStorage(listPattern)
+            case slicePattern is SlicePatternSyntax: (
+                this.context.SemanticModel.GetOperation(slicePattern) as ISlicePatternOperation
+            )?.SliceSymbol is IMethodSymbol or
+                IPropertySymbol
+            case constantPattern is ConstantPatternSyntax: this.ConstantPatternMayCallEquals(constantPattern)
+            case recursive is RecursivePatternSyntax: this.UserRecordPatternDeconstruct(recursive) != nil &&
+                this.RecordPatternNeedsDeconstruction(recursive)
+            default: false
+        }
+
+        private func SubpatternRunsUserCode(subpattern SubpatternSyntax) bool {
+            if this.context.SemanticModel.GetOperation(subpattern) is IPropertySubpatternOperation propertySubpattern {
+                for var member IOperation? = propertySubpattern.Member;
+                    member != nil;
+                    member = (member as IMemberReferenceOperation)
+                    ?.Instance {
+                    if member is IPropertyReferenceOperation reference && this.AccessorRunsUserCode(
+                        reference.Property,
+                        reference.Instance?.Type
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            return this.PositionalSubpatternRunsUserCode(subpattern)
+        }
+
         shared {
+            private func ExpressionReferencesIdentifier(expression GExpression?, target GExpression?) bool {
+                if expression == nil || target is not IdentifierExpression targetId {
+                    return false
+                }
+                return switch expression {
+                    case id is IdentifierExpression: id.Name == targetId.Name
+                    case nonNull is NonNullAssertionExpression: ExpressionReferencesIdentifier(nonNull.Operand, target)
+                    case paren is ParenthesizedExpression: ExpressionReferencesIdentifier(paren.Inner, target)
+                    case binary is BinaryExpression: ExpressionReferencesIdentifier(binary.Left, target) ||
+                        ExpressionReferencesIdentifier(binary.Right, target)
+                    case conversion is ConversionExpression: ExpressionReferencesIdentifier(conversion.Operand, target)
+                    case invocation is InvocationExpression: ExpressionReferencesIdentifier(
+                        invocation.Target,
+                        target
+                    ) ||
+                        invocation
+                        .Arguments
+                        .Any((arg GExpression) -> ExpressionReferencesIdentifier(arg, target))
+                    default: false
+                }
+            }
+
             private func FindLeadingElementBinding(
                 expression ExpressionSyntax
             ) ElementBindingExpressionSyntax? -> switch expression {

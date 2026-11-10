@@ -808,4 +808,241 @@ namespace Demo
     }
 }`, "False True 0")
     }
+
+    @Fact
+    func Issue5837_ExactRepro_UnusedDesignationClosureAssignedSubject_MatchesCSharpOracle() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class B
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+    }
+    public class Row
+    {
+        public object Child = new B();
+        public object Tag = 3;
+    }
+    public static class P
+    {
+        public static string Run()
+        {
+            var current = new Row();
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Tag = 0 }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Tag;
+            return "False " + current.Tag;
+        }
+    }
+}`, "False 0", rejectRedundantAssertions: true)
+    }
+
+    @Fact
+    func Issue5837_ClosureAssignedSubjectWithPatternDesignation_MatchesCSharpOracle() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class B
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+    }
+    public class BaseRow
+    {
+        public int Id = 1;
+    }
+    public class Row : BaseRow
+    {
+        public object Child = new B();
+        public object Tag = 3;
+        public int IntTag = 3;
+    }
+    public static class P
+    {
+        static string UnusedObjectDesignation()
+        {
+            var current = new Row();
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Tag = 0 }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Tag;
+            return "False " + current.Tag;
+        }
+        static string UsedObjectDesignation(int nextTag, bool mutateInBody)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+            {
+                if (mutateInBody) current = new Row { Id = 99, Tag = 99 };
+                return "True " + current.Id + " " + matched.Id;
+            }
+            return "False " + current.Tag;
+        }
+        static string IntMemberPatterns(int nextTag, bool useBinder)
+        {
+            var current = new Row { Id = 1, IntTag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, IntTag = nextTag }; };
+            if (!useBinder)
+            {
+                if (current is { Child: B { A: 1 }, IntTag: 3 })
+                    return "True " + current.IntTag;
+                return "False " + current.IntTag;
+            }
+            if (current is { Child: B { A: 1 }, IntTag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.IntTag;
+        }
+        static string TypedSameStaticType(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is Row { Child: B { A: 1 }, Tag: 3 } matched)
+            {
+                current = new Row { Id = 99, Tag = 99 };
+                return "True " + current.Id + " " + matched.Id;
+            }
+            return "False " + current.Tag;
+        }
+        static string TypedDowncastFromBase()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            initial.Child = child;
+            BaseRow current = initial;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            if (current is Row { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string NullableSubject(int nextTag)
+        {
+            Row? current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current!.Id + " " + matched.Id;
+            return "False " + current!.Tag;
+        }
+        public static string Run() =>
+            UnusedObjectDesignation() + " / " +
+            UsedObjectDesignation(0, false) + " / " +
+            UsedObjectDesignation(3, false) + " / " +
+            UsedObjectDesignation(3, true) + " / " +
+            IntMemberPatterns(0, false) + " / " +
+            IntMemberPatterns(0, true) + " / " +
+            IntMemberPatterns(3, true) + " / " +
+            TypedSameStaticType(0) + " / " +
+            TypedSameStaticType(3) + " / " +
+            TypedDowncastFromBase() + " / " +
+            NullableSubject(0) + " / " +
+            NullableSubject(3);
+    }
+}`, "False 0 / False 0 / True 2 2 / True 99 2 / False 0 / False 0 / True 2 2 / False 0 / True 99 2 / True 2 1 / False 0 / True 2 2", rejectRedundantAssertions: true)
+    }
+
+    @Fact
+    func Issue5837_ClosureAssignedSubjectAcrossControlFlowAndSwitchSurfaces_MatchesCSharpOracle() {
+        Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Expected { }
+    public class B
+    {
+        public Action? OnRead;
+        public int A { get { OnRead?.Invoke(); return 1; } }
+    }
+    public class Row
+    {
+        public int Id = 1;
+        public object Child = new B();
+        public object Tag = 3;
+    }
+    public static class P
+    {
+        const int Expected = 3;
+        static Row ReadRow() => new Row { Id = 7, Tag = 3 };
+        static string NegatedGuard(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is not { Child: B { A: 1 }, Tag: 3 } matched)
+                return "NotMatched " + current.Tag;
+            return "Matched " + current.Id + " " + matched.Id;
+        }
+        static string Conditional(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            return current is { Child: B { A: 1 }, Tag: 3 } matched
+                ? "True " + current.Id + " " + matched.Id
+                : "False " + current.Tag;
+        }
+        static string Loop(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            while (current is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Tag;
+        }
+        static string SwitchExpr(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            return current switch
+            {
+                { Child: B { A: 1 }, Tag: 3 } matched => "True " + current.Id + " " + matched.Id,
+                _ => "False " + current.Tag,
+            };
+        }
+        static string NamedConstResidual(int nextTag)
+        {
+            var current = new Row { Id = 1, Tag = 3 };
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Id = 2, Tag = nextTag }; };
+            if (current is { Child: B { A: 1 }, Tag: Expected } matched)
+                return "Const " + current.Id + " " + matched.Id;
+            return "None " + current.Tag;
+        }
+        public static string Run() =>
+            NegatedGuard(0) + " / " +
+            NegatedGuard(3) + " / " +
+            Conditional(0) + " / " +
+            Conditional(3) + " / " +
+            Loop(0) + " / " +
+            Loop(3) + " / " +
+            SwitchExpr(0) + " / " +
+            SwitchExpr(3) + " / " +
+            NamedConstResidual(0) + " / " +
+            NamedConstResidual(3);
+    }
+}`, "NotMatched 0 / Matched 2 2 / False 0 / True 2 2 / False 0 / True 2 2 / False 0 / True 2 2 / None 0 / Const 2 2", rejectRedundantAssertions: true)
+    }
 }

@@ -280,46 +280,58 @@ partial class CSharpToGSharpTranslator {
             } else {
                 BindingKind.Let
             }
+            let deferScrutineeCapture = this.PatternReceiverCanBeDuplicated(isPattern.Expression, receiver) &&
+                this.PatternScrutineeMayChangeDuringMatch(isPattern)
             let separateMainBinder = mainBinder != nil &&
-                (!(!negated && isPattern.Pattern is VarPatternSyntax)) &&
                 (
-                wholeValueBinders.Count > 1 || binding == BindingKind.Var || this.ShouldPromoteToNullableReference(
-                    mainBinder
-                ) ||
-                    scrutineeIsNullable ||
-                    !IsAssignableNonNull(scrutineeType, mainBinder.Type)
-            )
-            var hoistName string?
-            if mainBinder != nil && !separateMainBinder {
-                hoistName = this.EmittedName(mainBinder, mainBinder.Name)
-            } else {
-                hoistName = this.AllocateScopedSynthesizedLocalName("scrutinee", clause)
-            }
-            let hoistBinding = if separateMainBinder {
-                BindingKind.Let
-            } else {
-                binding
-            }
-            var hoistType GTypeReference? = nil
-            if !separateMainBinder && mainBinder != nil && this.InferredLocalDeclarationIsNullable(mainBinder) {
-                hoistType = MakeNullable(
-                    this.PromoteIfUsedAsNullable(
-                        this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
-                        mainBinder
+                deferScrutineeCapture ||
+                    (
+                    (!(!negated && isPattern.Pattern is VarPatternSyntax)) &&
+                        (
+                        wholeValueBinders.Count > 1 ||
+                            binding == BindingKind.Var ||
+                            this.ShouldPromoteToNullableReference(mainBinder) ||
+                            scrutineeIsNullable ||
+                            !IsAssignableNonNull(scrutineeType, mainBinder.Type)
                     )
                 )
-                this.state.LocalHoldsPromotedValueAnswers.Clear()
-                if hoistType != nil {
-                    this.state.EmittedLocalTypeClauses.Add(mainBinder)
-                    if hoistType.IsNullable {
-                        this.state.HoistedNullableGuardLocals.Add(mainBinder)
-                    }
+            )
+            var idExpr GExpression
+            if deferScrutineeCapture {
+                idExpr = receiver!!
+            } else {
+                var hoistName string?
+                if mainBinder != nil && !separateMainBinder {
+                    hoistName = this.EmittedName(mainBinder, mainBinder.Name)
+                } else {
+                    hoistName = this.AllocateScopedSynthesizedLocalName("scrutinee", clause)
                 }
-                this.state.EmittedLocalStorageAcceptsNil[mainBinder] = hoistType != nil && hoistType.IsNullable
-                this.RecordEmittedLocalNullability(mainBinder, hoistType, nil, nil)
+                let hoistBinding = if separateMainBinder {
+                    BindingKind.Let
+                } else {
+                    binding
+                }
+                var hoistType GTypeReference? = nil
+                if !separateMainBinder && mainBinder != nil && this.InferredLocalDeclarationIsNullable(mainBinder) {
+                    hoistType = MakeNullable(
+                        this.PromoteIfUsedAsNullable(
+                            this.typeMapper.MapExplicitType(mainBinder.Type, this.context, clause.GetLocation()),
+                            mainBinder
+                        )
+                    )
+                    this.state.LocalHoldsPromotedValueAnswers.Clear()
+                    if hoistType != nil {
+                        this.state.EmittedLocalTypeClauses.Add(mainBinder)
+                        if hoistType.IsNullable {
+                            this.state.HoistedNullableGuardLocals.Add(mainBinder)
+                        }
+                    }
+                    this.state.EmittedLocalStorageAcceptsNil[mainBinder] = hoistType != nil && hoistType.IsNullable
+                    this.RecordEmittedLocalNullability(mainBinder, hoistType, nil, nil)
+                }
+                into.Add(LocalDeclarationStatement(hoistBinding, hoistName, type: hoistType, initializer: receiver))
+                idExpr = IdentifierExpression(hoistName)
             }
-            into.Add(LocalDeclarationStatement(hoistBinding, hoistName, type: hoistType, initializer: receiver))
-            let idExpr = IdentifierExpression(hoistName)
             if scrutineeIsNullable {
                 this.state.GSharpNullablePatternReceivers.Add(idExpr)
             }
@@ -1341,8 +1353,19 @@ partial class CSharpToGSharpTranslator {
                     .ToList()
                 if designations.Count != 1 ||
                     candidatePositive is DeclarationPatternSyntax ||
-                    candidatePositive is RecursivePatternSyntax &&
-                    candidatePositive.Designation is SingleVariableDesignationSyntax {
+                    (
+                    candidatePositive is RecursivePatternSyntax{
+                        Designation: SingleVariableDesignationSyntax
+                    } candidateRecursive &&
+                        (
+                        (
+                            candidateRecursive.PositionalPatternClause == nil &&
+                                candidateRecursive.PropertyPatternClause is nil or
+                                {Subpatterns: {Count: 0}}
+                        ) ||
+                            this.TryTranslateIfLetResidualPattern(candidateRecursive, "_", out _)
+                    )
+                ) {
                     continue
                 }
                 if patternIndex >= 0 {
@@ -1371,8 +1394,7 @@ partial class CSharpToGSharpTranslator {
             this.BeginRecordPatternDecision(isPattern!!)
             var receiver GExpression? = this.TranslateExpression(isPattern!!.Expression)
             if this.IsNativelyExpressiblePattern(positivePattern, topLevel: true) &&
-                !this
-                .PatternRequiresLoweredListTest(
+                !this.PatternScrutineeMayChangeDuringMatch(isPattern!!) && !this.PatternRequiresLoweredListTest(
                 positivePattern!!,
                 this.ResolveDeclaredReceiverType(
                     this.context.GetTypeInfo(isPattern!!.Expression).Type,
@@ -1424,6 +1446,8 @@ partial class CSharpToGSharpTranslator {
                 statements.Add(LocalDeclarationStatement(BindingKind.Let, spillName, initializer: receiver))
                 receiver = IdentifierExpression(spillName)
             }
+            let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
+            this.state.PendingSpillPrologue = statements
             let hadPrevious = this.state.PatternBindings.TryGetValue(binder, out var previous)
             var positiveTest GExpression
             var replacement GExpression?
@@ -1439,6 +1463,7 @@ partial class CSharpToGSharpTranslator {
                 )!!
                 this.state.PatternBindings.TryGetValue(binder, out replacement)
             } finally {
+                this.state.PendingSpillPrologue = outerSpillPrologue
                 if hadPrevious {
                     this.state.PatternBindings[binder] = previous
                 } else {
@@ -1449,8 +1474,8 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let localName string? = this.EmittedName(designation, designation!!.Identifier)
-            let localSymbolType = if this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) &&
-                inputIsNonNull {
+            let localSymbolType = if designation!!.Parent !is VarPatternSyntax ||
+                (this.TryGetVarCaptureStaticNonNull(binder, out var inputIsNonNull) && inputIsNonNull) {
                 binder.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
             } else {
                 binder.Type

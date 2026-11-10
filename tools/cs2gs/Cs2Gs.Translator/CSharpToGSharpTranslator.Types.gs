@@ -1010,11 +1010,17 @@ partial class CSharpToGSharpTranslator {
         ) List[GStatement] {
             let declarations = List[GStatement](mutableBindings.Count)
             for (symbol, matchedValue) in mutableBindings {
+                let symbolSyntax = symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                let symbolType = if symbolSyntax?.Parent is not Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax {
+                    symbol.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                } else {
+                    symbol.Type
+                }
                 declarations.Add(
                     LocalDeclarationStatement(
                         BindingKind.Var,
                         this.EmittedName(symbol, symbol.Name),
-                        this.typeMapper.Map(symbol.Type, this.context, pattern.GetLocation()),
+                        this.typeMapper.Map(symbolType, this.context, pattern.GetLocation()),
                         initializer: matchedValue
                     )
                 )
@@ -2583,6 +2589,20 @@ partial class CSharpToGSharpTranslator {
                 guards.Add(this.TranslatePatternTest(local, pattern, inputType))
                 return VarPattern(temp)
             }
+            if receiverSyntax.Parent is SwitchExpressionSyntax && this.PatternScrutineeMayChangeDuringMatch(
+                receiverSyntax,
+                pattern
+            ) {
+                this.AddTypedSubpatternGuard(
+                    () -> this.TranslatePatternTest(receiver, pattern, inputType, receiverSyntax),
+                    bindings,
+                    guards,
+                    mutableBindings,
+                    receiver,
+                    materializeReceiverBindings: true
+                )
+                return DiscardPattern()
+            }
             if pattern is RecursivePatternSyntax &&
                 pattern.Type != nil &&
                 pattern.PropertyPatternClause != nil &&
@@ -2938,27 +2958,29 @@ partial class CSharpToGSharpTranslator {
                 // binder (the nightly selfmig regression on
                 // TupleElementNamesReader.cs).
                 var propertyDesignator string? = nil
-                if recursive!!.Designation is SingleVariableDesignationSyntax propertyVariable {
-                    propertyDesignator = this.EmittedName(propertyVariable, propertyVariable.Identifier)
-                    if mutableBindings != nil && this.context.GetDeclaredSymbol(
-                        propertyVariable
-                    ) is ILocalSymbol propertySymbol &&
-                        this
-                        .IsSymbolReassigned(
-                        propertySymbol,
-                        this.state.CurrentBodyScope ?? recursive!!.SyntaxTree.GetRoot()
-                    ) {
-                        let captureName = this.NewMutableSwitchPatternCaptureName(recursive, usedDesignators)
-                        mutableBindings.Add((propertySymbol, IdentifierExpression(captureName)))
-                        propertyDesignator = captureName
-                    } else {
-                        usedDesignators?.Add(propertyDesignator!!)
+                if !treatAsUntyped && !this.state.TranslatingBooleanPattern {
+                    if recursive!!.Designation is SingleVariableDesignationSyntax propertyVariable {
+                        propertyDesignator = this.EmittedName(propertyVariable, propertyVariable.Identifier)
+                        if mutableBindings != nil && this.context.GetDeclaredSymbol(
+                            propertyVariable
+                        ) is ILocalSymbol propertySymbol &&
+                            this
+                            .IsSymbolReassigned(
+                            propertySymbol,
+                            this.state.CurrentBodyScope ?? recursive!!.SyntaxTree.GetRoot()
+                        ) {
+                            let captureName = this.NewMutableSwitchPatternCaptureName(recursive, usedDesignators)
+                            mutableBindings.Add((propertySymbol, IdentifierExpression(captureName)))
+                            propertyDesignator = captureName
+                        } else {
+                            usedDesignators?.Add(propertyDesignator!!)
+                        }
+                    } else if recursive!!.Designation is ParenthesizedVariableDesignationSyntax {
+                        this.context.ReportUnsupported(
+                            recursive,
+                            "property pattern with tuple designation has no canonical G# form yet (ADR-0115 §B)."
+                        )
                     }
-                } else if recursive!!.Designation is ParenthesizedVariableDesignationSyntax {
-                    this.context.ReportUnsupported(
-                        recursive,
-                        "property pattern with tuple designation has no canonical G# form yet (ADR-0115 §B)."
-                    )
                 }
                 return PropertyPattern(fields, propertyDesignator)
             }
@@ -3154,7 +3176,9 @@ partial class CSharpToGSharpTranslator {
             translate() -> GExpression,
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             guards List[GExpression],
-            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]? = nil
+            mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]? = nil,
+            receiver GExpression? = nil,
+            materializeReceiverBindings bool = false
         ) {
             let bindingsBefore = HashSet[ISymbol](this.state.PatternBindings.Keys, SymbolEqualityComparer.Default)
             let memberTest = translate()
@@ -3163,16 +3187,22 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let matched = this.state.PatternBindings[added]
-                if mutableBindings != nil && added is ILocalSymbol mutableSymbol && this.IsSymbolReassigned(
-                    mutableSymbol,
-                    this
-                        .state
-                        .CurrentBodyScope ??
-                        mutableSymbol
-                        .DeclaringSyntaxReferences
-                        .FirstOrDefault()
-                        ?.SyntaxTree
-                        .GetRoot()
+                let scope_ = this
+                    .state
+                    .CurrentBodyScope ??
+                    (added as ILocalSymbol)
+                    ?.DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.SyntaxTree
+                    .GetRoot()
+                if mutableBindings != nil &&
+                    added is ILocalSymbol mutableSymbol &&
+                    (
+                    (scope_ != nil && this.IsSymbolReassigned(mutableSymbol, scope_)) ||
+                        (
+                        materializeReceiverBindings && scope_ != nil && this.ReadsSymbol(scope_, mutableSymbol) &&
+                            ExpressionReferencesIdentifier(matched, receiver)
+                    )
                 ) {
                     mutableBindings.Add((mutableSymbol, matched))
                     continue
