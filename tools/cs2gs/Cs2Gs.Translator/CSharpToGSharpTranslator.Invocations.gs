@@ -2953,7 +2953,6 @@ partial class CSharpToGSharpTranslator {
             } else {
                 cast[GTypeReference](NamedTypeReference(creation.Type.ToString()))
             }
-            type = this.PromoteCreationTupleArguments(type, typeSymbol, creation)
             type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)
             let arguments = this.TranslateCallArguments(
                 creation,
@@ -2989,7 +2988,7 @@ partial class CSharpToGSharpTranslator {
             arguments IReadOnlyList[GExpression],
             initializer InitializerExpressionSyntax?
         ) GExpression? {
-            var type = type
+            var type = this.PromoteCreationTupleArguments(type, typeSymbol, creationNode)
             if typeSymbol is INamedTypeSymbol primitive &&
                 type is NamedTypeReference &&
                 (
@@ -12066,7 +12065,11 @@ partial class CSharpToGSharpTranslator {
             private func NullableTypeArgumentViolatesTranslatedConstraints(parameter ITypeParameterSymbol) bool -> (
                 parameter.HasNotNullConstraint && !IsDictionaryKeyTypeParameter(parameter)
             ) ||
-                parameter.HasReferenceTypeConstraint ||
+                (
+                parameter.HasReferenceTypeConstraint && CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(
+                    parameter
+                )
+            ) ||
                 parameter.HasValueTypeConstraint ||
                 parameter.HasUnmanagedTypeConstraint ||
                 parameter.HasConstructorConstraint ||

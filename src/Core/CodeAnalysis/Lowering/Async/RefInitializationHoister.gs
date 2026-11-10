@@ -140,8 +140,56 @@ shared class RefInitializationHoister {
                     }
                     return HoistOperand(block.Expression, prelude, captureComponents)
                 }
+                case conditional is BoundConditionalExpression {
+                    return HoistOperand(
+                        BoundDereferenceExpression(
+                            conditional.Syntax,
+                            BoundConditionalAddressExpression(
+                                conditional.Syntax,
+                                conditional.Condition,
+                                conditional.WhenTrue,
+                                conditional.WhenFalse,
+                                conditional.Type
+                            )
+                        ),
+                        prelude,
+                        captureComponents
+                    )
+                }
                 case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                     return HoistOperand(address.Operand, prelude, captureComponents: true)
+                }
+                case BoundDereferenceExpression{
+                    Operand: BoundVariableExpression{Variable: LocalVariableSymbol aliased}
+                } when refLocals
+                    .TryGetValue(aliased, out var aliasedTemplate) {
+                    return HoistOperand(aliasedTemplate.Operand, prelude, captureComponents: true)
+                }
+                case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                    for statement in block.Statements {
+                        prelude.Add(RewriteStatement(statement))
+                    }
+                    return HoistOperand(
+                        BoundDereferenceExpression(dereference.Syntax, block.Expression),
+                        prelude,
+                        captureComponents: true
+                    )
+                }
+                case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} dereference {
+                    return HoistOperand(
+                        BoundDereferenceExpression(
+                            dereference.Syntax,
+                            BoundConditionalAddressExpression(
+                                conditional.Syntax,
+                                conditional.Condition,
+                                BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue),
+                                BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse),
+                                dereference.Type
+                            )
+                        ),
+                        prelude,
+                        captureComponents: true
+                    )
                 }
                 case dereference is BoundDereferenceExpression when SideEffectSpiller.IsNativeSliceElementOperand(
                     dereference.Operand
@@ -341,6 +389,9 @@ shared class RefInitializationHoister {
         shared {
             private func IsReconstructableStorage(expression BoundExpression) bool {
                 return switch expression {
+                    case block is BoundBlockExpression: IsReconstructableStorage(block.Expression)
+                    case conditional is BoundConditionalExpression: IsReconstructableStorage(conditional.WhenTrue) &&
+                        IsReconstructableStorage(conditional.WhenFalse)
                     case tuple is BoundTupleElementAccessExpression: IsReconstructableStorage(tuple.Receiver)
                     case BoundClrPropertyAccessExpression{Member: FieldInfo, Receiver: nil}: true
                     case BoundClrPropertyAccessExpression{

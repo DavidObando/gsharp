@@ -1627,7 +1627,8 @@ class CSharpTypeMapper {
         context TranslationContext,
         path List[int32],
         createdType INamedTypeSymbol? = nil,
-        creation BaseObjectCreationExpressionSyntax? = nil
+        creation BaseObjectCreationExpressionSyntax? = nil,
+        nullablePositions HashSet[string]? = nil
     ) GTypeReference? {
         var mapped = mapped
         if path.Count == 0 &&
@@ -1644,7 +1645,8 @@ class CSharpTypeMapper {
                 context,
                 path,
                 createdType,
-                creation
+                creation,
+                nullablePositions
             )
             path.RemoveAt(path.Count - 1)
             if !object.ReferenceEquals(element, array.ElementType) {
@@ -1664,7 +1666,8 @@ class CSharpTypeMapper {
                 context,
                 path,
                 createdType,
-                creation
+                creation,
+                nullablePositions
             )
             path.RemoveAt(path.Count - 1)
             return promoted
@@ -1687,7 +1690,8 @@ class CSharpTypeMapper {
                     context,
                     path,
                     createdType,
-                    creation
+                    creation,
+                    nullablePositions
                 )
                 path.RemoveAt(path.Count - 1)
                 changed |= !object.ReferenceEquals(element, tuple.ElementTypes[i])
@@ -1700,10 +1704,21 @@ class CSharpTypeMapper {
             }
         }
         if mapped is NamedTypeReference named && declaredType is INamedTypeSymbol declaredNamed {
-            mapped = this.PromoteNamedTypeChain(named, declaredNamed, symbol, context, path, createdType, creation)
+            mapped = this.PromoteNamedTypeChain(
+                named,
+                declaredNamed,
+                symbol,
+                context,
+                path,
+                createdType,
+                creation,
+                nullablePositions
+            )
         }
         let isTainted = if createdType != nil {
-            ObliviousNullabilityAnalyzer.IsCreationTupleElementTainted(
+            (nullablePositions?.Contains(string.Join(".", path)) == true) ||
+                ObliviousNullabilityAnalyzer
+                .IsCreationTupleElementTainted(
                 context.Compilation,
                 symbol,
                 createdType,
@@ -1712,7 +1727,7 @@ class CSharpTypeMapper {
                 creation
             )
         } else {
-            ObliviousNullabilityAnalyzer.IsTupleElementTainted(
+            nullablePositions?.Contains(string.Join(".", path)) ?? ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                 context.Compilation,
                 symbol,
                 path,
@@ -1733,7 +1748,8 @@ class CSharpTypeMapper {
         context TranslationContext,
         path List[int32],
         createdType INamedTypeSymbol?,
-        creation BaseObjectCreationExpressionSyntax?
+        creation BaseObjectCreationExpressionSyntax?,
+        nullablePositions HashSet[string]?
     ) NamedTypeReference {
         var containingType GTypeReference? = named.ContainingType
         if containingType is NamedTypeReference containingNamed &&
@@ -1745,7 +1761,8 @@ class CSharpTypeMapper {
                 context,
                 path,
                 createdType,
-                creation
+                creation,
+                nullablePositions
             )
         }
         let offset = if declaredNamed.ContainingType is INamedTypeSymbol parent {
@@ -1766,7 +1783,8 @@ class CSharpTypeMapper {
                     context,
                     path,
                     createdType,
-                    creation
+                    creation,
+                    nullablePositions
                 )
                 path.RemoveAt(path.Count - 1)
                 argumentsChanged |= !object.ReferenceEquals(argument, named.TypeArguments[i])
@@ -3191,7 +3209,7 @@ class CSharpTypeMapper {
         }
 
         @return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull("reference")
-        private func WithNullable(reference GTypeReference?, isNullable bool) GTypeReference? {
+        internal func WithNullable(reference GTypeReference?, isNullable bool) GTypeReference? {
             switch reference {
                 case slice is NativeSliceTypeReference {
                     return NativeSliceTypeReference(slice.ElementType, slice.IsReadOnly){IsNullable = isNullable}
@@ -4089,7 +4107,7 @@ class CSharpTypeMapper {
             return mapped
         }
 
-        private func TypeParameterForbidsNullableReferenceArgument(
+        internal func TypeParameterForbidsNullableReferenceArgument(
             parameter ITypeParameterSymbol,
             owner INamedTypeSymbol? = nil,
             visited HashSet[ITypeParameterSymbol]? = nil
@@ -4100,7 +4118,7 @@ class CSharpTypeMapper {
             }
             if parameter.HasReferenceTypeConstraint &&
                 (
-                isSourceDeclared ||
+                (owner != nil && isSourceDeclared) ||
                     parameter.ReferenceTypeConstraintNullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation

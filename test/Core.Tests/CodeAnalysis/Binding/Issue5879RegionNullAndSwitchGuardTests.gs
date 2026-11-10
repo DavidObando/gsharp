@@ -265,21 +265,25 @@ Read()
             for arms in[]string{
                 "case _ when { action = mutate false } { action = noop noop() }",
                 "case _ when { action = mutate false } { action = noop noop() }\n        case _ when { action() false } { }",
-                "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }"
+                "default { action() }\n        case _ when { action = mutate false } { action = noop noop() }",
+                "default { action() return text.Length }\n        case 1 when { action = mutate false } { action = noop noop() }\n        case 2 when { action = noop false } { action = noop noop() }"
             } {
-                yield []object{"finally_" + arms, Switch(arms, true), true}
-                yield []object{
-                    "safe_finally_" + arms,
-                    Switch(arms.Replace("action = mutate", "action = noop"), true, true).Replace("\"safe\"", "\"ok\""),
-                    false
-                }
-                if !arms.Contains("\n") {
-                    yield []object{"straight_" + arms, Switch(arms, false), true}
+                if !arms.Contains("text.Length") {
+                    yield []object{"finally_" + arms, Switch(arms, true), true}
                     yield []object{
-                        "safe_straight_" + arms,
-                        Switch(arms.Replace("action = mutate", "action = noop"), false).Replace("\"safe\"", "\"ok\""),
+                        "safe_finally_" + arms,
+                        Switch(arms.Replace("action = mutate", "action = noop"), true, true).Replace(
+                            "\"safe\"",
+                            "\"ok\""
+                        ),
                         false
                     }
+                }
+                yield []object{"straight_" + arms, Switch(arms, false), true}
+                yield []object{
+                    "safe_straight_" + arms,
+                    Switch(arms.Replace("action = mutate", "action = noop"), false).Replace("\"safe\"", "\"ok\""),
+                    false
                 }
             }
         }
@@ -434,12 +438,19 @@ Read(nilARGUMENT)
     var text string? = nil
     text = "safe"
     REGION
-    return text.Length
+    TAIL
 }
 Run(1ARGUMENT)
 `.Replace(
                 "REGION",
                 region
+            ).Replace(
+                "TAIL",
+                if arms.Contains("text.Length") {
+                    "return 2"
+                } else {
+                    "return text.Length"
+                }
             ).Replace(
                 "NOOP",
                 if useExternal {

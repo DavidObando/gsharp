@@ -558,9 +558,19 @@ internal partial class ExpressionBinder {
         }: Binder.IsReferenceTypeForConstraint(receiver.Type) || CanReconstructAddressAcrossSuspension(receiver)
         case BoundIndexExpression{IsArrayBackedElementAccess: true}: true
         case BoundTupleElementAccessExpression{Receiver: var receiver}: CanReconstructAddressAcrossSuspension(receiver)
+        case BoundBlockExpression{Expression: var inner}: CanReconstructAddressAcrossSuspension(inner)
+        case BoundConditionalExpression cond: CanReconstructAddressAcrossSuspension(cond.WhenTrue) &&
+            CanReconstructAddressAcrossSuspension(cond.WhenFalse)
         case BoundDereferenceExpression{Operand: BoundAddressOfExpression inner}: CanReconstructAddressAcrossSuspension(
             inner.Operand
         )
+        case BoundDereferenceExpression{Operand: BoundBlockExpression block}: CanReconstructAddressAcrossSuspension(
+            BoundDereferenceExpression(block.Syntax, block.Expression)
+        )
+        case BoundDereferenceExpression{
+            Operand: BoundConditionalExpression cond
+        }: CanReconstructAddressAcrossSuspension(BoundDereferenceExpression(cond.WhenTrue.Syntax, cond.WhenTrue)) &&
+            CanReconstructAddressAcrossSuspension(BoundDereferenceExpression(cond.WhenFalse.Syntax, cond.WhenFalse))
         case BoundDereferenceExpression{
             Operand: BoundConditionalAddressExpression cond
         }: CanReconstructAddressAcrossSuspension(cond.WhenTrueOperand) &&

@@ -4578,9 +4578,15 @@ partial class CSharpToGSharpTranslator {
                 this.context,
                 arrayExpression.GetLocation()
             ) is ArrayTypeReference mappedArray {
+                let promotedArray = this.PromoteCreationTupleArguments(
+                    mappedArray,
+                    array,
+                    arrayExpression
+                ) as ArrayTypeReference
                 let (sink, position) = this.ResolveArrayStorageSink(arrayExpression)
+                let baseElement = (promotedArray ?? mappedArray).ElementType
                 let promotedElement = this.PromoteTupleTypeArguments(
-                    mappedArray.ElementType,
+                    baseElement,
                     array.ElementType,
                     sink,
                     position
@@ -4588,7 +4594,7 @@ partial class CSharpToGSharpTranslator {
                         .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
                         .ToList()
                 ) ??
-                    mappedArray.ElementType
+                    baseElement
                 return if nullableElementSyntax {
                     MakeNullable(promotedElement)
                 } else {

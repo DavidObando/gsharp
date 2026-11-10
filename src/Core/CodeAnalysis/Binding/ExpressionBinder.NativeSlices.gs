@@ -600,6 +600,7 @@ internal partial class ExpressionBinder {
             case index is BoundClrIndexExpression: NativeSliceTypes.TryGetElement(index.Target.Type, out _, out _)
             case block is BoundBlockExpression: HasNativeSliceElementRoot(block.Expression)
             case dereference is BoundDereferenceExpression: HasNativeSliceElementRoot(dereference.Operand)
+            case tuple is BoundTupleElementAccessExpression: HasNativeSliceElementRoot(tuple.Receiver)
             case BoundFieldAccessExpression{Receiver: {} receiver}: HasNativeSliceElementRoot(receiver)
             case BoundClrPropertyAccessExpression{Receiver: {} receiver}: HasNativeSliceElementRoot(receiver)
             default: false

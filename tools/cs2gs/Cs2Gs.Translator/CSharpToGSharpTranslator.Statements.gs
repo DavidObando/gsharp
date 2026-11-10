@@ -382,8 +382,24 @@ partial class CSharpToGSharpTranslator {
                         this.context,
                         declaration!!.Type.GetLocation()
                     )
+                    if type == nil && tupleStorage.Type.IsReferenceType {
+                        mapped = CSharpTypeMapper.WithNullable(
+                            mapped,
+                            this.InferredLocalDeclarationIsNullable(tupleStorage)
+                        )
+                    }
                     let promoted = this.PromoteTupleDeclarationIfTainted(mapped, tupleStorage.Type, tupleStorage)
-                    if type != nil || !object.ReferenceEquals(mapped, promoted) {
+                    if type != nil || !object.ReferenceEquals(mapped, promoted) ||
+                        !SymbolEqualityComparer
+                        .IncludeNullability
+                        .Equals(
+                        tupleStorage.Type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.None),
+                        this
+                            .context
+                            .GetTypeInfo(declarator.Initializer!!.Value)
+                            .Type
+                            ?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.None)
+                    ) {
                         type = promoted
                     }
                 }
