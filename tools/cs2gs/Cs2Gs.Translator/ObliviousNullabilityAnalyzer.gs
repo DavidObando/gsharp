@@ -7711,10 +7711,143 @@ internal shared class ObliviousNullabilityAnalyzer {
         if derivedLeaves.Count == 0 || baseLeaves.Count == 0 {
             yield break
         }
+        for slot in baseLeaves {
+            for path in ProjectContractPathsToSource(
+                derivedSymbol,
+                comparisonType,
+                baseType,
+                slot.Path,
+                VarianceKind.Out
+            ) {
+                for derivedLeaf in derivedLeaves {
+                    if derivedLeaf.Path != path {
+                        continue
+                    }
+                    yield (derivedLeaf.Type, path, slot.Type, slot.Path)
+                }
+            }
+        }
+    }
+
+    private func ProjectContractPathsToSource(
+        derivedSymbol ISymbol,
+        source ITypeSymbol,
+        target ITypeSymbol,
+        targetPath string,
+        variance VarianceKind
+    ) sequence[string] {
+        if targetPath.Length == 0 {
+            yield string.Empty
+            yield break
+        }
+        if source is IArrayTypeSymbol sourceArray &&
+            target is IArrayTypeSymbol targetArray &&
+            sourceArray.Rank == targetArray.Rank &&
+            sourceArray.IsSZArray == targetArray.IsSZArray &&
+            TrySplitTuplePath(targetPath, out var arrayIndex, out var arrayRemainder) &&
+            arrayIndex == 0 {
+            for projected in ProjectContractPathsToSource(
+                derivedSymbol,
+                sourceArray.ElementType,
+                targetArray.ElementType,
+                arrayRemainder,
+                variance
+            ) {
+                yield PrependTuplePath(0, projected)
+            }
+            yield break
+        }
+        if source is not INamedTypeSymbol sourceNamed || target is not INamedTypeSymbol targetNamed {
+            yield break
+        }
+        if sourceNamed.IsTupleType && targetNamed.IsTupleType {
+            if sourceNamed
+                .TupleElements
+                .Length == targetNamed
+                .TupleElements
+                .Length &&
+                TrySplitTuplePath(targetPath, out var tupleIndex, out var tupleRemainder) &&
+                tupleIndex < sourceNamed
+                .TupleElements
+                .Length {
+                for projected in ProjectContractPathsToSource(
+                    derivedSymbol,
+                    sourceNamed.TupleElements[tupleIndex].Type,
+                    targetNamed.TupleElements[tupleIndex].Type,
+                    tupleRemainder,
+                    variance
+                ) {
+                    yield PrependTuplePath(tupleIndex, projected)
+                }
+            }
+            yield break
+        }
+        if SymbolEqualityComparer.Default.Equals(sourceNamed.OriginalDefinition, targetNamed.OriginalDefinition) {
+            if MatchesConstructedContractView(
+                sourceNamed,
+                targetNamed,
+                exact: false,
+                inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
+            ) &&
+                TrySplitTuplePath(targetPath, out var argIndex, out var argRemainder) &&
+                argIndex < sourceNamed
+                .TypeArguments
+                .Length &&
+                argIndex < targetNamed
+                .TypeArguments
+                .Length &&
+                argIndex < sourceNamed
+                .TypeParameters
+                .Length {
+                let childVariance = ComposeContractVariance(variance, sourceNamed.TypeParameters[argIndex].Variance)
+                for projected in ProjectContractPathsToSource(
+                    derivedSymbol,
+                    sourceNamed.TypeArguments[argIndex],
+                    targetNamed.TypeArguments[argIndex],
+                    argRemainder,
+                    childVariance
+                ) {
+                    yield PrependTuplePath(argIndex, projected)
+                }
+            }
+            yield break
+        }
+        if variance == VarianceKind.Out {
+            for (actual, template) in EnumerateMatchingContractViews(sourceNamed, targetNamed) {
+                for viewPath in ProjectContractPathsToSource(derivedSymbol, actual, targetNamed, targetPath, variance) {
+                    let (owner, path) = ProjectTupleContractPosition(derivedSymbol, viewPath, template, sourceNamed)
+                    if SymbolEqualityComparer.Default.Equals(owner, sourceNamed) {
+                        yield path
+                    }
+                }
+            }
+        } else if variance == VarianceKind.In {
+            for (actual, template) in EnumerateMatchingContractViews(targetNamed, sourceNamed) {
+                for slot in NestedTupleLeaves(actual) {
+                    let (owner, projectedTargetPath) = ProjectTupleContractPosition(
+                        derivedSymbol,
+                        slot.Path,
+                        template,
+                        targetNamed
+                    )
+                    if !SymbolEqualityComparer.Default.Equals(owner, targetNamed) || projectedTargetPath != targetPath {
+                        continue
+                    }
+                    for path in ProjectContractPathsToSource(derivedSymbol, sourceNamed, actual, slot.Path, variance) {
+                        yield path
+                    }
+                }
+            }
+        }
+    }
+
+    private func EnumerateMatchingContractViews(sourceNamed INamedTypeSymbol, targetNamed INamedTypeSymbol) sequence[
+        (Actual INamedTypeSymbol, Template INamedTypeSymbol)
+    ] {
         let candidates = List[(Actual INamedTypeSymbol, Template INamedTypeSymbol)]()
         let pending = Queue[(Actual INamedTypeSymbol, Template INamedTypeSymbol)]()
         let visited = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
-        pending.Enqueue((comparisonType, comparisonType.OriginalDefinition))
+        pending.Enqueue((sourceNamed, sourceNamed.OriginalDefinition))
         while pending.Count > 0 {
             let (actual, template) = pending.Dequeue()
             if !visited.Add(template) {
@@ -7728,36 +7861,62 @@ internal shared class ObliviousNullabilityAnalyzer {
                 pending.Enqueue((actual.Interfaces[i], template.Interfaces[i]))
             }
         }
+        let inProgress = List[(Source ITypeSymbol, Target ITypeSymbol)]()
         let exact = candidates.Any(
             (candidate(Actual INamedTypeSymbol, Template INamedTypeSymbol)) -> MatchesConstructedContractView(
                 candidate.Actual,
-                baseType,
-                exact: true
+                targetNamed,
+                exact: true,
+                inProgress: inProgress
             )
         )
         for (actual, template) in candidates {
-            if !MatchesConstructedContractView(actual, baseType, exact) {
-                continue
+            if MatchesConstructedContractView(actual, targetNamed, exact, inProgress) {
+                yield (actual, template)
             }
-            for slot in baseLeaves {
-                let (owner, path) = ProjectTupleContractPosition(derivedSymbol, slot.Path, template, derivedType)
-                if !SymbolEqualityComparer.Default.Equals(owner, derivedType) {
-                    continue
-                }
-                for derivedLeaf in derivedLeaves {
-                    if derivedLeaf.Path != path {
-                        continue
-                    }
-                    yield (derivedLeaf.Type, path, slot.Type, slot.Path)
-                }
-            }
+        }
+    }
+
+    private func ComposeContractVariance(outer VarianceKind, inner VarianceKind) VarianceKind {
+        if outer == VarianceKind.None || inner == VarianceKind.None {
+            return VarianceKind.None
+        }
+        return if outer == inner {
+            VarianceKind.Out
+        } else {
+            VarianceKind.In
+        }
+    }
+
+    private func TrySplitTuplePath(path string, out index int32, out remainder string) bool {
+        let dot = path.IndexOf('.')
+        let head = if dot < 0 {
+            path
+        } else {
+            path.Substring(0, dot)
+        }
+        remainder = if dot < 0 {
+            string.Empty
+        } else {
+            path.Substring(dot + 1)
+        }
+        return int32.TryParse(head, out index) && index >= 0
+    }
+
+    private func PrependTuplePath(index int32, suffix string) string {
+        let prefix = index.ToString(CultureInfo.InvariantCulture)
+        return if suffix.Length == 0 {
+            prefix
+        } else {
+            prefix + "." + suffix
         }
     }
 
     private func MatchesConstructedContractView(
         actual INamedTypeSymbol,
         target INamedTypeSymbol,
-        exact bool = false
+        exact bool,
+        inProgress List[(Source ITypeSymbol, Target ITypeSymbol)]
     ) bool {
         let normalizedActual = NormalizeContractTupleNames(actual)
         let normalizedTarget = NormalizeContractTupleNames(target)
@@ -7775,7 +7934,12 @@ internal shared class ObliviousNullabilityAnalyzer {
         if (actual.ContainingType != nil) != (target.ContainingType != nil) ||
             (
             actual.ContainingType != nil &&
-                !MatchesConstructedContractView(actual.ContainingType!!, target.ContainingType!!)
+                !MatchesConstructedContractView(
+                actual.ContainingType!!,
+                target.ContainingType!!,
+                exact: false,
+                inProgress: inProgress
+            )
         ) {
             return false
         }
@@ -7783,7 +7947,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             if !IsVarianceCompatibleContractArgument(
                 actual.TypeArguments[i],
                 target.TypeArguments[i],
-                actual.TypeParameters[i].Variance
+                actual.TypeParameters[i].Variance,
+                inProgress
             ) {
                 return false
             }
@@ -7794,7 +7959,8 @@ internal shared class ObliviousNullabilityAnalyzer {
     private func IsVarianceCompatibleContractArgument(
         actual ITypeSymbol,
         target ITypeSymbol,
-        variance VarianceKind
+        variance VarianceKind,
+        inProgress List[(Source ITypeSymbol, Target ITypeSymbol)]
     ) bool {
         if SymbolEqualityComparer.Default.Equals(
             NormalizeContractTupleNames(actual),
@@ -7803,42 +7969,69 @@ internal shared class ObliviousNullabilityAnalyzer {
             return true
         }
         return switch variance {
-            case VarianceKind.Out: IsReferenceAssignableContractType(actual, target)
-            case VarianceKind.In: IsReferenceAssignableContractType(target, actual)
+            case VarianceKind.Out: IsReferenceAssignableContractType(actual, target, inProgress)
+            case VarianceKind.In: IsReferenceAssignableContractType(target, actual, inProgress)
             default: false
         }
     }
 
-    private func IsReferenceAssignableContractType(source ITypeSymbol, target ITypeSymbol) bool {
+    private func IsReferenceAssignableContractType(
+        source ITypeSymbol,
+        target ITypeSymbol,
+        inProgress List[(Source ITypeSymbol, Target ITypeSymbol)]
+    ) bool {
         if !source.IsReferenceType || !target.IsReferenceType {
             return false
         }
-        if SymbolEqualityComparer.Default.Equals(
-            NormalizeContractTupleNames(source),
-            NormalizeContractTupleNames(target)
-        ) ||
+        let normalizedSource = NormalizeContractTupleNames(source)
+        let normalizedTarget = NormalizeContractTupleNames(target)
+        if SymbolEqualityComparer.Default.Equals(normalizedSource, normalizedTarget) ||
             target.SpecialType == SpecialType.System_Object {
             return true
         }
-        if source is IArrayTypeSymbol sourceArray && target is IArrayTypeSymbol targetArray {
-            return sourceArray.Rank == targetArray.Rank &&
-                sourceArray.IsSZArray == targetArray.IsSZArray &&
-                IsReferenceAssignableContractType(sourceArray.ElementType, targetArray.ElementType)
-        }
-        if target is not INamedTypeSymbol targetNamed {
+        if inProgress.Any(
+            (pair(Source ITypeSymbol, Target ITypeSymbol)) -> SymbolEqualityComparer.Default.Equals(
+                pair.Source,
+                normalizedSource
+            ) &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(pair.Target, normalizedTarget)
+        ) {
             return false
         }
-        if source is INamedTypeSymbol sourceNamed && MatchesConstructedContractView(sourceNamed, targetNamed) {
-            return true
-        }
-        var current = source.BaseType
-        while current != nil {
-            if MatchesConstructedContractView(current, targetNamed) {
+        inProgress.Add((normalizedSource, normalizedTarget))
+        try {
+            if source is IArrayTypeSymbol sourceArray && target is IArrayTypeSymbol targetArray {
+                return sourceArray.Rank == targetArray.Rank &&
+                    sourceArray.IsSZArray == targetArray.IsSZArray &&
+                    IsReferenceAssignableContractType(sourceArray.ElementType, targetArray.ElementType, inProgress)
+            }
+            if target is not INamedTypeSymbol targetNamed {
+                return false
+            }
+            if source is INamedTypeSymbol sourceNamed &&
+                MatchesConstructedContractView(sourceNamed, targetNamed, exact: false, inProgress: inProgress) {
                 return true
             }
-            current = current.BaseType
+            var current = source.BaseType
+            while current != nil {
+                if MatchesConstructedContractView(current, targetNamed, exact: false, inProgress: inProgress) {
+                    return true
+                }
+                current = current.BaseType
+            }
+            return source.AllInterfaces.Any(
+                (iface INamedTypeSymbol) -> MatchesConstructedContractView(
+                    iface,
+                    targetNamed,
+                    exact: false,
+                    inProgress: inProgress
+                )
+            )
+        } finally {
+            inProgress.RemoveAt(inProgress.Count - 1)
         }
-        return source.AllInterfaces.Any((iface INamedTypeSymbol) -> MatchesConstructedContractView(iface, targetNamed))
     }
 
     // Issue #2504: a source named delegate's Invoke return is a declaration

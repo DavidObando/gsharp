@@ -263,21 +263,37 @@ public static class Consumer {
     @InlineData("intermediate")
     @InlineData("widened-interface")
     @InlineData("wrapped")
+    @InlineData("nested-reordered")
+    @InlineData("contravariant-self-first")
+    @InlineData("contravariant-exact-first")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
             case "widened-interface": "ICarrier<object, (string? Text, int Code)>"
             case "wrapped": "Carrier<((string? Text, int Code) Data, int Marker)>"
+            case "nested-reordered": "IOut<Carrier<(string? Text, int Code), (string Keep, int Code)>>"
+            case "contravariant-self-first",
+            "contravariant-exact-first": "ICarrier<IContra<Recursive>, (string? Text, int Code)>"
             default: "Carrier<(string? Text, int Code), (string Keep, int Code)>"
+        }
+        let recursiveInterfaces = if mode == "contravariant-exact-first" {
+            "IContra<Recursive>, IContra<IContra<Recursive>>"
+        } else {
+            "IContra<IContra<Recursive>>, IContra<Recursive>"
         }
         let library = CSharpProjectLoader.LoadInMemory([](string, string){("Library.cs", (`#nullable enable
 namespace Contract4718;
+public interface IOut<out T> { }
+public interface IContra<in T> { }
+public class Recursive : ` + "$recursiveInterfaces" + ` { }
 public interface ICarrier<out X, Y> { }
 public class Derived<T> : ICarrier<string, T> { }
+public class RecursiveDerived<T> : ICarrier<Recursive, T> { }
 public class Carrier<T> { }
 public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
 public class Reordered<X, Y> : Carrier<Y, X> { }
 public class Intermediate<X, Y> : Reordered<X, Y> { }
+public class WrappedOut<X, Y> : IOut<Reordered<X, Y>> { }
 public abstract class RowsBase {
     public abstract ` + "$baseReturn" + ` Rows();
 }`))}, assemblyName: "Contract4718")
@@ -285,14 +301,15 @@ public abstract class RowsBase {
         let emitted = library.Compilation.Emit(image)
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
         let bytes = image.ToArray()
-        let derived = if mode == "intermediate" {
-            "Intermediate"
-        } else {
-            "Reordered"
+        let derived = switch mode {
+            case "intermediate": "Intermediate"
+            case "nested-reordered": "WrappedOut"
+            default: "Reordered"
         }
         let returnType = switch mode {
             case "direct": "Carrier<(string Text, int Code), (string Keep, int Code)>"
             case "widened-interface": "Derived<(string Text, int Code)>"
+            case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
             case "wrapped": "Wrapped<(string Text, int Code)>"
             default: "$derived<(string Keep, int Code), (string Text, int Code)>"
         }
@@ -305,6 +322,7 @@ public sealed class Producer : RowsBase {
         let expected = switch mode {
             case "direct": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
             case "widened-interface": "Derived[(Text string?, Code int32)]"
+            case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
             case "wrapped": "Wrapped[(Text string?, Code int32)]"
             default: "$derived[(Keep string, Code int32), (Text string?, Code int32)]"
         }

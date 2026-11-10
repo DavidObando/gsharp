@@ -2398,56 +2398,71 @@ class Conversion {
                 typeParameters.Length != toArgs.Length {
                 return false
             }
-            for var i = 0; i < typeParameters.Length; i++ {
-                let fromArg = fromArgs[i]
-                let toArg = toArgs[i]
-                if fromArg == toArg {
-                    continue
-                }
-                switch typeParameters[i].Variance {
-                    case TypeParameterVariance.Out {
-                        // CLR generic-interface variance (ECMA-335 II.9.7) is
-                        // defined only for REFERENCE-typed type arguments; the
-                        // emitter (MethodBodyEmitter.IsReferenceCompatible, which
-                        // calls back into this same method) emits no cast/box for
-                        // a variance conversion, so a value-type argument (a
-                        // primitive, enum, or user struct) would produce
-                        // unverifiable/unsound IL even though it boxes implicitly
-                        // to `object` (ADR-0045). Reject before considering
-                        // `Classify` at all — a value-type argument on either
-                        // side means the two constructed interfaces are genuinely
-                        // different CLR types, not variance-compatible ones.
-                        // Covariant: the source argument must implicitly
-                        // convert to the target argument (string -> object).
-                        // #4420: an element conversion that needs ADR-0186 §4's
-                        // nil check (`string!` -> `object`) is not variance: a
-                        // variance conversion reads every element through the
-                        // target view with no per-element check point.
-                        if !IsVariantArgumentRelated(fromArg, toArg, nominalOnly, allowPlatformNilCheck: false) {
-                            return false
-                        }
-                    }
-                    case TypeParameterVariance.In {
-                        // Same reference-type-only restriction as the `Out` case
-                        // above, applied symmetrically to the contravariant slot.
-                        // Contravariant: the TARGET argument must implicitly
-                        // convert to the SOURCE argument (object -> string),
-                        // so the narrower interface accepts the wider one.
-                        // #4420: symmetric to the covariant arm. A view that
-                        // writes `string!` (possibly nil) into a sink declared
-                        // non-null `object` has no per-element check point.
-                        if !IsVariantArgumentRelated(toArg, fromArg, nominalOnly, allowPlatformNilCheck: false) {
-                            return false
-                        }
-                    }
-                    default {
-                        // Invariant: the arguments must be identical (already
-                        // ruled out above by the `fromArg == toArg` fast path).
-                        return false
-                    }
+            let active = activeConstructedReferenceConversions ?? {
+                let created = List[(From TypeSymbol, To TypeSymbol)]()
+                activeConstructedReferenceConversions = created
+                created
+            }
+            for pair in active {
+                if pair.From == from && pair.To == to {
+                    return false
                 }
             }
-            return true
+            active.Add((from, to))
+            try {
+                for var i = 0; i < typeParameters.Length; i++ {
+                    let fromArg = fromArgs[i]
+                    let toArg = toArgs[i]
+                    if fromArg == toArg {
+                        continue
+                    }
+                    switch typeParameters[i].Variance {
+                        case TypeParameterVariance.Out {
+                            // CLR generic-interface variance (ECMA-335 II.9.7) is
+                            // defined only for REFERENCE-typed type arguments; the
+                            // emitter (MethodBodyEmitter.IsReferenceCompatible, which
+                            // calls back into this same method) emits no cast/box for
+                            // a variance conversion, so a value-type argument (a
+                            // primitive, enum, or user struct) would produce
+                            // unverifiable/unsound IL even though it boxes implicitly
+                            // to `object` (ADR-0045). Reject before considering
+                            // `Classify` at all — a value-type argument on either
+                            // side means the two constructed interfaces are genuinely
+                            // different CLR types, not variance-compatible ones.
+                            // Covariant: the source argument must implicitly
+                            // convert to the target argument (string -> object).
+                            // #4420: an element conversion that needs ADR-0186 §4's
+                            // nil check (`string!` -> `object`) is not variance: a
+                            // variance conversion reads every element through the
+                            // target view with no per-element check point.
+                            if !IsVariantArgumentRelated(fromArg, toArg, nominalOnly, allowPlatformNilCheck: false) {
+                                return false
+                            }
+                        }
+                        case TypeParameterVariance.In {
+                            // Same reference-type-only restriction as the `Out` case
+                            // above, applied symmetrically to the contravariant slot.
+                            // Contravariant: the TARGET argument must implicitly
+                            // convert to the SOURCE argument (object -> string),
+                            // so the narrower interface accepts the wider one.
+                            // #4420: symmetric to the covariant arm. A view that
+                            // writes `string!` (possibly nil) into a sink declared
+                            // non-null `object` has no per-element check point.
+                            if !IsVariantArgumentRelated(toArg, fromArg, nominalOnly, allowPlatformNilCheck: false) {
+                                return false
+                            }
+                        }
+                        default {
+                            // Invariant: the arguments must be identical (already
+                            // ruled out above by the `fromArg == toArg` fast path).
+                            return false
+                        }
+                    }
+                }
+                return true
+            } finally {
+                active.RemoveAt(active.Count - 1)
+            }
         }
 
         /// Issue #1162/#2516: symbolic slice-to-interface conversion shared by
@@ -3984,6 +3999,9 @@ class Conversion {
         /// @param clrArgumentBoundary Whether CLR applicability already admitted reference annotations.
         /// @param nominalOnly Whether the caller already classified the pair, so variant arguments use only the nominal proof.
         /// @returns Whether the symbolic hierarchy and variance admit the relation.
+        @ThreadStatic
+        private var activeConstructedReferenceConversions List[(From TypeSymbol, To TypeSymbol)]?
+
         private func TryClassifyConstructedImportedReferenceConversion(
             from TypeSymbol?,
             to TypeSymbol?,
@@ -3997,46 +4015,61 @@ class Conversion {
                 targetOpen.IsValueType {
                 return false
             }
-            // Issue #3501 (Track A6 keystone): a VALUE-TYPE source converting to a
-            // variant INTERFACE target is C#'s boxing conversion composed with
-            // interface variance (`ImmutableArray[IMethodSymbol]` →
-            // `IEnumerable[ISymbol]`); the emitter's struct→interface arm already
-            // boxes, and the boxed reference is runtime-assignment-compatible with
-            // the variant interface, so only classification was missing. Non-
-            // interface targets keep the value-type exclusion.
-            // Closed CLR signatures have no symbolic owner vector to map.
-            // Project their real hierarchy; symbolic sources must
-            // keep the owner-aware path and never fall back to erased probes.
-            if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
-                (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
-                ClrTypeUtilities
-                .AreSame(sourceOpen, targetOpen) {
-                return AreConstructedReferenceArgumentsCompatible(
-                    sourceTypeArguments,
-                    targetArguments,
-                    targetOpen,
-                    clrArgumentBoundary,
-                    nominalOnly
-                )
+            let active = activeConstructedReferenceConversions ?? {
+                let created = List[(From TypeSymbol, To TypeSymbol)]()
+                activeConstructedReferenceConversions = created
+                created
             }
-            if from is not ImportedTypeSymbol importedSource {
-                return false
-            }
-            for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
-                importedSource,
-                targetOpen
-            ) {
-                if AreConstructedReferenceArgumentsCompatible(
-                    arguments,
-                    targetArguments,
-                    targetOpen,
-                    clrArgumentBoundary,
-                    nominalOnly
-                ) {
-                    return true
+            for pair in active {
+                if pair.From == from && pair.To == to {
+                    return false
                 }
             }
-            return false
+            active.Add((from, to))
+            try {
+                // Issue #3501 (Track A6 keystone): a VALUE-TYPE source converting to a
+                // variant INTERFACE target is C#'s boxing conversion composed with
+                // interface variance (`ImmutableArray[IMethodSymbol]` →
+                // `IEnumerable[ISymbol]`); the emitter's struct→interface arm already
+                // boxes, and the boxed reference is runtime-assignment-compatible with
+                // the variant interface, so only classification was missing. Non-
+                // interface targets keep the value-type exclusion.
+                // Closed CLR signatures have no symbolic owner vector to map.
+                // Project their real hierarchy; symbolic sources must
+                // keep the owner-aware path and never fall back to erased probes.
+                if TryGetConstructedGenericShape(from, out var sourceOpen, out var sourceTypeArguments) &&
+                    (!sourceOpen!!.IsValueType || targetOpen.IsInterface) &&
+                    ClrTypeUtilities
+                    .AreSame(sourceOpen, targetOpen) {
+                    return AreConstructedReferenceArgumentsCompatible(
+                        sourceTypeArguments,
+                        targetArguments,
+                        targetOpen,
+                        clrArgumentBoundary,
+                        nominalOnly
+                    )
+                }
+                if from is not ImportedTypeSymbol importedSource {
+                    return false
+                }
+                for arguments in MemberLookup.EnumerateConstructedTypeArgumentsThroughHierarchy(
+                    importedSource,
+                    targetOpen
+                ) {
+                    if AreConstructedReferenceArgumentsCompatible(
+                        arguments,
+                        targetArguments,
+                        targetOpen,
+                        clrArgumentBoundary,
+                        nominalOnly
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            } finally {
+                active.RemoveAt(active.Count - 1)
+            }
         }
 
         private func AreConstructedReferenceArgumentsCompatible(
