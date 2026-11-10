@@ -145,8 +145,8 @@ class Spawner : Base {
     func ReadPosSpanCreated() int32 -> posSpanCreated
     func Three(a int32, b int32, c int32) { Log.Add("positional " + a.ToString() + b.ToString() + c.ToString()) }
     func Pair(a int32, b int32) { Log.Add("named a=" + a.ToString() + " b=" + b.ToString()) }
-    func ConsumeSpan(value ReadOnlySpan[char], extra int32) { Log.Add("named-span len=" + value.Length.ToString() + " extra=" + extra.ToString()) }
-    func ConsumeSpan3(value ReadOnlySpan[char], extra int32, last int32) {
+    func ConsumeSpan(value string, extra int32) { Log.Add("named-span len=" + value.Length.ToString() + " extra=" + extra.ToString()) }
+    func ConsumeSpan3(value string, extra int32, last int32) {
         Log.Add("named-span3 len=" + value.Length.ToString() + " extra=" + extra.ToString() + " last=" + last.ToString())
     }
     func Show[T](tag string, value T) { Log.Add(tag + " " + value.ToString()) }
@@ -168,7 +168,7 @@ class Spawner : Base {
             go Three(Next("a"), Next("b"), Next("c"))
             go Pair(b: Next("d"), a: Next("e"))
             go Pair(b: Next("f"), a: Next("g"))
-            go ConsumeSpan(extra: Next("h"), value: label.AsSpan())
+            go ConsumeSpan(extra: Next("h"), value: label.AsSpan().ToString())
             go Show("span-block", {
                 let s = (order += "i").AsSpan()
                 let n = s.Length
@@ -182,17 +182,17 @@ class Spawner : Base {
                 Log.Add("box-in-block " + m.ToString())
                 let n = s.Length
                 let len = n
-                s.Slice(0, len)
+                s.Slice(0, len).ToString()
             }, 11)
             go ConsumeSpan({
                 let _ = Next("k")
                 var c = Counter{}
                 let s = "abc".AsSpan()
                 c.n = s.Length
-                s
+                s.ToString()
             }, 12)
-            go ConsumeSpan3(extra: Next("l"), value: MakeSpanString().AsSpan(), last: ReadSpanCreated())
-            go ConsumeSpan(MakePosSpanString().AsSpan(), ReadPosSpanCreated())
+            go ConsumeSpan3(extra: Next("l"), value: MakeSpanString().AsSpan().ToString(), last: ReadSpanCreated())
+            go ConsumeSpan(MakePosSpanString().AsSpan().ToString(), ReadPosSpanCreated())
             go Show("inferred", label)
             go Show[int32]("explicit", count)
             go Later(count)
@@ -200,6 +200,8 @@ class Spawner : Base {
             go Show("suspending", Fetch(ch))
             go Show("boxed local", local)
             order += "|"
+            spanCreated = 0
+            posSpanCreated = 0
             bump()
             count++
             target = Target("second")
@@ -267,7 +269,7 @@ class Target {
 var target Target = Target("first")
 func Print(n int32) { Log.Add("argument " + n.ToString()) }
 func Inc(ref n int32) { n++ }
-func PrintSpan(span ReadOnlySpan[char], n int32) {
+func PrintSpan(span string, n int32) {
     Log.Add("span " + span.Length.ToString() + " scalar " + n.ToString())
 }
 func Run(release ManualResetEventSlim) {
@@ -277,7 +279,7 @@ func Run(release ManualResetEventSlim) {
         go Holder.staticCounter.Bump()
         go Print(value.n)
         go target.Report()
-        go PrintSpan(text.AsSpan(), value.n)
+        go PrintSpan(text.AsSpan().ToString(), value.n)
         go {
             var local = 0
             Inc(&local)
@@ -341,29 +343,51 @@ scope {
 ` + Prelude + `
 struct Counter {
     var n int32
-    func Add(span ReadOnlySpan[char], value int32) { n += value }
+    func Add(label string, value int32) { n += label.Length + value - 3 }
 }
 var x int32 = 0
 var items []int32 = []int32{7}
 var counter Counter = Counter{n: 7}
 var second Counter = Counter{n: 7}
-func Consume(span ReadOnlySpan[char], value int32) { Log.Add("write " + value.ToString()) }
-func Run(release ManualResetEventSlim) {
+var order string = ""
+func MakeLabel() string {
+    order += "operand;"
+    return "abc".AsSpan().ToString()
+}
+func Consume(label string, value int32) { Log.Add("write " + label.Length.ToString() + "/" + value.ToString()) }
+func Identity(value int32) int32 -> value
+unsafe func ClearFirst(pointer *int32, value int32) {
+    *pointer = 0
+    Log.Add("pointer-write " + value.ToString())
+}
+unsafe func Run(release ManualResetEventSlim) {
     let original = items
     scope {
-        go Consume("abc".AsSpan(), {
+        go Consume(MakeLabel(), {
             let _ = 0
             x = 1
             x
         })
-        go items.AsSpan().Clear()
-        go counter.Add("abc".AsSpan(), counter.n)
-        go second.Add("abc".AsSpan(), second.n.ToString().Length)
+        go ClearFirst(&items[0], {
+            let _ = 0
+            x = x + 1
+            x
+        })
+        async let childWrite = Identity({
+            let _ = 0
+            x = x + 10
+            x
+        })
+        go counter.Add("abc", counter.n)
+        go second.Add("abc", second.n.ToString().AsSpan().Length)
+        order += "queued=" + x.ToString()
         items = []int32{99}
         counter.n = 99
         second.n = 99
         release.Set()
+        Log.Add("async-let " + (await childWrite).ToString())
     }
+    Log.Add("after x=" + x.ToString() + " " + order)
     Log.Add("arrays " + original[0].ToString() + "/" + items[0].ToString())
     Log.Add("counter " + counter.n.ToString())
     Log.Add("second " + second.n.ToString())
@@ -371,11 +395,59 @@ func Run(release ManualResetEventSlim) {
 RestrictPool()
 Blocked((release ManualResetEventSlim) -> Run(release))
 `
-        AssertRuns(source, "Issue5708RetainedGlobals", `arrays 0/99
+        let assemblyPath = Compile(source, "Issue5708RetainedGlobals")
+        let expected = `after x=12 operand;queued=2
+arrays 0/99
+async-let 12
 counter 106
+pointer-write 2
 second 100
-write 1
-`)
+write 3/1
+`.ReplaceLineEndings(Environment.NewLine)
+        for var i = 0; i < 3; i++ {
+            Assert.Equal(expected, RunBounded(assemblyPath, "Issue5708RetainedGlobals"))
+        }
+    }
+
+    @Theory
+    @InlineData("UseSpan(MakeSpan(), { let _ = 0 x = 1 x })")
+    @InlineData("UseSpan(extra: 1, value: text.AsSpan())")
+    @InlineData("UseSpan({ let s = text.AsSpan() s }, 1)")
+    @InlineData("items.AsSpan().Clear()")
+    @InlineData("MakeWindow().Run()")
+    @InlineData("MakeWindow().counter.Bump()")
+    func ByRefLikeGoOperands_AreRejectedByTheDriver(operand string) {
+        let source = `package Issue5836Driver
+import System
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+ref struct Window {
+    var counter Counter
+    func Run() {}
+}
+func MakeSpan() ReadOnlySpan[char] {
+    Console.WriteLine("operand")
+    return "abc".AsSpan()
+}
+func MakeWindow() Window -> Window{counter: Counter{}}
+func UseSpan(value ReadOnlySpan[char], extra int32) {}
+var x = 0
+let text = "abc"
+let items = []int32{1}
+scope {
+    go ` + operand + `
+}
+`
+        let (exitCode, output) = TryCompile(source, "Issue5836ByRefLike")
+        Assert.NotEqual(0, exitCode)
+        Assert.Contains(
+            "(21,8,21," + (8 + operand.Length).ToString() + "): error GS0219",
+            output,
+            StringComparison.Ordinal
+        )
+        Assert.DoesNotContain("GS9998", output, StringComparison.Ordinal)
     }
 
     @Fact
@@ -397,17 +469,115 @@ scope {
     @Fact
     func UnmanagedPointerArgument_CompilesAndMutatesTheArray() {
         let source = `package Issue5708PointerDriver
-import System
-var items []int32 = []int32{0}
-unsafe func Write(pointer *int32) { *pointer = 42 }
-unsafe func Run() {
-    scope { go Write(&items[0]) }
-    Console.WriteLine(items[0])
+` + Prelude + `
+struct Pair {
+    var first int32
+    var second int32
 }
-Run()
+struct Counter {
+    var n int32
+    var pair Pair
+    func Bump() { n++ }
+}
+struct Outer {
+    var inner Counter
+}
+unsafe struct SlotHolder {
+    var slot *int32
+}
+var items []int32 = []int32{0, 0, 0, 0, 0, 0}
+var counters []Counter = []Counter{Counter{}, Counter{}, Counter{}}
+var outers []Outer = []Outer{Outer{}}
+var slotHolders []SlotHolder = []SlotHolder{SlotHolder{}}
+var order string = ""
+func Next(tag string, value int32) int32 {
+    order += tag
+    return value
+}
+unsafe func GetPointer(tag string, index int32) *int32 {
+    order += tag
+    return &items[index]
+}
+unsafe func GetSlot(tag string, slots []*int32, index int32) **int32 {
+    order += tag
+    return &slots[index]
+}
+unsafe func GetCounterPointer(tag string, index int32) *Counter {
+    order += tag
+    return &counters[index]
+}
+unsafe func GetOuterPointer(tag string) *Outer {
+    order += tag
+    return &outers[0]
+}
+unsafe func Write(pointer *int32, value int32) { *pointer = value }
+unsafe func ClearSlot(slot **int32) { *slot = nil }
+unsafe func Run(release ManualResetEventSlim) {
+    var slots = []*int32{&items[0], &items[1], &items[2], &items[4]}
+    slotHolders[0] = SlotHolder{slot: &items[3]}
+    let originalItems = items
+    let originalCounters = counters
+    let originalOuters = outers
+    let originalSlots = slots
+    let originalSlotHolders = slotHolders
+    scope {
+        go Write(&items[0], 42)
+        go Write(&*GetPointer("a;", 1), 43)
+        go Write(&GetPointer("b;", 0)[2], 44)
+        go Write(&(*GetCounterPointer("c;", 0)).n, 10)
+        go Write(&(*GetCounterPointer("d;", 0)).pair.first, 20)
+        go Write(GetPointer("e;", 3), 45)
+        go Write({
+            var hidden = 4
+            order += "block;"
+            (&items[hidden])
+        }, 46)
+        go Write(&*{
+            let _ = 0
+            order += "deref-block;"
+            GetPointer("k;", 5)
+        }, Next("next;", 47))
+        go (*GetCounterPointer("f;", 1)).Bump()
+        go GetCounterPointer("g;", 0)[2].Bump()
+        go (*GetOuterPointer("h;")).inner.Bump()
+        go ClearSlot(&slots[0])
+        go ClearSlot(&*GetSlot("i;", slots, 1))
+        go ClearSlot(&GetSlot("j;", slots, 0)[2])
+        go ClearSlot(&*{
+            let _ = 0
+            GetSlot("l;", slots, 3)
+        })
+        go ClearSlot(&slotHolders[0].slot)
+        var hidden = 7
+        Log.Add("hidden " + hidden.ToString())
+        order += "queued"
+        items = []int32{99, 99, 99, 99, 99, 99}
+        counters = []Counter{Counter{n: 99}, Counter{n: 99}, Counter{n: 99}}
+        outers = []Outer{Outer{inner: Counter{n: 99}}}
+        slots = []*int32{&items[0], &items[1], &items[2], &items[4]}
+        slotHolders = []SlotHolder{SlotHolder{slot: &items[3]}}
+        release.Set()
+    }
+    Log.Add("order " + order)
+    Log.Add("items " + originalItems[0].ToString() + "/" + originalItems[1].ToString() + "/" + originalItems[2].ToString() + "/" + originalItems[3].ToString() + "/" + originalItems[4].ToString() + "/" + originalItems[5].ToString() + " replacement=" + items[0].ToString() + "/" + items[5].ToString())
+    Log.Add("counters " + originalCounters[0].n.ToString() + "/" + originalCounters[0].pair.first.ToString() + "/" + originalCounters[1].n.ToString() + "/" + originalCounters[2].n.ToString() + " replacement=" + counters[0].n.ToString())
+    Log.Add("outers " + originalOuters[0].inner.n.ToString() + " replacement=" + outers[0].inner.n.ToString())
+    Log.Add("slots " + (originalSlots[0] == nil).ToString() + "/" + (originalSlots[1] == nil).ToString() + "/" + (originalSlots[2] == nil).ToString() + "/" + (originalSlots[3] == nil).ToString() + "/" + (originalSlotHolders[0].slot == nil).ToString() + " replacement=" + (slots[0] == nil).ToString() + "/" + (slots[3] == nil).ToString() + "/" + (slotHolders[0].slot == nil).ToString())
+}
+RestrictPool()
+Blocked((release ManualResetEventSlim) -> Run(release))
 `
         let assemblyPath = Compile(source, "Issue5708PointerValue")
-        Assert.Equal("42\n".ReplaceLineEndings(Environment.NewLine), RunBounded(assemblyPath, "PointerValue"))
+        let expected = `counters 10/20/1/1 replacement=99
+hidden 7
+items 42/43/44/45/46/47 replacement=99/99
+order a;b;c;d;e;block;deref-block;k;next;f;g;h;i;j;l;queued
+outers 1 replacement=99
+slots True/True/True/True/True replacement=False/False/False
+`.ReplaceLineEndings(Environment.NewLine)
+        for var i = 0; i < 3; i++ {
+            Assert.Equal(expected, RunBounded(assemblyPath, "PointerValue"))
+        }
     }
 
     @Theory
