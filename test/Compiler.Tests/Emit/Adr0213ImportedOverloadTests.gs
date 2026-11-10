@@ -169,13 +169,22 @@ public struct Payload {
     public int Raw;
     public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
 }
+public class R { public void Run() { } }
+public class Q { public System.Action Run = () => { }; }
 public class S {
     public void Use(object o, int extra = 0) { }
     internal void Use(Payload p) { }
+    public R Create(object x) => new R();
+    internal Q Create(string x) => new Q();
+}
+public static class Ext {
+    public static Q Create(this S s) => new Q();
 }`
 
-    @Fact
-    func FriendAssemblyInternalOverloadWithAConversion_RemovesAByReferenceFact() {
+    @Theory
+    @InlineData("s.Use(tok)")
+    @InlineData(`s.Create("ab").Run()`)
+    func FriendAssemblyInternalOverloadWithAConversion_RemovesAByReferenceFact(call string) {
         let source = `package T
 import System
 import FriendLib
@@ -184,7 +193,7 @@ func Run(ref text string?, s S, tok Token) int32 {
     var n = 0
     while text.Length > 0 && n < 3 {
         n++
-        s.Use(tok)
+        ` + call + `
     }
     return n
 }
@@ -252,6 +261,12 @@ public class S {
     public void UseEnum(object o, Payload p) { }
     public void UseFmt(System.FormattableString f, System.DateTimeOffset d) { }
     public void UseFmt(object a, object b) { }
+    public static void UseStaticFmt(System.FormattableString f, System.DateTimeOffset d) { }
+    public static void UseStaticFmt(object a, object b) { }
+    public string Describe(System.FormattableString f) => "fmt:" + f.Format + ":" + f.ArgumentCount;
+    public string Describe(object o) => "obj:" + o;
+    public static string DescribeStatic(System.FormattableString f) => "sfmt:" + f.Format + ":" + f.ArgumentCount;
+    public static string DescribeStatic(object o) => "sobj:" + o;
     public void UseList(System.Collections.Generic.List<object> xs, Token t) { }
     public void UseList(object o, Payload p) { }
 }`
@@ -259,6 +274,7 @@ public class S {
     @Theory
     @InlineData("s.UseEnum(kind, tok)", "GS0158@10:16")
     @InlineData(`s.UseFmt("n=${n}", dt)`, "GS0158@10:16")
+    @InlineData(`S.UseStaticFmt(("n=${n}"), dt)`, "GS0158@10:16")
     @InlineData("s.UseList(xs, tok)", "GS0158@10:16")
     func ImportedErasureAndInterpolationOverloadsWithAConversion_RemoveAByReferenceFact(call string, expected string) {
         let source = `package T
@@ -286,5 +302,29 @@ func Main() { }`
             .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
             .ToArray()
         Assert.Equal(expected, string.Join(" ", errors))
+    }
+
+    @Fact
+    func ParenthesizedFormattableStringArgument_EmitsAndRuns() {
+        let source = `package T
+import System
+import ErasureLib
+func Main() {
+    var n = 7
+    let s = S()
+    Console.WriteLine(s.Describe(("n=${n}")) + "|" + S.DescribeStatic(("n=${n}")))
+}`
+        using let lib = CSharpFixture(ErasureAndInterpolationLibrarySource, assemblyName: "ErasureLib")
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        System
+            .IO
+            .File
+            .Copy(
+            lib.AssemblyPath,
+            System.IO.Path.Combine(fixture.Directory, System.IO.Path.GetFileName(lib.AssemblyPath))
+        )
+        let exe = fixture.Compile(source, "ParenthesizedFmt", executable: true, "/reference:" + lib.AssemblyPath)
+        IlVerifier.Verify(exe, []string{lib.AssemblyPath})
+        Assert.Equal("fmt:n={0}:1|sfmt:n={0}:1", fixture.Run(exe).Trim())
     }
 }

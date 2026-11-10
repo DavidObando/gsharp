@@ -1561,7 +1561,10 @@ internal partial class ExpressionBinder {
             if paramIndex >= parameters.Length {
                 continue
             }
-            let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount])
+            var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount])
+            while argSyntax is ParenthesizedExpressionSyntax parenthesized {
+                argSyntax = parenthesized.Expression
+            }
             var targetType = parameters[paramIndex].ParameterType
             if isExpanded && paramIndex == paramsIndex && ClrOverloadResolution.IsParamsArrayParameter(
                 parameters[paramIndex]

@@ -4123,6 +4123,36 @@ func Run(ref text string?, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@9:16")
+            Add("narrowed-nullable-reference-in-argument-uses-effective-nullability (A3, #5662)", `package T
+import System
+func Use(in s string, d DateTimeOffset) { }
+func Use(in s string?, d DateTime, pad int32 = 0) { }
+func Run(ref text string?, in x string?, dt DateTime) int32 {
+    if text == nil || x == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("async-call-argument-uses-observable-task-result (A3, #5662)", `package T
+import System
+import System.Threading.Tasks
+async func Make() int32 { return 1 }
+func Use(v int32, o object) { }
+func Use(t Task[int32], d DateTimeOffset) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(Make(), dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
             return rows
         }
     }

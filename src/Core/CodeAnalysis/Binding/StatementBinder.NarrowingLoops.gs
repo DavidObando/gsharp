@@ -776,20 +776,24 @@ internal partial class StatementBinder {
         effects RegionEffects,
         keepNullableValueAtEnd bool = false,
         keepReferenceNullabilityAtEnd bool = false,
-        forStorageAtEnd bool = false
+        forStorageAtEnd bool = false,
+        forOutStorageAtEnd bool = false
     ) List[ReceiverType]? {
         let savedValue = keepNullableValueTypes
         let savedReference = keepReferenceNullability
         let savedStorage = forStorageRoot
+        let savedOutStorage = forOutStorageRoot
         try {
             keepNullableValueTypes = keepNullableValueAtEnd || path.Steps.Length > 0
             keepReferenceNullability = keepReferenceNullabilityAtEnd && path.Steps.Length == 0
             forStorageRoot = forStorageAtEnd && path.Steps.Length == 0
+            forOutStorageRoot = forOutStorageAtEnd && path.Steps.Length == 0
             return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd, keepReferenceNullabilityAtEnd)
         } finally {
             keepNullableValueTypes = savedValue
             keepReferenceNullability = savedReference
             forStorageRoot = savedStorage
+            forOutStorageRoot = savedOutStorage
         }
     }
 
@@ -800,8 +804,11 @@ internal partial class StatementBinder {
     // Whether (cref:AddSymbolType) keeps reference nullability at the end of an overload-resolution argument path.
     private var keepReferenceNullability bool = false
 
-    // Whether (cref:AddRootTypes) resolves a root variable's declared storage type without read narrowings.
+    // Whether (cref:AddRootTypes) resolves a root variable's storage type for a by-reference argument.
     private var forStorageRoot bool = false
+
+    // Whether (cref:AddRootTypes) resolves a root variable's declared storage type for an `out` argument.
+    private var forOutStorageRoot bool = false
 
     private func ResolveReceiverPathCore(
         path RegionReceiverPath,
@@ -849,6 +856,7 @@ internal partial class StatementBinder {
             keepNullableValueTypes = keepNullableValueAtEnd || !isLastStep
             keepReferenceNullability = keepReferenceNullabilityAtEnd && isLastStep
             forStorageRoot = false
+            forOutStorageRoot = false
             let next = List[ReceiverType]()
             for type in types {
                 let outcome = AddStepTypes(type, step, next)
@@ -890,7 +898,7 @@ internal partial class StatementBinder {
             let functions = $scope.TryLookupExtensionFunctions(symbol, method)
             if !functions.IsDefaultOrEmpty {
                 for function in functions {
-                    if !AddSymbolType(function.Type, next) {
+                    if !AddSymbolType(ObservableCallResultType(function), next) {
                         return false
                     }
                 }
@@ -946,7 +954,7 @@ internal partial class StatementBinder {
                 return false
             }
             for function in functions {
-                if !AddSymbolType(function.Type, types) {
+                if !AddSymbolType(ObservableCallResultType(function), types) {
                     return false
                 }
             }
@@ -955,7 +963,54 @@ internal partial class StatementBinder {
         let symbol = $scope.TryLookupSymbol(root)
         if symbol is VariableSymbol variable {
             if forStorageRoot {
-                return AddSymbolType(variable.Type, types)
+                if forOutStorageRoot {
+                    return AddSymbolType(variable.Type, types)
+                }
+                let declaredStorage = if variable.Type is ByRefTypeSymbol byRef {
+                    byRef.PointeeType
+                } else {
+                    variable.Type
+                }
+                let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
+                let survives = narrowed != nil && NarrowingSurvivesRegion(variable, effects)
+                if !survives {
+                    if !AddSymbolType(declaredStorage, types) {
+                        return false
+                    }
+                    if binderCtx.NonNullByRefVariables.Contains(variable) &&
+                        !AddSymbolType(
+                        ExpressionBinder.ApplyEffectiveReferenceNullability(
+                            declaredStorage,
+                            StripReferenceNullability(declaredStorage)
+                        ),
+                        types
+                    ) {
+                        return false
+                    }
+                }
+                if narrowed != nil &&
+                    !AddSymbolType(
+                    ExpressionBinder.ApplyEffectiveReferenceNullability(declaredStorage, narrowed),
+                    types
+                ) {
+                    return false
+                }
+                for test in effects.TypeTests {
+                    if test.Name == root {
+                        let tested = TestedType(test, out var testsConstant)
+                        if tested != nil {
+                            if !AddSymbolType(
+                                ExpressionBinder.ApplyEffectiveReferenceNullability(declaredStorage, tested),
+                                types
+                            ) {
+                                return false
+                            }
+                        } else if !testsConstant {
+                            return false
+                        }
+                    }
+                }
+                return types.Count > 0
             }
             let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
             // A narrowing that survives the region stands for the value, and the declared type loses its `?`. One that
@@ -1030,7 +1085,7 @@ internal partial class StatementBinder {
         } else {
             StripAllNullability(type)
         }
-        if stripped == nil || stripped is TypeParameterSymbol {
+        if stripped == nil || TypeSymbol.ContainsTypeParameter(stripped) {
             return false
         }
         types.Add(ReceiverType(stripped, nil))
@@ -1314,6 +1369,47 @@ internal partial class StatementBinder {
         }
     }
 
+    private func ObservableCallResultType(function FunctionSymbol) TypeSymbol? {
+        if function.IsReturnTypeInferred || function.Type == TypeSymbol.Error {
+            return nil
+        }
+        if !function.IsAsync || function.IsAsyncVoid || AsyncIteratorDetection.IsAsyncIteratorReturnType(
+            function.Type
+        ) {
+            return function.Type
+        }
+        if TypeSymbol.ContainsTypeParameter(function.Type) {
+            return nil
+        }
+        let wrapperName = if function.AsyncReturnsValueTask {
+            "System.Threading.Tasks.ValueTask"
+        } else {
+            "System.Threading.Tasks.Task"
+        }
+        if function.Type == TypeSymbol.Void {
+            return if binderCtx.References.TryResolveType(wrapperName, out var taskType) && taskType != nil {
+                ImportedTypeSymbol.GetWithoutNullability(taskType, NullabilityFreeReason.TypeLiteral)
+            } else {
+                default(TypeSymbol?)
+            }
+        }
+        if !binderCtx.References.TryResolveType(wrapperName + "`1", out var openTask) || openTask == nil {
+            return nil
+        }
+        if TypeSymbol.RequiresSymbolicProjection(function.Type) {
+            if binderCtx.References.MapClrTypeToReferences(typeof(object)) is not{} objectClr {
+                return nil
+            }
+            let erasedTask = openTask.MakeGenericType(objectClr)
+            return ImportedTypeSymbol.GetConstructed(erasedTask, openTask, ImmutableArray.Create(function.Type))
+        }
+        if Expressions?.GetEffectiveArgumentClrTypeForOverloadResolution(function.Type) is not{} elementClr {
+            return nil
+        }
+        let closedTask = openTask.MakeGenericType(elementClr)
+        return ImportedTypeSymbol.GetConstructed(closedTask, openTask, ImmutableArray.Create(function.Type))
+    }
+
     private func MemberType(candidate Symbol) TypeSymbol? {
         switch candidate {
             case field is FieldSymbol {
@@ -1323,13 +1419,40 @@ internal partial class StatementBinder {
                 return property.Type
             }
             case function is FunctionSymbol {
-                return function.Type
+                return ObservableCallResultType(function)
             }
             case declaredEvent is EventSymbol {
                 return declaredEvent.Type
             }
             default {
                 return nil
+            }
+        }
+    }
+
+    private func IsVisibleClrStepMember(member MemberInfo) bool {
+        let includeInternal = binderCtx.References.CanAccessInternalMembers(member.DeclaringType?.Assembly)
+        switch member {
+            case field is FieldInfo {
+                return ClrMemberVisibility.IsVisible(field, includeInternal)
+            }
+            case property is PropertyInfo {
+                return ClrMemberVisibility.GetVisibleGetter(property, includeInternal) != nil
+            }
+            case method is MethodInfo {
+                return !method.IsPrivate &&
+                    (
+                    ClrMemberVisibility.IsVisible(method, includeInternal) ||
+                        (
+                        Expressions?.GetFamilyAccessBase() != nil && ClrMemberVisibility.IsVisibleFromDerived(
+                            method,
+                            includeInternal
+                        )
+                    )
+                )
+            }
+            default {
+                return false
             }
         }
     }
@@ -1365,8 +1488,9 @@ internal partial class StatementBinder {
         definition Type?,
         next List[ReceiverType]
     ) int32 {
-        // Only a public member can be named after a dot or indexed; an explicit interface implementation cannot.
-        let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+        // Accessible public and friend-internal members can be named after a dot or indexed; an explicit interface
+        // implementation cannot.
+        let flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
         let searched = List[Type]()
         searched.Add(type)
         if type.IsInterface {
@@ -1399,7 +1523,7 @@ internal partial class StatementBinder {
                 var found = false
                 for searchedType in searched {
                     for property in searchedType.GetProperties(flags) {
-                        if property.GetIndexParameters().Length > 0 {
+                        if property.GetIndexParameters().Length > 0 && IsVisibleClrStepMember(property) {
                             found = true
                             if !AddClrType(property.PropertyType, arguments, definition, next) {
                                 return StepUnresolved
@@ -1417,6 +1541,9 @@ internal partial class StatementBinder {
                 var found = false
                 for searchedType in searched {
                     for clrMember in searchedType.GetMember(step.Name ?? "", flags) {
+                        if !IsVisibleClrStepMember(clrMember) {
+                            continue
+                        }
                         var memberType Type? = nil
                         if step.Kind == RegionReceiverStepKind.Member {
                             if clrMember is FieldInfo field {
@@ -1432,6 +1559,19 @@ internal partial class StatementBinder {
                             if !AddClrType(memberType, arguments, definition, next) {
                                 return StepUnresolved
                             }
+                        }
+                    }
+                }
+                if step.Kind == RegionReceiverStepKind.Call {
+                    for method in CollectClrCandidateMethods(
+                        type,
+                        step.Name ?? "",
+                        staticAccess: false,
+                        allowProtectedInherited: Expressions?.GetFamilyAccessBase() != nil
+                    ) {
+                        found = true
+                        if !AddClrType(method.ReturnType, arguments, definition, next) {
+                            return StepUnresolved
                         }
                     }
                 }
@@ -2064,8 +2204,6 @@ internal partial class StatementBinder {
                         return false
                     }
                     builder.Add(intArg!!)
-                } else if unwrapped is InterpolatedStringExpressionSyntax {
-                    builder.Add(BoundDefaultExpression(unwrapped, argType))
                 } else {
                     builder.Add(BoundDefaultExpression(argSyntax, argType))
                 }
@@ -2087,6 +2225,9 @@ internal partial class StatementBinder {
                         return true
                     }
                 }
+            }
+            if RegionEffectKindTable.Classify(current.Kind) == RegionEffectClass.Loop {
+                break
             }
         }
         return false
@@ -3685,18 +3826,28 @@ internal partial class StatementBinder {
         return operand is NameExpressionSyntax name && name.IdentifierToken.ValueText == root
     }
 
+    private func IsOutStorageArgument(argSyntax ExpressionSyntax?) bool {
+        var current = argSyntax
+        while current is ParenthesizedExpressionSyntax parenthesized {
+            current = parenthesized.Expression
+        }
+        return current is RefArgumentExpressionSyntax refArg &&
+            (refArg.IsInlineDeclaration || refArg.RefKindModifier.Text == "out")
+    }
+
     private func StorageTypes(path RegionReceiverPath?, argSyntax ExpressionSyntax?, effects RegionEffects) List[
         TypeSymbol
     ]? {
-        if path is not{} origin || origin.RootType?.HasTypeArguments == true && origin.Steps.Length == 0 {
+        if path is not{} origin || origin.Steps.Length > 0 || origin.RootType?.HasTypeArguments == true {
             return nil
         }
-        if origin
-            .Steps
-            .Length == 0 &&
-            !origin.RootIsCall &&
+        if !origin.RootIsCall &&
             origin.RootName is {} root &&
-            (HasEnclosingDeclaration(argSyntax, root, constOnly: false) || !StorageOperandNamesRoot(argSyntax, root)) {
+            (
+            HasEnclosingDeclaration(argSyntax, root, constOnly: false) ||
+                !StorageOperandNamesRoot(argSyntax, root) ||
+                $scope.TryLookupSymbol(root) is not LocalVariableSymbol and not GlobalVariableSymbol
+        ) {
             return nil
         }
         if ResolveReceiverPath(
@@ -3704,7 +3855,8 @@ internal partial class StatementBinder {
             effects,
             keepNullableValueAtEnd: true,
             keepReferenceNullabilityAtEnd: true,
-            forStorageAtEnd: true
+            forStorageAtEnd: true,
+            forOutStorageAtEnd: IsOutStorageArgument(argSyntax)
         ) is not{} types {
             return nil
         }

@@ -926,25 +926,10 @@ class ImportedClassSymbol : Symbol {
         /// `null` when no argument qualifies (the common path).
         private func ComputeInterpolatedStringArgFlags(callExpression CallExpressionSyntax?, count int32) IReadOnlyList[
             bool
-        ]? {
-            if callExpression == nil {
-                return nil
-            }
-            var flags[]?bool = nil
-            let argumentSyntax = callExpression.Arguments
-            let limit = Math.Min(count, argumentSyntax.Count)
-            for var i = 0; i < limit; i++ {
-                // Issue #377 sub-item 5: an interpolated string passed as a named
-                // argument (`M(arg: $"…")`) is wrapped by NamedArgumentExpressionSyntax.
-                // Unwrap before classifying so Tier-4 target typing flows through
-                // named arguments as well as positional ones.
-                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i])
-                if argSyntax is InterpolatedStringExpressionSyntax {
-                    flags ??= [count]bool
-                    flags!![i] = true
-                }
-            }
-            return flags
+        ]? -> if callExpression == nil {
+            default(IReadOnlyList[bool]?)
+        } else {
+            ExpressionBinder.ComputeInterpolatedStringArgFlags(callExpression.Arguments, count)
         }
 
         private func GetBaseTypeSafe(type Type) Type? {
