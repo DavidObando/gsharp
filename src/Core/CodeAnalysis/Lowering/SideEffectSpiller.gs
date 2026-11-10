@@ -663,7 +663,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             }
             case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
                 dereference.Operand.Type
-            ) {
+            ) ||
+                dereference
+                .Operand
+                .Type is ByRefTypeSymbol {
                 let operand = this.MaybeSpill(
                     dereference.Operand,
                     !IsStableLocalRead(dereference.Operand) &&
@@ -1139,7 +1142,10 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(
                         dereference.Operand
                     ) ||
-                        TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type) {
+                        TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type) ||
+                        dereference
+                        .Operand
+                        .Type is ByRefTypeSymbol {
                         return true
                     }
                     case block is BoundBlockExpression {

@@ -807,7 +807,29 @@ func Main() {
         derefBlockSteps++
         &right
     })).Code += 4
-    Console.WriteLine("${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}:${pickCalls}:${derefBlockSteps}")
+    var p = &left
+    var q = &right
+    var ptrPickCalls = 0
+    let pickPtr = () -> {
+        ptrPickCalls++
+        return ptrPickCalls == 1
+    }
+    (*(pickPtr() ? p : q)).Code += 2
+    var ptrBlockCalls = 0
+    (*({
+        ptrBlockCalls++
+        q
+    })).Code += 6
+    var ifConditionSteps = 0
+    ({
+        if true {
+            ifConditionSteps++
+        }
+        true
+    } ? left : right).Code += 5
+    Console.WriteLine(
+        "${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}:${pickCalls}:${derefBlockSteps}:${ptrPickCalls}:${ptrBlockCalls}:${ifConditionSteps}"
+    )
 
     var ref whole = row
     whole.Text = "via-ref"
@@ -823,7 +845,7 @@ func Main() {
         IlVerifier.Verify(dll)
         Assert.Equal(
             Encoding.UTF8.GetBytes(
-                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n18:31:1:1:1:1\nclosed:33\nasync-fallback:5\n"
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:10:True\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:5\n"
             ),
             fixture.RunBytes(dll)
         )

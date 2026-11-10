@@ -598,6 +598,37 @@ class Lowerer : BoundTreeRewriter {
         return base.RewritePropertyAssignmentExpression(node)
     }
 
+    protected override func RewriteIndirectAssignmentExpression(
+        node BoundIndirectAssignmentExpression
+    ) BoundExpression {
+        if node.Pointer is BoundAddressOfExpression{
+            Operand: BoundTupleElementAccessExpression tuple,
+            IsUnmanaged: false
+        } address {
+            let originalReceiver = tuple.Receiver
+            let rewrittenReceiver = RewriteExpression(originalReceiver)
+            let placeholder = BoundDefaultExpression(nil, originalReceiver.Type)
+            let valueWithPlaceholder = SideEffectSpiller.SubstituteReceiver(node.Value, originalReceiver, placeholder)
+            let rewrittenValue = RewriteExpression(valueWithPlaceholder)
+            let value = if object.ReferenceEquals(valueWithPlaceholder, node.Value) {
+                rewrittenValue
+            } else {
+                SideEffectSpiller.SubstituteReceiver(rewrittenValue, placeholder, rewrittenReceiver)
+            }
+            let updatedTuple = if object.ReferenceEquals(rewrittenReceiver, originalReceiver) {
+                tuple
+            } else {
+                BoundTupleElementAccessExpression(tuple.Syntax, rewrittenReceiver, tuple.TupleType, tuple.Index)
+            }
+            return if object.ReferenceEquals(updatedTuple, tuple) && object.ReferenceEquals(value, node.Value) {
+                node
+            } else {
+                BoundIndirectAssignmentExpression(node.Syntax, address.Update(updatedTuple), value)
+            }
+        }
+        return base.RewriteIndirectAssignmentExpression(node)
+    }
+
     /// Determines whether an access to [`prop`](paramref) lowers to the
     /// synthesized backing field instead of an accessor call. The read lowering and the write lowering both use this decision.
     /// @remarks The backing field is private. Only the type that directly declares
