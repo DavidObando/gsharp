@@ -619,6 +619,11 @@ partial class CSharpToGSharpTranslator {
                     node = conditional
                     continue
                 }
+                if node!!.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                    (coalesce.Left == node || coalesce.Right == node) {
+                    node = coalesce
+                    continue
+                }
                 if node!!.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node {
                     node = arm.Parent
                     continue
@@ -1221,6 +1226,11 @@ partial class CSharpToGSharpTranslator {
                 if node.Parent is ConditionalExpressionSyntax conditional &&
                     (conditional.WhenTrue == node || conditional.WhenFalse == node) {
                     node = conditional
+                    continue
+                }
+                if node.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                    (coalesce.Left == node || coalesce.Right == node) {
+                    node = coalesce
                     continue
                 }
                 if node.Parent is SwitchExpressionArmSyntax arm &&

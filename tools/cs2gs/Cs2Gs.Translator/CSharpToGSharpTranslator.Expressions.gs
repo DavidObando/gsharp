@@ -6262,6 +6262,7 @@ partial class CSharpToGSharpTranslator {
             }
             let sourceMayBeNil = this.SourceTupleElementIsAnnotatedNullable(value, path) ||
                 this.TupleElementYieldsNilableBeyondItsCSharpType(value, path)
+            let targetPath = this.GetTargetTupleElementPath(targetSymbol, value, path)
             let targetRequiresNonNull = elementType.IsReferenceType &&
                 elementType.NullableAnnotation != Microsoft
                 .CodeAnalysis
@@ -6270,12 +6271,73 @@ partial class CSharpToGSharpTranslator {
                 !ContainsTypeParameter(elementType) &&
                 this.SlotTypeIsDeclared(targetSymbol, value, path) &&
                 !ObliviousNullabilityAnalyzer
-                .IsTupleElementTainted(this.context.Compilation, targetSymbol, path, this.context.SiblingCompilations)
+                .IsTupleElementTainted(
+                this.context.Compilation,
+                targetSymbol,
+                targetPath,
+                this.context.SiblingCompilations
+            )
             let conversionOperator = this.TryGetTupleElementConversionOperator(value, path, elementType)
             if conversionOperator != nil {
                 return true
             }
             return targetRequiresNonNull && sourceMayBeNil
+        }
+
+        private func GetTargetTupleElementPath(
+            targetSymbol ISymbol?,
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            path List[int32]
+        ) List[int32] {
+            var current ITypeSymbol? = ObliviousNullabilityAnalyzer.SymbolValueType(targetSymbol)
+            let targetPath = List[int32]()
+            let outermost = OutermostTransparentNode(value)
+            if outermost is Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .AssignmentExpressionSyntax assignment &&
+                assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SimpleAssignmentExpression) &&
+                ObliviousNullabilityAnalyzer
+                .TryResolveTupleContainerSource(
+                assignment.Left,
+                this.context.SemanticModel,
+                out _,
+                out var containerType,
+                out var containerPrefix,
+                unwrapSuppressions: true
+            ) &&
+                containerPrefix.Length > 0 {
+                current = containerType
+                for component in containerPrefix.Split('.') {
+                    if int32.TryParse(component, out var prefixIndex) {
+                        targetPath.Add(prefixIndex)
+                    }
+                }
+            }
+            for index in path {
+                while current is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    targetPath.Add(0)
+                    current = nullableNamed.TypeArguments[0]
+                }
+                targetPath.Add(index)
+                current = if current is INamedTypeSymbol{IsTupleType: true} tuple &&
+                    index >= 0 &&
+                    index < tuple
+                    .TupleElements
+                    .Length {
+                    tuple.TupleElements[index].Type
+                } else {
+                    default(ITypeSymbol?)
+                }
+            }
+            return targetPath
         }
 
         private func BuildBridgedTupleLeaf(
@@ -6313,6 +6375,7 @@ partial class CSharpToGSharpTranslator {
                         projection: projection
                     )!!
                 }
+                let targetPath = this.GetTargetTupleElementPath(targetSymbol, value, path)
                 let targetRequiresNonNull = elementType.IsReferenceType &&
                     elementType.NullableAnnotation != Microsoft
                     .CodeAnalysis
@@ -6324,7 +6387,7 @@ partial class CSharpToGSharpTranslator {
                     .IsTupleElementTainted(
                     this.context.Compilation,
                     targetSymbol,
-                    path,
+                    targetPath,
                     this.context.SiblingCompilations
                 )
                 let operatorReturnsNullable = conversionOperator

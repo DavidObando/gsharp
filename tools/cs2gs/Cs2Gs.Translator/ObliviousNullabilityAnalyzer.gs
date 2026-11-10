@@ -5719,7 +5719,17 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if targetType is INamedTypeSymbol tuple && tuple.IsTupleType {
-            CollectTupleValueFlow(target, tuple, value, model, prefix, tupleTainted, tupleEdges, tupleScalarEdges)
+            CollectTupleValueFlow(
+                target,
+                tuple,
+                value,
+                model,
+                prefix,
+                tupleTainted,
+                tupleEdges,
+                tupleScalarEdges,
+                tupleContractEdges: tupleContractEdges
+            )
             return
         }
         if targetType is INamedTypeSymbol{
@@ -5735,7 +5745,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 AppendTuplePath(prefix, 0),
                 tupleTainted,
                 tupleEdges,
-                tupleScalarEdges
+                tupleScalarEdges,
+                tupleContractEdges: tupleContractEdges
             )
             return
         }
@@ -5960,7 +5971,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         tupleScalarEdges List[(Target TupleElementKey, Source ISymbol?)],
-        respectNullGuards bool = false
+        respectNullGuards bool = false,
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         var value = value
         value = UnwrapTupleValue(value)
@@ -5978,7 +5990,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    tupleContractEdges
                 )
                 CollectTupleValueFlow(
                     target,
@@ -5989,7 +6002,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    tupleContractEdges
                 )
                 return
             }
@@ -6003,7 +6017,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    tupleContractEdges
                 )
                 CollectTupleValueFlow(
                     target,
@@ -6014,7 +6029,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleTainted,
                     tupleEdges,
                     tupleScalarEdges,
-                    respectNullGuards
+                    respectNullGuards,
+                    tupleContractEdges
                 )
                 return
             }
@@ -6029,7 +6045,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         tupleEdges,
                         tupleScalarEdges,
-                        respectNullGuards
+                        respectNullGuards,
+                        tupleContractEdges
                     )
                 }
                 return
@@ -6049,9 +6066,25 @@ internal shared class ObliviousNullabilityAnalyzer {
                             tupleTainted,
                             tupleEdges,
                             tupleScalarEdges,
-                            respectNullGuards
+                            respectNullGuards,
+                            tupleContractEdges
                         )
-                    } else if IsEligibleTupleLeaf(targetType) {
+                        continue
+                    }
+                    if HasNestedTupleSlots(targetType) {
+                        CollectDeclarationTupleFlow(
+                            target,
+                            targetType,
+                            elementValue,
+                            model,
+                            tupleTainted,
+                            tupleEdges,
+                            tupleScalarEdges,
+                            path,
+                            tupleContractEdges
+                        )
+                    }
+                    if IsEligibleTupleLeaf(targetType) {
                         let targetKey = TupleElementKey(target, path)
                         let contextualOperator IMethodSymbol? = GetContextualOperator(elementValue, model, targetType)
                         let canForwardElement = contextualOperator == nil ||
@@ -6116,7 +6149,17 @@ internal shared class ObliviousNullabilityAnalyzer {
             return
         }
         if TryResolveTupleStorageSource(value, model, out var source, out var sourceTuple, out var sourcePrefix) {
-            AddTupleShapeEdges(target, targetTuple, prefix, source, sourceTuple, sourcePrefix, tupleTainted, tupleEdges)
+            AddTupleShapeEdges(
+                target,
+                targetTuple,
+                prefix,
+                source,
+                sourceTuple,
+                sourcePrefix,
+                tupleTainted,
+                tupleEdges,
+                tupleContractEdges
+            )
         }
     }
 
@@ -6128,7 +6171,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         sourceTuple INamedTypeSymbol?,
         sourcePrefix string,
         tupleTainted HashSet[TupleElementKey],
-        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)]
+        tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         let count = Math.Min(targetTuple!!.TupleElements.Length, sourceTuple!!.TupleElements.Length)
         for var i = 0; i < count; i++ {
@@ -6149,9 +6193,52 @@ internal shared class ObliviousNullabilityAnalyzer {
                     nestedSource,
                     sourcePath,
                     tupleTainted,
-                    tupleEdges
+                    tupleEdges,
+                    tupleContractEdges
                 )
-            } else if IsEligibleTupleLeaf(targetType) {
+                continue
+            }
+            if HasNestedTupleSlots(targetType) && HasNestedTupleSlots(sourceType) {
+                let targetSlots = NestedTupleSlots(targetType, targetPath)
+                let sourceSlots = NestedTupleSlots(sourceType, sourcePath)
+                if targetSlots.Count == sourceSlots.Count {
+                    let sharedArray = tupleContractEdges != nil &&
+                        targetType is IArrayTypeSymbol &&
+                        sourceType is IArrayTypeSymbol
+                    let activeEdges = if sharedArray {
+                        tupleContractEdges!!
+                    } else {
+                        tupleEdges
+                    }
+                    for var j = 0; j < targetSlots.Count; j++ {
+                        if targetSlots[j].Tuple.TupleElements.Length == sourceSlots[j].Tuple.TupleElements.Length {
+                            AddTupleShapeEdges(
+                                target,
+                                targetSlots[j].Tuple,
+                                targetSlots[j].Path,
+                                source,
+                                sourceSlots[j].Tuple,
+                                sourceSlots[j].Path,
+                                tupleTainted,
+                                activeEdges,
+                                tupleContractEdges
+                            )
+                            if sharedArray {
+                                AddTupleReverseContractEdges(
+                                    source,
+                                    sourceSlots[j].Tuple,
+                                    sourceSlots[j].Path,
+                                    target,
+                                    targetSlots[j].Tuple,
+                                    targetSlots[j].Path,
+                                    tupleContractEdges!!
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if IsEligibleTupleLeaf(targetType) {
                 let targetKey = TupleElementKey(target, targetPath)
                 if sourceType.IsReferenceType &&
                     sourceType.NullableAnnotation == Microsoft

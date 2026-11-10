@@ -423,6 +423,55 @@ public static class Obj {
         AssertParity(source, printed, "null:0,abc:1")
     }
 
+    @Fact
+    func PromotedArrayElementTuple_PassedToObliviousNullableTupleParameter_OmitsLeafAssertionAndMatchesRuntime() {
+        const source = `public static class Obj {
+    private static string Consume((string Text, int Code)? value) =>
+        value.HasValue ? (value.Value.Text ?? "null") + ":" + value.Value.Code : "empty";
+    public static string Run() {
+        var items = new (string Text, int Code)[] { ("x", 0), ("abc", 1) };
+        items[0] = (null, 2);
+        return Consume(items[0]) + "|" + Consume(items[1]) + "|" + Consume(null);
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain(".Item1!!", printed)
+        AssertParity(source, printed, "null:2|abc:1|empty")
+    }
+
+    @Fact
+    func CoalescingFallbackTupleArray_PromotesFallbackAllocationAndMatchesRuntime() {
+        const source = `public static class Obj {
+    public static string Eval(bool useSeed) {
+        (string, int)[] seed = useSeed ? new (string, int)[] { ("seed", 1) } : null;
+        var items = seed ?? new (string, int)[] { ("x", 0), ("abc", 2) };
+        items[0] = (null, 3);
+        return (items[0].Item1 == null ? "null" : items[0].Item1) + ":" + items[0].Item2;
+    }
+    public static string Run() => Eval(false) + "|" + Eval(true);
+}`
+        let printed = Translate(source)
+        Assert.Contains("[](string?, int32)", printed)
+        Assert.DoesNotContain("[](string, int32)", printed)
+        AssertParity(source, printed, "null:3|null:3")
+    }
+
+    @Fact
+    func TupleContainedArrayAlias_PropagatesWriteToSourceArrayAndMatchesRuntime() {
+        const source = `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 0), ("abc", 1) };
+        var state = (Rows: rows, Count: 2);
+        state.Rows[0] = (null, 4);
+        return (rows[0].Item1 == null ? "null" : rows[0].Item1) + ":" + rows[0].Item2 + "," + rows[1].Item1 + ":" + rows[1].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("[](string?, int32)", printed)
+        Assert.DoesNotContain("[](string, int32)", printed)
+        AssertParity(source, printed, "null:4,abc:1")
+    }
+
     shared {
         private func Translate(source string) string {
             let loaded = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})
