@@ -73,6 +73,10 @@ partial class CSharpToGSharpTranslator {
                         yield (methodMember, methodIsStatic)
                     }
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
+                        let forwarder = this.BuildImportedDeconstructForwarder(deconstruct, ownerKind)
+                        if forwarder != nil {
+                            yield (forwarder, false)
+                        }
                         let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
                         if adapter != nil {
                             yield (adapter, deconstruct.IsStatic)
@@ -1376,21 +1380,21 @@ partial class CSharpToGSharpTranslator {
                 body = BlockStatement([]GStatement{BlockStatement(body.Statements, isUnsafe: true)})
             }
             let isAsyncVoidHandler = IsCSharpAsyncVoidHandler(symbol)
-            var isOverride = symbol != nil &&
-                symbol.IsOverride &&
-                !(
-                EmittedNameAllocator.IsUserRecordDeconstruct(symbol) &&
-                    symbol.OverriddenMethod != nil &&
-                    symbol.OverriddenMethod!!
-                    .DeclaringSyntaxReferences
-                    .IsDefaultOrEmpty &&
-                    !this.TryResolveMigratedProducerDeconstruct(symbol.OverriddenMethod, out _, out _)
-            )
+            let overridesImportedNonMigratedDeconstruct = symbol != nil && this.EmittedName(
+                symbol,
+                symbol.Name
+            ) != symbol.Name &&
+                symbol.OverriddenMethod != nil &&
+                symbol.OverriddenMethod!!
+                .DeclaringSyntaxReferences
+                .IsDefaultOrEmpty &&
+                !this.TryResolveMigratedProducerDeconstruct(symbol.OverriddenMethod, out _, out _)
+            var isOverride = symbol != nil && symbol.IsOverride && !overridesImportedNonMigratedDeconstruct
             // Interface members are implicitly abstract in C#; in canonical G# the
             // members of an `interface` carry no modifier (the `open` keyword is for
             // virtual/abstract members of a class). Suppress `open` for them so the
             // emitted G# round-trips (ADR-0115 §B.6).
-            var isOpen = this.IsMemberEmittedOpen(symbol, isOverride)
+            var isOpen = this.IsMemberEmittedOpen(symbol, symbol != nil && symbol.IsOverride)
             // Receiver-clause methods have no `open`/`override`, and a value
             // aggregate has no open members of its own. A `data struct`
             // replaces its synthesized `ToString` with a plain `func` (ADR-0029

@@ -1659,29 +1659,33 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.TypeHasUnsafeSignatureMember(mergedMembers)
-            if kind == TypeDeclarationKind.DataClass && symbol != nil {
-                let bridge = this.BuildImportedDeconstructContractBridge(
-                    symbol,
-                    node,
-                    baseType,
-                    interfaces,
-                    typeParameters,
-                    isUnsafe
-                )
-                if bridge != nil {
-                    if node.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax {
-                        this.state.PendingTopLevelDeclarations.Add(bridge)
-                    } else {
-                        members.Insert(0, bridge)
-                    }
-                    baseType = NamedTypeReference(
-                        bridge.Name,
-                        typeParameters.Select(
-                            (parameter TypeParameter) -> cast[GTypeReference](NamedTypeReference(parameter.Name))
-                        )
-                            .ToList()
+            if kind == TypeDeclarationKind.DataClass && symbol != nil && this.HasImportedDeconstructContractBridge(
+                symbol
+            ) {
+                let bridgeName = this.AllocateImportedDeconstructBridgeName(symbol)
+                if this.ShouldAttachOwnedExtensions(node, symbol) {
+                    let bridge = this.BuildImportedDeconstructContractBridge(
+                        symbol,
+                        node,
+                        baseType,
+                        typeParameters,
+                        isUnsafe
                     )
+                    if bridge != nil {
+                        if node.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax {
+                            this.state.PendingTopLevelDeclarations.Add(bridge)
+                        } else {
+                            members.Insert(0, bridge)
+                        }
+                    }
                 }
+                baseType = NamedTypeReference(
+                    bridgeName,
+                    typeParameters.Select(
+                        (parameter TypeParameter) -> cast[GTypeReference](NamedTypeReference(parameter.Name))
+                    )
+                        .ToList()
+                )
             }
             // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
             // C# `partial` modifier onto each standalone G# part. Legacy merge

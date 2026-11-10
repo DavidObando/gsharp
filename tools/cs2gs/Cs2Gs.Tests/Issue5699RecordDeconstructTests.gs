@@ -568,12 +568,20 @@ namespace RecordDeconstruction {
         public static System.Action? Hook;
         public void Deconstruct(out int x, out int y) { x = 1; y = 2; Hook?.Invoke(); }
     }
+    public record Sub : R {
+        public int Extra = 9;
+    }
     public static class Probe {
         public static string Run() {
             R? r = new R();
             R.Hook = () => r = null;
-            try { return (r is PATTERN).ToString(); }
+            var matched = false;
+            try { matched = r is PATTERN; }
             catch (System.NullReferenceException) { return "threw"; }
+            R.Hook = null;
+            R plain = new R();
+            var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
+            return $"{matched},{subtypeMiss}";
         }
     }
 }`).Replace(
@@ -796,27 +804,66 @@ namespace RecordDeconstruction {
     func ImportedDeconstructContracts_EmitDispatchPreservingBridges(overrideBase bool) {
         const external = `
 namespace External {
-    public interface IParts { void Deconstruct(out int x, out int y); }
+    public interface IParts {
+        int Count { get; }
+        int Reset();
+        void Deconstruct(out int x, out int y);
+    }
     public record Base {
         public int X, Y;
         public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
+    public unsafe record ExtPtr {
+        public static int[] Cells = new[] { 42 };
+        public void Deconstruct(out int* p, out int n) { fixed (int* ptr = Cells) p = ptr; n = 5; }
+    }
+    public static class Ext {
+        public static void Deconstruct(this object value, out int x, out int y, out int z) {
+            x = 10; y = 20; z = 30;
+        }
+    }
 }`
-        let source = (`
+        let part1 = (`
+using External;
 namespace RecordDeconstruction {
-    public record R : PARENT {
+    public partial record R : PARENT {
         FIELDS
+    }
+}`).Replace(
+            "PARENT",
+            if overrideBase {
+                "External.Base"
+            } else {
+                "External.IParts"
+            }
+        )
+            .Replace(
+            "FIELDS",
+            if overrideBase {
+                ""
+            } else {
+                "public int X, Y; public int Count => X + Y; public int Reset() => Count * 2;"
+            }
+        )
+        let part2 = (`
+using External;
+namespace RecordDeconstruction {
+    public partial record R {
         public OVERRIDE void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
+    EXTRA_TYPES
     public static class Probe {
-        public static string Run() {
+        public static unsafe string Run() {
             var r = new R { X = 2, Y = 3 };
             r.Deconstruct(out var x, out var y);
             var (a, b) = r;
             PARENT contract = r;
             contract.Deconstruct(out var c, out var d);
             var (e, f) = contract;
-            return $"{x},{y},{a},{b},{c},{d},{e},{f},{r == new R { X = 2, Y = 3 }}";
+            var (ex1, ex2, ex3) = r;
+            var (ptr, len) = new External.ExtPtr();
+            EXTRA_ASSERT
+            return $"{x},{y},{a},{b},{c},{d},{e},{f},{ex1},{ex2},{ex3},{*ptr},{len},{extra},{r == new R { X = 2, Y = 3 }}";
         }
     }
 }`).Replace(
@@ -827,21 +874,33 @@ namespace RecordDeconstruction {
                 "External.IParts"
             }
         ).Replace(
-            "FIELDS",
-            if overrideBase {
-                ""
-            } else {
-                "public int X, Y;"
-            }
-        ).Replace(
             "OVERRIDE",
             if overrideBase {
                 "override"
             } else {
                 ""
             }
+        ).Replace(
+            "EXTRA_TYPES",
+            if overrideBase {
+                "public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }"
+            } else {
+                `public class C : External.IParts {
+                    public int X, Y;
+                    public int Count => X + Y;
+                    public int Reset() => Count;
+                    public void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
+                }`
+            }
+        ).Replace(
+            "EXTRA_ASSERT",
+            if overrideBase {
+                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; var extra = $\"{dx},{dy}\";"
+            } else {
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var extra = $\"{cx},{cy},{contract.Count},{contract.Reset()}\";"
+            }
         )
-        VerifyWithExternalReference(external, source)
+        VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
     }
 
     @Theory
@@ -1203,20 +1262,29 @@ namespace RecordDeconstruction {
         Verify(`
 namespace RecordDeconstruction {
     public delegate void Parts(out int x, out int y);
-    public record Base(int X, int Y) {
+    public record Z(int X, int Y) {
         public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
-    public record R(int A, int B) : Base(A, B) {
+    public record A(int A1, int B1) : Z(A1, B1) {
+        public override void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public abstract record AbstractBase {
+        public abstract void Deconstruct(out int x, out int y);
+    }
+    public record Concrete : AbstractBase {
+        public int X = 4, Y = 5;
         public override void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
     public static class Probe {
         public static string Run() {
-            Base r = new R(2, 3);
+            Z r = new A(2, 3);
             var (a, b) = r;
             Parts parts = r.Deconstruct;
             parts(out var c, out var d);
-            var pattern = r is Base(var e, var f) ? e + f : -1;
-            return $"{a},{b},{c},{d},{pattern}|{r with { X = 5 }}";
+            var pattern = r is Z(var e, var f) ? e + f : -1;
+            AbstractBase abs = new Concrete();
+            var (ax, ay) = abs;
+            return $"{a},{b},{c},{d},{pattern},{ax},{ay}|{r with { X = 5 }}";
         }
     }
 }`)
@@ -1274,8 +1342,8 @@ namespace RecordDeconstruction {
         public void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
     public static class Extensions {
-        public static void Deconstruct(this R r, out int x, out int y, out int z) {
-            x = r.Y * 10; y = r.X; z = r.Z * 50;
+        public static void Deconstruct(this R component0, out int x, out int y, out int z) {
+            x = component0.Y * 10; y = component0.X; z = component0.Z * 50;
         }
     }
     public static class Probe {
@@ -1308,6 +1376,15 @@ namespace RecordDeconstruction {
         public static Holder Current;
         public R Child = new R { X = 2, Y = 3 };
     }
+    public class DerivedHolder : Holder {
+        public new R Child = new R { X = 4, Y = 5 };
+    }
+    public record Outer {
+        public R First = new R { X = 2, Y = 3 };
+        public R Second = new R { X = 6, Y = 7 };
+        public void Deconstruct(out R child, out int a) { child = First; a = 1; }
+        public void Deconstruct(out R child, out int a, out int b) { child = Second; a = 1; b = 2; }
+    }
     public static class Probe {
         public static string Run() {
             Holder.Current = new Holder();
@@ -1316,7 +1393,22 @@ namespace RecordDeconstruction {
                 Holder { Child: R(var x, var y) } => x + y,
                 _ => -1
             };
-            return $"{result},{R.Calls},{Holder.Current.Child is null}";
+            var firstCalls = R.Calls;
+            var firstNull = Holder.Current.Child is null;
+            Holder.Current = new Holder();
+            Holder hiddenSubject = new DerivedHolder();
+            var hiddenResult = hiddenSubject switch {
+                DerivedHolder { Child: R(0, _) } => 0,
+                Holder { Child: R(var hx, var hy) } => hx + hy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            var overloadResult = new Outer() switch {
+                Outer(R(0, _), _) => 0,
+                Outer(R(var ox, var oy), _, _) => ox + oy,
+                _ => -1
+            };
+            return $"{result},{firstCalls},{firstNull},{hiddenResult},{overloadResult},{R.Calls}";
         }
     }
 }`).Replace("HOOK", hook))
@@ -1435,7 +1527,7 @@ namespace RecordDeconstruction {
             Assert.Equal(expected + "\n", CompileAndRun(printedSources).Replace("\r\n", "\n"))
         }
 
-        private func VerifyWithExternalReference(externalSource string, source string) {
+        private func VerifyWithExternalReference(externalSource string, sources[](string, string)) {
             let externalName = "External" + Guid.NewGuid().ToString("N")
             let external = CSharpProjectLoader.LoadInMemory(
                 [](string, string){("External.cs", externalSource)},
@@ -1450,7 +1542,7 @@ namespace RecordDeconstruction {
                 .Append(MetadataReference.CreateFromImage(externalBytes))
                 .ToArray()
             let project = CSharpProjectLoader.LoadInMemory(
-                [](string, string){("Snippet.cs", source)},
+                sources,
                 references,
                 assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
             )
@@ -1470,18 +1562,25 @@ namespace RecordDeconstruction {
             } finally {
                 loadContext.Unload()
             }
-            let document = Assert.Single(project.Documents)
-            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-            Assert.DoesNotContain(
-                context.Diagnostics,
-                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            let printedSources = project
+                .Documents
+                .Select(
+                (document LoadedDocument) -> {
+                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+                    let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                    Assert.DoesNotContain(
+                        context.Diagnostics,
+                        (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                    )
+                    Assert.DoesNotContain("func __", printed)
+                    return printed
+                }
             )
-            Assert.DoesNotContain("func __", printed)
-            Assert.Contains("data ", printed)
+                .ToArray()
+            Assert.Contains("data ", string.Join("\n", printedSources))
             Assert.Equal(
                 expected + "\n",
-                CompileAndRun([]string{printed}, externalBytes, externalName + ".dll").Replace("\r\n", "\n")
+                CompileAndRun(printedSources, externalBytes, externalName + ".dll").Replace("\r\n", "\n")
             )
         }
 
