@@ -1187,8 +1187,8 @@ internal class BinderContext {
             !TypeMemberModel
             .GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty
 
-        func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol) bool {
-            if declaredType == narrowedType {
+        func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol?) bool {
+            if narrowedType == nil || declaredType == narrowedType {
                 return false
             }
             if declaredType is PlatformTypeSymbol platform && platform.UnderlyingType == narrowedType {
