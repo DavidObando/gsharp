@@ -172,25 +172,54 @@ internal class EmittedNameAllocator {
                     ),
                     StringComparer.Ordinal
                 )
+                var explicitOrdinal = 0
                 for member in contract {
                     if member is IMethodSymbol method {
                         if IsUserRecordDeconstruct(method) {
                             taken.UnionWith(this.GetDeconstructionReservedNames(method))
                         }
-                        if !method
-                            .ExplicitInterfaceImplementations
-                            .IsDefaultOrEmpty &&
-                            method
-                            .ContainingType
-                            .GetMembers("Deconstruct")
-                            .OfType[IMethodSymbol]()
-                            .Any((candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared) {
-                            taken.Add("deconstruct")
+                        if !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                            if method
+                                .ContainingType
+                                .GetMembers("Deconstruct")
+                                .OfType[IMethodSymbol]()
+                                .Any((candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared) {
+                                taken.Add("deconstruct")
+                            }
+                            let priorExplicit = method
+                                .ContainingType
+                                .GetMembers()
+                                .OfType[IMethodSymbol]()
+                                .Where(
+                                (candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared &&
+                                    !candidate
+                                    .ExplicitInterfaceImplementations
+                                    .IsDefaultOrEmpty &&
+                                    SourceName(candidate) == "Deconstruct" &&
+                                    !contract.Contains(Canonical(candidate)!!)
+                            )
+                                .OrderBy(
+                                (candidate IMethodSymbol) -> candidate.ToDisplayString(),
+                                StringComparer.Ordinal
+                            )
+                                .TakeWhile(
+                                (candidate IMethodSymbol) -> string.CompareOrdinal(
+                                    candidate.ToDisplayString(),
+                                    method.ToDisplayString()
+                                ) < 0
+                            )
+                                .Count()
+                            if priorExplicit > explicitOrdinal {
+                                explicitOrdinal = priorExplicit
+                            }
                         }
                     }
                 }
                 var renamed = "deconstruct"
-                for var suffix = 2; taken.Contains(renamed); suffix++ {
+                for var suffix = 2; taken.Contains(renamed) || explicitOrdinal > 0; suffix++ {
+                    if !taken.Contains(renamed) {
+                        explicitOrdinal--
+                    }
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {

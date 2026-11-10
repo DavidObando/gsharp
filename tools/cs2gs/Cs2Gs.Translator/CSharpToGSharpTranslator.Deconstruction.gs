@@ -929,6 +929,89 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
+        private func IsExplicitImportedDeconstructOnlyInterface(method IMethodSymbol) bool {
+            if method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                return false
+            }
+            let iface = method.ExplicitInterfaceImplementations[0].ContainingType
+            if iface == nil || !iface.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                return false
+            }
+            let owner = method.ContainingType
+            if owner == nil {
+                return false
+            }
+            for member in iface.GetMembers() {
+                if member is not IMethodSymbol ifaceMethod || ifaceMethod.Name != "Deconstruct" {
+                    return false
+                }
+                if owner.FindImplementationForInterfaceMember(ifaceMethod) == nil {
+                    return false
+                }
+            }
+            return true
+        }
+
+        private func HasConflictingImportedDeconstructSignature(method IMethodSymbol) bool {
+            let owner = method.ContainingType
+            if owner == nil {
+                return false
+            }
+            for other in this.GetImportedDeconstructContractMethods(owner) {
+                if SymbolEqualityComparer.Default.Equals(other, method) ||
+                    other
+                    .Parameters
+                    .Length != method
+                    .Parameters
+                    .Length ||
+                    other.Arity != method.Arity {
+                    continue
+                }
+                var sameParameters = true
+                for var i = 0; i < method.Parameters.Length; i++ {
+                    if other
+                        .Parameters[i]
+                        .RefKind != method
+                        .Parameters[i]
+                        .RefKind ||
+                        !SymbolEqualityComparer
+                        .Default
+                        .Equals(other.Parameters[i].Type, method.Parameters[i].Type) {
+                        sameParameters = false
+                        break
+                    }
+                }
+                if sameParameters {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func RemoveBridgedExplicitInterfaces(
+            symbol INamedTypeSymbol,
+            node TypeDeclarationSyntax,
+            interfaces List[GTypeReference]
+        ) {
+            let bridged = HashSet[string](StringComparer.Ordinal)
+            for method in this.GetImportedDeconstructContractMethods(symbol) {
+                if this.IsExplicitImportedDeconstructOnlyInterface(method) {
+                    let iface = method.ExplicitInterfaceImplementations[0].ContainingType
+                    if this.typeMapper.Map(iface, this.context, node.GetLocation()) is {} mapped {
+                        bridged.Add(GSharpPrinter.RenderTypeReference(mapped))
+                    }
+                }
+            }
+            if bridged.Count == 0 {
+                return
+            }
+            for var i = interfaces.Count - 1; i >= 0; i-- {
+                if bridged.Contains(GSharpPrinter.RenderTypeReference(interfaces[i])) {
+                    interfaces.RemoveAt(i)
+                }
+            }
+        }
+
         private func BuildDeconstructContractForwardingMethod(
             method IMethodSymbol,
             emittedMethodName string,
@@ -936,7 +1019,8 @@ partial class CSharpToGSharpTranslator {
             targetMethodName string,
             isOpen bool,
             isOverride bool,
-            visibility Visibility = Visibility.Public
+            visibility Visibility = Visibility.Public,
+            explicitInterfaceType GTypeReference? = nil
         ) MethodDeclaration {
             let signature = method.PartialImplementationPart ?? method
             let syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
@@ -1000,7 +1084,8 @@ partial class CSharpToGSharpTranslator {
                 typeParameters: typeParameters,
                 visibility: visibility,
                 isOpen: isOpen,
-                isOverride: isOverride
+                isOverride: isOverride,
+                explicitInterfaceType: explicitInterfaceType
             )
         }
 
@@ -1181,6 +1266,8 @@ partial class CSharpToGSharpTranslator {
                     .ToList()
             )
             var bridgeIsUnsafe = isUnsafe
+            let bridgeInterfaces = List[GTypeReference]()
+            let seenBridgeInterfaces = HashSet[string](StringComparer.Ordinal)
             for method in contractMethods {
                 let signature = method.PartialImplementationPart ?? method
                 if this.TypeContainsPointerOrFunctionPointer(signature.ReturnType) || signature.Parameters.Any(
@@ -1196,7 +1283,19 @@ partial class CSharpToGSharpTranslator {
                 } else {
                     this.EmittedName(method, method.Name)!!
                 }
-                let bridgeMethodVisibility = if isOverride &&
+                var explicitBridgeIface GTypeReference? = nil
+                if isDirectlyOnSymbol && this.IsExplicitImportedDeconstructOnlyInterface(method) {
+                    let explicitIface = method.ExplicitInterfaceImplementations[0].ContainingType
+                    explicitBridgeIface = this.typeMapper.Map(explicitIface, this.context, node.GetLocation())
+                    if explicitBridgeIface != nil && seenBridgeInterfaces.Add(
+                        GSharpPrinter.RenderTypeReference(explicitBridgeIface)
+                    ) {
+                        bridgeInterfaces.Add(explicitBridgeIface)
+                    }
+                }
+                let bridgeMethodVisibility = if explicitBridgeIface != nil {
+                    Visibility.Default
+                } else if isOverride &&
                     (
                     method.DeclaredAccessibility == Accessibility.Protected ||
                         method.DeclaredAccessibility == Accessibility.ProtectedAndInternal
@@ -1213,9 +1312,10 @@ partial class CSharpToGSharpTranslator {
                             ConversionExpression(selfType, ThisExpression(), isCheckedReferenceCast: true)
                         ),
                         targetMethodName,
-                        isOpen: true,
+                        isOpen: explicitBridgeIface == nil,
                         isOverride: isOverride,
-                        visibility: bridgeMethodVisibility
+                        visibility: bridgeMethodVisibility,
+                        explicitInterfaceType: explicitBridgeIface
                     )
                 )
                 if isOverride && method.OverriddenMethod != nil && !method.OverriddenMethod!!.IsAbstract {
@@ -1237,7 +1337,11 @@ partial class CSharpToGSharpTranslator {
                 bridgeName,
                 typeParameters: typeParameters,
                 baseType: baseType,
-                interfaces: nil,
+                interfaces: if bridgeInterfaces.Count == 0 {
+                    default(IReadOnlyList[GTypeReference]?)
+                } else {
+                    bridgeInterfaces
+                },
                 members: bridgeMembers,
                 visibility: MapVisibility(symbol, this.context, node),
                 isAbstract: true,
@@ -1630,7 +1734,9 @@ partial class CSharpToGSharpTranslator {
         ) bool {
             sourceMethod = nil
             producerCompilation = nil
-            if method == nil || method.Name != "Deconstruct" || !visited.Add(method.OriginalDefinition) {
+            if method == nil ||
+                (method.Name != "Deconstruct" && !method.Name.EndsWith(".Deconstruct", StringComparison.Ordinal)) ||
+                !visited.Add(method.OriginalDefinition) {
                 return false
             }
             let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations

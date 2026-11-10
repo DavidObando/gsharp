@@ -38,11 +38,23 @@ partial class CSharpToGSharpTranslator {
                 }
                 case method is MethodDeclarationSyntax {
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol importedContractMethod &&
-                        (importedContractMethod.ContainingType.IsValueType || importedContractMethod.IsStatic) &&
                         EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
                         this
                         .nameAllocator
-                        .HasImportedDeconstructionContract(importedContractMethod) {
+                        .HasImportedDeconstructionContract(importedContractMethod) &&
+                        (
+                        importedContractMethod
+                            .ContainingType
+                            .IsValueType ||
+                            importedContractMethod.IsStatic ||
+                            (
+                            !importedContractMethod
+                                .ExplicitInterfaceImplementations
+                                .IsDefaultOrEmpty &&
+                                this.HasConflictingImportedDeconstructSignature(importedContractMethod) &&
+                                !this.IsExplicitImportedDeconstructOnlyInterface(importedContractMethod)
+                        )
+                    ) {
                         this.context.ReportUnsupported(
                             method,
                             "record methods implementing an imported Deconstruct contract need a dispatch-preserving bridge."

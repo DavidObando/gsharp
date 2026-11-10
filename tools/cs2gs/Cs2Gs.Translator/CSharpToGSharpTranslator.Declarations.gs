@@ -1694,6 +1694,7 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                 }
+                this.RemoveBridgedExplicitInterfaces(symbol, node, interfaces)
                 baseType = NamedTypeReference(
                     bridgeName,
                     typeParameters.Select(

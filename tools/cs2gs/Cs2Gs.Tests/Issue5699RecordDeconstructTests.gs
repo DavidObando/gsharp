@@ -81,6 +81,9 @@ namespace RecordDeconstruction {
         public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
         public Parts Save() => Deconstruct;
     }
+    public class ConsumerExplicit : Producer.IParts {
+        void Producer.IParts.Deconstruct(out int x, out int y) { x = 91; y = 92; }
+    }
     public static class Probe {
         public static string Run() {
             var child = new Child();
@@ -88,7 +91,9 @@ namespace RecordDeconstruction {
             saved(out var x, out var y);
             Middle.Mid mid = child;
             var (mx, my) = mid;
-            return $"{x},{y},{mx},{my},{mid.deconstruct2}";
+            Producer.IParts expConsumer = new ConsumerExplicit();
+            var (ex, ey) = expConsumer;
+            return $"{x},{y},{mx},{my},{ex},{ey},{mid.deconstruct2}";
         }
     }
 }`
@@ -846,6 +851,12 @@ namespace External {
     public interface IStaticParts {
         static abstract int Deconstruct(int scale);
     }
+    public interface IA {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IB {
+        void Deconstruct(out int x, out int y);
+    }
     public record Base {
         public int X, Y;
         public Base() { }
@@ -1003,6 +1014,10 @@ namespace RecordDeconstruction {
                     public int Reset() => 6;
                     int External.IParts.Deconstruct(int scale) => 6 * scale;
                     void External.IParts.Deconstruct(out int x, out int y) { x = 60; y = 6; }
+                }
+                public record DualExplicit : External.IA, External.IB {
+                    void External.IA.Deconstruct(out int x, out int y) { x = 70; y = 7; }
+                    void External.IB.Deconstruct(out int x, out int y) { x = 80; y = 8; }
                 }`
             }
         ).Replace(
@@ -1010,7 +1025,7 @@ namespace RecordDeconstruction {
             if overrideBase {
                 "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
