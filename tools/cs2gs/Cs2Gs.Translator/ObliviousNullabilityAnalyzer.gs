@@ -5866,9 +5866,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     .TakeWhile((node SyntaxNode) -> node != call)
                     .OfType[ArgumentSyntax]()
                     .FirstOrDefault()
-                let refExpression ExpressionSyntax? = if refArgument is ArgumentSyntax{
-                    RefKindKeyword: {RawKind: not 0}
-                } sourceArgument {
+                let refExpression ExpressionSyntax? = if refArgument is ArgumentSyntax sourceArgument {
                     sourceArgument.Expression
                 } else if call is InvocationExpressionSyntax{Expression: MemberAccessExpressionSyntax memberAccess} &&
                     argument
@@ -5909,7 +5907,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                                     let hasNestedTupleLeaves = subType is INamedTypeSymbol{IsTupleType: true} ||
                                         HasNestedTupleSlots(subType)
                                     if !hasNestedTupleLeaves &&
-                                        CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(typeParameter) {
+                                        (
+                                        typeParameter.NullableAnnotation == Microsoft
+                                            .CodeAnalysis
+                                            .NullableAnnotation
+                                            .Annotated ||
+                                            CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(
+                                            typeParameter
+                                        )
+                                    ) {
                                         continue
                                     }
                                     if !sharedTypeParameterStorages.TryGetValue(typeParameter, out var entries) {
@@ -6013,7 +6019,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         contractOrValueEdges,
                         secondPrefix: current.Path,
                         bidirectional: true,
-                        firstPrefix: representative.Path
+                        firstPrefix: representative.Path,
+                        isContractBoundary: true
                     )
                 } else {
                     ConnectSharedLeaf(current, representative, isOutputPair)
@@ -6634,6 +6641,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             if i < 0 || slot.Tuple.TupleElements.Length != sourceSlots[i].Tuple.TupleElements.Length {
                 continue
             }
+            let crossSubstitutable = IsCrossMemberSubstitutablePosition(target, slot.Path, source) ||
+                IsCrossMemberSubstitutablePosition(source, sourceSlots[i].Path, target)
+            let activeEdges = if sharedArrayContract && !crossSubstitutable {
+                tupleContractEdges!!
+            } else {
+                tupleEdges
+            }
             AddTupleShapeEdges(
                 target,
                 slot.Tuple,
@@ -6643,9 +6657,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                 sourceSlots[i].Path,
                 tupleTainted,
                 activeEdges,
-                tupleContractEdges
+                tupleContractEdges,
+                isCallBoundary,
+                isContractBoundary: sharedArrayContract && !crossSubstitutable
             )
-            if sharedArrayContract {
+            if sharedArrayContract && !crossSubstitutable {
                 AddTupleReverseContractEdges(
                     source,
                     sourceSlots[i].Tuple,
@@ -6903,7 +6919,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 sourcePrefix,
                 tupleTainted,
                 tupleEdges,
-                tupleContractEdges
+                tupleContractEdges,
+                isCallBoundary
             )
         }
     }
@@ -6917,7 +6934,9 @@ internal shared class ObliviousNullabilityAnalyzer {
         sourcePrefix string,
         tupleTainted HashSet[TupleElementKey],
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
-        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil,
+        isCallBoundary bool = false,
+        isContractBoundary bool = false
     ) {
         let count = Math.Min(targetTuple!!.TupleElements.Length, sourceTuple!!.TupleElements.Length)
         for var i = 0; i < count; i++ {
@@ -6939,7 +6958,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                     sourcePath,
                     tupleTainted,
                     tupleEdges,
-                    tupleContractEdges
+                    tupleContractEdges,
+                    isCallBoundary,
+                    isContractBoundary
                 )
                 continue
             }
@@ -6950,13 +6971,19 @@ internal shared class ObliviousNullabilityAnalyzer {
                     let sharedArray = tupleContractEdges != nil &&
                         targetType is IArrayTypeSymbol &&
                         sourceType is IArrayTypeSymbol
-                    let activeEdges = if sharedArray {
-                        tupleContractEdges!!
-                    } else {
-                        tupleEdges
-                    }
                     for var j = 0; j < targetSlots.Count; j++ {
                         if targetSlots[j].Tuple.TupleElements.Length == sourceSlots[j].Tuple.TupleElements.Length {
+                            let crossSubstitutable = IsCrossMemberSubstitutablePosition(
+                                target,
+                                targetSlots[j].Path,
+                                source
+                            ) ||
+                                IsCrossMemberSubstitutablePosition(source, sourceSlots[j].Path, target)
+                            let activeEdges = if sharedArray && !crossSubstitutable {
+                                tupleContractEdges!!
+                            } else {
+                                tupleEdges
+                            }
                             AddTupleShapeEdges(
                                 target,
                                 targetSlots[j].Tuple,
@@ -6966,9 +6993,11 @@ internal shared class ObliviousNullabilityAnalyzer {
                                 sourceSlots[j].Path,
                                 tupleTainted,
                                 activeEdges,
-                                tupleContractEdges
+                                tupleContractEdges,
+                                isCallBoundary,
+                                isContractBoundary || (sharedArray && !crossSubstitutable)
                             )
-                            if sharedArray {
+                            if sharedArray && !crossSubstitutable {
                                 AddTupleReverseContractEdges(
                                     source,
                                     sourceSlots[j].Tuple,
@@ -6983,18 +7012,15 @@ internal shared class ObliviousNullabilityAnalyzer {
                     }
                 }
             }
-            if !IsCrossMemberSubstitutablePosition(target, targetPath, source) {
-                AddTupleLeafEdge(
-                    target,
-                    targetPath,
-                    targetType,
-                    source,
-                    sourcePath,
-                    sourceType,
-                    tupleTainted,
-                    tupleEdges
-                )
+            let constructedTarget = target is IMethodSymbol targetMethod && !SymbolEqualityComparer.Default.Equals(
+                targetMethod,
+                targetMethod.OriginalDefinition
+            )
+            if (isCallBoundary || isContractBoundary || constructedTarget) &&
+                IsCrossMemberSubstitutablePosition(target, targetPath, source) {
+                continue
             }
+            AddTupleLeafEdge(target, targetPath, targetType, source, sourcePath, sourceType, tupleTainted, tupleEdges)
         }
     }
 
@@ -7371,7 +7397,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleContractEdges
                     },
                     secondPrefix: sourcePath,
-                    bidirectional: !isOutput
+                    bidirectional: !isOutput,
+                    isContractBoundary: true
                 )
                 if targetType is INamedTypeSymbol{IsTupleType: true} {
                     continue
@@ -9108,7 +9135,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         tupleEdges List[(Target TupleElementKey, Source TupleElementKey)],
         secondPrefix string = "",
         bidirectional bool = true,
-        firstPrefix string = ""
+        firstPrefix string = "",
+        isContractBoundary bool = false
     ) {
         let comparisonType = TupleContractComparisonType(first, firstType, second)
         // Covariant envelopes can reorder type arguments. Bare tuple
@@ -9173,7 +9201,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     secondSlots[i].Tuple,
                     secondPath,
                     tupleTainted,
-                    tupleEdges
+                    tupleEdges,
+                    isContractBoundary: isContractBoundary
                 )
             }
             AddTupleShapeEdges(
@@ -9184,7 +9213,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
                 tupleTainted,
-                tupleEdges
+                tupleEdges,
+                isContractBoundary: isContractBoundary
             )
         }
     }

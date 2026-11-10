@@ -2091,7 +2091,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 var argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
-                if argumentParameter.RefKind != RefKind.None &&
+                if (argumentParameter.RefKind != RefKind.None || ContainsArrayType(parameterType)) &&
                     ObliviousNullabilityAnalyzer
                     .TryResolveTupleContainerSource(
                     argumentValue,
@@ -3656,6 +3656,16 @@ partial class CSharpToGSharpTranslator {
                 return arguments != nil && arguments.Any((argument ITypeSymbol) -> MentionsTypeParameter(argument))
             }
 
+            private func ContainsArrayType(type ITypeSymbol?) bool {
+                if type is IArrayTypeSymbol {
+                    return true
+                }
+                if type is INamedTypeSymbol{IsTupleType: true} tuple {
+                    return tuple.TupleElements.Any((element IFieldSymbol) -> ContainsArrayType(element.Type))
+                }
+                return false
+            }
+
             private func JoinPosition(prefix string, position string) string {
                 if prefix == "" {
                     return position
@@ -3813,7 +3823,17 @@ partial class CSharpToGSharpTranslator {
                     return
                 }
                 if pattern is ITypeParameterSymbol parameter {
-                    AddTypeParameterPositions(bindings, parameter, positions)
+                    let parameterPositions = if parameter.NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        WithoutTopLevel(positions)
+                    } else {
+                        positions
+                    }
+                    if parameterPositions != nil && !parameterPositions.IsEmpty {
+                        AddTypeParameterPositions(bindings, parameter, parameterPositions)
+                    }
                     return
                 }
                 if pattern is IArrayTypeSymbol patternArray {

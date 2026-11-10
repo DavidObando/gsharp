@@ -957,6 +957,7 @@ public static class Obj {
     @InlineData("leaf-out-taints-ref")
     @InlineData("whole-out-taints-ref")
     @InlineData("annotated-leaf")
+    @InlineData("implicit-in-and-ref")
     func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
         let method = switch shape {
             case "whole-tuple": "private static void Keep<T>(ref T a, ref T b) { }"
@@ -969,6 +970,7 @@ public static class Obj {
             case "whole-both-out": "private static void Keep<T>(T value, out T a, out T b) { a = value; b = value; }"
             case "leaf-out-taints-ref": "private static void Keep<T>(out (T, int) dst, ref (T, int) src) { dst = src; }"
             case "whole-out-taints-ref": "private static void Keep<T>(out T dst, ref T src) { dst = src; }"
+            case "implicit-in-and-ref": "private static void Keep<T>(in (T, int) input, ref (T, int) writable) { writable = input; }"
             default: "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
         }
         let bDeclaration = if shape == "annotated-leaf" {
@@ -978,6 +980,7 @@ public static class Obj {
         }
         let taintedCall = switch shape {
             case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref a, ref b);"
+            case "implicit-in-and-ref": "Keep<string>(b, ref a);"
             case "whole-out-first" or "leaf-out-first": "Keep(out a, ref b);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref b, out a);"
             case "leaf-both-out": "Keep<string>(\"ok\", out a, out b);"
@@ -988,6 +991,7 @@ public static class Obj {
         }
         let cleanCall = switch shape {
             case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref cleanA, ref cleanB);"
+            case "implicit-in-and-ref": "Keep<string>(cleanB, ref cleanA);"
             case "whole-out-first" or "leaf-out-first": "Keep(out cleanA, ref cleanB);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref cleanB, out cleanA);"
             case "leaf-both-out": "Keep<string>(\"keep\", out cleanA, out cleanB);"
@@ -1017,14 +1021,22 @@ public static class Obj {
         } else {
             Assert.Contains("var cleanA = (\"keep\", 2)", printed)
         }
-        if shape is "explicit-leaf" or "leaf-both-out" or "leaf-out-taints-ref" or "annotated-leaf" {
+        if shape is "explicit-leaf" or
+            "leaf-both-out" or
+            "leaf-out-taints-ref" or
+            "annotated-leaf" or
+            "implicit-in-and-ref" {
             Assert.Contains("Keep[string?]", printed)
             Assert.Contains("Keep[string]", printed)
         }
         let expected = switch shape {
             case "leaf-both-out" or "whole-both-out": "ok:ok:keep:keep"
             case "leaf-out-taints-ref" or "whole-out-taints-ref": "x:x:keep:keep"
-            case "whole-out-first" or "whole-ref-first" or "leaf-out-first" or "leaf-ref-first": "null:null:stay:stay"
+            case "whole-out-first" or
+                "whole-ref-first" or
+                "leaf-out-first" or
+                "leaf-ref-first" or
+                "implicit-in-and-ref": "null:null:stay:stay"
             default: "x:null:keep:stay"
         }
         AssertParity(source, printed, expected)
@@ -1102,6 +1114,7 @@ public static class Obj {
     @InlineData("parameter-write")
     @InlineData("local-to-return")
     @InlineData("captured-local-to-return")
+    @InlineData("forwarded-generic-return")
     @InlineData("local-ref-to-parameter")
     func Issue5880_GenericMethodBodyTupleFlows_PromoteOwnDeclarations(shape string) {
         let source = switch shape {
@@ -1123,6 +1136,14 @@ public static class Obj {
     }
     public static string Run() {
         (string, int) row = Create<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "forwarded-generic-return": `public static class Obj {
+    private static (T, int) Make<T>() where T : class? => (null, 0);
+    private static (T, int) Forward<T>() where T : class? => Make<T>();
+    public static string Run() {
+        (string, int) row = Forward<string>();
         return (row.Item1 ?? "null") + ":" + row.Item2;
     }
 }`
@@ -1194,6 +1215,46 @@ public static class Obj {
         Assert.Contains("var ref alias (string?, int32)", printed)
         Assert.DoesNotContain("var fixedRow (string?, int32)", printed)
         AssertParity(source, printed, "null:1:keep:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefReturnArrayParameter_UpdatesExplicitTypeArguments() {
+        const source = `public static class Obj {
+    private static ref (T, int) Borrow<T>((T, int)[] rows) => ref rows[0];
+    public static string Run() {
+        (string, int)[] rows = new[] { ("x", 1) };
+        ref var alias = ref Borrow<string>(rows);
+        alias = (null, 1);
+        (string, int)[] clean = new[] { ("keep", 2) };
+        ref var cleanAlias = ref Borrow<string>(clean);
+        return (rows[0].Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean[0].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("Borrow[string?](rows)", printed)
+        Assert.Contains("Borrow[string](clean)", printed)
+        AssertParity(source, printed, "null:keep:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefTupleWithFormalNullableAnnotation_KeepsFixedPeerNonNull() {
+        const source = `#nullable enable
+public static class Obj {
+    private static void Keep<T>(ref (T, int) a, ref (T?, int) b) where T : class? {
+        b = (null, b.Item2);
+    }
+    public static string Run() {
+        (string, int) a = ("ok", 1);
+        (string?, int) b = ("x", 2);
+        Keep<string>(ref a, ref b);
+        return a.Item1 + ":" + (b.Item1 ?? "null") + ":" + b.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string](&a, &b)", printed)
+        Assert.DoesNotContain("Keep[string?]", printed)
+        AssertParity(source, printed, "ok:null:2")
     }
 
     @Theory
