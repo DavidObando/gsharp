@@ -636,6 +636,15 @@ partial class CSharpToGSharpTranslator {
             out result GExpression?
         ) bool {
             result = nil
+            if pattern == nil || this.PatternMentionsConditionalAccessType(pattern, out _) ||
+                this.PatternRequiresValueEquality(pattern) || !this.HasOnlyUnambiguousNativeConstants(pattern) ||
+                this.PatternRequiresLoweredListTest(pattern) {
+                return false
+            }
+            let isPattern = pattern.Ancestors().OfType[IsPatternExpressionSyntax]().FirstOrDefault()
+            if isPattern != nil && this.PatternScrutineeMayChangeDuringMatch(isPattern) {
+                return false
+            }
             let bindings = List[(Symbol ISymbol, Replacement GExpression)]()
             let guards = List[GExpression]()
             let outerBooleanPattern = this.state.TranslatingBooleanPattern
@@ -727,7 +736,9 @@ partial class CSharpToGSharpTranslator {
             }
 
             private func IsTrivialPatternReceiver(expression ExpressionSyntax) bool -> (
-                Unparenthesize(expression) is IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax
+                UnwrapParenthesesAndSuppressions(expression) is (
+                    IdentifierNameSyntax or ThisExpressionSyntax or LiteralExpressionSyntax
+                )
             )
 
             private func TryExtractSingleTopLevelIfLetPattern(

@@ -6099,8 +6099,17 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
-            if expression.Parent is IsPatternExpressionSyntax decision && this.RecordPatternRunsUserCode(
-                decision.Pattern
+            if expression.Parent is IsPatternExpressionSyntax decision &&
+                (
+                this.RecordPatternRunsUserCode(decision.Pattern) ||
+                    (
+                    UnwrapParenthesesAndSuppressions(expression) is IdentifierNameSyntax identifier &&
+                        this.IsByReferenceVariable(this.context.GetSymbolInfo(identifier).Symbol) &&
+                        decision
+                        .Pattern
+                        .DescendantNodesAndSelf()
+                        .Any(this.PatternNodeRunsUserCode)
+                )
             ) {
                 return false
             }
@@ -6108,7 +6117,11 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // Both the spill emitter and its short-circuit scope detector use this decision.
-            return IsTrivialOperand(translated ?? this.TranslateExpression(expression)!!)
+            var candidate GExpression = translated ?? this.TranslateExpression(expression)!!
+            while candidate is ParenthesizedExpression parenthesized {
+                candidate = parenthesized.Inner
+            }
+            return IsTrivialOperand(candidate)
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not
