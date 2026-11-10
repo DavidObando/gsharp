@@ -70,6 +70,95 @@ public static class Consumer {
     }
 
     @Fact
+    func ImportedNotNullAndDependentConstraints_PreserveNonNullArgumentsAndForwarding() {
+        let compiler = FindCompiler()
+        Assert.NotNull(compiler)
+        let workDir = NewDirectory("dependent-constraints")
+        try {
+            let contractPath = Path.Combine(workDir, "Contracts.dll")
+            let contract = CSharpProjectLoader.LoadInMemory([](string, Source string){("Contracts.cs", `#nullable enable
+namespace Contracts {
+    public class MigrationOperation { }
+    public sealed class AddColumnOperation : MigrationOperation { }
+    public sealed class OperationBuilder<TOperation> where TOperation : notnull {
+        public TOperation Operation { get; }
+        public OperationBuilder(TOperation operation) => Operation = operation;
+    }
+    public sealed class StrictPairBuilder<TBase, TOperation>
+        where TBase : MigrationOperation
+        where TOperation : TBase {
+    }
+    public sealed class FlexiblePairBuilder<TBase, TOperation>
+        where TBase : MigrationOperation?
+        where TOperation : TBase {
+    }
+    public static class Builder {
+        public static void Consume<T>(T value) where T : notnull { }
+        public static StrictPairBuilder<MigrationOperation, AddColumnOperation> StrictPair() => new();
+        public static FlexiblePairBuilder<MigrationOperation, AddColumnOperation> FlexibleNonNull() => new();
+        public static FlexiblePairBuilder<MigrationOperation?, AddColumnOperation?> FlexibleNullable() => new();
+    }
+}`)})
+            Assert.True(contract.BoundWithoutErrors, string.Join(Environment.NewLine, contract.ErrorDiagnostics))
+            {
+                using let image = File.Create(contractPath)
+                let emitted = contract.Compilation.Emit(image)
+                Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics))
+            }
+            let loaded = CSharpProjectLoader.LoadInMemory([](string, Source string){("Consumer.cs", `#nullable enable annotations
+using Contracts;
+public sealed class MigrationHolder<TOperation> where TOperation : notnull {
+    private OperationBuilder<TOperation> item;
+    public MigrationHolder(TOperation op) {
+        item = new OperationBuilder<TOperation>(op);
+    }
+}
+public static class Consumer {
+    private static AddColumnOperation? MaybeNull() => null;
+    public static void ConsumeChecked(AddColumnOperation op, bool reset) {
+        if (reset) op = null;
+        if (!reset) Builder.Consume(op);
+        var local = MaybeNull();
+        if (!reset) Builder.Consume(local);
+    }
+    public static object StrictAnon() => new { Pair = Builder.StrictPair() };
+    public static object FlexibleAnon() => new { Pair = Builder.FlexibleNonNull() };
+}`)}, CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromFile(contractPath)).ToArray())
+            Assert.True(loaded.BoundWithoutErrors, string.Join(Environment.NewLine, loaded.ErrorDiagnostics))
+            let compilation = loaded.Compilation.WithOptions(
+                loaded.Compilation.Options.WithNullableContextOptions(NullableContextOptions.Annotations)
+            )
+            let tree = Assert.Single(compilation.SyntaxTrees)
+            let model = compilation.GetSemanticModel(tree)
+            let document = LoadedDocument(tree.FilePath, tree, model)
+            let context = TranslationContext(compilation, model, document.FilePath)
+            let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+            Assert.Contains("class MigrationHolder[TOperation notnull]", printed, StringComparison.Ordinal)
+            Assert.DoesNotContain("OperationBuilder[AddColumnOperation?]", printed, StringComparison.Ordinal)
+            Assert.Contains(
+                "StrictPairBuilder[MigrationOperation, AddColumnOperation]",
+                printed,
+                StringComparison.Ordinal
+            )
+            Assert.Contains(
+                "FlexiblePairBuilder[MigrationOperation?, AddColumnOperation?]",
+                printed,
+                StringComparison.Ordinal
+            )
+            let sourcePath = Path.Combine(workDir, "Consumer.gs")
+            let outputPath = Path.Combine(workDir, "Consumer.dll")
+            File.WriteAllText(sourcePath, printed)
+            let (exit, output) = RunDotnet(
+                "\"$compiler\" /target:library /targetframework:net10.0 /reference:\"$contractPath\" " +
+                    "/out:\"$outputPath\" \"$sourcePath\""
+            )
+            Assert.True(exit == 0, "Translated consumer must compile with zero errors:\n" + output)
+        } finally {
+            Directory.Delete(workDir, recursive: true)
+        }
+    }
+
+    @Fact
     func Translator_UsesStableOrderedShapeNamesAcrossDocumentsAndProjects() {
         let translated = Translate(("A.Tools.cs", ToolsSource), ("B.Hosting.cs", HostingSource))
         let toolsType = AnonymousTypeName(translated[0]!!)

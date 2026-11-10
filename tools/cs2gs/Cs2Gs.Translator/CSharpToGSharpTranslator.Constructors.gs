@@ -755,18 +755,11 @@ partial class CSharpToGSharpTranslator {
             if tp.HasConstructorConstraint {
                 flags.Add("init()")
             }
-            // C# `where T : notnull` has no precise G# constraint keyword; it is
-            // dropped (the closest forms `comparable`/`any` change semantics), and
-            // the loss is recorded (ADR-0115 §B.7 gap).
-            if tp.HasNotNullConstraint {
-                this.context.Report(
-                    TranslationDiagnostic(
-                        "TypeParameterConstraintClause",
-                        "type parameter '${tp.Name}' has a 'notnull' constraint; G# has no equivalent constraint keyword, so it is dropped (ADR-0115 §B.7 gap).",
-                        spellingLocation,
-                        TranslationSeverity.Info
-                    )
-                )
+            if tp.HasNotNullConstraint &&
+                !tp.HasReferenceTypeConstraint &&
+                !tp.HasValueTypeConstraint &&
+                !tp.HasUnmanagedTypeConstraint {
+                flags.Add("notnull")
             }
             var legacy string? = nil
             if tp.ConstraintTypes.Length > 0 {
