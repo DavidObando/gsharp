@@ -1457,6 +1457,58 @@ namespace Demo
             };
             return recorded;
         }
+        static string SwitchSameTypeMultiArmClearedToNull()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            return current switch
+            {
+                Row { A: 0 } => "0",
+                Row { A: 1 } matched => "1 " + (matched == null ? "null" : matched.Id.ToString()),
+                _ => "-1",
+            };
+        }
+        static string NestedMemberSameTypeInDelayedCompoundCapture()
+        {
+            var initial = new Row { Id = 1, Child = new Row { Id = 2, Tag = 0 }, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new BaseRow { Id = 9 }; };
+            if (current is ((not null and Row { A: 1, Child: Row }) or Row { A: 2 }) and { Tag: 3 } matched)
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string SwitchLeafTypeAndConjunctionConversionCache()
+        {
+            var initial1 = new Row { Id = 1 };
+            BaseRow current1 = initial1;
+            initial1.OnRead = () => { current1 = new BaseRow { Id = 9 }; };
+            int r1 = current1 switch
+            {
+                Row { A: 0 } => 0,
+                Row matched => matched.Id,
+                _ => -1,
+            };
+            var initial2 = new Row { Id = 1 };
+            BaseRow current2 = initial2;
+            initial2.OnRead = () => { current2 = new BaseRow { Id = 9 }; };
+            int r2 = current2 switch
+            {
+                Row and { A: 0 } => 0,
+                Row and { A: 1 } => 1,
+                _ => -1,
+            };
+            return r1 + " " + r2;
+        }
+        static int SwitchSingleArmOrPatternClearedToNull()
+        {
+            Row? current = new Row { Id = 1 };
+            current.OnRead = () => { current = null; };
+            return current switch
+            {
+                { A: 0 } or { A: 1 } => 1,
+                _ => -1,
+            };
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1499,8 +1551,12 @@ namespace Demo
             SwitchExtendedPropertyClearedToNull() + " / " +
             BareTypeLeafInDelayedCompoundCapture() + " / " +
             SwitchCacheSuspendedInWhenAndBody() + " / " +
-            SwitchAsStatementClearedToNull();
+            SwitchAsStatementClearedToNull() + " / " +
+            SwitchSameTypeMultiArmClearedToNull() + " / " +
+            NestedMemberSameTypeInDelayedCompoundCapture() + " / " +
+            SwitchLeafTypeAndConjunctionConversionCache() + " / " +
+            SwitchSingleArmOrPatternClearedToNull();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1 / 1 null / True 9 1 / 1 1 / 1", rejectRedundantAssertions: true)
     }
 }

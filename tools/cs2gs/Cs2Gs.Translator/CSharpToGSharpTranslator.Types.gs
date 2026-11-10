@@ -677,21 +677,33 @@ partial class CSharpToGSharpTranslator {
                     arm.Pattern
                 )
             )
-            let multiArmLiveSwitch = liveSubjectSwitch && node.Arms.Count(
-                (arm SwitchExpressionArmSyntax) -> arm.Pattern is not(
-                    Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .DiscardPatternSyntax or
+            let needsSharedEvaluations = liveSubjectSwitch &&
+                (
+                node.Arms.Count(
+                    (arm SwitchExpressionArmSyntax) -> arm.Pattern is not(
                         Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .VarPatternSyntax
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .DiscardPatternSyntax or
+                            Microsoft
+                            .CodeAnalysis
+                            .CSharp
+                            .Syntax
+                            .VarPatternSyntax
+                    )
+                ) > 1 ||
+                    node
+                    .Arms
+                    .Any(
+                    (arm SwitchExpressionArmSyntax) -> arm
+                        .Pattern
+                        .DescendantNodesAndSelf()
+                        .OfType[BinaryPatternSyntax]()
+                        .Any((binary BinaryPatternSyntax) -> binary.OperatorToken.IsKind(SyntaxKind.OrKeyword))
                 )
-            ) > 1
-            return if multiArmLiveSwitch {
+            )
+            return if needsSharedEvaluations {
                 (
                     List[GStatement](),
                     List[(Flag string, Value string)](),
