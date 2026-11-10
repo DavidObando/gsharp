@@ -1601,7 +1601,30 @@ partial class CSharpToGSharpTranslator {
                 let outerDeclarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
                 if outerDeclarations != nil {
                     outerDeclarations.AddRange(isCache.Declarations)
-                    return cachedTest
+                    let resets = List[GStatement]()
+                    for guardEntry in isCache.NullGuard {
+                        resets.Add(
+                            AssignmentStatement(IdentifierExpression(guardEntry.Flag), LiteralExpression.Bool(false))
+                        )
+                    }
+                    for memberEntry in isCache.Members {
+                        resets.Add(
+                            AssignmentStatement(IdentifierExpression(memberEntry.Flag), LiteralExpression.Bool(false))
+                        )
+                    }
+                    for conversionEntry in isCache.TypeConversions {
+                        resets.Add(
+                            AssignmentStatement(
+                                IdentifierExpression(conversionEntry.Flag),
+                                LiteralExpression.Bool(false)
+                            )
+                        )
+                    }
+                    return if resets.Count == 0 {
+                        cachedTest
+                    } else {
+                        BinaryExpression(BlockExpression(resets, LiteralExpression.Bool(true)), "&&", cachedTest)
+                    }
                 }
                 return BlockExpression(isCache.Declarations, cachedTest)
             }

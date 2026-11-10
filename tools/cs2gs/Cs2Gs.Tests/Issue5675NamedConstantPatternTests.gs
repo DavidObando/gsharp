@@ -1070,7 +1070,8 @@ namespace Demo
     public class Row : BaseRow, IExplicitRow
     {
         public Action? OnRead;
-        public int A { get { OnRead?.Invoke(); return 1; } }
+        public int AValue = 1;
+        public int A { get { OnRead?.Invoke(); return AValue; } }
         int IExplicitRow.ExplicitA { get { OnRead?.Invoke(); return 1; } }
         public object Child = new B();
         public B TypedChild = new B();
@@ -1549,6 +1550,19 @@ namespace Demo
                 _ => -1,
             };
         }
+        static int LoopNonBindingOrPatternMultiIteration()
+        {
+            Row? current = new Row { Id = 1, AValue = 1 };
+            current.OnRead = () => { current = new Row { Id = 2, AValue = 0 }; };
+            int iterations = 0;
+            while (current is { A: 1 } or { A: 2 })
+            {
+                iterations++;
+                if (iterations > 5)
+                    return -99;
+            }
+            return iterations;
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1599,8 +1613,9 @@ namespace Demo
             IsOrPatternClearedToNull() + " / " +
             SwitchDelayedCompoundOrAndConversionCapture() + " / " +
             SwitchVarArmClearedToNull() + " / " +
-            SwitchInterleavedNullArmClearedToNull();
+            SwitchInterleavedNullArmClearedToNull() + " / " +
+            LoopNonBindingOrPatternMultiIteration();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1 / 1 null / True 9 1 / 1 1 / 1 / True / True 9 1 / 1 / 1", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0 / False 2 / True 2 1 / False 2 / True 2 1 / True 9 1 / True / True null null / False 0 / True / False 2 0 3 / True 2 1 3 3 / False 2 0 3 / True 2 1 3 3 / True 2 1 3 / False 2 / True 2 1 / True 2 1 / True True True False / False 2 0 3 / True 2 1 3 3 / 1 / True 9 1 / 1 / 1 / True 1 1 / False / 1 / 1 null / True 9 1 / 1 1 / 1 / True / True 9 1 / 1 / 1 / 1", rejectRedundantAssertions: true)
     }
 }
