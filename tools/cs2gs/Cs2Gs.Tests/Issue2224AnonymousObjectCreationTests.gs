@@ -241,6 +241,63 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Demo.C.Run()", "IdColumn")
     }
 
+    @Fact
+    func AnonymousObjectCreation_SourceGenericPropertyWithNullableConstraintSyntax_DoesNotWidenTypeArgument() {
+        let printed = TranslateUnit(`
+#nullable enable
+using System;
+
+namespace Demo
+{
+    public interface IOperation
+    {
+        string Name { get; }
+    }
+
+    public class MigrationOperation : IOperation
+    {
+        public string Name { get; init; } = "op";
+    }
+
+    public sealed class AddColumnOperation : MigrationOperation
+    {
+    }
+
+    public sealed class InterfaceBuilder<TOperation>
+        where TOperation : IOperation?
+    {
+        public TOperation Operation { get; }
+        public InterfaceBuilder(TOperation operation) => Operation = operation;
+    }
+
+    public sealed class ClassBuilder<TOperation>
+        where TOperation : class?
+    {
+        public TOperation Operation { get; }
+        public ClassBuilder(TOperation operation) => Operation = operation;
+    }
+
+    public static class C
+    {
+        public static void Run()
+        {
+            var anon = new
+            {
+                First = new InterfaceBuilder<AddColumnOperation>(new AddColumnOperation { Name = "FirstColumn" }),
+                Second = new ClassBuilder<AddColumnOperation>(new AddColumnOperation { Name = "SecondColumn" })
+            };
+            Console.WriteLine(anon.First.Operation.Name + ":" + anon.Second.Operation.Name);
+        }
+    }
+}`)
+        Assert.Contains("First InterfaceBuilder[AddColumnOperation]", printed)
+        Assert.Contains("Second ClassBuilder[AddColumnOperation]", printed)
+        Assert.DoesNotContain("InterfaceBuilder[AddColumnOperation?]", printed)
+        Assert.DoesNotContain("ClassBuilder[AddColumnOperation?]", printed)
+        Assert.DoesNotContain("Operation!!", printed)
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Demo.C.Run()", "FirstColumn:SecondColumn")
+    }
+
     shared {
         private func AnonymousTypeName(printed string) string -> Regex
             .Match(printed, "data class (AnonymousType\\d+_[0-9A-F]{16})\\(")

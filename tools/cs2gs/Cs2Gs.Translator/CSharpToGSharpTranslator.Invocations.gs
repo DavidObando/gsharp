@@ -11976,6 +11976,9 @@ partial class CSharpToGSharpTranslator {
             }
 
             private func NullableTypeArgumentViolatesTranslatedConstraints(parameter ITypeParameterSymbol) bool -> (
+                parameter.HasNotNullConstraint && !IsDictionaryKeyTypeParameter(parameter)
+            ) ||
+                (
                 parameter.HasReferenceTypeConstraint && CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(
                     parameter
                 )
@@ -11986,6 +11989,16 @@ partial class CSharpToGSharpTranslator {
                 !parameter
                 .ConstraintTypes
                 .IsEmpty
+
+            private func IsDictionaryKeyTypeParameter(
+                parameter ITypeParameterSymbol
+            ) bool -> parameter.TypeParameterKind == TypeParameterKind.Type &&
+                parameter.Ordinal == 0 &&
+                parameter
+                .ContainingType
+                ?.OriginalDefinition
+                .ToDisplayString() ==
+            "System.Collections.Generic.Dictionary<TKey, TValue>"
 
             private func DerivesFromOrEquals(candidate INamedTypeSymbol?, target INamedTypeSymbol) bool {
                 for var current INamedTypeSymbol? = candidate; current != nil; current = current!!.BaseType {
