@@ -271,12 +271,15 @@ public static class Consumer {
     @InlineData("base-typed-reordered")
     @InlineData("base-typed-extra")
     @InlineData("repeated-type-parameter")
+    @InlineData("implicit-reordered")
+    @InlineData("nested-containing")
     @InlineData("nested-contravariant")
     func ImportedTupleReturnContracts_ProjectPositionalTaintThroughCovariantEnvelopes(mode string) {
         let baseReturn = switch mode {
             case "widened-interface": "ICarrier<object, (string? Text, int Code)>"
             case "wrapped": "Carrier<((string? Text, int Code) Data, int Marker)>"
             case "nested-reordered": "IOut<Carrier<(string? Text, int Code), (string Keep, int Code)>>"
+            case "nested-containing": "Outer<(string? Text, int Code)>.Inner"
             case "contravariant-self-first",
             "contravariant-exact-first": "ICarrier<IContra<Recursive>, (string? Text, int Code)>"
             case "nested-contravariant": "IContra<ICarrier<string, (string? Text, int Code)>>"
@@ -296,6 +299,12 @@ public interface ICarrier<out X, Y> { }
 public class Derived<T> : ICarrier<string, T> { }
 public class RecursiveDerived<T> : ICarrier<Recursive, T> { }
 public class ContraDerived<T> : IContra<ICarrier<object, T>> { }
+public class Outer<T> {
+    public class Inner { }
+}
+public class NestedDerived<T> : Outer<T>.Inner {
+    public NestedDerived(T value = default!) { }
+}
 public class Carrier<T> { }
 public class Wrapped<T> : Carrier<(T Data, int Marker)> { }
 public class Carrier<X, Y> { }
@@ -328,6 +337,7 @@ public abstract class RowsBase {
             "base-typed-extra",
             "repeated-type-parameter": "Carrier<(string Text, int Code), (string Keep, int Code)>"
             case "widened-interface": "Derived<(string Text, int Code)>"
+            case "nested-containing": "NestedDerived<(string Text, int Code)>"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived<(string Text, int Code)>"
             case "nested-contravariant": "ContraDerived<(string Text, int Code)>"
             case "wrapped": "Wrapped<(string Text, int Code)>"
@@ -344,6 +354,8 @@ public abstract class RowsBase {
             case "base-typed-reordered": "string extra = null; $returnType local = new $reorderedCreationType((\"keep\", 1), (extra, 2)); return local;"
             case "base-typed-extra": "string extra = null; Carrier<(string Untainted, int Code), (string Keep, int Code)> clean = new $cleanCreationType((extra, 1), (\"keep\", 2)); _ = clean; return new $extraCreationType((extra, 1), (extra, 2));"
             case "repeated-type-parameter": "string text = null; Carrier<(string Text, int Code), (string Text, int Code)> both = new Both<(string Text, int Code)>((text, 1)); _ = both; return new $reorderedCreationType((\"keep\", 1), (text, 2));"
+            case "implicit-reordered": "return new();"
+            case "nested-containing": "string text = null; Outer<(string Text, int Code)>.Inner local = new $returnType((text, 1)); _ = local; return new $returnType();"
             default: "return new $returnType();"
         }
         let printed = Translate((`using Contract4718;
@@ -358,6 +370,7 @@ public sealed class Producer : RowsBase {
             "base-typed-extra",
             "repeated-type-parameter": "Carrier[(Text string?, Code int32), (Keep string, Code int32)]"
             case "widened-interface": "Derived[(Text string?, Code int32)]"
+            case "nested-containing": "NestedDerived[(Text string?, Code int32)]"
             case "contravariant-self-first", "contravariant-exact-first": "RecursiveDerived[(Text string?, Code int32)]"
             case "nested-contravariant": "ContraDerived[(Text string?, Code int32)]"
             case "wrapped": "Wrapped[(Text string?, Code int32)]"
@@ -396,6 +409,12 @@ public sealed class Producer : RowsBase {
                 printed
             )
             Assert.Contains("(text, 1)", printed)
+        } else if mode == "nested-containing" {
+            Assert.Contains(
+                "local Outer[(Text string?, Code int32)].Inner = NestedDerived[(Text string?, Code int32)]((text, 1))",
+                printed
+            )
+            Assert.Contains("return $expected()", printed)
         } else {
             Assert.Contains("return $expected()", printed)
         }

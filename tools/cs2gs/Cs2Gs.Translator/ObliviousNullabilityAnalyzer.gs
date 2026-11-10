@@ -6718,9 +6718,76 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             return
         }
-        for var i = 0; i < named.TypeArguments.Length; i++ {
-            CollectNestedTupleSlots(named.TypeArguments[i], AppendTuplePath(prefix, i), slots)
+        let typeArguments = EffectiveTypeArguments(named)
+        for var i = 0; i < typeArguments.Count; i++ {
+            CollectNestedTupleSlots(typeArguments[i], AppendTuplePath(prefix, i), slots)
         }
+    }
+
+    internal func EffectiveTypeArguments(named INamedTypeSymbol) IReadOnlyList[ITypeSymbol] {
+        if named.ContainingType == nil {
+            return named.TypeArguments
+        }
+        let chain = List[INamedTypeSymbol]()
+        for var current INamedTypeSymbol? = named; current != nil; current = current?.ContainingType {
+            chain.Add(current)
+        }
+        let result = List[ITypeSymbol]()
+        for var i = chain.Count - 1; i >= 0; i-- {
+            for argument in chain[i].TypeArguments {
+                result.Add(argument)
+            }
+        }
+        return result
+    }
+
+    internal func EffectiveTypeParameters(named INamedTypeSymbol) IReadOnlyList[ITypeParameterSymbol] {
+        if named.ContainingType == nil {
+            return named.TypeParameters
+        }
+        let chain = List[INamedTypeSymbol]()
+        for var current INamedTypeSymbol? = named; current != nil; current = current?.ContainingType {
+            chain.Add(current)
+        }
+        let result = List[ITypeParameterSymbol]()
+        for var i = chain.Count - 1; i >= 0; i-- {
+            for parameter in chain[i].TypeParameters {
+                result.Add(parameter)
+            }
+        }
+        return result
+    }
+
+    private func TryGetEffectiveTypeParameterIndex(
+        owner INamedTypeSymbol,
+        declaringType INamedTypeSymbol,
+        ordinal int32,
+        out index int32
+    ) bool {
+        index = 0
+        if owner.ContainingType == nil {
+            if SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, declaringType) &&
+                ordinal >= 0 &&
+                ordinal < owner
+                .TypeParameters
+                .Length {
+                index = ordinal
+                return true
+            }
+            return false
+        }
+        let parameters = EffectiveTypeParameters(owner)
+        for var i = 0; i < parameters.Count; i++ {
+            let candidate = parameters[i]
+            if candidate.Ordinal == ordinal && candidate.ContainingType != nil && SymbolEqualityComparer.Default.Equals(
+                candidate.ContainingType.OriginalDefinition,
+                declaringType.OriginalDefinition
+            ) {
+                index = i
+                return true
+            }
+        }
+        return false
     }
 
     private func NestedTupleLeaves(type ITypeSymbol?) List[(Path string, Type ITypeSymbol)] {
@@ -6756,16 +6823,15 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) bool {
         tupleType = nil
         path = nil
-        if SymbolEqualityComparer.Default.Equals(receiverType!!.OriginalDefinition, declaringType) {
-            if ordinal >= receiverType!!
-                .TypeArguments
-                .Length ||
-                receiverType!!.TypeArguments[ordinal] is not INamedTypeSymbol directTuple ||
+        if TryGetEffectiveTypeParameterIndex(receiverType!!, declaringType, ordinal, out var directIndex) {
+            let directArguments = EffectiveTypeArguments(receiverType!!)
+            if directIndex >= directArguments.Count ||
+                directArguments[directIndex] is not INamedTypeSymbol directTuple ||
                 !directTuple.IsTupleType {
                 return false
             }
             tupleType = directTuple
-            path = []int32{ordinal}
+            path = []int32{directIndex}
             return true
         }
         for (constructed, template) in EnumerateDirectReceiverTypes(receiverType) {
@@ -6779,13 +6845,16 @@ internal shared class ObliviousNullabilityAnalyzer {
                 !TryFollowTypeArgumentPath(template, inheritedPath, out var source) ||
                 source is not ITypeParameterSymbol sourceParameter ||
                 sourceParameter.ContainingType is not INamedTypeSymbol sourceOwner ||
-                !SymbolEqualityComparer
-                .Default
-                .Equals(sourceOwner.OriginalDefinition, receiverType!!.OriginalDefinition) {
+                !TryGetEffectiveTypeParameterIndex(
+                receiverType!!,
+                sourceOwner.OriginalDefinition,
+                sourceParameter.Ordinal,
+                out var sourceIndex
+            ) {
                 continue
             }
             tupleType = inheritedTuple
-            path = []int32{sourceParameter.Ordinal}
+            path = []int32{sourceIndex}
             return true
         }
         return false
@@ -6818,11 +6887,16 @@ internal shared class ObliviousNullabilityAnalyzer {
     ) bool {
         result = type
         for index in path!! {
-            if result is not INamedTypeSymbol named || index >= named.TypeArguments.Length {
+            if result is not INamedTypeSymbol named {
                 result = nil
                 return false
             }
-            result = named.TypeArguments[index]
+            let typeArguments = EffectiveTypeArguments(named)
+            if index < 0 || index >= typeArguments.Count {
+                result = nil
+                return false
+            }
+            result = typeArguments[index]
         }
         return true
     }
@@ -6935,8 +7009,12 @@ internal shared class ObliviousNullabilityAnalyzer {
             if named.IsTupleType && index < named.TupleElements.Length {
                 crossesTuple = true
                 type = named.TupleElements[index].Type
-            } else if !named.IsTupleType && index < named.TypeArguments.Length {
-                type = named.TypeArguments[index]
+            } else if !named.IsTupleType {
+                let typeArguments = EffectiveTypeArguments(named)
+                if index >= typeArguments.Count {
+                    return nil
+                }
+                type = typeArguments[index]
             } else {
                 return nil
             }
@@ -7969,22 +8047,20 @@ internal shared class ObliviousNullabilityAnalyzer {
                     inProgress: List[(Source ITypeSymbol, Target ITypeSymbol)]()
                 )
             }
+            let sourceArguments = EffectiveTypeArguments(sourceNamed)
+            let targetArguments = EffectiveTypeArguments(targetNamed)
+            let sourceParameters = EffectiveTypeParameters(sourceNamed)
             if compatible &&
                 TrySplitTuplePath(targetPath, out var argIndex, out var argRemainder) &&
-                argIndex < sourceNamed
-                .TypeArguments
-                .Length &&
-                argIndex < targetNamed
-                .TypeArguments
-                .Length &&
-                argIndex < sourceNamed
-                .TypeParameters
-                .Length {
-                let childVariance = ComposeContractVariance(variance, sourceNamed.TypeParameters[argIndex].Variance)
+                argIndex < sourceArguments.Count &&
+                argIndex < targetArguments.Count &&
+                argIndex < sourceParameters
+                .Count {
+                let childVariance = ComposeContractVariance(variance, sourceParameters[argIndex].Variance)
                 for projected in ProjectContractPathsToSource(
                     derivedSymbol,
-                    sourceNamed.TypeArguments[argIndex],
-                    targetNamed.TypeArguments[argIndex],
+                    sourceArguments[argIndex],
+                    targetArguments[argIndex],
                     argRemainder,
                     childVariance
                 ) {
@@ -9515,25 +9591,53 @@ internal shared class ObliviousNullabilityAnalyzer {
         template ??= SymbolValueType(Canonical(symbol))
         let indexes = path.Split('.')
         for var offset = 0; offset <= indexes.Length; offset++ {
-            if template is ITypeParameterSymbol parameter && parameter.TypeParameterKind == TypeParameterKind.Type {
-                var owner INamedTypeSymbol? = receiver ?? symbol!!.ContainingType
-                while owner != nil && !SymbolEqualityComparer.Default.Equals(
-                    owner.OriginalDefinition,
-                    parameter.ContainingType
-                ) {
-                    owner = owner.ContainingType
-                }
-                if owner != nil {
-                    let suffix = string.Join(".", indexes.Skip(offset))
-                    let prefix = parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
-                    return (
+            if template is ITypeParameterSymbol parameter &&
+                parameter.TypeParameterKind == TypeParameterKind.Type &&
+                parameter.ContainingType is INamedTypeSymbol parameterOwner {
+                if receiver != nil {
+                    if TryGetEffectiveTypeParameterIndex(
+                        receiver,
+                        parameterOwner.OriginalDefinition,
+                        parameter.Ordinal,
+                        out var receiverIndex
+                    ) {
+                        let suffix = string.Join(".", indexes.Skip(offset))
+                        let prefix = receiverIndex.ToString(CultureInfo.InvariantCulture)
+                        return (
+                            receiver,
+                            if suffix.Length == 0 {
+                                prefix
+                            } else {
+                                prefix + "." + suffix
+                            }
+                        )
+                    }
+                } else {
+                    var owner INamedTypeSymbol? = symbol!!.ContainingType
+                    while owner != nil && !SymbolEqualityComparer.Default.Equals(
+                        owner.OriginalDefinition,
+                        parameterOwner.OriginalDefinition
+                    ) {
+                        owner = owner.ContainingType
+                    }
+                    if owner != nil &&
+                        TryGetEffectiveTypeParameterIndex(
                         owner,
-                        if suffix.Length == 0 {
-                            prefix
-                        } else {
-                            prefix + "." + suffix
-                        }
-                    )
+                        parameterOwner.OriginalDefinition,
+                        parameter.Ordinal,
+                        out var ownerIndex
+                    ) {
+                        let suffix = string.Join(".", indexes.Skip(offset))
+                        let prefix = ownerIndex.ToString(CultureInfo.InvariantCulture)
+                        return (
+                            owner,
+                            if suffix.Length == 0 {
+                                prefix
+                            } else {
+                                prefix + "." + suffix
+                            }
+                        )
+                    }
                 }
             }
             if offset == indexes.Length {
@@ -9543,13 +9647,17 @@ internal shared class ObliviousNullabilityAnalyzer {
                 template = array.ElementType
                 continue
             }
-            if template is not INamedTypeSymbol named || !int32.TryParse(indexes[offset], out var index) {
+            if template is not INamedTypeSymbol named || !int32.TryParse(indexes[offset], out var index) || index < 0 {
                 break
             }
             if named.IsTupleType && index < named.TupleElements.Length {
                 template = named.TupleElements[index].Type
-            } else if !named.IsTupleType && index < named.TypeArguments.Length {
-                template = named.TypeArguments[index]
+            } else if !named.IsTupleType {
+                let typeArguments = EffectiveTypeArguments(named)
+                if index >= typeArguments.Count {
+                    break
+                }
+                template = typeArguments[index]
             } else {
                 break
             }
@@ -9558,20 +9666,43 @@ internal shared class ObliviousNullabilityAnalyzer {
     }
 
     private func NormalizeContractTupleNames(type ITypeSymbol) ITypeSymbol {
-        var named INamedTypeSymbol? = type as INamedTypeSymbol
-        if named == nil {
+        if type is not INamedTypeSymbol initialNamed {
             return type
         }
         // Tuple labels are rendered at each use, not part of contract identity.
-        named = named.TupleUnderlyingType ?? named
+        var named INamedTypeSymbol = initialNamed.TupleUnderlyingType ?? initialNamed
+        var containingChanged = false
+        if named.ContainingType is INamedTypeSymbol containingType &&
+            NormalizeContractTupleNames(containingType) is INamedTypeSymbol normalizedContaining &&
+            !SymbolEqualityComparer
+            .IncludeNullability
+            .Equals(normalizedContaining, containingType) {
+            for member in normalizedContaining.GetTypeMembers(named.Name, named.Arity) {
+                if !SymbolEqualityComparer.Default.Equals(member.OriginalDefinition, named.OriginalDefinition) {
+                    continue
+                }
+                named = if named.Arity > 0 {
+                    member.ConstructedFrom.Construct(named.TypeArguments, named.TypeArgumentNullableAnnotations)
+                } else {
+                    member
+                }
+                containingChanged = true
+                break
+            }
+        }
         let arguments = named.TypeArguments.Select(NormalizeContractTupleNames).ToArray()
-        return if arguments.SequenceEqual(named.TypeArguments, SymbolEqualityComparer.IncludeNullability) {
+        return if !containingChanged && arguments.SequenceEqual(
+            named.TypeArguments,
+            SymbolEqualityComparer.IncludeNullability
+        ) {
             cast[ITypeSymbol](named)
-        } else {
+        } else if named.Arity > 0 {
             named
                 .ConstructedFrom
                 .Construct(arguments.ToImmutableArray(), named.TypeArgumentNullableAnnotations)
                 .WithNullableAnnotation(named.NullableAnnotation)
+        } else {
+            named.WithNullableAnnotation(named.NullableAnnotation)
         }
     }
 }
