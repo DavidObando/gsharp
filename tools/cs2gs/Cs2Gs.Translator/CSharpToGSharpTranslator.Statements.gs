@@ -6108,7 +6108,11 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             // Both the spill emitter and its short-circuit scope detector use this decision.
-            return IsTrivialOperand(translated ?? this.TranslateExpression(expression)!!)
+            var candidate GExpression = translated ?? this.TranslateExpression(Unparenthesize(expression))!!
+            while candidate is ParenthesizedExpression parenthesized {
+                candidate = parenthesized.Inner
+            }
+            return IsTrivialOperand(candidate)
         }
 
         // For a string-concatenation `+` operand: if the operand's C# type is not

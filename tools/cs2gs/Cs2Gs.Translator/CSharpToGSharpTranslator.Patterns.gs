@@ -1840,89 +1840,15 @@ partial class CSharpToGSharpTranslator {
                     // `x is 11 or 12` → `x == 11 || x == 12`;
                     // `x is A and B` → `(x is A) && (x is B)`.
                     let isOr = binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword)
-                    let leftTypeSyntax ExpressionSyntax? = switch binaryPattern.Left {
-                        case declaration is DeclarationPatternSyntax: declaration.Type
-                        case typePattern is TypePatternSyntax: typePattern.Type
-                        case constant is ConstantPatternSyntax when this.IsTypeReferencePattern(constant.Expression):
-                        constant.Expression
-                        default: default(ExpressionSyntax?)
-                    }
-                    if !isOr && leftTypeSyntax != nil && this.ScrutineeMayLoseNarrowingInPattern(receiverSyntax) &&
-                        !this.IsConditionalAccessAnalyzerType(leftTypeSyntax as TypeSyntax) &&
-                        !this.IsPlainAccessAnalyzerType(leftTypeSyntax as TypeSyntax, out _) &&
-                        !this
-                        .IsVariableReferenceAnalyzerType(leftTypeSyntax as TypeSyntax, out _) {
-                        let testedType ITypeSymbol? = (
-                            this.context.GetSymbolInfo(leftTypeSyntax).Symbol as ITypeSymbol
-                        ) ??
-                            this
-                            .context
-                            .GetTypeInfo(leftTypeSyntax)
-                            .Type
-                        let effectiveReceiverType ITypeSymbol? = if IsNullableValueType(receiverType) {
-                            receiverType
-                        } else {
-                            UnwrapNullable(receiverType)
-                        }
-                        if testedType != nil && effectiveReceiverType != nil && !SymbolEqualityComparer.Default.Equals(
-                            effectiveReceiverType,
-                            UnwrapNullable(testedType)
-                        ) {
-                            let assignable = !IsNullableValueType(receiverType) &&
-                                IsAssignableNonNull(effectiveReceiverType, testedType)
-                            let leftDesignation = (binaryPattern.Left as DeclarationPatternSyntax)?.Designation as
-                            SingleVariableDesignationSyntax
-                            if !assignable || leftDesignation != nil {
-                                let temp = this.NewSpillName()
-                                let local = IdentifierExpression(temp)
-                                if leftDesignation != nil && this.context.GetDeclaredSymbol(
-                                    leftDesignation
-                                ) is {} leftSymbol {
-                                    this.state.PatternBindings[leftSymbol] = local
-                                }
-                                let subReceiver = if assignable {
-                                    receiver
-                                } else {
-                                    local
-                                }
-                                let subReceiverSyntax = if assignable {
-                                    receiverSyntax
-                                } else {
-                                    default(ExpressionSyntax?)
-                                }
-                                let subReceiverType = if assignable {
-                                    receiverType
-                                } else {
-                                    testedType
-                                }
-                                let rightTest = this.TranslatePatternTest(
-                                    subReceiver,
-                                    binaryPattern.Right,
-                                    subReceiverType,
-                                    subReceiverSyntax,
-                                    isNestedPatternMember: !assignable || isNestedPatternMember,
-                                    receiverIsNonNull: true
-                                )
-                                if leftDesignation != nil && this.context.GetDeclaredSymbol(
-                                    leftDesignation
-                                ) is {} leftSymbolAfter {
-                                    this.state.PatternBindings[leftSymbolAfter] = local
-                                }
-                                return BinaryExpression(
-                                    PatternTestExpression(
-                                        receiver,
-                                        this.BuildPatternTypeTest(
-                                            temp,
-                                            leftTypeSyntax,
-                                            binaryPattern.Left,
-                                            designationAfterType: true
-                                        )
-                                    ),
-                                    "&&",
-                                    rightTest
-                                )
-                            }
-                        }
+                    if !isOr && this.ScrutineeMayLoseNarrowingInPattern(receiverSyntax) {
+                        return this.TranslateConversionCapturingAndPatternTest(
+                            receiver,
+                            binaryPattern,
+                            receiverType,
+                            receiverSyntax,
+                            isNestedPatternMember,
+                            receiverIsNonNull
+                        )
                     }
                     let underlyingType = if IsNullableValueType(receiverType) {
                         cast[INamedTypeSymbol](receiverType).TypeArguments[0]
@@ -5769,6 +5695,167 @@ partial class CSharpToGSharpTranslator {
                 .Annotated ||
                 IsNullableValueType(declaredType) ||
                 this.ShouldPromoteToNullableReference(symbol)
+        }
+
+        private func CollectAndPatternConjuncts(pattern PatternSyntax, conjuncts List[PatternSyntax]) {
+            var current = pattern
+            while current is ParenthesizedPatternSyntax parenthesized {
+                current = parenthesized.Pattern
+            }
+            if current is BinaryPatternSyntax binary && binary.OperatorToken.IsKind(SyntaxKind.AndKeyword) {
+                this.CollectAndPatternConjuncts(binary.Left, conjuncts)
+                this.CollectAndPatternConjuncts(binary.Right, conjuncts)
+                return
+            }
+            conjuncts.Add(current)
+        }
+
+        private func TranslateConversionCapturingAndPatternTest(
+            receiver GExpression?,
+            binaryPattern BinaryPatternSyntax,
+            receiverType ITypeSymbol?,
+            receiverSyntax ExpressionSyntax?,
+            isNestedPatternMember bool,
+            receiverIsNonNull bool
+        ) GExpression {
+            let conjuncts = List[PatternSyntax]()
+            this.CollectAndPatternConjuncts(binaryPattern, conjuncts)
+            var currentReceiver GExpression? = receiver
+            var currentReceiverSyntax ExpressionSyntax? = receiverSyntax
+            var currentReceiverType ITypeSymbol? = receiverType
+            var currentIsNested = isNestedPatternMember
+            var currentIsNonNull = receiverIsNonNull
+            var combined GExpression? = nil
+            let pinnedBindings = List[(ISymbol, GExpression)]()
+            for conjunct in conjuncts {
+                let typeSyntax ExpressionSyntax? = switch conjunct {
+                    case declaration is DeclarationPatternSyntax: declaration.Type
+                    case typePattern is TypePatternSyntax: typePattern.Type
+                    case constant is ConstantPatternSyntax when this.IsTypeReferencePattern(constant.Expression):
+                    constant.Expression
+                    case recursive is RecursivePatternSyntax: recursive.Type
+                    default: default(ExpressionSyntax?)
+                }
+                if this.ScrutineeMayLoseNarrowingInPattern(currentReceiverSyntax) &&
+                    (
+                    typeSyntax != nil ||
+                        (conjunct is RecursivePatternSyntax && IsNullableValueType(currentReceiverType))
+                ) &&
+                    !this.IsConditionalAccessAnalyzerType(typeSyntax as TypeSyntax) && !this.IsPlainAccessAnalyzerType(
+                    typeSyntax as TypeSyntax,
+                    out _
+                ) &&
+                    !this
+                    .IsVariableReferenceAnalyzerType(typeSyntax as TypeSyntax, out _) {
+                    let testedType ITypeSymbol? = if typeSyntax != nil {
+                        (this.context.GetSymbolInfo(typeSyntax).Symbol as ITypeSymbol) ??
+                            this
+                            .context
+                            .GetTypeInfo(typeSyntax)
+                            .Type
+                    } else {
+                        UnwrapNullable(currentReceiverType)
+                    }
+                    let effectiveReceiverType ITypeSymbol? = if IsNullableValueType(currentReceiverType) {
+                        currentReceiverType
+                    } else {
+                        UnwrapNullable(currentReceiverType)
+                    }
+                    if testedType != nil && effectiveReceiverType != nil && !SymbolEqualityComparer.Default.Equals(
+                        effectiveReceiverType,
+                        UnwrapNullable(testedType)
+                    ) {
+                        let assignable = !IsNullableValueType(currentReceiverType) &&
+                            IsAssignableNonNull(effectiveReceiverType, testedType)
+                        let designation = switch conjunct {
+                            case declaration is DeclarationPatternSyntax:
+                            declaration.Designation as SingleVariableDesignationSyntax
+                            case recursive is RecursivePatternSyntax:
+                            recursive.Designation as SingleVariableDesignationSyntax
+                            default: default(SingleVariableDesignationSyntax?)
+                        }
+                        if !assignable || designation != nil {
+                            let temp = this.NewSpillName()
+                            let local = IdentifierExpression(temp)
+                            if designation != nil && this.context.GetDeclaredSymbol(designation) is {} boundSymbol {
+                                this.state.PatternBindings[boundSymbol] = local
+                                pinnedBindings.Add((boundSymbol, local))
+                            }
+                            let capturePattern GPattern = if typeSyntax != nil {
+                                this.BuildPatternTypeTest(temp, typeSyntax, conjunct, designationAfterType: true)
+                            } else {
+                                PropertyPattern(List[PropertyPatternField](), temp)
+                            }
+                            var stepTest GExpression = PatternTestExpression(currentReceiver, capturePattern)
+                            if !assignable {
+                                currentReceiver = local
+                                currentReceiverSyntax = nil
+                                currentReceiverType = testedType
+                                currentIsNested = true
+                                currentIsNonNull = true
+                            }
+                            if conjunct is RecursivePatternSyntax recursiveConjunct &&
+                                (
+                                recursiveConjunct.PropertyPatternClause != nil ||
+                                    recursiveConjunct.PositionalPatternClause != nil
+                            ) {
+                                let rest = this.TranslateRecursivePatternTest(
+                                    currentReceiver,
+                                    recursiveConjunct,
+                                    currentReceiverSyntax,
+                                    currentReceiverType,
+                                    isNestedPatternMember: currentIsNested,
+                                    receiverAlreadyMatched: true
+                                )
+                                stepTest = BinaryExpression(stepTest, "&&", rest)
+                            }
+                            combined = if combined == nil {
+                                stepTest
+                            } else {
+                                cast[GExpression](BinaryExpression(combined, "&&", stepTest))
+                            }
+                            continue
+                        }
+                    }
+                }
+                let stepTest = this.TranslatePatternTest(
+                    currentReceiver,
+                    conjunct,
+                    currentReceiverType,
+                    currentReceiverSyntax,
+                    currentIsNested,
+                    currentIsNonNull
+                )
+                let underlying = if IsNullableValueType(currentReceiverType) {
+                    cast[INamedTypeSymbol](currentReceiverType).TypeArguments[0]
+                } else {
+                    currentReceiverType?.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+                }
+                let narrowing = this.ClassifyLoweredPatternNarrowing(conjunct, underlying, underlying)
+                currentIsNonNull = currentIsNonNull || narrowing.TypeThen != nil || narrowing.NilThen != nil
+                if currentReceiverSyntax != nil && this.ScrutineeStorageIsNullableInGSharp(currentReceiverSyntax) &&
+                    this.ScrutineeMayLoseNarrowingInPattern(currentReceiverSyntax) && conjunct.DescendantNodesAndSelf()
+                    .Any(
+                    (node SyntaxNode) -> this.PatternNodeRunsUserCode(node) ||
+                        (
+                        node is ConstantPatternSyntax cp && this.ConstantPatternUsesValueEquality(
+                            this.GetPatternComparisonReceiverType(cp),
+                            cp.Expression
+                        )
+                    )
+                ) {
+                    currentReceiver = EnsureNonNullAssertion(receiver)
+                }
+                combined = if combined == nil {
+                    stepTest
+                } else {
+                    cast[GExpression](BinaryExpression(combined, "&&", stepTest))
+                }
+            }
+            for (symbol, boundLocal) in pinnedBindings {
+                this.state.PatternBindings[symbol] = boundLocal
+            }
+            return combined ?? LiteralExpression.Bool(true)
         }
 
         private func PatternNodeRunsUserCode(node SyntaxNode) bool -> switch node {

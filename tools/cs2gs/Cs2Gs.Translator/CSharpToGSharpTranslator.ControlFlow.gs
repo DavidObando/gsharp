@@ -539,7 +539,8 @@ partial class CSharpToGSharpTranslator {
                 case binaryPattern is BinaryPatternSyntax when(
                     (!negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.AndKeyword)) ||
                         (negated && binaryPattern.OperatorToken.IsKind(SyntaxKind.OrKeyword))
-                ) {
+                ) &&
+                    scrutineeSyntax == nil {
                     this.EmitMustHoldGuards(
                         idExpr,
                         scrutineeType,
@@ -1143,10 +1144,11 @@ partial class CSharpToGSharpTranslator {
         /// guarded block must hoist the scrutinee into a local (so the local
         /// smart-casts) rather than re-emit the expression at each use of `t`.
         private func IsSmartCastableScrutinee(expression ExpressionSyntax?) bool {
-            if !(expression is IdentifierNameSyntax) {
+            let unwrapped = Unparenthesize(expression)
+            if !(unwrapped is IdentifierNameSyntax) {
                 return false
             }
-            let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
+            let symbol ISymbol? = this.context.GetSymbolInfo(unwrapped).Symbol
             return symbol is ILocalSymbol || symbol is IParameterSymbol
         }
 

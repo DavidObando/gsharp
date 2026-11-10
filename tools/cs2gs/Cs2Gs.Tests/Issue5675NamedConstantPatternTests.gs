@@ -1185,6 +1185,43 @@ namespace Demo
                 _ => -1,
             };
         }
+        static string LoopBinaryAndLeftTypeCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            while (current is Row matched and { A: 1, Tag: 3 })
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string BinaryAndParenthesizedLeftTypeCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            if (current is (Row matched) and { A: 1, Tag: 3 })
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string BinaryAndChainedLeftTypeCapture()
+        {
+            var initial = new Row { Id = 1, Tag = 3 };
+            BaseRow current = initial;
+            initial.OnRead = () => { current = new Row { Id = 2, Tag = 0 }; };
+            if (current is Row matched and { A: 1 } and { Tag: 3 })
+                return "True " + current.Id + " " + matched.Id;
+            return "False " + current.Id;
+        }
+        static string ParenthesizedSubjectUnusedDesignation()
+        {
+            var current = new Row();
+            var child = new B();
+            current.Child = child;
+            child.OnRead = () => { current = new Row { Tag = 0 }; };
+            if ((current) is { Child: B { A: 1 }, Tag: 3 } matched)
+                return "True " + current.Tag;
+            return "False " + current.Tag;
+        }
         public static string Run() =>
             LoopTypedDowncast() + " / " +
             LoopNullableSubject() + " / " +
@@ -1196,8 +1233,12 @@ namespace Demo
             NegatedGuardClearedToNull() + " / " +
             BinaryAndLeftTypeCapture() + " / " +
             ParenthesizedSwitchSubjectWithWhenGuard() + " / " +
-            SwitchArmNullableClearedReassigned();
+            SwitchArmNullableClearedReassigned() + " / " +
+            LoopBinaryAndLeftTypeCapture() + " / " +
+            BinaryAndParenthesizedLeftTypeCapture() + " / " +
+            BinaryAndChainedLeftTypeCapture() + " / " +
+            ParenthesizedSubjectUnusedDesignation();
     }
-}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7", rejectRedundantAssertions: true)
+}`, "True 2 1 / True 2 2 / True null / True null / True 0 1 / False 0 / True 99 2 / True / True 2 1 / True 99 2 / 7 / True 2 1 / True 2 1 / True 2 1 / False 0", rejectRedundantAssertions: true)
     }
 }
