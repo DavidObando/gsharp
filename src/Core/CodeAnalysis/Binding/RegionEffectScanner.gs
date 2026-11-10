@@ -29,6 +29,9 @@ internal sealed class RegionEffectScanner {
     // The names that a pattern or a binding declared anywhere in the region so far. A pattern variable
     // of `if x is not T v { return }` is visible after the statement that declares it.
     private var patternNames HashSet[string] = HashSet[string]()
+    private let undeclaredTypeCandidates HashSet[TypeOrConstantPatternSyntax] = HashSet[TypeOrConstantPatternSyntax](
+        ReferenceEqualityComparer.Instance
+    )
     private var pendingReceiver ExpressionSyntax? = nil
     private var pendingReceiverIsRoot bool = false
     private var pendingReceiverPath RegionReceiverPath? = nil
@@ -393,8 +396,8 @@ internal sealed class RegionEffectScanner {
             case SyntaxKind.RelationalPattern {
                 let relational = cast[RelationalPatternSyntax](node)
                 // The binder converts the operand to the subject's type, which a conversion operator can do (W4).
-                if Active() && UnwrapParentheses(relational.Expression) !is LiteralExpressionSyntax {
-                    RecordConversion(relational.Expression, patternSubject)
+                if Active() && relational.Expression !is LiteralExpressionSyntax {
+                    current.Conversions.Add(RegionConversion(nil, nil, false))
                 }
                 // Issue #5688: `== value` and `!= value` bind as the binary operation `subject op value`.
                 // Record them as operator candidates, including a literal value.
@@ -554,6 +557,11 @@ internal sealed class RegionEffectScanner {
             }
             case SyntaxKind.TypeOrConstantPattern {
                 let pattern = cast[TypeOrConstantPatternSyntax](node)
+                if CandidateUnlessDeclared(TypeTest("", pattern.CandidateType, pattern.PropertyPattern == nil)) != nil {
+                    undeclaredTypeCandidates.Add(pattern)
+                } else {
+                    undeclaredTypeCandidates.Remove(pattern)
+                }
                 if pattern.PropertyPattern == nil {
                     RecordPatternTest(pattern.Expression, TypeTest("", pattern.CandidateType, true))
                     constantPatternDepth++
@@ -2918,8 +2926,7 @@ internal sealed class RegionEffectScanner {
         for node in pattern.DescendantNodesAndSelf() {
             if node is TypePatternSyntax {
                 all++
-            } else if node is TypeOrConstantPatternSyntax candidate &&
-                CandidateUnlessDeclared(TypeTest("", candidate.CandidateType, true)) != nil {
+            } else if node is TypeOrConstantPatternSyntax candidate && undeclaredTypeCandidates.Contains(candidate) {
                 all++
             }
         }
@@ -2941,9 +2948,8 @@ internal sealed class RegionEffectScanner {
         for node in tested {
             if node is TypePatternSyntax typePattern {
                 current.TypeTests.Add(TypeTest(name, typePattern.Type, false))
-            } else if node is TypeOrConstantPatternSyntax candidate &&
-                CandidateUnlessDeclared(TypeTest(name, candidate.CandidateType, true)) is {} typeTest {
-                current.TypeTests.Add(typeTest)
+            } else if node is TypeOrConstantPatternSyntax candidate && undeclaredTypeCandidates.Contains(candidate) {
+                current.TypeTests.Add(TypeTest(name, candidate.CandidateType, candidate.PropertyPattern == nil))
             }
         }
     }
@@ -2994,9 +3000,10 @@ internal sealed class RegionEffectScanner {
 
     // A name that the region declares is a value, whatever type of that name the entry scope has. A nested region's
     // test is checked again when the enclosing region composes it, since the enclosing region can declare the name.
-    private func CandidateUnlessDeclared(
-        candidate RegionTypeTest?
-    ) RegionTypeTest? -> if candidate?.TypeName is {} typeName &&
+    private func CandidateUnlessDeclared(candidate RegionTypeTest?) RegionTypeTest? -> if candidate is {
+        MayBeConstant: true,
+        TypeName: {} typeName
+    } &&
         IsDeclared(FirstSegment(typeName)) {
         default(RegionTypeTest?)
     } else {
@@ -3029,7 +3036,7 @@ internal sealed class RegionEffectScanner {
                 tested.Add(pattern)
             }
             case candidate is TypeOrConstantPatternSyntax {
-                if CandidateUnlessDeclared(TypeTest("", candidate.CandidateType, true)) != nil {
+                if undeclaredTypeCandidates.Contains(candidate) {
                     tested.Add(pattern)
                 }
             }

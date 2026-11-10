@@ -136,6 +136,35 @@ Console.WriteLine(Probe())
                 ),
                 true
             }
+            yield []object{"relational_equality_subject_conversion_on_ref", `import System
+class Target {}
+class Source { var Callback () -> void }
+func operator implicit(src Source) Target { src.Callback() return Target() }
+func operator ==(left Target, right Target) bool -> false
+func operator !=(left Target, right Target) bool -> true
+func Read(ref text string?, src Source, target Target) int32 {
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        if !(src is == target) { }
+        if i == 1 { return length }
+    }
+    return 0
+}
+func Probe() int32 {
+    var text string? = "ok"
+    let src = Source{Callback: () -> { text = nil }}
+    return Read(ref text, src, Target())
+}
+Console.WriteLine(Probe())
+`, true}
+            for hiddenBody in[]string{
+                "if items is DerivedList and var DerivedList { let c = items.Count }",
+                "const DerivedList C? = nil\n        if items is DerivedList {} { let c = items.Count }",
+                "const DerivedList C? = nil\n        for var j = 0; j < 1; j++ {\n            if items is DerivedList matched { let c = items.Count }\n        }"
+            } {
+                yield []object{"hidden_count_" + hiddenBody, HiddenCount(hiddenBody), true}
+            }
             for body in[]string{
                 "var Local C? = nil\n        Local = replacement\n        let matches = value is (Local)",
                 "const First C? = nil\n        var Local = First\n        Local = replacement\n        let matches = value is (Local)",
@@ -267,6 +296,28 @@ Console.WriteLine(Run(1ARGUMENT))
                 source.Replace("func Read(", "func Read[T](").Replace("Read(nil", "Read[int32](nil")
             }
         }
+
+        private func HiddenCount(body string) string -> `import System
+import System.Collections.Generic
+class C {}
+class DerivedList : List[int32] {
+    var Callback () -> void
+    prop Count int32 { get { Callback() return 0 } }
+}
+func Read() int32 {
+    var text string? = "ok"
+    let clear = () -> { text = nil }
+    let items List[int32] = DerivedList{Callback: clear}
+    if text == nil { return 0 }
+    for var i = 0; i < 2; i++ {
+        let length = text.Length
+        BODY
+        if i == 1 { return length }
+    }
+    return 0
+}
+Console.WriteLine(Read())
+`.Replace("BODY", body)
 
         private func NullChars(conversion string, inLoop bool, rejected bool = true) string {
             let declaration = if inLoop {
