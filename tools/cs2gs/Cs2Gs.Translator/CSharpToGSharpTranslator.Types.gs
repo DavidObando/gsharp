@@ -2689,17 +2689,18 @@ partial class CSharpToGSharpTranslator {
                 return VarPattern(temp)
             }
             if receiverSyntax.Parent is SwitchExpressionSyntax switchParent &&
-                pattern is not(
-                Microsoft
+                pattern is not Microsoft
+                .CodeAnalysis
+                .CSharp
+                .Syntax
+                .DiscardPatternSyntax &&
+                (
+                pattern is not Microsoft
                     .CodeAnalysis
                     .CSharp
                     .Syntax
-                    .DiscardPatternSyntax or
-                    Microsoft
-                    .CodeAnalysis
-                    .CSharp
-                    .Syntax
-                    .VarPatternSyntax
+                    .VarPatternSyntax varSwitchPattern ||
+                    varSwitchPattern.Designation is SingleVariableDesignationSyntax
             ) &&
                 switchParent
                 .Arms

@@ -1563,6 +1563,48 @@ partial class CSharpToGSharpTranslator {
             receiverIsNonNull bool = false,
             receiverNarrowingLost bool = false
         ) GExpression {
+            if !isNestedPatternMember &&
+                receiverSyntax != nil &&
+                this.activeSwitchEvaluationCache == nil &&
+                pattern != nil &&
+                this.PatternScrutineeMayChangeDuringMatch(receiverSyntax, pattern) &&
+                pattern
+                .DescendantNodesAndSelf()
+                .OfType[BinaryPatternSyntax]()
+                .Any((binary BinaryPatternSyntax) -> binary.OperatorToken.IsKind(SyntaxKind.OrKeyword)) {
+                let isCache = (
+                    Declarations: List[GStatement](),
+                    NullGuard: List[(Flag string, Value string)](),
+                    Members: List[(ReceiverKey string, Member ISymbol, Flag string, Value string)](),
+                    TypeConversions: List[
+                        (TestedType ITypeSymbol, Flag string, Matched string, Value string, NullableStorage bool)
+                    ]()
+                )
+                this.activeSwitchEvaluationCache = isCache
+                var cachedTest GExpression
+                try {
+                    cachedTest = this.TranslatePatternTest(
+                        receiver,
+                        pattern,
+                        receiverType,
+                        receiverSyntax,
+                        isNestedPatternMember,
+                        receiverIsNonNull,
+                        receiverNarrowingLost
+                    )
+                } finally {
+                    this.activeSwitchEvaluationCache = nil
+                }
+                if isCache.Declarations.Count == 0 {
+                    return cachedTest
+                }
+                let outerDeclarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+                if outerDeclarations != nil {
+                    outerDeclarations.AddRange(isCache.Declarations)
+                    return cachedTest
+                }
+                return BlockExpression(isCache.Declarations, cachedTest)
+            }
             let receiverType = if pattern is RelationalPatternSyntax {
                 this.GetPatternInputType(pattern, receiverType)
             } else {
@@ -1653,9 +1695,7 @@ partial class CSharpToGSharpTranslator {
                 return LiteralExpression.Bool(false)
             }
             switch pattern {
-                case paramsNull is ConstantPatternSyntax when paramsNull.Expression.IsKind(
-                    SyntaxKind.NullLiteralExpression
-                ) &&
+                case paramsNull is ConstantPatternSyntax when this.IsNullPatternValue(paramsNull.Expression) &&
                     this
                     .IsParamsArrayOperand(receiverSyntax) {
                     // ADR-0159 / issue #3501: `args is null` where `args` is a
@@ -1665,6 +1705,15 @@ partial class CSharpToGSharpTranslator {
                     // `args == null` spelling is folded (see
                     // TryFoldParamsArrayNullCheck).
                     return LiteralExpression.Bool(false)
+                }
+                case constant is ConstantPatternSyntax when this.IsNullPatternValue(constant.Expression) &&
+                    !isNestedPatternMember &&
+                    receiverSyntax != nil &&
+                    this.activeSwitchEvaluationCache != nil {
+                    return UnaryExpression(
+                        "!",
+                        ParenthesizedExpression(this.BuildCachedSwitchNullGuard(receiver, receiverType))
+                    )
                 }
                 case constant is ConstantPatternSyntax when constant.Expression.IsKind(
                     SyntaxKind.NullLiteralExpression
@@ -2247,6 +2296,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 case constant is ConstantPatternSyntax when this.IsNullPatternValue(constant.Expression) {
                     // `x is not null` → `x != nil`.
+                    if !isNestedPatternMember && receiverSyntax != nil && this.activeSwitchEvaluationCache != nil {
+                        return this.BuildCachedSwitchNullGuard(receiver, receiverType)
+                    }
                     return BinaryExpression(receiver, "!=", LiteralExpression.Null())
                 }
                 case constant is ConstantPatternSyntax when this.IsTypeReferencePattern(constant.Expression) {
@@ -2268,6 +2320,12 @@ partial class CSharpToGSharpTranslator {
                     BindPatternDesignation(emptyRecursive.Designation, receiver)
                     if receiverType != nil && IsNonNullableValueTypeSymbol(receiverType) {
                         return LiteralExpression.Bool(false)
+                    }
+                    if !isNestedPatternMember && receiverSyntax != nil && this.activeSwitchEvaluationCache != nil {
+                        return UnaryExpression(
+                            "!",
+                            ParenthesizedExpression(this.BuildCachedSwitchNullGuard(receiver, receiverType))
+                        )
                     }
                     return BinaryExpression(receiver, "==", LiteralExpression.Null())
                 }
@@ -6123,7 +6181,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 default(GExpression?)
             }
-            let prefixTest = BlockExpression(
+            var prefixTest GExpression = BlockExpression(
                 List[GStatement]{
                     IfStatement(
                         UnaryExpression("!", IdentifierExpression(entry.Flag)),
@@ -6147,6 +6205,23 @@ partial class CSharpToGSharpTranslator {
                 },
                 IdentifierExpression(entry.Matched)
             )
+            if this.activeCompoundConversionCapture is {} captureTarget && object.ReferenceEquals(
+                receiver,
+                captureTarget.SourceReceiver
+            ) &&
+                (
+                SymbolEqualityComparer.Default.Equals(unwrappedTarget, captureTarget.TargetType) ||
+                    IsAssignableNonNull(unwrappedTarget, captureTarget.TargetType)
+            ) {
+                prefixTest = BinaryExpression(
+                    prefixTest,
+                    "&&",
+                    BlockExpression(
+                        List[GStatement]{AssignmentStatement(captureTarget.TargetLocal, memberOverride ?? local)},
+                        LiteralExpression.Bool(true)
+                    )
+                )
+            }
             return (prefixTest, local, memberOverride)
         }
 
@@ -6212,7 +6287,7 @@ partial class CSharpToGSharpTranslator {
             let receiverKey = if isRootSubject {
                 "<root>"
             } else {
-                GSharpPrinter.Print(memberReceiver!!)
+                GSharpPrinter.RenderExpressionText(memberReceiver!!)
             }
             var entry = cache.Members.FirstOrDefault(
                 (candidate(ReceiverKey string, Member ISymbol, Flag string, Value string)) -> string.Equals(
@@ -6345,6 +6420,7 @@ partial class CSharpToGSharpTranslator {
             var combined GExpression? = nil
             let pinnedBindings = List[(ISymbol, GExpression)]()
             let localCompoundDeclarations = List[GStatement]()
+            let switchDelayedCompoundCaptures = List[GExpression]()
             for conjunct in conjuncts {
                 let typeSyntax ExpressionSyntax? = switch conjunct {
                     case declaration is DeclarationPatternSyntax: declaration.Type
@@ -6580,14 +6656,21 @@ partial class CSharpToGSharpTranslator {
                         if targetSymbol.IsReferenceType {
                             storageType = MakeNullable(storageType)
                         }
-                        let declarations = this
-                            .state
-                            .ShortCircuitSpillDeclarations ??
+                        let declarations = if this.activeSwitchEvaluationCache is {} switchCache {
+                            switchCache.Declarations
+                        } else {
                             this
-                            .state
-                            .PendingSpillPrologue ??
-                            localCompoundDeclarations
+                                .state
+                                .ShortCircuitSpillDeclarations ??
+                                this
+                                .state
+                                .PendingSpillPrologue ??
+                                localCompoundDeclarations
+                        }
                         declarations.Add(LocalDeclarationStatement(BindingKind.Var, temp, storageType))
+                        if receiverSyntax?.Parent is SwitchExpressionSyntax && targetSymbol.IsReferenceType {
+                            switchDelayedCompoundCaptures.Add(compoundCaptureLocal)
+                        }
                         this.activeCompoundConversionCapture = (
                             compoundPreCaptureReceiver,
                             targetSymbol,
@@ -6679,6 +6762,14 @@ partial class CSharpToGSharpTranslator {
             }
             for (symbol, boundLocal) in pinnedBindings {
                 this.state.PatternBindings[symbol] = boundLocal
+            }
+            for delayedCapture in switchDelayedCompoundCaptures {
+                this.state.StoredPatternCaptures.Add(delayedCapture)
+                for boundKey in this.state.PatternBindings.Keys.ToList() {
+                    if object.ReferenceEquals(this.state.PatternBindings[boundKey], delayedCapture) {
+                        this.state.PatternBindings[boundKey] = NonNullAssertionExpression(delayedCapture)
+                    }
+                }
             }
             let result = combined ?? LiteralExpression.Bool(true)
             return if localCompoundDeclarations.Count == 0 {
