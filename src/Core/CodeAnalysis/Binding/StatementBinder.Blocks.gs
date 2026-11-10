@@ -1846,7 +1846,10 @@ internal partial class StatementBinder {
         captureTail Func[BoundExpression, BoundExpression]
     ) BoundExpression {
         for statement in block.Statements {
-            if statement is BoundVariableDeclaration hoistedDeclaration {
+            if statement is BoundVariableDeclaration hoistedDeclaration &&
+                hoistedDeclaration
+                .Variable
+                .DeclaringSyntax == nil {
                 $scope.TryDeclareVariable(hoistedDeclaration.Variable)
             }
             prefix.Add(statement)
@@ -1871,6 +1874,8 @@ internal partial class StatementBinder {
             .Emit
             .ReflectionMetadataEmitter
             .IsValueTypeSymbol(type) ||
+            type is PointerTypeSymbol or
+            FunctionPointerTypeSymbol ||
             type is TypeParameterSymbol &&
             !Binder.IsReferenceTypeForConstraint(type)
     )

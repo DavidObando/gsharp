@@ -97,10 +97,13 @@ struct Counter {
     func Bump() { n++ }
 }
 unsafe func GetPointer(items []int32) *int32 -> &items[0]
+unsafe func GetSlot(slots []*int32) **int32 -> &slots[0]
 unsafe func GetCounterPointer(items []Counter) *Counter -> &items[0]
 unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func ClearSlot(slot **int32) { *slot = nil }
 unsafe func Run() {
     let items = []int32{0, 0}
+    let slots = []*int32{&items[0], &items[1]}
     let counters = []Counter{Counter{}}
     ` + keyword + ` Write(&items[0])
     ` + keyword + ` Write(&*GetPointer(items))
@@ -109,6 +112,9 @@ unsafe func Run() {
     ` + keyword + ` Write(&(*GetCounterPointer(counters)).pair.first)
     ` + keyword + ` Write(GetPointer(items))
     ` + keyword + ` (*GetCounterPointer(counters)).Bump()
+    ` + keyword + ` ClearSlot(&slots[0])
+    ` + keyword + ` ClearSlot(&*GetSlot(slots))
+    ` + keyword + ` ClearSlot(&GetSlot(slots)[1])
 }
 `
         Assert.Empty(BindErrors(source))
@@ -129,6 +135,38 @@ unsafe func Run() {
 `
         let error = Assert.Single(BindErrors(source))
         Assert.Equal("GS9008", error.Id)
+    }
+
+    @Fact
+    func HoistedPointerBlockLocals_DoNotLeakIntoEnclosingScope() {
+        let redeclareSource = `package Issue5836BlockScope
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    let items = []int32{0}
+    scope {
+        go Write({
+            var hidden = 1
+            (&items[hidden - 1])
+        })
+        var hidden = 2
+    }
+}
+`
+        Assert.Empty(BindErrors(redeclareSource))
+
+        let leakSource = `package Issue5836BlockLeak
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() int32 {
+    let items = []int32{0}
+    go Write({
+        var hidden = 1
+        (&items[hidden - 1])
+    })
+    return hidden
+}
+`
+        let error = Assert.Single(BindErrors(leakSource))
+        Assert.Equal("GS0125", error.Id)
     }
 
     @Theory
