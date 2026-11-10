@@ -1101,6 +1101,7 @@ public static class Obj {
     @Theory
     @InlineData("parameter-write")
     @InlineData("local-to-return")
+    @InlineData("captured-local-to-return")
     @InlineData("local-ref-to-parameter")
     func Issue5880_GenericMethodBodyTupleFlows_PromoteOwnDeclarations(shape string) {
         let source = switch shape {
@@ -1108,6 +1109,17 @@ public static class Obj {
     private static (T, int) Create<T>() where T : class? {
         (T, int) row = (null, 0);
         return row;
+    }
+    public static string Run() {
+        (string, int) row = Create<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "captured-local-to-return": `public static class Obj {
+    private static (T, int) Create<T>() where T : class? {
+        (T, int) row = (null, 0);
+        (T, int) Local() => row;
+        return Local();
     }
     public static string Run() {
         (string, int) row = Create<string>();
@@ -1140,6 +1152,48 @@ public static class Obj {
         Assert.Contains("(T?, int32)", printed)
         Assert.Contains("row (string?, int32)", printed)
         AssertParity(source, printed, "null:0")
+    }
+
+    @Fact
+    func Issue5880_GenericLocalFunctionRefParameter_KeepsNullableAndFixedCallsIndependent() {
+        const source = `public static class Obj {
+    public static string Run() {
+        void Keep<T>(ref (T, int) value) where T : class? { }
+        (string, int) nullableRow = (null, 1);
+        Keep(ref nullableRow);
+#nullable enable
+        (string, int) fixedRow = ("ok", 2);
+#nullable disable
+        Keep(ref fixedRow);
+        return (nullableRow.Item1 ?? "null") + ":" + fixedRow.Item1 + ":" + fixedRow.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("var nullableRow (string?, int32)", printed)
+        Assert.DoesNotContain("var fixedRow (string?, int32)", printed)
+        AssertParity(source, printed, "null:ok:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefReturnNonParameterStorage_IgnoresUnrelatedFixedParameter() {
+        const source = `public static class Obj {
+    private static (string, int) saved = ("x", 0);
+    private static ref (string, int) Borrow<T>(ref (string, int) unused) => ref saved;
+    public static string Run() {
+#nullable enable
+        (string, int) fixedRow = ("keep", 2);
+#nullable disable
+        ref var alias = ref Borrow<int>(ref fixedRow);
+        alias = (null, 1);
+        return (saved.Item1 ?? "null") + ":" + saved.Item2 + ":" + fixedRow.Item1 + ":" + fixedRow.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var saved (string?, int32)", printed)
+        Assert.Contains("var ref alias (string?, int32)", printed)
+        Assert.DoesNotContain("var fixedRow (string?, int32)", printed)
+        AssertParity(source, printed, "null:1:keep:2")
     }
 
     @Theory

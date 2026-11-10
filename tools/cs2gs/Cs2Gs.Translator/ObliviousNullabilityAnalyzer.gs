@@ -4424,12 +4424,47 @@ internal shared class ObliviousNullabilityAnalyzer {
 
     private func ContainingExecutableMember(symbol ISymbol?) ISymbol? {
         var current = symbol
-        while current is ILocalSymbol or
-            IParameterSymbol or
-            IMethodSymbol{MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction} {
+        while current is ILocalSymbol or IParameterSymbol or IMethodSymbol{MethodKind: MethodKind.AnonymousFunction} {
             current = current?.ContainingSymbol
         }
         return OwningMember(current)
+    }
+
+    private func IsWithinExecutableMember(symbol ISymbol?, member ISymbol?) bool {
+        if symbol == nil || member == nil {
+            return false
+        }
+        var current = ContainingExecutableMember(symbol)
+        while current != nil {
+            if SymbolEqualityComparer.Default.Equals(current, member) {
+                return true
+            }
+            if current is IMethodSymbol{MethodKind: MethodKind.LocalFunction} localFunction {
+                current = OwningMember(localFunction.ContainingSymbol)
+            } else {
+                break
+            }
+        }
+        return false
+    }
+
+    private func IsCrossMemberSubstitutablePosition(endpoint ISymbol?, endpointPath string, other ISymbol?) bool {
+        if endpoint is not(IMethodSymbol or IParameterSymbol) ||
+            !TryGetMethodTypeParameterPosition(endpoint, endpointPath, out var parameter, out var isNestedLeaf) {
+            return false
+        }
+        if !isNestedLeaf && CSharpTypeMapper.TypeParameterForbidsNullableReferenceArgument(parameter!!) {
+            return false
+        }
+        let owner = ContainingExecutableMember(endpoint)
+        let declaringMethod = parameter!!.DeclaringMethod?.OriginalDefinition
+        if owner == nil || declaringMethod == nil || !SymbolEqualityComparer.Default.Equals(
+            owner,
+            owner.OriginalDefinition
+        ) {
+            return true
+        }
+        return !IsWithinExecutableMember(owner, declaringMethod) || !IsWithinExecutableMember(other, declaringMethod)
     }
 
     // Every declaration whose `[AllowNull]` binds `symbol`'s write contract:
@@ -6480,19 +6515,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     tupleContractEdges
                 )
             } else if targetType.IsReferenceType {
-                let crossMember = !SymbolEqualityComparer.Default.Equals(
-                    ContainingExecutableMember(target),
-                    ContainingExecutableMember(source)
-                )
-                if crossMember &&
-                    (
-                    (
-                        target is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(target, targetPath)
-                    ) ||
-                        (
-                        source is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(source, sourcePath)
-                    )
-                ) {
+                if IsCrossMemberSubstitutablePosition(target, targetPath, source) ||
+                    IsCrossMemberSubstitutablePosition(source, sourcePath, target) {
                     continue
                 }
                 tupleContractEdges.Add((TupleElementKey(target, targetPath), TupleElementKey(source, sourcePath)))
@@ -6786,14 +6810,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if IsEligibleTupleLeaf(targetType) {
-                let crossMember = !SymbolEqualityComparer.Default.Equals(
-                    ContainingExecutableMember(target),
-                    ContainingExecutableMember(source)
-                )
-                if crossMember &&
-                    target is IMethodSymbol or
-                    IParameterSymbol &&
-                    IsSubstitutableMethodPosition(target, targetPath) {
+                if IsCrossMemberSubstitutablePosition(target, targetPath, source) {
                     continue
                 }
                 let targetKey = TupleElementKey(target, targetPath)
@@ -7132,22 +7149,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     if SymbolValueType(scalar)?.IsReferenceType != true {
                         continue
                     }
-                    if !SymbolEqualityComparer.Default.Equals(
-                        ContainingExecutableMember(target),
-                        ContainingExecutableMember(scalar)
-                    ) &&
-                        (
-                        (
-                            target is IMethodSymbol or
-                                IParameterSymbol &&
-                                IsSubstitutableMethodPosition(target, string.Empty)
-                        ) ||
-                            (
-                            scalar is IMethodSymbol or
-                                IParameterSymbol &&
-                                IsSubstitutableMethodPosition(scalar, string.Empty)
-                        )
-                    ) {
+                    if IsCrossMemberSubstitutablePosition(target, string.Empty, scalar) ||
+                        IsCrossMemberSubstitutablePosition(scalar, string.Empty, target) {
                         continue
                     }
                     let first = TupleElementKey(target, string.Empty)
@@ -7181,18 +7184,8 @@ internal shared class ObliviousNullabilityAnalyzer {
             if sourcePath.Length == 0 || targetType?.IsReferenceType != true {
                 continue
             }
-            if !SymbolEqualityComparer.Default.Equals(
-                ContainingExecutableMember(target),
-                ContainingExecutableMember(sourceSymbol)
-            ) &&
-                (
-                (target is IMethodSymbol or IParameterSymbol && IsSubstitutableMethodPosition(target, string.Empty)) ||
-                    (
-                    sourceSymbol is IMethodSymbol or
-                        IParameterSymbol &&
-                        IsSubstitutableMethodPosition(sourceSymbol, sourcePath)
-                )
-            ) {
+            if IsCrossMemberSubstitutablePosition(target, string.Empty, sourceSymbol) ||
+                IsCrossMemberSubstitutablePosition(sourceSymbol, sourcePath, target) {
                 continue
             }
             let canonicalTarget = Canonical(target)!!
@@ -7486,9 +7479,11 @@ internal shared class ObliviousNullabilityAnalyzer {
         let definition = (method.ReducedFrom ?? method).OriginalDefinition
         let implementation = definition.PartialImplementationPart ?? definition
         let parameterReturns = List[(Ordinal int32, Prefix string)]()
+        var inspectedImplementation = HasRefImplementation(implementation, model.Compilation)
         if activeVisited.Add(implementation) {
             try {
                 for (returned, declarationModel) in RefReturnExpressions(implementation, model.Compilation) {
+                    inspectedImplementation = true
                     for inner in EnumerateTupleContainerSources(
                         returned,
                         declarationModel,
@@ -7506,8 +7501,10 @@ internal shared class ObliviousNullabilityAnalyzer {
             } finally {
                 activeVisited.Remove(implementation)
             }
+        } else {
+            inspectedImplementation = true
         }
-        if parameterReturns.Count == 0 && implementation.Arity > 0 {
+        if !inspectedImplementation && parameterReturns.Count == 0 && implementation.Arity > 0 {
             for parameter in implementation.Parameters {
                 if (
                     parameter.RefKind == RefKind.Ref ||
@@ -7549,6 +7546,24 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
+    }
+
+    private func HasRefImplementation(method IMethodSymbol, compilation Compilation) bool {
+        for reference in method.DeclaringSyntaxReferences {
+            let syntax = reference.GetSyntax()
+            if !compilation.ContainsSyntaxTree(syntax.SyntaxTree) {
+                continue
+            }
+            if syntax is MethodDeclarationSyntax methodDecl &&
+                (methodDecl.ExpressionBody != nil || methodDecl.Body != nil) {
+                return true
+            }
+            if syntax is LocalFunctionStatementSyntax localFunc &&
+                (localFunc.ExpressionBody != nil || localFunc.Body != nil) {
+                return true
+            }
+        }
+        return false
     }
 
     private func RefReturnExpressions(method IMethodSymbol, compilation Compilation) sequence[
