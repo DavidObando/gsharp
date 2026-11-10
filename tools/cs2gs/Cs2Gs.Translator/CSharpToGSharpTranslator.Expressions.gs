@@ -1557,9 +1557,6 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             for argument in invocation.ArgumentList.Arguments {
-                if !this.PassesArgumentStorageUnasserted(argument) {
-                    continue
-                }
                 // Only the argument that SUPPLIES the returned type parameter matters: in
                 // `Pick<T, U>(ref T value, U result)` a suppressed `ref x!` fixes T, not the returned U.
                 let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
@@ -1567,41 +1564,53 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 let declaredParameter = method.OriginalDefinition.Parameters[parameter.Ordinal]
-                if declaredParameter.Type is not ITypeParameterSymbol parameterType ||
-                    parameterType.NullableAnnotation == Microsoft
+                if declaredParameter.Type is ITypeParameterSymbol parameterType &&
+                    parameterType.NullableAnnotation != Microsoft
                     .CodeAnalysis
                     .NullableAnnotation
-                    .Annotated ||
-                    !SymbolEqualityComparer
+                    .Annotated &&
+                    SymbolEqualityComparer
                     .Default
-                    .Equals(parameterType, returnParameter) || this.IsTranslatorWidenedDeclaration(declaredParameter) {
-                    continue
-                }
-                var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
-                if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
-                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                    .Equals(parameterType, returnParameter) && this.ByRefArgumentStorageIsNilableInGSharp(
+                    argument,
+                    declaredParameter
                 ) {
-                    let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
-                    if declared != nil &&
-                        declared.IsReferenceType &&
-                        declared.NullableAnnotation == Microsoft
-                        .CodeAnalysis
-                        .NullableAnnotation
-                        .Annotated {
-                        return true
-                    }
-                    storage = Unparenthesize(suppressed.Operand)
-                }
-                if storage is {} target &&
-                    this
-                    .context
-                    .GetSymbolInfo(target)
-                    .Symbol is {} symbol &&
-                    this.IsTranslatorWidenedDeclaration(symbol) {
                     return true
                 }
             }
             return false
+        }
+
+        private func ByRefArgumentStorageIsNilableInGSharp(
+            argument ArgumentSyntax,
+            declaredParameter IParameterSymbol
+        ) bool {
+            if !this.PassesArgumentStorageUnasserted(argument) || this.IsTranslatorWidenedDeclaration(
+                declaredParameter
+            ) {
+                return false
+            }
+            var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
+            if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                let declared ITypeSymbol? = this.GetDeclaredValueType(suppressed.Operand)
+                if declared != nil &&
+                    declared.IsReferenceType &&
+                    declared.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return true
+                }
+                storage = Unparenthesize(suppressed.Operand)
+            }
+            return storage is {} target &&
+                this
+                .context
+                .GetSymbolInfo(target)
+                .Symbol is {} symbol &&
+                this.IsTranslatorWidenedDeclaration(symbol)
         }
 
         private func ManagedReferenceArrayWidenedExpressionMayBeNull(
@@ -5714,24 +5723,27 @@ partial class CSharpToGSharpTranslator {
                 }
                 return false
             }
-            if this.context.GetSymbolInfo(value).Symbol is not ILocalSymbol local {
+            if this.context.GetSymbolInfo(value).Symbol is ILocalSymbol local {
+                if this.state.NilableOnlyInEmittedGSharpLocals.TryGetValue(local, out var decided) {
+                    return decided
+                }
+                // A local's answer is invariant. Recording it keeps a chain of locals linear.
+                this.state.NilableOnlyInEmittedGSharpLocals[local] = false
+                let answer = local
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is VariableDeclaratorSyntax{
+                    Initializer: {Value: {} initializer},
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
+                } &&
+                    this.IsNilableOnlyInEmittedGSharp(initializer)
+                this.state.NilableOnlyInEmittedGSharpLocals[local] = answer
+                return answer
+            }
+            if this.context.GetTypeInfo(value).Type is not{IsReferenceType: true} {
                 return false
             }
-            if this.state.NilableOnlyInEmittedGSharpLocals.TryGetValue(local, out var decided) {
-                return decided
-            }
-            // A local's answer is invariant. Recording it keeps a chain of locals linear.
-            this.state.NilableOnlyInEmittedGSharpLocals[local] = false
-            let answer = local
-                .DeclaringSyntaxReferences
-                .FirstOrDefault()
-                ?.GetSyntax() is VariableDeclaratorSyntax{
-                Initializer: {Value: {} initializer},
-                Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclarationSyntax{Type: {IsVar: true}}
-            } &&
-                this.IsNilableOnlyInEmittedGSharp(initializer)
-            this.state.NilableOnlyInEmittedGSharpLocals[local] = answer
-            return answer
+            return this.ExpressionCarriesNilableOnlyAtSlotChainCore(value, Array.Empty[ITypeParameterSymbol](), nil)
         }
 
         private func IsActivePatternBinding(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) bool {
@@ -7326,8 +7338,13 @@ partial class CSharpToGSharpTranslator {
                         .CodeAnalysis
                         .NullableAnnotation
                         .NotAnnotated &&
-                        !this.IsNullableArrayElementAccess(arrayElement)
+                        !this.IsNullableArrayElementAccess(arrayElement) && !this.IsNilableOnlyInEmittedGSharp(
+                        arrayElement
+                    )
                 }
+            }
+            if this.IsNilableOnlyInEmittedGSharp(unwrapped) {
+                return false
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
             if symbol is ILocalSymbol inferredLocal {
@@ -7630,41 +7647,999 @@ partial class CSharpToGSharpTranslator {
                 this.state.VarCaptureInputNonNull[local] = isNonNull
                 return true
             }
-            if this.state.VarCaptureUndecided.Contains(local) || !this.TryGetVarCaptureInput(
-                local,
-                out var input,
-                out var member,
-                out var narrowedByTypeTest
-            ) {
+            if !this.TryGetVarCaptureInput(local, out var input, out var member, out var narrowedByTypeTest) {
                 return false
             }
-            // The scrutinee mentions a value that is `T?` only in G#. Unless the capture reads that value
-            // itself, or a member whose declared type does not follow the scrutinee's type arguments, the
-            // emitted type of the capture is not known here: each form keeps its previous translation.
-            if !narrowedByTypeTest && local.Type.IsReferenceType && this.PatternScrutinee(local) is {} scrutinee &&
-                this
-                .MentionsValueNilableOnlyInEmittedGSharp(scrutinee) {
-                if input != nil && this.IsNilableOnlyInEmittedGSharp(input) {
-                    this.state.VarCaptureInputNonNull[local] = false
-                    return true
-                }
-                if input != nil || this.MemberTypeFollowsItsReceiver(member) {
-                    this.state.VarCaptureUndecided.Add(local)
-                    return false
-                }
-            }
+            this.state.VarCaptureInputNonNull[local] = true
             if narrowedByTypeTest {
                 isNonNull = true
             } else if input != nil {
                 isNonNull = this.GSharpExpressionIsStaticallyNonNull(input)
             } else {
+                var memberType = (member as IFieldSymbol)?.Type ?? (member as IPropertySymbol)?.Type
+                let declaredMemberType = switch member {
+                    case field is IFieldSymbol: field.OriginalDefinition.Type
+                    case property is IPropertySymbol: property.OriginalDefinition.Type
+                    default: default(ITypeSymbol?)
+                }
+                if member != nil &&
+                    memberType != nil &&
+                    memberType.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .None &&
+                    this.IsSourceSymbol(member) &&
+                    ContainsTypeParameter(declaredMemberType) &&
+                    declaredMemberType?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .NotAnnotated &&
+                    capturePattern != nil &&
+                    this
+                    .context
+                    .SemanticModel
+                    .GetNullableContext(capturePattern.SpanStart)
+                    .HasFlag(NullableContext.AnnotationsEnabled) {
+                    memberType = memberType.WithNullableAnnotation(
+                        Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated
+                    )
+                }
                 // The analyzer map can retarget a non-null Roslyn member onto a `T?` G# member (issue #4356).
-                isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) && this.DeclaredValueIsStaticallyNonNull(
-                    member,
-                    (member as IFieldSymbol)?.Type ?? (member as IPropertySymbol)?.Type
-                )
+                isNonNull = !this.IsGSharpNullableAnalyzerApiMember(member) &&
+                    !this.SubpatternMemberCarriesNilableOnlyAtSlotChain(
+                    local,
+                    Array.Empty[ITypeParameterSymbol](),
+                    nil
+                ) &&
+                    this.DeclaredValueIsStaticallyNonNull(member, memberType)
             }
             this.state.VarCaptureInputNonNull[local] = isNonNull
+            return true
+        }
+
+        // Issue #5656: whether a property subpattern capture reads a member whose emitted G# type is `T?`
+        // because the pattern scrutinee supplies a G#-only `T?` type argument to it.
+        private func SubpatternMemberCarriesNilableOnlyAtSlotChain(
+            local ILocalSymbol,
+            initialChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if !local.Type.IsReferenceType {
+                return false
+            }
+            let designation = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if !(
+                designation is SingleVariableDesignationSyntax{
+                    Parent: Microsoft.CodeAnalysis.CSharp.Syntax.VarPatternSyntax
+                }
+            ) {
+                return false
+            }
+            var currentChain = List[ITypeParameterSymbol](initialChain)
+            var pattern Microsoft.CodeAnalysis.SyntaxNode = designation.Parent!!
+            while true {
+                while true {
+                    if pattern.Parent is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedPatternSyntax parenthesized {
+                        pattern = parenthesized
+                        continue
+                    }
+                    if pattern.Parent is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .BinaryPatternSyntax conjunction &&
+                        conjunction
+                        .IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AndPattern) {
+                        if conjunction.Right == pattern && this.PatternTestsType(conjunction.Left) {
+                            return false
+                        }
+                        pattern = conjunction
+                        continue
+                    }
+                    break
+                }
+                switch pattern.Parent {
+                    case isPattern is IsPatternExpressionSyntax {
+                        return currentChain.Count > 0 && this.ExpressionCarriesNilableOnlyAtSlotChain(
+                            isPattern.Expression,
+                            currentChain,
+                            localMemo
+                        )
+                    }
+                    case Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionArmSyntax{
+                        Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression
+                    } {
+                        return currentChain.Count > 0 && this.ExpressionCarriesNilableOnlyAtSlotChain(
+                            switchExpression.GoverningExpression,
+                            currentChain,
+                            localMemo
+                        )
+                    }
+                    case CasePatternSwitchLabelSyntax{
+                        Parent: {Parent: Microsoft.CodeAnalysis.CSharp.Syntax.SwitchStatementSyntax switchStatement}
+                    } {
+                        return currentChain.Count > 0 && this.ExpressionCarriesNilableOnlyAtSlotChain(
+                            switchStatement.Expression,
+                            currentChain,
+                            localMemo
+                        )
+                    }
+                    case SubpatternSyntax{
+                        Parent: PropertyPatternClauseSyntax{Parent: RecursivePatternSyntax recursive}
+                    } subpattern {
+                        var memberExpr = subpattern.ExpressionColon?.Expression ?? subpattern.NameColon?.Expression
+                        while memberExpr != nil {
+                            let subMember = this.context.GetSymbolInfo(memberExpr).Symbol
+                            let declaredMemberType = switch subMember?.OriginalDefinition {
+                                case field is IFieldSymbol: field.Type
+                                case property is IPropertySymbol: property.Type
+                                default: default(ITypeSymbol?)
+                            }
+                            if !this.TryResolveSlotChainThroughDeclaredType(
+                                declaredMemberType,
+                                currentChain,
+                                out var nextMemberChain
+                            ) ||
+                                nextMemberChain[nextMemberChain.Count - 1].TypeParameterKind != TypeParameterKind.Type {
+                                return false
+                            }
+                            currentChain = nextMemberChain
+                            memberExpr = if memberExpr is MemberAccessExpressionSyntax dottedMember {
+                                dottedMember.Expression
+                            } else {
+                                default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+                            }
+                        }
+                        if recursive.Type != nil {
+                            let testedType = this.context.GetTypeInfo(recursive.Type).Type
+                            if !this.TryResolveSlotChainThroughDeclaredType(
+                                testedType,
+                                currentChain,
+                                out var nextTestedChain
+                            ) {
+                                return false
+                            }
+                            currentChain = nextTestedChain
+                        }
+                        pattern = recursive
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+        }
+
+        // Issue #5656: whether `expression` carries a value that is `T?` only in the emitted G# at the
+        // type-parameter slot chain `slotChain` (or as its own top-level value when `slotChain` is empty).
+        private func ExpressionCarriesNilableOnlyAtSlotChain(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]? = nil
+        ) bool {
+            if expression == nil {
+                return false
+            }
+            if slotChain.Count == 0 {
+                return this.IsNilableOnlyInEmittedGSharp(expression)
+            }
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressed {
+                    unwrapped = Unparenthesize(suppressed.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if this.TryGetSlotChainNodeMemo(unwrapped, slotChain, out var nodeDecided) {
+                return nodeDecided
+            }
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, false)
+            let answer = this.ComputeExpressionCarriesNilableOnlyAtSlotChain(unwrapped, slotChain, localMemo)
+            this.SetSlotChainNodeMemo(unwrapped, slotChain, answer)
+            return answer
+        }
+
+        private func ComputeExpressionCarriesNilableOnlyAtSlotChain(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if slotChain.Count == 1 &&
+                this
+                .context
+                .GetTypeInfo(unwrapped)
+                .Type is INamedTypeSymbol exprNamedType &&
+                this
+                .SubstituteProjectedContainingTypeParameter(exprNamedType, slotChain[0])
+                ?.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return true
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax conditional {
+                return this.ExpressionCarriesNilableOnlyAtSlotChain(conditional.WhenTrue, slotChain, localMemo) ||
+                    this.ExpressionCarriesNilableOnlyAtSlotChain(conditional.WhenFalse, slotChain, localMemo)
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionSyntax switchExpression {
+                return switchExpression.Arms.Any(
+                    (
+                        arm Microsoft.CodeAnalysis.CSharp.Syntax.SwitchExpressionArmSyntax
+                    ) -> this.ExpressionCarriesNilableOnlyAtSlotChain(arm.Expression, slotChain, localMemo)
+                )
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.ExpressionCarriesNilableOnlyAtSlotChain(coalesce.Left, slotChain, localMemo) ||
+                    this.ExpressionCarriesNilableOnlyAtSlotChain(coalesce.Right, slotChain, localMemo)
+            }
+            if unwrapped is ConditionalAccessExpressionSyntax conditionalAccess {
+                return this.ExpressionCarriesNilableOnlyAtSlotChain(conditionalAccess.WhenNotNull, slotChain, localMemo)
+            }
+            if (unwrapped is ImplicitArrayCreationExpressionSyntax || unwrapped is CollectionExpressionSyntax) &&
+                slotChain[slotChain.Count - 1].Ordinal == 0 {
+                let elementChain = slotChain.Take(slotChain.Count - 1).ToList()
+                return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(unwrapped, elementChain, localMemo)
+            }
+            if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
+                return this.LocalCarriesNilableOnlyAtSlotChain(local, slotChain, localMemo)
+            }
+            return this.ExpressionCarriesNilableOnlyAtSlotChainCore(unwrapped, slotChain, localMemo)
+        }
+
+        private func LocalCarriesNilableOnlyAtSlotChain(
+            local ILocalSymbol,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if TryGetSlotChainLocalMemo(localMemo, local, slotChain, out var cached) {
+                return cached
+            }
+            let activeMemo = localMemo ??
+                List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]()
+            SetSlotChainLocalMemo(activeMemo, local, slotChain, false)
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            var result = false
+            if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                !this
+                .state
+                .EmittedLocalTypeClauses
+                .Contains(local) {
+                result = this.ExpressionCarriesNilableOnlyAtSlotChain(initializer, slotChain, activeMemo)
+            } else if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                local,
+                out var captureInput,
+                out var captureMember,
+                out var narrowed
+            ) &&
+                !narrowed {
+                if captureInput != nil {
+                    result = this.ExpressionCarriesNilableOnlyAtSlotChain(captureInput, slotChain, activeMemo)
+                } else if captureMember != nil {
+                    result = this.SubpatternMemberCarriesNilableOnlyAtSlotChain(local, slotChain, activeMemo)
+                }
+            }
+            SetSlotChainLocalMemo(activeMemo, local, slotChain, result)
+            return result
+        }
+
+        private func CallableReturnCarriesNilableOnlyAtSlotChain(
+            callable Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            var unwrapped = Unparenthesize(callable)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is AnonymousFunctionExpressionSyntax lambda {
+                if this.LambdaHasExplicitDelegateCast(lambda) {
+                    return false
+                }
+                var bodyChain IReadOnlyList[ITypeParameterSymbol] = slotChain
+                if lambda.AsyncKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.AsyncKeyword) {
+                    if bodyChain.Count == 0 {
+                        return false
+                    }
+                    bodyChain = bodyChain.Take(bodyChain.Count - 1).ToList()
+                }
+                for resultExpr in GetLambdaResultExpressions(lambda) {
+                    if this.ExpressionCarriesNilableOnlyAtSlotChain(resultExpr, bodyChain, localMemo) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                return operands.Any(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.CallableReturnCarriesNilableOnlyAtSlotChain(operand, slotChain, localMemo)
+                )
+            }
+            if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
+                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                    IsImplicitlyTypedLocal(local) &&
+                    !this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) {
+                    return this.CallableReturnCarriesNilableOnlyAtSlotChain(initializer, slotChain, localMemo)
+                }
+                if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                    local,
+                    out var captureInput,
+                    out _,
+                    out var narrowed
+                ) &&
+                    !narrowed &&
+                    captureInput != nil {
+                    return this.CallableReturnCarriesNilableOnlyAtSlotChain(captureInput, slotChain, localMemo)
+                }
+            }
+            let callableType = UnwrapExpressionTreeDelegateType(
+                this.context.GetTypeInfo(unwrapped).Type
+            ) as INamedTypeSymbol
+            if callableType?.OriginalDefinition.DelegateInvokeMethod?.ReturnType is ITypeParameterSymbol invokeTp {
+                let extendedChain = List[ITypeParameterSymbol](slotChain)
+                extendedChain.Add(invokeTp)
+                return this.ExpressionCarriesNilableOnlyAtSlotChain(unwrapped, extendedChain, localMemo)
+            }
+            return false
+        }
+
+        private func ExpressionCarriesNilableOnlyAtSlotChainCore(
+            unwrapped Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if unwrapped is MemberAccessExpressionSyntax tupleAccess && this.TryGetTupleElementAccess(
+                tupleAccess,
+                out var tupleReceiver,
+                out var accessPath
+            ) {
+                return this.TupleElementCarriesNilableOnlyAtSlotChain(
+                    tupleReceiver,
+                    accessPath!!.ToList(),
+                    slotChain,
+                    localMemo
+                )
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax awaited {
+                let declaredResult = this.GetDeclaredAwaitedResultType(awaited)
+                return this.TryResolveSlotChainThroughDeclaredType(declaredResult, slotChain, out var nextChain) &&
+                    this.ExpressionCarriesNilableOnlyAtSlotChain(awaited.Expression, nextChain, localMemo)
+            }
+            if unwrapped is ElementAccessExpressionSyntax arrayAccess &&
+                this
+                .context
+                .GetSymbolInfo(arrayAccess)
+                .Symbol == nil &&
+                this
+                .context
+                .GetTypeInfo(arrayAccess.Expression)
+                .Type is IArrayTypeSymbol {
+                return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+                    arrayAccess.Expression,
+                    slotChain,
+                    localMemo
+                )
+            }
+            let memberReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = switch unwrapped {
+                case memberAccess is MemberAccessExpressionSyntax: memberAccess.Expression
+                case elementAccess is ElementAccessExpressionSyntax: elementAccess.Expression
+                default: default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
+            }
+            if memberReceiver != nil {
+                let symbol = this.context.GetSymbolInfo(unwrapped).Symbol
+                let declaredMemberType = (symbol?.OriginalDefinition as IFieldSymbol)?.Type ??
+                    (symbol?.OriginalDefinition as IPropertySymbol)?.Type
+                if declaredMemberType != nil {
+                    let receiverType = this.context.GetTypeInfo(memberReceiver).Type
+                    if receiverType != nil &&
+                        !ContainsTypeParameter(
+                        this.ProjectSlotThroughReceiverType(declaredMemberType, receiverType.OriginalDefinition)
+                    ) {
+                        return false
+                    }
+                    return this.TryResolveSlotChainThroughDeclaredType(
+                        declaredMemberType,
+                        slotChain,
+                        out var nextChain
+                    ) &&
+                        nextChain[nextChain.Count - 1].TypeParameterKind == TypeParameterKind.Type &&
+                        this.ExpressionCarriesNilableOnlyAtSlotChain(memberReceiver, nextChain, localMemo)
+                }
+            }
+            if unwrapped is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol method {
+                if method.MethodKind == MethodKind.DelegateInvoke ||
+                    method
+                    .ContainingType
+                    ?.TypeKind == TypeKind
+                    .Delegate {
+                    let callable = if invocation.Expression is MemberAccessExpressionSyntax{
+                        Name: {Identifier: {ValueText: "Invoke"}}
+                    } invokeAccess {
+                        invokeAccess.Expression
+                    } else {
+                        invocation.Expression
+                    }
+                    return this.CallableReturnCarriesNilableOnlyAtSlotChain(callable, slotChain, localMemo)
+                }
+                let definition = (method.ReducedFrom ?? method).OriginalDefinition
+                if this.IsTranslatorWidenedDeclaration(definition) || !this.TryResolveSlotChainThroughDeclaredType(
+                    definition.ReturnType,
+                    slotChain,
+                    out var nextChain
+                ) {
+                    return false
+                }
+                let targetTp = nextChain[nextChain.Count - 1]
+                if targetTp.TypeParameterKind == TypeParameterKind.Type {
+                    if invocation.Expression is MemberAccessExpressionSyntax{Expression: {} callReceiver} {
+                        let receiverType = this.context.GetTypeInfo(callReceiver).Type
+                        if receiverType != nil &&
+                            !ContainsTypeParameter(
+                            this.ProjectSlotThroughReceiverType(targetTp, receiverType.OriginalDefinition)
+                        ) {
+                            return false
+                        }
+                        return this.ExpressionCarriesNilableOnlyAtSlotChain(callReceiver, nextChain, localMemo)
+                    }
+                    return false
+                }
+                if targetTp.TypeParameterKind == TypeParameterKind.Method {
+                    let remainingChain = nextChain.Take(nextChain.Count - 1).ToList()
+                    return this.InvocationInfersNilableOnlyForMethodTypeParameter(
+                        invocation,
+                        method,
+                        definition,
+                        targetTp,
+                        remainingChain,
+                        localMemo
+                    )
+                }
+            }
+            return false
+        }
+
+        private func InvocationInfersNilableOnlyForMethodTypeParameter(
+            invocation InvocationExpressionSyntax,
+            method IMethodSymbol,
+            definition IMethodSymbol,
+            targetTp ITypeParameterSymbol,
+            remainingChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if remainingChain.Count == 0 &&
+                targetTp.Ordinal < method
+                .TypeArgumentNullableAnnotations
+                .Length &&
+                method.TypeArgumentNullableAnnotations[targetTp.Ordinal] == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return true
+            }
+            if HasExplicitTypeArguments(invocation.Expression) {
+                return false
+            }
+            if method.ReducedFrom != nil &&
+                definition
+                .Parameters
+                .Length > 0 &&
+                invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extReceiver} &&
+                this
+                .ArgumentSuppliesNilableOnlyToMethodTypeParameter(
+                extReceiver,
+                argumentSyntax: nil,
+                definition.Parameters[0],
+                isExpandedParams: false,
+                targetTp,
+                remainingChain,
+                localMemo
+            ) {
+                return true
+            }
+            let offset = if method.ReducedFrom != nil {
+                1
+            } else {
+                0
+            }
+            for argument in invocation.ArgumentList.Arguments {
+                if argument.Expression == nil {
+                    continue
+                }
+                let parameter IParameterSymbol? = DetermineParameter(argument, this.context)
+                if parameter == nil {
+                    continue
+                }
+                let ordinal = parameter.Ordinal + offset
+                if ordinal >= definition.Parameters.Length {
+                    continue
+                }
+                let declaredParameter = definition.Parameters[ordinal]
+                let isExpandedParams = parameter.IsParams && this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    parameter,
+                    out _,
+                    out _
+                )
+                if this.ArgumentSuppliesNilableOnlyToMethodTypeParameter(
+                    argument.Expression,
+                    argument,
+                    declaredParameter,
+                    isExpandedParams,
+                    targetTp,
+                    remainingChain,
+                    localMemo
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func ArgumentSuppliesNilableOnlyToMethodTypeParameter(
+            argExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            argumentSyntax ArgumentSyntax?,
+            declaredParameter IParameterSymbol,
+            isExpandedParams bool,
+            targetTp ITypeParameterSymbol,
+            remainingChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if this.IsTranslatorWidenedDeclaration(declaredParameter) {
+                return false
+            }
+            let declaredParameterType = if isExpandedParams {
+                GetParamsElementType(declaredParameter) ?? declaredParameter.Type
+            } else {
+                declaredParameter.Type
+            }
+            if argumentSyntax != nil &&
+                remainingChain.Count == 0 &&
+                declaredParameterType is ITypeParameterSymbol byRefTp &&
+                byRefTp.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated &&
+                SymbolEqualityComparer
+                .Default
+                .Equals(byRefTp, targetTp) && this.ByRefArgumentStorageIsNilableInGSharp(
+                argumentSyntax,
+                declaredParameter
+            ) {
+                return true
+            }
+            return this.TypeSuppliesMethodTypeParameter(
+                argExpr,
+                declaredParameterType,
+                targetTp,
+                remainingChain,
+                localMemo
+            )
+        }
+
+        private func TypeSuppliesMethodTypeParameter(
+            argExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            declaredType ITypeSymbol?,
+            targetTp ITypeParameterSymbol,
+            remainingChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if declaredType == nil {
+                return false
+            }
+            if SymbolEqualityComparer.Default.Equals(declaredType, targetTp) {
+                return declaredType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    this.ExpressionCarriesNilableOnlyAtSlotChain(argExpr, remainingChain, localMemo)
+            }
+            if declaredType is IArrayTypeSymbol arrayParam {
+                return SymbolEqualityComparer.Default.Equals(arrayParam.ElementType, targetTp) &&
+                    arrayParam.ElementNullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(argExpr, remainingChain, localMemo)
+            }
+            if UnwrapExpressionTreeDelegateType(declaredType) is INamedTypeSymbol{
+                TypeKind: TypeKind.Delegate,
+                DelegateInvokeMethod: {} paramInvoke
+            } {
+                return this.TryAppendTypeParameterPathToMethodTypeParameter(
+                    paramInvoke.ReturnType,
+                    targetTp,
+                    remainingChain,
+                    out var callbackChain
+                ) &&
+                    this.CallableReturnCarriesNilableOnlyAtSlotChain(argExpr, callbackChain, localMemo)
+            }
+            if declaredType is INamedTypeSymbol namedParam {
+                if namedParam.IsTupleType {
+                    if Unparenthesize(argExpr) is TupleExpressionSyntax tupleExpr {
+                        for var i = 0; i < namedParam.TupleElements.Length && i < tupleExpr.Arguments.Count; i++ {
+                            if this.TypeSuppliesMethodTypeParameter(
+                                tupleExpr.Arguments[i].Expression,
+                                namedParam.TupleElements[i].Type,
+                                targetTp,
+                                remainingChain,
+                                localMemo
+                            ) {
+                                return true
+                            }
+                        }
+                    }
+                    return false
+                }
+                var owner INamedTypeSymbol? = namedParam
+                while owner != nil {
+                    for var i = 0; i < owner.TypeArguments.Length; i++ {
+                        if this.TryAppendTypeParameterPathToMethodTypeParameter(
+                            owner.TypeArguments[i],
+                            targetTp,
+                            remainingChain,
+                            out var subChain
+                        ) {
+                            let extendedChain = List[ITypeParameterSymbol](subChain)
+                            extendedChain.Add(owner.OriginalDefinition.TypeParameters[i])
+                            if this.ExpressionCarriesNilableOnlyAtSlotChain(argExpr, extendedChain, localMemo) {
+                                return true
+                            }
+                        }
+                    }
+                    owner = owner.ContainingType
+                }
+            }
+            return false
+        }
+
+        private func TryAppendTypeParameterPathToMethodTypeParameter(
+            declaredType ITypeSymbol?,
+            targetTp ITypeParameterSymbol,
+            innerChain IReadOnlyList[ITypeParameterSymbol],
+            out resultChain List[ITypeParameterSymbol]
+        ) bool {
+            resultChain = List[ITypeParameterSymbol]()
+            if declaredType == nil {
+                return false
+            }
+            if SymbolEqualityComparer.Default.Equals(declaredType, targetTp) {
+                if declaredType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                    return false
+                }
+                resultChain.AddRange(innerChain)
+                return true
+            }
+            if declaredType is INamedTypeSymbol named && !named.IsTupleType {
+                var owner INamedTypeSymbol? = named
+                while owner != nil {
+                    for var i = 0; i < owner.TypeArguments.Length; i++ {
+                        if this.TryAppendTypeParameterPathToMethodTypeParameter(
+                            owner.TypeArguments[i],
+                            targetTp,
+                            innerChain,
+                            out var subChain
+                        ) {
+                            resultChain.AddRange(subChain)
+                            resultChain.Add(owner.OriginalDefinition.TypeParameters[i])
+                            return true
+                        }
+                    }
+                    owner = owner.ContainingType
+                }
+            }
+            return false
+        }
+
+        private func ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+            arrayExpr Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            var unwrapped = Unparenthesize(arrayExpr)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil {
+                return false
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArray {
+                let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                this.CollectArrayInitializerLeaves(implicitArray.Initializer, leaves)
+                return leaves.Any(
+                    (
+                        leaf Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.ExpressionCarriesNilableOnlyAtSlotChain(leaf, slotChain, localMemo)
+                )
+            }
+            if unwrapped is CollectionExpressionSyntax collection {
+                for element in collection.Elements {
+                    if element is ExpressionElementSyntax exprElem && this.ExpressionCarriesNilableOnlyAtSlotChain(
+                        exprElem.Expression,
+                        slotChain,
+                        localMemo
+                    ) {
+                        return true
+                    }
+                    if element is SpreadElementSyntax spreadElem &&
+                        this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(
+                        spreadElem.Expression,
+                        slotChain,
+                        localMemo
+                    ) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                return operands.Any(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(operand, slotChain, localMemo)
+                )
+            }
+            if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
+                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                    !this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) {
+                    return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(initializer, slotChain, localMemo)
+                }
+                if declaration is SingleVariableDesignationSyntax && this.TryGetVarCaptureInput(
+                    local,
+                    out var captureInput,
+                    out _,
+                    out var narrowed
+                ) &&
+                    !narrowed &&
+                    captureInput != nil {
+                    return this.ArrayExpressionElementsCarryNilableOnlyAtSlotChain(captureInput, slotChain, localMemo)
+                }
+            }
+            if unwrapped is InvocationExpressionSyntax invocation &&
+                this
+                .context
+                .GetSymbolInfo(invocation)
+                .Symbol is IMethodSymbol method &&
+                !HasExplicitTypeArguments(invocation.Expression) {
+                let definition = (method.ReducedFrom ?? method).OriginalDefinition
+                if definition.ReturnType is IArrayTypeSymbol returnArray && this.TryResolveSlotChainThroughDeclaredType(
+                    returnArray.ElementType,
+                    slotChain,
+                    out var elemChain
+                ) {
+                    let elemTp = elemChain[elemChain.Count - 1]
+                    if elemTp.TypeParameterKind == TypeParameterKind.Method {
+                        return this.InvocationInfersNilableOnlyForMethodTypeParameter(
+                            invocation,
+                            method,
+                            definition,
+                            elemTp,
+                            elemChain.Take(elemChain.Count - 1).ToList(),
+                            localMemo
+                        )
+                    }
+                }
+            }
+            return false
+        }
+
+        private func TupleElementCarriesNilableOnlyAtSlotChain(
+            tupleReceiver Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            accessPath List[int32],
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
+        ) bool {
+            if slotChain.Count == 0 && this.TupleElementYieldsNilableBeyondItsCSharpType(tupleReceiver, accessPath) {
+                return true
+            }
+            var unwrapped = Unparenthesize(tupleReceiver)
+            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                unwrapped = Unparenthesize(checkedExpr.Expression)
+            }
+            if unwrapped == nil || accessPath.Count == 0 {
+                return false
+            }
+            if unwrapped is TupleExpressionSyntax tupleExpr {
+                let index = accessPath[0]
+                if index < 0 || index >= tupleExpr.Arguments.Count {
+                    return false
+                }
+                let elemExpr = tupleExpr.Arguments[index].Expression
+                return if accessPath.Count == 1 {
+                    this.ExpressionCarriesNilableOnlyAtSlotChain(elemExpr, slotChain, localMemo)
+                } else {
+                    this.TupleElementCarriesNilableOnlyAtSlotChain(
+                        elemExpr,
+                        accessPath.Skip(1).ToList(),
+                        slotChain,
+                        localMemo
+                    )
+                }
+            }
+            if this.ComposedValueOperands(unwrapped) is {} operands {
+                return operands.Any(
+                    (
+                        operand Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+                    ) -> this.TupleElementCarriesNilableOnlyAtSlotChain(operand, accessPath, slotChain, localMemo)
+                )
+            }
+            if this.context.GetSymbolInfo(unwrapped).Symbol is ILocalSymbol local {
+                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration is VariableDeclaratorSyntax{Initializer: {Value: {} initializer}} &&
+                    !this
+                    .state
+                    .EmittedLocalTypeClauses
+                    .Contains(local) {
+                    return this.TupleElementCarriesNilableOnlyAtSlotChain(initializer, accessPath, slotChain, localMemo)
+                }
+            }
+            return false
+        }
+
+        private func GetDeclaredAwaitedResultType(
+            awaitExpression Microsoft.CodeAnalysis.CSharp.Syntax.AwaitExpressionSyntax
+        ) ITypeSymbol? {
+            let info = this.context.SemanticModel.GetAwaitExpressionInfo(awaitExpression)
+            if info.GetAwaiterMethod is {} getAwaiter &&
+                info.GetResultMethod is {} getResult &&
+                !getAwaiter
+                .IsExtensionMethod {
+                return this.ProjectSlotThroughReceiverType(
+                    getResult.OriginalDefinition.ReturnType,
+                    getAwaiter.OriginalDefinition.ReturnType
+                )
+            }
+            let awaitableType = this.context.GetTypeInfo(awaitExpression.Expression).Type
+            return this.GetAwaitedResultType(awaitExpression, awaitableType?.OriginalDefinition ?? awaitableType)
+        }
+
+        private func TryResolveSlotChainThroughDeclaredType(
+            declaredType ITypeSymbol?,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            out nextChain List[ITypeParameterSymbol]
+        ) bool {
+            nextChain = List[ITypeParameterSymbol]()
+            var currentType ITypeSymbol? = declaredType
+            var index = slotChain.Count - 1
+            while index >= 0 && currentType != nil && !(currentType is ITypeParameterSymbol) {
+                if currentType is IArrayTypeSymbol arrayType && slotChain[index].Ordinal == 0 {
+                    currentType = arrayType.ElementType
+                } else {
+                    currentType = this.ResolveReceiverTypeArgument(slotChain[index], currentType)
+                }
+                index--
+            }
+            if currentType is not ITypeParameterSymbol typeParameter ||
+                typeParameter.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                return false
+            }
+            for var i = 0; i <= index; i++ {
+                nextChain.Add(slotChain[i])
+            }
+            nextChain.Add(typeParameter)
+            return true
+        }
+
+        private func TryGetSlotChainNodeMemo(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            out result bool
+        ) bool {
+            result = false
+            if !this.state.NilableOnlySlotChainNodes.TryGetValue(node, out var entries) {
+                return false
+            }
+            for entry in entries {
+                if SlotChainsEqual(entry.Chain, slotChain) {
+                    result = entry.Result
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func SetSlotChainNodeMemo(
+            node Microsoft.CodeAnalysis.SyntaxNode,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            result bool
+        ) {
+            if !this.state.NilableOnlySlotChainNodes.TryGetValue(node, out var entries) {
+                entries = List[(Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]()
+                this.state.NilableOnlySlotChainNodes[node] = entries
+            } else {
+                for var i = 0; i < entries.Count; i++ {
+                    if SlotChainsEqual(entries[i].Chain, slotChain) {
+                        entries[i] = (slotChain, result)
+                        return
+                    }
+                }
+            }
+            entries.Add((slotChain, result))
+        }
+
+        private func TryGetSlotChainLocalMemo(
+            memo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?,
+            local ILocalSymbol,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            out result bool
+        ) bool {
+            result = false
+            if memo == nil {
+                return false
+            }
+            for entry in memo {
+                if SymbolEqualityComparer.Default.Equals(entry.Local, local) &&
+                    SlotChainsEqual(entry.Chain, slotChain) {
+                    result = entry.Result
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func SetSlotChainLocalMemo(
+            memo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)],
+            local ILocalSymbol,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            result bool
+        ) {
+            for var i = 0; i < memo.Count; i++ {
+                if SymbolEqualityComparer.Default.Equals(memo[i].Local, local) &&
+                    SlotChainsEqual(memo[i].Chain, slotChain) {
+                    memo[i] = (local, slotChain, result)
+                    return
+                }
+            }
+            memo.Add((local, slotChain, result))
+        }
+
+        private func SlotChainsEqual(
+            first IReadOnlyList[ITypeParameterSymbol],
+            second IReadOnlyList[ITypeParameterSymbol]
+        ) bool {
+            if first.Count != second.Count {
+                return false
+            }
+            for var i = 0; i < first.Count; i++ {
+                if !SymbolEqualityComparer.Default.Equals(first[i], second[i]) {
+                    return false
+                }
+            }
             return true
         }
 
@@ -7747,27 +8722,6 @@ partial class CSharpToGSharpTranslator {
             let answer = source != nil && this.MentionsValueNilableOnlyInEmittedGSharp(source)
             this.state.LocalsMentioningNilableOnlyValues[local] = answer
             return answer
-        }
-
-        // A field, property or indexer whose declared type mentions a type parameter of its containing type, or
-        // a reduced extension whose `this` parameter mentions a method type parameter.
-        private func MemberTypeFollowsItsReceiver(member ISymbol?) bool -> switch member {
-            case field is IFieldSymbol: this.TypeMentionsAnyTypeParameter(field.OriginalDefinition.Type)
-            case property is IPropertySymbol: this.TypeMentionsAnyTypeParameter(property.OriginalDefinition.Type)
-            case IMethodSymbol{ReducedFrom: {} reduced}: reduced
-                .Parameters
-                .Length > 0 &&
-                this.TypeMentionsAnyTypeParameter(reduced.OriginalDefinition.Parameters[0].Type)
-            default: false
-        }
-
-        private func TypeMentionsAnyTypeParameter(type ITypeSymbol?) bool -> switch type {
-            case ITypeParameterSymbol: true
-            case array is IArrayTypeSymbol: this.TypeMentionsAnyTypeParameter(array.ElementType)
-            case named is INamedTypeSymbol: named.TypeArguments.Any(
-                (argument ITypeSymbol) -> this.TypeMentionsAnyTypeParameter(argument)
-            )
-            default: false
         }
 
         // The expression that the pattern declaring `local` matches: of `x is …`, of a switch arm or of a
@@ -7872,7 +8826,7 @@ partial class CSharpToGSharpTranslator {
                 .ExpressionSyntax? = if pattern.Parent is SubpatternSyntax{
                 Parent: PropertyPatternClauseSyntax
             } subpattern {
-                subpattern.ExpressionColon?.Expression
+                subpattern.ExpressionColon?.Expression ?? subpattern.NameColon?.Expression
             } else {
                 default(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?)
             }

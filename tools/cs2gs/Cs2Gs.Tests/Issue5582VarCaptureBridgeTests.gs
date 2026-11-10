@@ -26,6 +26,10 @@ import Xunit
 /// composed by-ref row does not bind.
 /// Without `IsNilableOnlyInEmittedGSharp`, the nullable-return and target rows emit `return c!!` or
 /// `pair = (c!!, 0)` and throw.
+/// Without the slot-chain projection (#5656), a capture whose scrutinee mentions a G#-only `T?` value in an
+/// argument or unused type-parameter slot (`LookupArm`, `LookupCase`, `PairArm`, `SecondArm`) emits a throwing
+/// `!!`, and an `is var` or nullable-target capture over a generic member read (`ResultIs`, `NullArmReturn`,
+/// `BoxArm`) fails to bind (`GS0154`) or throws `NullReferenceException`.
 /// The deconstruction row throws `NullReferenceException` when #5598's bridge also asserts a store into a
 /// local with no recorded storage, or records an explicit `Node?` local as non-null.
 open class Issue5582VarCaptureBridgeTests {
@@ -338,9 +342,8 @@ namespace Demo
 
     /// G# infers a generic result from the arguments that supply it. `Id(Volatile.Read(ref cache!))`,
     /// `First(Volatile.Read(ref cache!))` (`params T[]`), `Get(() => Volatile.Read(ref cache!))` (`Func<T>`)
-    /// and `cache.Echo()` over a capture are `Dictionary?` in G#. The capture decision does not project
-    /// generic inference, so each switch-arm and `case` capture keeps its translation from `main`, with `!!`.
-    /// The `is var` form keeps `main`'s unbridged read (#5656).
+    /// and `c.Echo()` over a capture are `Dictionary?` in G#, so each switch-arm, `case` and `is var` capture
+    /// keeps its `!!` (#5656).
     @Fact
     func AVarCaptureOfAnInferredGenericResult_KeepsItsAssertion() {
         let printed = Translate(`
@@ -364,7 +367,9 @@ namespace Demo
                 case var c: return c.Count;
             }
         }
+        static int Is() => Id(Volatile.Read(ref cache!)) is var c ? c.Count : -1;
         static int Receiver() => Volatile.Read(ref cache!) is var c ? c.Echo() switch { var e => e.Count } : -1;
+        static int ReceiverIs() => Volatile.Read(ref cache!) is var c && c.Echo() is var e ? e.Count : -1;
         static int ParamsArm() => First(Volatile.Read(ref cache!)) switch { var p => p.Count };
         static int ParamsCase()
         {
@@ -373,6 +378,7 @@ namespace Demo
                 case var q: return q.Count;
             }
         }
+        static int ParamsIs() => First(Volatile.Read(ref cache!)) is var p ? p.Count : -1;
         static int CallbackArm() => Get(() => Volatile.Read(ref cache!)) switch { var f => f.Count };
         static int CallbackCase()
         {
@@ -381,19 +387,24 @@ namespace Demo
                 case var g: return g.Count;
             }
         }
+        static int CallbackIs() => Get(() => Volatile.Read(ref cache!)) is var f ? f.Count : -1;
         public static string Run() =>
-            Arm() + " " + Case() + " " + Receiver() + " " + ParamsArm() + " " + ParamsCase() + " " + CallbackArm() + " " +
-            CallbackCase();
+            Arm() + " " + Case() + " " + Is() + " " + Receiver() + " " + ReceiverIs() + " " + ParamsArm() + " " +
+            ParamsCase() + " " + ParamsIs() + " " + CallbackArm() + " " + CallbackCase() + " " + CallbackIs();
     }
 }`)
         Assert.Contains("case var c: c!!.Count", printed)
         Assert.Contains("return c!!.Count", printed)
+        Assert.Contains("is var c { c!!.Count }", printed)
         Assert.Contains("case var e: e!!.Count", printed)
+        Assert.Contains("is var e { e!!.Count }", printed)
         Assert.Contains("case var p: p!!.Count", printed)
         Assert.Contains("return q!!.Count", printed)
+        Assert.Contains("is var p { p!!.Count }", printed)
         Assert.Contains("case var f: f!!.Count", printed)
         Assert.Contains("return g!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1")
+        Assert.Contains("is var f { f!!.Count }", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1 1")
     }
 
     /// With #5601's slot query: a capture of an `[AllowNull]` field typed by an unconstrained `T` has the
@@ -440,9 +451,9 @@ namespace Demo
 
     /// A value that is `T?` only in G# can flow into a capture through a generic member read (`task.Result`,
     /// also through a local), `await`, `GetAwaiter().GetResult()`, a receiver-dependent method (`box.Get()`), a
-    /// block-bodied callback, a generic factory read by a property subpattern, and a nest of generic calls.
-    /// The capture decision does not project these types: when the scrutinee mentions such a value, the
-    /// capture keeps the translation it had before, and each switch-arm and `case` capture keeps its `!!`.
+    /// block-bodied callback, a generic factory read by a property subpattern, an inferred array element, a
+    /// delegate call, and a nest of generic calls. Each switch-arm, `case` and `is var` capture keeps its `!!`
+    /// (#5656).
     @Fact
     func AVarCaptureOfAGenericFlow_KeepsItsAssertion() {
         let nested = Nest(8, "Volatile.Read(ref cache!)")
@@ -453,7 +464,13 @@ using System.Threading;
 using System.Threading.Tasks;
 namespace Demo
 {
-    public class Box<T> { public Box(T value) { Value = value; } public T Value; public T Get() => Value; }
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; }
+        public T Value;
+        public T Get() => Value;
+        public T this[int index] => Value;
+    }
     public static class P
     {
         private static Dictionary<string, int>? cache = new Dictionary<string, int> { ["a"] = 1 };
@@ -463,14 +480,20 @@ namespace Demo
         static int LocalResult()
         {
             var task = Task.FromResult(Volatile.Read(ref cache!));
-            return task.Result switch { var l => l.Count };
+            return (task.Result switch { var l => l.Count }) + (task.Result is var m ? m.Count : -1) - 1;
         }
         static int BlockCallback(bool flag) =>
-            Call(() => { if (flag) { return Volatile.Read(ref cache!); } else { return Volatile.Read(ref cache!); } }) switch { var k => k.Count };
-        static int ReceiverGet() => Wrap(Volatile.Read(ref cache!)).Get() switch { var g => g.Count };
+            (Call(() => { if (flag) { return Volatile.Read(ref cache!); } else { return Volatile.Read(ref cache!); } }) switch { var k => k.Count }) +
+            (Call(() => { if (flag) { return Volatile.Read(ref cache!); } else { return Volatile.Read(ref cache!); } }) is var j ? j.Count : -1) - 1;
+        static int ReceiverGet() =>
+            (Wrap(Volatile.Read(ref cache!)).Get() switch { var g => g.Count }) +
+            (Wrap(Volatile.Read(ref cache!)).Get() is var h ? h.Count : -1) - 1;
         static int CapturedTask() =>
-            Task.FromResult(Volatile.Read(ref cache!)) is var task ? task.Result switch { var t => t.Count } : -1;
-        static int Awaiter() => Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() switch { var w => w.Count };
+            Task.FromResult(Volatile.Read(ref cache!)) is var task ?
+                (task.Result switch { var t => t.Count }) + (task.Result is var u ? u.Count : -1) - 1 : -1;
+        static int Awaiter() =>
+            (Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() switch { var w => w.Count }) +
+            (Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() is var x ? x.Count : -1) - 1;
         static int ResultArm() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var r => r.Count };
         static int ResultCase()
         {
@@ -479,25 +502,127 @@ namespace Demo
                 case var s: return s.Count;
             }
         }
-        static async Task<int> AwaitArm() => (await Task.FromResult(Volatile.Read(ref cache!))) switch { var a => a.Count };
-        static int BoxArm() => Wrap(Volatile.Read(ref cache!)) switch { { Value: var b } => b.Count, _ => -1 };
-        static int Nested() => ` + nested + ` switch { var n => n.Count };
+        static int ResultIs() => Task.FromResult(Volatile.Read(ref cache!)).Result is var v ? v.Count : -1;
+        static async Task<int> AwaitArm() =>
+            ((await Task.FromResult(Volatile.Read(ref cache!))) switch { var a => a.Count }) +
+            ((await Task.FromResult(Volatile.Read(ref cache!))) is var d ? d.Count : -1) - 1;
+        static int BoxArm() =>
+            (Wrap(Volatile.Read(ref cache!)) switch { { Value: var b } => b.Count, _ => -1 }) +
+            (Wrap(Volatile.Read(ref cache!)) is { Value: var c } ? c.Count : -1) - 1;
+        static int IndexerAndDelegate()
+        {
+            var read = () => Volatile.Read(ref cache!);
+            return (Wrap(Volatile.Read(ref cache!))[0] is var idx ? idx.Count : -1) +
+                (Wrap(Volatile.Read(ref cache!))[0] switch { var idxArm => idxArm.Count }) +
+                (read() is var invoked ? invoked.Count : -1) +
+                (read() switch { var invokedArm => invokedArm.Count }) - 3;
+        }
+        static int Nested() => (` + nested + ` switch { var n => n.Count }) + (` + nested + ` is var p ? p.Count : -1) - 1;
         public static string Run() =>
-            ResultArm() + " " + ResultCase() + " " + AwaitArm().Result + " " + BoxArm() + " " + Nested() + " " +
-            LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter() + " " + CapturedTask();
+            ResultArm() + " " + ResultCase() + " " + ResultIs() + " " + AwaitArm().Result + " " + BoxArm() + " " +
+            Nested() + " " + LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter() + " " +
+            CapturedTask() + " " + IndexerAndDelegate();
     }
 }`)
         Assert.Contains("case var r: r!!.Count", printed)
         Assert.Contains("return s!!.Count", printed)
+        Assert.Contains("is var v { v!!.Count }", printed)
         Assert.Contains("case var a: a!!.Count", printed)
+        Assert.Contains("is var d { d!!.Count }", printed)
         Assert.Contains("case { Value: var b }: b!!.Count", printed)
+        Assert.Contains("is { Value: var c } { c!!.Count }", printed)
         Assert.Contains("case var n: n!!.Count", printed)
+        Assert.Contains("is var p { p!!.Count }", printed)
         Assert.Contains("case var l: l!!.Count", printed)
+        Assert.Contains("is var m { m!!.Count }", printed)
         Assert.Contains("case var k: k!!.Count", printed)
+        Assert.Contains("is var j { j!!.Count }", printed)
         Assert.Contains("case var g: g!!.Count", printed)
+        Assert.Contains("is var h { h!!.Count }", printed)
         Assert.Contains("case var w: w!!.Count", printed)
+        Assert.Contains("is var x { x!!.Count }", printed)
         Assert.Contains("case var t: t!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1")
+        Assert.Contains("is var u { u!!.Count }", printed)
+        Assert.Contains("is var idx { idx!!.Count }", printed)
+        Assert.Contains("case var idxArm: idxArm!!.Count", printed)
+        Assert.Contains("is var invoked { invoked!!.Count }", printed)
+        Assert.Contains("case var invokedArm: invokedArm!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1 1 1")
+    }
+
+    /// Issue #5656: the issue's repro and target-aware nullable slots over a generic member read. `LookupArm`,
+    /// `LookupCase` and `LookupIs` mention a `T?`-only value in an argument while `Lookup` returns non-null
+    /// `Node`, so no `!!` is emitted and a null `Node` is passed on. `ResultArm`, `ResultCase` and `ResultIs`
+    /// capture a `Dictionary?` in G#, so a non-null parameter bridges with `c!!` in every form and a nullable
+    /// return, field or tuple slot passes a null `cache` through unasserted.
+    @Fact
+    func TheIssue5656Repro_DecidesEachCaptureByItsEmittedType() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+namespace Demo
+{
+    public class Node { }
+    public class Holder
+    {
+        public Holder(Node child) { Child = child; }
+        public Node Child { get; }
+        public Dictionary<string, int>? Slot;
+    }
+    public class Sink
+    {
+        public virtual string Take(Node n) => "taken";
+        public virtual string TakeD(Dictionary<string, int> d) => d.Count.ToString();
+    }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        static Node Lookup(int n) => new Holder(default(Node)!).Child;
+        static string LookupArm() => Lookup(Volatile.Read(ref full!).Count) switch { var c => new Sink().Take(c) };
+        static string LookupCase() { switch (Lookup(Volatile.Read(ref full!).Count)) { case var c: return new Sink().Take(c); } }
+        static string LookupIs() => Lookup(Volatile.Read(ref full!).Count) is var c ? new Sink().Take(c) : "none";
+        static string ResultArm() => Task.FromResult(Volatile.Read(ref full!)).Result switch { var c => new Sink().TakeD(c) };
+        static string ResultCase() { switch (Task.FromResult(Volatile.Read(ref full!)).Result) { case var c: return new Sink().TakeD(c); } }
+        static string ResultIs() => Task.FromResult(Volatile.Read(ref full!)).Result is var c ? new Sink().TakeD(c) : "none";
+        static Dictionary<string, int>? NullArmReturn() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var c => c };
+        static Dictionary<string, int>? NullCaseReturn() { switch (Task.FromResult(Volatile.Read(ref cache!)).Result) { case var c: return c; } }
+        static Dictionary<string, int>? NullIsReturn() => Task.FromResult(Volatile.Read(ref cache!)).Result is var c ? c : null;
+        static bool NullField(Holder h)
+        {
+            switch (Task.FromResult(Volatile.Read(ref cache!)).Result)
+            {
+                case var c: h.Slot = c; break;
+            }
+            return h.Slot == null;
+        }
+        static bool NullTuple()
+        {
+            switch (Task.FromResult(Volatile.Read(ref cache!)).Result)
+            {
+                case var c: (Dictionary<string, int>? d, int n) pair = (c, 0); return pair.d == null;
+            }
+        }
+        public static string Run() =>
+            LookupArm() + " " + LookupCase() + " " + LookupIs() + " " +
+            ResultArm() + " " + ResultCase() + " " + ResultIs() + " " +
+            (NullArmReturn() == null) + " " + (NullCaseReturn() == null) + " " + (NullIsReturn() == null) + " " +
+            NullField(new Holder(default(Node)!)) + " " + NullTuple();
+    }
+}`)
+        Assert.Contains("case var c: Sink().Take(c)\n", printed)
+        Assert.Contains("return Sink().Take(c)\n", printed)
+        Assert.Contains("is var c { Sink().Take(c) }", printed)
+        Assert.Contains("case var c: Sink().TakeD(c!!)", printed)
+        Assert.Contains("return Sink().TakeD(c!!)", printed)
+        Assert.Contains("is var c { Sink().TakeD(c!!) }", printed)
+        Assert.Contains("case var c: c\n", printed)
+        Assert.Contains("return c\n", printed)
+        Assert.Contains("h.Slot = c\n", printed)
+        Assert.Contains("= (c, 0)\n", printed)
+        RunsAs(printed, "taken taken taken 1 1 1 True True True True True")
     }
 
     /// A subpattern member whose declared type does not follow the scrutinee's type arguments (`Node Child` of
@@ -519,21 +644,51 @@ namespace Demo
         public T Value;
         public Node Child;
     }
+    public class Pair<T, U>
+    {
+        public Pair(T first, U second) { First = first; Second = second; }
+        public T First;
+        public U Second;
+    }
     public static class P
     {
         private static Dictionary<string, int>? cache;
         static Box<T> Wrap<T>(T value) => new Box<T>(value, default(Node)!);
+        static Pair<T, U> MakePair<T, U>(T first, U second) => new Pair<T, U>(first, second);
         static string Arm() => Wrap(Volatile.Read(ref cache!)) switch { { Child: var c } => new Sink().Take(c), _ => "none" };
-        public static string Run() => Arm();
+        static string Case()
+        {
+            switch (Wrap(Volatile.Read(ref cache!)))
+            {
+                case { Child: var c }: return new Sink().Take(c);
+                default: return "none";
+            }
+        }
+        static string Is() => Wrap(Volatile.Read(ref cache!)) is { Child: var c } ? new Sink().Take(c) : "none";
+        static string SecondArm() =>
+            MakePair(Volatile.Read(ref cache!), Wrap(0).Child) switch { { Second: var s } => new Sink().Take(s), _ => "none" };
+        static string NullableSecondIs(Node? maybe, Pair<int, Node?> pair) =>
+            (MakePair(0, maybe) is { Second: var m } ? new Sink().Take(m!) : "none") + " " +
+            (pair is { Second: var n } ? new Sink().Take(n!) : "none");
+        public static string Run() =>
+            Arm() + " " + Case() + " " + Is() + " " + SecondArm() + " " +
+            NullableSecondIs(new Node(), new Pair<int, Node?>(0, new Node()));
     }
 }`)
         Assert.Contains("case { Child: var c }: Sink().Take(c)\n", printed)
-        RunsAs(printed, "taken")
+        Assert.Contains("return Sink().Take(c)\n", printed)
+        Assert.Contains("is { Child: var c } { Sink().Take(c) }", printed)
+        Assert.DoesNotContain("Take(c!!)", printed)
+        Assert.DoesNotContain("Take(s!!)", printed)
+        Assert.Contains("case { Second: var s }: Sink().Take(s)\n", printed)
+        Assert.Contains("is { Second: var m } { Sink().Take(m!!) }", printed)
+        Assert.Contains("is { Second: var n } { Sink().Take(n!!) }", printed)
+        RunsAs(printed, "taken taken taken taken taken taken")
     }
 
     /// `??` removes the nil of its left operand, and a switch expression returns its arms, not its governing
     /// expression. So `Id(Volatile.Read(ref cache!) ?? fallback)` and `Id(Volatile.Read(ref cache!) switch
-    /// { _ => fallback })` are not `T?` only in G#, and their `is var` captures pass a null `fallback` on.
+    /// { _ => fallback })` are not `T?` only in G#, and their captures pass a null `fallback` on in every form.
     @Fact
     func AVarCaptureOfACoalescedOrSwitchedGenericFlow_PassesTheNullOn() {
         let printed = Translate(`
@@ -549,22 +704,28 @@ namespace Demo
         static T Id<T>(T x) => x;
         static string Coalesce(Bag fallback) =>
             Id(Volatile.Read(ref cache!) ?? fallback) is var c ? new Sink().Take(c) : "none";
+        static string CoalesceArm(Bag fallback) =>
+            Id(Volatile.Read(ref cache!) ?? fallback) switch { var c => new Sink().Take(c) };
         static string Switched(Bag fallback) =>
             Id(Volatile.Read(ref cache!) switch { _ => fallback }) is var d ? new Sink().Take(d) : "none";
-        public static string Run() => Coalesce(default(Bag)!) + " " + Switched(default(Bag)!);
+        static string SwitchedArm(Bag fallback) =>
+            Id(Volatile.Read(ref cache!) switch { _ => fallback }) switch { var d => new Sink().Take(d) };
+        public static string Run() =>
+            Coalesce(default(Bag)!) + " " + CoalesceArm(default(Bag)!) + " " + Switched(default(Bag)!) + " " +
+            SwitchedArm(default(Bag)!);
     }
 }`)
         Assert.Contains("Sink().Take(c)", printed)
         Assert.Contains("Sink().Take(d)", printed)
         Assert.DoesNotContain("Take(c!!)", printed)
         Assert.DoesNotContain("Take(d!!)", printed)
-        RunsAs(printed, "taken taken")
+        RunsAs(printed, "taken taken taken taken")
     }
 
-    /// A value that is `T?` only in G# passed to a generic call does not make the call's result `T?` for the
-    /// capture decision: G# can infer the result from another input (`Second(Volatile.Read(ref cache!), node)`,
-    /// `Keep(callback, node)`, `Pick<T>(T? ignored, T value)`, `Name<T>(T)` returning `Node`). The capture
-    /// keeps `main`'s translation, so an `is var` capture passes a null `Node` on.
+    /// A value that is `T?` only in G# passed to a generic call does not make the call's result `T?` when G#
+    /// infers the result from another input (`Second(Volatile.Read(ref cache!), node)`,
+    /// `Keep(callback, node)`, `Pick<T>(T? ignored, T value)`, `Name<T>(T)` returning `Node`,
+    /// `MakePair(Volatile.Read(ref cache!), node).Second`). Every capture form passes a null `Node` on (#5656).
     @Fact
     func AVarCaptureOfAResultThatDoesNotFollowTheInput_PassesTheNullOn() {
         let printed = Translate(`
@@ -574,29 +735,46 @@ namespace Demo
 {
     public class Node { }
     public class Holder { public Holder(Node child) { Child = child; } public Node Child { get; } }
+    public class Pair<T, U> { public Pair(T first, U second) { First = first; Second = second; } public T First; public U Second; }
     public class Sink { public virtual string Take(Node n) => "taken"; }
     public static class P
     {
         private static Node? cache;
         static T Id<T>(T x) => x;
         static U Second<T, U>(T first, U second) => second;
+        static Pair<T, U> MakePair<T, U>(T first, U second) => new Pair<T, U>(first, second);
         static Node Name<T>(T x) => new Holder(default(Node)!).Child;
         static T Keep<T, U>(System.Func<T, U> f, T x) => x;
         static T Pick<T>(T? ignored, T value) where T : class => value;
         static string PairIs() =>
             Id(Second(Volatile.Read(ref cache!), new Holder(default(Node)!).Child)) is var c ? new Sink().Take(c) : "none";
+        static string PairArm() =>
+            Id(Second(Volatile.Read(ref cache!), new Holder(default(Node)!).Child)) switch { var c => new Sink().Take(c) };
         static string NameIs() => Name(Volatile.Read(ref cache!)) is var d ? new Sink().Take(d) : "none";
+        static string NameArm() => Name(Volatile.Read(ref cache!)) switch { var d => new Sink().Take(d) };
         static string KeepIs() =>
             Keep((Node _) => Volatile.Read(ref cache!), new Holder(default(Node)!).Child) is var k ? new Sink().Take(k) : "none";
+        static string KeepArm() =>
+            Keep((Node _) => Volatile.Read(ref cache!), new Holder(default(Node)!).Child) switch { var k => new Sink().Take(k) };
         static string PickIs() => Pick(Volatile.Read(ref cache!), new Holder(default(Node)!).Child) is var q ? new Sink().Take(q) : "none";
-        public static string Run() => PairIs() + " " + NameIs() + " " + KeepIs() + " " + PickIs();
+        static string PickArm() => Pick(Volatile.Read(ref cache!), new Holder(default(Node)!).Child) switch { var q => new Sink().Take(q) };
+        static string SecondMemberArm() =>
+            Id(MakePair(Volatile.Read(ref cache!), new Holder(default(Node)!).Child).Second) switch { var s => new Sink().Take(s) };
+        public static string Run() =>
+            PairIs() + " " + PairArm() + " " + NameIs() + " " + NameArm() + " " + KeepIs() + " " + KeepArm() + " " +
+            PickIs() + " " + PickArm() + " " + SecondMemberArm();
     }
 }`)
         Assert.Contains("is var c { Sink().Take(c) }", printed)
+        Assert.Contains("case var c: Sink().Take(c)\n", printed)
         Assert.Contains("is var d { Sink().Take(d) }", printed)
+        Assert.Contains("case var d: Sink().Take(d)\n", printed)
         Assert.Contains("is var k { Sink().Take(k) }", printed)
+        Assert.Contains("case var k: Sink().Take(k)\n", printed)
         Assert.Contains("is var q { Sink().Take(q) }", printed)
-        RunsAs(printed, "taken taken taken taken")
+        Assert.Contains("case var q: Sink().Take(q)\n", printed)
+        Assert.Contains("case var s: Sink().Take(s)\n", printed)
+        RunsAs(printed, "taken taken taken taken taken taken taken taken taken")
     }
 
     /// G# infers `Volatile.Read(ref h.Value)` from the emitted storage of `h.Value`, which `[AllowNull]` widens
