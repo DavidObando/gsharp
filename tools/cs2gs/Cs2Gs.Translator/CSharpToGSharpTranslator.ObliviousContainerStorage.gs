@@ -2069,22 +2069,28 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 var argumentPositions = this.ConvertedObliviousPositionsOf(argumentValue, model, flow)
-                if argumentParameter.RefKind != RefKind.None {
-                    let (storage, depth) = ObliviousNullabilityAnalyzer.RefArrayStorage(
-                        argumentValue!!,
-                        model,
-                        preserveSubstitution: true
-                    )
-                    var declared = StorageType(storage)
-                    let path = List[int32]()
-                    for var i = 0; i < depth && declared is IArrayTypeSymbol array; i++ {
-                        path.Add(0)
-                        declared = array.ElementType
+                if argumentParameter.RefKind != RefKind.None &&
+                    ObliviousNullabilityAnalyzer
+                    .TryResolveTupleContainerSource(
+                    argumentValue,
+                    model,
+                    out var storage,
+                    out var declared,
+                    out var storagePrefix,
+                    unwrapSuppressions: true
+                ) {
+                    let path = if storagePrefix.Length == 0 {
+                        List[int32]()
+                    } else {
+                        storagePrefix
+                            .Split('.')
+                            .Select(
+                            (index string) -> int32.Parse(index, System.Globalization.CultureInfo.InvariantCulture)
+                        )
+                            .ToList()
                     }
                     let tuplePositions = ObliviousPositionSet()
-                    if storage != nil && path.Count == depth {
-                        this.CollectTupleStoragePositions(storage, declared, model, path, "", tuplePositions.Nullable)
-                    }
+                    this.CollectTupleStoragePositions(storage!!, declared, model, path, "", tuplePositions.Nullable)
                     if !tuplePositions.IsEmpty {
                         if argumentPositions != nil {
                             tuplePositions.UnionWith(argumentPositions)

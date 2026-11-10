@@ -2430,7 +2430,9 @@ partial class CSharpToGSharpTranslator {
             if source is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
                 source = property
             }
-            if source == nil || source is IDiscardSymbol {
+            if source == nil ||
+                source is IDiscardSymbol ||
+                (source is IFieldSymbol field && field.ContainingType.IsTupleType) {
                 return
             }
             if receiver is InvocationExpressionSyntax{

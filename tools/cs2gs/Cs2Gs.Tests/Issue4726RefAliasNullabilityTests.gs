@@ -920,6 +920,110 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("whole")
+    @InlineData("member")
+    @InlineData("leaf")
+    func Issue5880_GenericProjectedTupleRefStorage_PreservesCSharpOutput(aliasKind string) {
+        let mutation = switch aliasKind {
+            case "member": "ref (string, int) alias = ref row.Item1; alias = (null, 1);"
+            case "leaf": "ref string alias = ref row.Item1.Item1; alias = null;"
+            default: "ref ((string, int), int) alias = ref row; alias = ((null, 1), 2);"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref (T, int) value) { }
+    public static string Run() {
+        ((string, int), int) row = (("x", 1), 2);
+        ` + mutation + `
+        Keep<string>(ref row.Item1);
+        return (row.Item1.Item1 ?? "null") + ":" + row.Item1.Item2 + ":" + row.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string?]", printed)
+        AssertParity(source, printed, "null:1:2")
+    }
+
+    @Theory
+    @InlineData("tuple-parameter")
+    @InlineData("explicit-call")
+    @InlineData("whole-generic")
+    @InlineData("projected-return")
+    @InlineData("conditional-return")
+    func Issue5880_GenericRefReturnTupleStorage_PreservesCSharpOutput(shape string) {
+        let source = switch shape {
+            case "explicit-call": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow<string>(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow<string>(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "whole-generic": `public static class Obj {
+    private static ref T Borrow<T>(ref T value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "projected-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref ((T, int), int) value) => ref value.Item1;
+    public static string Run() {
+        ((string, int), int) row = (("x", 1), 3);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        ((string, int), int) clean = (("keep", 2), 4);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item1.Item2;
+    }
+}`
+            case "conditional-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(bool choose, ref (T, int) first, ref (T, int) second) {
+        if (choose) return ref first;
+        return ref second;
+    }
+    public static string Run() {
+        (string, int) left = ("x", 1);
+        (string, int) right = ("y", 1);
+        ref var alias = ref Borrow(true, ref left, ref right);
+        alias = (null, 1);
+        (string, int) cleanLeft = ("keep", 2);
+        (string, int) cleanRight = ("stay", 2);
+        ref var cleanAlias = ref Borrow(false, ref cleanLeft, ref cleanRight);
+        return (left.Item1 ?? "null") + ":" + (right.Item1 ?? "null") + ":" + cleanAlias.Item1;
+    }
+}`
+            default: `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+        }
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("let ref cleanAlias (string, int32)", printed)
+        let expected = if shape == "conditional-return" {
+            "null:y:stay"
+        } else {
+            "null:keep:2"
+        }
+        AssertParity(source, printed, expected)
+    }
+
+    @Theory
     @InlineData("declaration")
     @InlineData("parameter")
     @InlineData("generic-parameter")
