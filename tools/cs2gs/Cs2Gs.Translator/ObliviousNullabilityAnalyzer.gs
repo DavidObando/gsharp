@@ -5777,11 +5777,13 @@ internal shared class ObliviousNullabilityAnalyzer {
             CollectGenericReceiverTupleArgumentFlow(call, argument, model, tupleTainted, tupleEdges, tupleScalarEdges)
         }
         for entries in sharedTypeParameterStorages.Values {
-            let representativeIndex = entries.FindIndex(
+            let nonOutputIndex = entries.FindIndex(
                 (entry(Symbol ISymbol, Type ITypeSymbol, Path string, IsOutput bool)) -> !entry.IsOutput
             )
-            if representativeIndex < 0 {
-                continue
+            let representativeIndex = if nonOutputIndex >= 0 {
+                nonOutputIndex
+            } else {
+                0
             }
             let representative = entries[representativeIndex]
             for var i = 0; i < entries.Count; i++ {
@@ -5789,7 +5791,9 @@ internal shared class ObliviousNullabilityAnalyzer {
                     continue
                 }
                 let current = entries[i]
-                let edges = if current.IsOutput {
+                let isOutputPair = representative.IsOutput || current.IsOutput
+                let bidirectional = !current.IsOutput || representative.IsOutput
+                let edges = if isOutputPair {
                     tupleEdges
                 } else {
                     tupleContractEdges
@@ -5804,7 +5808,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                         tupleTainted,
                         edges,
                         secondPrefix: current.Path,
-                        bidirectional: !current.IsOutput,
+                        bidirectional: bidirectional,
                         firstPrefix: representative.Path
                     )
                 } else if representative
@@ -5818,7 +5822,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     let representativeKey = TupleElementKey(representative.Symbol, representative.Path)
                     let currentKey = TupleElementKey(current.Symbol, current.Path)
                     edges.Add((currentKey, representativeKey))
-                    if !current.IsOutput {
+                    if bidirectional {
                         edges.Add((representativeKey, currentKey))
                     }
                 }

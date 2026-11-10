@@ -952,6 +952,8 @@ public static class Obj {
     @InlineData("whole-ref-first")
     @InlineData("leaf-out-first")
     @InlineData("leaf-ref-first")
+    @InlineData("leaf-both-out")
+    @InlineData("whole-both-out")
     func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
         let method = switch shape {
             case "whole-tuple": "private static void Keep<T>(ref T a, ref T b) { }"
@@ -960,18 +962,24 @@ public static class Obj {
             case "whole-ref-first": "private static void Keep<T>(ref T b, out T a) { a = b; }"
             case "leaf-out-first": "private static void Keep<T>(out (T, int) a, ref (T, int) b) { a = b; }"
             case "leaf-ref-first": "private static void Keep<T>(ref (T, int) b, out (T, int) a) { a = b; }"
+            case "leaf-both-out": "private static void Keep<T>(T value, out (T, int) a, out (T, int) b) { a = (value, 1); b = (value, 2); }"
+            case "whole-both-out": "private static void Keep<T>(T value, out T a, out T b) { a = value; b = value; }"
             default: "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
         }
         let taintedCall = switch shape {
             case "explicit-leaf": "Keep<string>(ref a, ref b);"
             case "whole-out-first" or "leaf-out-first": "Keep(out a, ref b);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref b, out a);"
+            case "leaf-both-out": "Keep<string>(\"ok\", out a, out b);"
+            case "whole-both-out": "Keep((\"ok\", 1), out a, out b);"
             default: "Keep(ref a, ref b);"
         }
         let cleanCall = switch shape {
             case "explicit-leaf": "Keep<string>(ref cleanA, ref cleanB);"
             case "whole-out-first" or "leaf-out-first": "Keep(out cleanA, ref cleanB);"
             case "whole-ref-first" or "leaf-ref-first": "Keep(ref cleanB, out cleanA);"
+            case "leaf-both-out": "Keep<string>(\"keep\", out cleanA, out cleanB);"
+            case "whole-both-out": "Keep((\"keep\", 2), out cleanA, out cleanB);"
             default: "Keep(ref cleanA, ref cleanB);"
         }
         let source = `public static class Obj {
@@ -990,17 +998,14 @@ public static class Obj {
         Assert.DoesNotContain("(T?, int32)", printed)
         Assert.Contains("var a (string?, int32)", printed)
         Assert.Contains("var cleanA = (\"keep\", 2)", printed)
-        if shape == "explicit-leaf" {
-            Assert.Contains("Keep[string?](&a, &b)", printed)
-            Assert.Contains("Keep[string](&cleanA, &cleanB)", printed)
+        if shape is "explicit-leaf" or "leaf-both-out" {
+            Assert.Contains("Keep[string?]", printed)
+            Assert.Contains("Keep[string]", printed)
         }
-        let expected = if shape.Contains("out-", StringComparison.Ordinal) || shape.Contains(
-            "ref-first",
-            StringComparison.Ordinal
-        ) {
-            "null:null:stay:stay"
-        } else {
-            "x:null:keep:stay"
+        let expected = switch shape {
+            case "leaf-both-out" or "whole-both-out": "ok:ok:keep:keep"
+            case "whole-out-first" or "whole-ref-first" or "leaf-out-first" or "leaf-ref-first": "null:null:stay:stay"
+            default: "x:null:keep:stay"
         }
         AssertParity(source, printed, expected)
     }
