@@ -29,7 +29,7 @@ namespace Demo
             Foo(a: 1, flag: 2);
         }
     }
-}`, "G# currently cannot bind decimal optional defaults emitted without a decimal literal suffix.")
+}`)
         Assert.Contains("Foo(a: 1, flag: 2)", printed, StringComparison.Ordinal)
     }
 
@@ -50,8 +50,8 @@ namespace Demo
             Foo(1);
         }
     }
-}`, "G# currently cannot bind decimal optional defaults emitted without a decimal literal suffix.")
-        Assert.Contains("price decimal = 1.5", printed, StringComparison.Ordinal)
+}`)
+        Assert.Contains("price decimal = 1.5m", printed, StringComparison.Ordinal)
         Assert.Contains("Foo(1)", printed, StringComparison.Ordinal)
     }
 

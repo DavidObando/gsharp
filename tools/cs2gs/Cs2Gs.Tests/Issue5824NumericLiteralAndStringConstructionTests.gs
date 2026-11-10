@@ -110,6 +110,30 @@ open class Issue5824NumericLiteralTranslationTests {
         source.Append(main.ToString() + "} }")
         LiteralConstructionRuntimeParity.AssertMatches(source.ToString())
     }
+
+    @Fact
+    func DecimalDefaults_PreserveScaleAndSignedZeroBits() {
+        LiteralConstructionRuntimeParity.AssertMatches(`
+using System;
+public class P
+{
+    static int NegScaledZero(decimal value = -0.00m) => decimal.GetBits(value)[3];
+    static int PosZero(decimal value = 0m) => decimal.GetBits(value)[3];
+    static int PosScaledZero(decimal value = 0.00m) => decimal.GetBits(value)[3];
+    static int ScaledNonZero(decimal value = 1.50m) => decimal.GetBits(value)[3];
+    static int NullableNegScaledZero(decimal? value = -0.00m) => decimal.GetBits(value!.Value)[3];
+    public static void Main()
+    {
+        var f = (decimal value = -0.00m) => decimal.GetBits(value)[3];
+        Console.WriteLine(NegScaledZero());
+        Console.WriteLine(PosZero());
+        Console.WriteLine(PosScaledZero());
+        Console.WriteLine(ScaledNonZero());
+        Console.WriteLine(NullableNegScaledZero());
+        Console.WriteLine(f());
+    }
+}`)
+    }
 }
 
 open class Issue5826StringConstructionTranslationTests {
