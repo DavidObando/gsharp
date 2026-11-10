@@ -389,7 +389,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
         parameterMap Dictionary[VariableSymbol, LocalVariableSymbol]
     ) BoundExpression {
         let isField = property.Member is FieldInfo
-        return BoundClrStaticCallExpression(
+        let access = BoundClrStaticCallExpression(
             property.Syntax,
             if isField {
                 ExpressionFieldInfoMethod
@@ -414,6 +414,7 @@ internal class ExpressionTreeLowerer : NestedFunctionBodyRewriter {
                 )
             )
         )
+        return WrapNarrowingConversionIfNeeded(access, property.EffectiveDeclaredType, property.NarrowedType)
     }
 
     private func BuildUnaryExpression(

@@ -5733,15 +5733,7 @@ internal partial class ExpressionBinder {
                     )
                 )
                 case imported is BoundClrPropertyAccessExpression: cast[BoundExpression](
-                    BoundClrPropertyAccessExpression(
-                        imported.Syntax,
-                        savedReceiver,
-                        imported.Member,
-                        imported.Type,
-                        imported.StaticContainerType,
-                        imported.ConstrainedReceiverTypeParameter,
-                        imported.ConstrainedInterfaceType
-                    )
+                    imported.WithReceiver(savedReceiver)
                 )
                 default: propertyTarget
             }

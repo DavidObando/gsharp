@@ -809,17 +809,7 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     if object.ReferenceEquals(inner, clrLink.Receiver) {
                         return clrLink
                     }
-                    return BoundClrPropertyAccessExpression(
-                        clrLink.Syntax,
-                        inner,
-                        clrLink.Member,
-                        clrLink.Type,
-                        clrLink.StaticContainerType,
-                        clrLink.ConstrainedReceiverTypeParameter,
-                        clrLink.ConstrainedInterfaceType,
-                        clrLink.IsAddressableStaticField,
-                        clrLink.IsReadOnlySubmissionGlobal
-                    )
+                    return clrLink.WithReceiver(inner)
                 }
             }
             default {
@@ -914,15 +904,12 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     narrowedType: nil
                 )
             }
-            case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo info:
+            case field is BoundClrPropertyAccessExpression when field.NarrowedType != nil && field.Member is FieldInfo:
             BoundClrPropertyAccessExpression(
                 field.Syntax,
                 field.Receiver,
                 field.Member,
-                MemberLookup.GetClrFieldTypeSymbol(
-                    field.Receiver?.Type ?? field.StaticContainerType ?? TypeSymbol.Error,
-                    info
-                ),
+                field.EffectiveDeclaredType,
                 field.StaticContainerType,
                 field.ConstrainedReceiverTypeParameter,
                 field.ConstrainedInterfaceType,

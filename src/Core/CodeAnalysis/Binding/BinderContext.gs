@@ -1026,7 +1026,11 @@ internal class BinderContext {
             return true
         }
         if expression is BoundClrPropertyAccessExpression clrAccess {
-            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.Type)
+            if clrAccess.NarrowedType is {} clrNarrowed {
+                narrowedType = clrNarrowed
+                return true
+            }
+            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.EffectiveDeclaredType)
             if !object.Equals(clrAccess.Type, declared) {
                 narrowedType = clrAccess.Type
                 return true

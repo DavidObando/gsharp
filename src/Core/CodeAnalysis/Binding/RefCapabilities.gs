@@ -333,6 +333,9 @@ internal shared class RefCapabilities {
             field.Receiver.Type
         ) &&
             IsReadOnlyReference(field.Receiver)
+        case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo &&
+            clrField.NarrowedType != nil &&
+            Binder.IsReferenceTypeForConstraint(clrField.EffectiveDeclaredType.StripToBareShape()): false
         default: IsReadOnlyStorage(expression)
     }
 
@@ -680,12 +683,13 @@ internal shared class RefCapabilities {
             .IsConst == true: false
         case BoundClrPropertyAccessExpression{Member: FieldInfo field} when field.IsLiteral ||
             (field.IsStatic && field.IsInitOnly): false
-        case BoundFieldAccessExpression{Receiver: {} receiver}: Binder.IsReferenceTypeForConstraint(receiver.Type) ||
-            IsDirectlyAddressableForImplicitIn(receiver)
+        case BoundFieldAccessExpression{Receiver: {} receiver} access: access.NarrowedType == nil &&
+            (Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver))
         case BoundClrPropertyAccessExpression{
             Member: FieldInfo,
             Receiver: {} receiver
-        }: Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver)
+        } access: access.NarrowedType == nil &&
+            (Binder.IsReferenceTypeForConstraint(receiver.Type) || IsDirectlyAddressableForImplicitIn(receiver))
         case _ is BoundBlockExpression or _ is BoundConditionalExpression: false
         default: ExpressionBinder.IsLvalue(value)
     }

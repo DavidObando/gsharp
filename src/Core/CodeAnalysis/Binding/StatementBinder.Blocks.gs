@@ -1633,16 +1633,8 @@ internal partial class StatementBinder {
                         receiver
                     }
                 }
-                return BoundClrPropertyAccessExpression(
-                    clrField.Syntax,
-                    CaptureCallReceiverCore(instance, prefix, retainedVariables, retainRemaining, isDefer),
-                    clrField.Member,
-                    clrField.Type,
-                    clrField.StaticContainerType,
-                    clrField.ConstrainedReceiverTypeParameter,
-                    clrField.ConstrainedInterfaceType,
-                    clrField.IsAddressableStaticField,
-                    clrField.IsReadOnlySubmissionGlobal
+                return clrField.WithReceiver(
+                    CaptureCallReceiverCore(instance, prefix, retainedVariables, retainRemaining, isDefer)
                 )
             }
             case element is BoundIndexExpression when element.IsArrayBackedElementAccess {

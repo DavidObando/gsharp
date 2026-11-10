@@ -1032,6 +1032,7 @@ internal partial class MethodBodyEmitter {
             this.il.Token(
                 this.outer.memberRefs.GetMethodEntityHandle(constrainedGetter, access.ConstrainedInterfaceType)
             )
+            this.EmitNarrowingCastIfNeeded(access.EffectiveDeclaredType, access.NarrowedType)
             return
         }
         // Phase 4 / Stream B: property or field read on a CLR receiver.
@@ -1125,6 +1126,7 @@ internal partial class MethodBodyEmitter {
                 // (`Comparer<!TResult>`), not the erased `object`. Skip widening
                 // exactly as the instance symbolic-container path does below.
                 if isStatic && access.StaticContainerType != nil {
+                    this.EmitNarrowingCastIfNeeded(access.EffectiveDeclaredType, access.NarrowedType)
                     break
                 }
                 // Issue #774: when the receiver is a symbolic open container,
@@ -1144,9 +1146,11 @@ internal partial class MethodBodyEmitter {
                     property,
                     out _
                 ) {
+                    this.EmitNarrowingCastIfNeeded(access.EffectiveDeclaredType, access.NarrowedType)
                     break
                 }
-                this.EmitErasedObjectReturnWidening(getter.ReturnType, access.Type)
+                this.EmitErasedObjectReturnWidening(getter.ReturnType, access.EffectiveDeclaredType)
+                this.EmitNarrowingCastIfNeeded(access.EffectiveDeclaredType, access.NarrowedType)
             }
             case field is FieldInfo {
                 let fieldRef = if access.StaticContainerType is {} staticContainerType {
@@ -1162,6 +1166,7 @@ internal partial class MethodBodyEmitter {
                     }
                 )
                 this.il.Token(fieldRef)
+                this.EmitNarrowingCastIfNeeded(access.EffectiveDeclaredType, access.NarrowedType)
             }
             default {
                 throw NotSupportedException(
@@ -1557,7 +1562,7 @@ internal partial class MethodBodyEmitter {
                 this.EmitExpression(dereference.Operand)
                 return
             }
-            if receiver is BoundVariableExpression bve && this.TryLoadStructVariableAddress(bve) {
+            if this.TryEmitBoxedValueTypeReceiver(receiver) {
                 return
             }
             if receiver is BoundTupleElementAccessExpression tuple && this.outer.IsAddressableReceiverStorage(
@@ -1901,6 +1906,22 @@ internal partial class MethodBodyEmitter {
         this.EmitLoadVariable(bve.Variable)
         this.il.OpCode(ILOpCode.Unbox)
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(effectiveType))
+        return true
+    }
+
+    private func TryEmitBoxedValueTypeReceiver(receiver BoundExpression) bool {
+        if receiver is BoundVariableExpression bve {
+            return this.TryLoadStructVariableAddress(bve)
+        }
+        let storage = SideEffectSpiller.GetReceiverStorageView(receiver)
+        if object.ReferenceEquals(storage, receiver) || !Binder.IsReferenceTypeForConstraint(
+            storage.Type.StripToBareShape()
+        ) {
+            return false
+        }
+        this.EmitExpression(storage)
+        this.il.OpCode(ILOpCode.Unbox)
+        this.il.Token(this.outer.memberRefs.GetElementTypeToken(receiver.Type))
         return true
     }
 

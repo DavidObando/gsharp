@@ -69,6 +69,21 @@ internal partial class ExpressionBinder {
                     narrowedField.SubstitutedType
                 )
             }
+        } else if boundRead is BoundClrPropertyAccessExpression{
+            NarrowedType: not nil,
+            EffectiveDeclaredType: NullableTypeSymbol or PlatformTypeSymbol
+        } narrowedClr {
+            boundRead = BoundClrPropertyAccessExpression(
+                narrowedClr.Syntax,
+                narrowedClr.Receiver,
+                narrowedClr.Member,
+                narrowedClr.EffectiveDeclaredType,
+                narrowedClr.StaticContainerType,
+                narrowedClr.ConstrainedReceiverTypeParameter,
+                narrowedClr.ConstrainedInterfaceType,
+                narrowedClr.IsAddressableStaticField,
+                narrowedClr.IsReadOnlySubmissionGlobal
+            )
         }
         if boundRead is BoundErrorExpression || boundRead.Type == TypeSymbol.Error {
             let _ = BindExpression(syntax.Value)
@@ -1199,20 +1214,12 @@ internal partial class ExpressionBinder {
                 return BoundIndexExpression(index.Syntax, target, indices.MoveToImmutable(), index.Type)
             }
             case field is BoundClrPropertyAccessExpression when field.Member is FieldInfo {
-                return BoundClrPropertyAccessExpression(
-                    field.Syntax,
+                return field.WithReceiver(
                     if field.Receiver == nil {
                         default(BoundExpression?)
                     } else {
                         CaptureStorageReceiver(anchor, field.Receiver, preStatements, forceCapture: true)
-                    },
-                    field.Member,
-                    field.Type,
-                    field.StaticContainerType,
-                    field.ConstrainedReceiverTypeParameter,
-                    field.ConstrainedInterfaceType,
-                    field.IsAddressableStaticField,
-                    field.IsReadOnlySubmissionGlobal
+                    }
                 )
             }
             case block is BoundBlockExpression {

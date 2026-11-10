@@ -170,15 +170,11 @@ internal shared class ManagedReferenceOrigins {
                     field.NarrowedType
                 )
             }
-            case BoundClrPropertyAccessExpression{Receiver: {} receiver, Member: FieldInfo} field when !Binder
-                .IsReferenceTypeForConstraint(receiver.Type) {
-                return BoundClrPropertyAccessExpression(
-                    field.Syntax,
-                    PrepareAliases(receiver, references),
-                    field.Member,
-                    field.Type,
-                    field.StaticContainerType
-                )
+            case BoundClrPropertyAccessExpression{
+                Receiver: {} receiver,
+                Member: FieldInfo
+            } field when !Binder.IsReferenceTypeForConstraint(receiver.Type) {
+                return field.WithReceiver(PrepareAliases(receiver, references))
             }
             case block is BoundBlockExpression {
                 return BoundBlockExpression(

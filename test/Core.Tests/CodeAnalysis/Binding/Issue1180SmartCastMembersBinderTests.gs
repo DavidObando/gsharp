@@ -5,6 +5,7 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import GSharp.Core.CodeAnalysis.Symbols
 import GSharp.Core.CodeAnalysis.Syntax
@@ -12,6 +13,7 @@ import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Linq
 import Xunit
 
 /// ADR-0069 addendum / issue #1180 — extend Kotlin-style smart cast from
@@ -377,6 +379,75 @@ Token(Owner()).Mutate(ref s)`
         let result = Evaluate(source)
         let diagnostic = Assert.Single(result.Diagnostics, (d Diagnostic) -> d.Id == "GS0158")
         Assert.Contains("Length", diagnostic.Message, StringComparison.Ordinal)
+    }
+
+    @Fact
+    func Issue5814_ImportedReadonlyMembers_NarrowForMethodCalls_WhileMutableMembersReject() {
+        using let fixture = CSharpFixture(`#nullable enable
+namespace Imported5814 {
+    public struct Counter {
+        public int n;
+        public void Bump() { n++; }
+    }
+    public sealed class Box {
+        public readonly object? readonlyField;
+        public object? GetOnlyProp { get; }
+        public object? mutableField;
+        public object? MutableProp { get; set; }
+        public Box(object? value) {
+            readonlyField = value;
+            GetOnlyProp = value;
+            mutableField = value;
+            MutableProp = value;
+        }
+    }
+}`)
+        using let references = fixture.RuntimeReferences()
+        let validSource = `import Imported5814
+let box = Box(Counter())
+if box.readonlyField is Counter {
+    defer box.readonlyField.Bump()
+}
+if box.GetOnlyProp is Counter {
+    box.GetOnlyProp.Bump()
+}
+`
+        let validTree = SyntaxTree.Parse(SourceText.From(validSource))
+        let validCompilation = Compilation(references, validTree)
+        let validProgram = Binder.BindProgram(validCompilation.GlobalScope, validCompilation.References)
+        let validErrors = validTree
+            .Diagnostics
+            .Concat(validCompilation.GlobalScope.Diagnostics)
+            .Concat(validProgram.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .ToArray()
+        Assert.Empty(validErrors)
+
+        for member in[]string{"mutableField", "MutableProp"} {
+            let call = "Bump()"
+            let rejectedSource = "import Imported5814\nlet box = Box(Counter())\nif box." +
+                member +
+                " is Counter {\n    box." +
+                member +
+                "." +
+                call +
+                "\n}\n"
+            let rejectedTree = SyntaxTree.Parse(SourceText.From(rejectedSource))
+            let rejectedCompilation = Compilation(references, rejectedTree)
+            let rejectedProgram = Binder.BindProgram(rejectedCompilation.GlobalScope, rejectedCompilation.References)
+            let error = Assert.Single(
+                rejectedTree
+                    .Diagnostics
+                    .Concat(rejectedCompilation.GlobalScope.Diagnostics)
+                    .Concat(rejectedProgram.Diagnostics)
+                    .Where((d Diagnostic) -> d.IsError)
+            )
+            Assert.Equal("GS0159", error.Id)
+            Assert.Equal(
+                TextSpan(rejectedSource.IndexOf(call, StringComparison.Ordinal), call.Length),
+                error.Location.Span
+            )
+        }
     }
 
     shared {

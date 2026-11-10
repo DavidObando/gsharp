@@ -4879,6 +4879,12 @@ internal class ReflectionMetadataEmitter {
         if receiver is BoundDereferenceExpression {
             return false
         }
+        if IsValueTypeSymbol(receiver.Type) && SideEffectSpiller.GetReceiverStorageView(receiver) is {} storage &&
+            !object.ReferenceEquals(storage, receiver) && Binder.IsReferenceTypeForConstraint(
+            storage.Type.StripToBareShape()
+        ) {
+            return false
+        }
         if receiver is BoundTupleElementAccessExpression && this.IsAddressableReceiverStorage(
             receiver,
             (variable VariableSymbol) -> this.CanLoadVariableAddressForReceiverSpill(variable, function, locals)
@@ -4995,7 +5001,11 @@ internal class ReflectionMetadataEmitter {
         } else {
             this.IsStaticFieldAddressLegalHere(field.Field)
         }
-        case BoundClrPropertyAccessExpression{Member: FieldInfo field, Receiver: var owner}: !field.IsLiteral &&
+        case BoundClrPropertyAccessExpression{
+            Member: FieldInfo field,
+            Receiver: var owner
+        } access: access.NarrowedType == nil &&
+            !field.IsLiteral &&
             !(field.IsStatic && field.IsInitOnly) &&
             (
             field.IsStatic ||

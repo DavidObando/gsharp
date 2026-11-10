@@ -5500,7 +5500,11 @@ internal class ConversionClassifier {
             target TypeSymbol?,
             @NotNullWhen(true) out declaredRead BoundExpression?
         ) bool {
-            let declaredType = MemberLookup.GetDeclaredAccessPathType(path, narrowedType)
+            let declaredType = if expression is BoundClrPropertyAccessExpression clrExpr {
+                clrExpr.EffectiveDeclaredType
+            } else {
+                MemberLookup.GetDeclaredAccessPathType(path, narrowedType)
+            }
             if !BinderContext.NarrowedReadChangesRuntimeType(declaredType, narrowedType) ||
                 ConversionNeedsNarrowedSource(declaredType, narrowedType, target) {
                 declaredRead = nil
