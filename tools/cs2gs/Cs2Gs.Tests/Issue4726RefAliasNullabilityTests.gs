@@ -479,6 +479,1017 @@ public static class Obj {
     }
 
     @Fact
+    func Issue5868_EightElementTemporaryCollection_PreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() =>
+        new List<(int,int,int,int,int,int,int,string)> { (1,2,3,4,5,6,7,null!) }.Count.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
+    func Issue5868_TemporaryTupleArray_PreservesCSharpOutput() {
+        const source = `public static class Obj {
+    public static string Run() => new (string, int)[] { (null!, 0) }.Length.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
+    func Issue5868_ReorderedTupleSlots_KeepConvertedTypePositions() {
+        const source = `using System.Collections.Generic;
+public class Reordered<TValue, TKey> : Dictionary<TKey, TValue> { }
+public static class Obj {
+    public static string Run() {
+        IDictionary<(string, int), (string, int)> rows =
+            new Reordered<(string, int), (string, int)> { { ("key", 1), (null!, 0) } };
+        string output = "";
+        foreach (var row in rows) output += row.Key.Item1 + ":" + (row.Value.Item1 ?? "null");
+        return output;
+    }
+}`
+        let printed = Translate(source)
+        // #5909 blocks inherited initializer execution; compare the converted declaration bytes.
+        let declaration = printed.Split('\n').Single((line string) -> line.Contains("let rows ")).Trim()
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "let rows IDictionary[(string, int32), (string?, int32)] = Reordered[(string?, int32), (string, int32)]{ (\"key\", 1): (nil, 0) }"
+            ),
+            Encoding.UTF8.GetBytes(declaration)
+        )
+    }
+
+    @Fact
+    func Issue5868_TemporaryTupleCollection_PreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() => new List<(string, int)> { (null!, 0) }.Count.ToString();
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Theory
+    @InlineData("list")
+    @InlineData("array")
+    @InlineData("single-list")
+    func Issue5868_TemporaryNestedContainers_PreserveCSharpOutput(shape string) {
+        let type = if shape == "array" {
+            "List<(string, int)>[]"
+        } else {
+            "List<List<(string, int)>>"
+        }
+        let count = if shape == "array" {
+            "Length"
+        } else {
+            "Count"
+        }
+        let second = if shape == "single-list" {
+            ""
+        } else {
+            ", new List<(string, int)> { (\"abc\", 1) }"
+        }
+        let source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() => new ` + type + ` {
+        new List<(string, int)> { (null!, 0) }` + second + `
+    }.` + count + `.ToString();
+}`
+        AssertParity(
+            source,
+            Translate(source),
+            if shape == "single-list" {
+                "1"
+            } else {
+                "2"
+            }
+        )
+    }
+
+    @Fact
+    func Issue5868_IndexerTupleKey_ConstructionAlonePreservesCSharpOutput() {
+        const source = `using System.Collections.Generic;
+public static class Obj {
+    public static string Run() {
+        var items = new Dictionary<(string, int), int> { [(null!, 0)] = 1 };
+        return items.Count.ToString();
+    }
+}`
+        AssertParity(source, Translate(source), "1")
+    }
+
+    @Fact
+    func Issue5868_InferredTupleKeywordLabel_PreservesCSharpOutput() {
+        const source = `public static class Obj {
+    public static string Run() {
+        string scope = "keep";
+        var row = ("x", scope);
+        row = (null, scope);
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+        AssertParity(source, Translate(source), "null:keep")
+    }
+
+    @Theory
+    @InlineData("list")
+    @InlineData("hashset")
+    @InlineData("dictionary-add")
+    @InlineData("dictionary-index")
+    @InlineData("dictionary-key")
+    @InlineData("dictionary-index-key")
+    @InlineData("array")
+    @InlineData("implicit-array")
+    @InlineData("bare-array")
+    @InlineData("jagged-array")
+    @InlineData("array-of-lists")
+    @InlineData("interface-dictionary")
+    @InlineData("interface-array")
+    @InlineData("interface-implicit-array")
+    @InlineData("interface-array-nested")
+    @InlineData("interface-jagged-array")
+    @InlineData("nested-lists")
+    @InlineData("list-of-arrays")
+    @InlineData("dictionary-of-lists")
+    @InlineData("parenthesized-null")
+    @InlineData("target-typed")
+    @InlineData("nested")
+    @InlineData("promoted")
+    func Issue5868_CollectionInitializerTupleLeaves_PreserveCSharpOutput(shape string) {
+        let creation = switch shape {
+            case "hashset": "new HashSet<(string, int)> { (null!, 0), (\"abc\", 1) }"
+            case "dictionary-add": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
+            case "dictionary-index": "new Dictionary<int, (string, int)> { [0] = (null!, 0), [1] = (\"abc\", 1) }"
+            case "dictionary-key": "new Dictionary<(string, int), int> { { (null!, 0), 0 }, { (\"abc\", 1), 1 } }"
+            case "dictionary-index-key": "new Dictionary<(string, int), int> { [(null!, 0)] = 0, [(\"abc\", 1)] = 1 }"
+            case "array": "new (string, int)[] { (null!, 0), (\"abc\", 1) }"
+            case "implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
+            case "bare-array": "{ (null!, 0), (\"abc\", 1) }"
+            case "jagged-array": "new[] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
+            case "array-of-lists": "new[] { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "interface-dictionary": "new Dictionary<int, (string, int)> { { 0, (null!, 0) }, { 1, (\"abc\", 1) } }"
+            case "interface-array": "new (string, int)[] { (null!, 0), (\"abc\", 1) }"
+            case "interface-implicit-array": "new[] { ((string)null, 0), (\"abc\", 1) }"
+            case "interface-array-nested": "new List<(string, int)>[] { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "interface-jagged-array": "new (string, int)[][] { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
+            case "nested-lists": "new List<List<(string, int)>> { new List<(string, int)> { (null!, 0) }, new List<(string, int)> { (\"abc\", 1) } }"
+            case "list-of-arrays": "new List<(string, int)[]> { new (string, int)[] { (null!, 0) }, new (string, int)[] { (\"abc\", 1) } }"
+            case "dictionary-of-lists": "new Dictionary<int, List<(string, int)>> { { 0, new List<(string, int)> { (null!, 0) } }, { 1, new List<(string, int)> { (\"abc\", 1) } } }"
+            case "parenthesized-null": "new List<(string, int)> { ((null!), 0), (\"abc\", 1) }"
+            case "target-typed": "new() { (null!, 0), (\"abc\", 1) }"
+            case "nested": "new List<((string, int), int)> { ((null!, 0), 1), ((\"abc\", 1), 2) }"
+            case "promoted": "new List<(string, int)> { (Missing(), 0), (\"abc\", 1) }"
+            default: "new List<(string, int)> { (null!, 0), (\"abc\", 1) }"
+        }
+        let declaration = switch shape {
+            case "target-typed": "List<(string, int)>"
+            case "bare-array": "(string, int)[]"
+            case "interface-dictionary": "IEnumerable<KeyValuePair<int, (string, int)>>"
+            case "interface-array": "IEnumerable<(string, int)>"
+            case "interface-implicit-array": "IReadOnlyList<(string, int)>"
+            case "interface-array-nested" or "interface-jagged-array": "IEnumerable<IReadOnlyList<(string, int)>>"
+            default: "var"
+        }
+        let collection = switch shape {
+            case "dictionary-add" or "dictionary-index" or "dictionary-of-lists": "items.Values"
+            case "dictionary-key" or "dictionary-index-key": "items.Keys"
+            default: "items"
+        }
+        let leaf = switch shape {
+            case "nested": "row.Item1.Item1"
+            case "jagged-array" or
+                "array-of-lists" or
+                "nested-lists" or
+                "list-of-arrays" or
+                "interface-array-nested" or
+                "interface-jagged-array" or
+                "dictionary-of-lists": "row[0].Item1"
+            case "interface-dictionary": "row.Value.Item1"
+            default: "row.Item1"
+        }
+        let source = `using System.Collections.Generic;
+public static class Obj {
+    private static string Missing() => null;
+    public static string Run() {
+        ` + declaration + " items = " + creation + `;
+        string output = "";
+        foreach (var row in ` + collection + `) {
+            output += (` + leaf + ` ?? "null") + ",";
+        }
+        return output;
+    }
+}`
+        let printed = Translate(source)
+        AssertParity(source, printed, "null,abc,")
+    }
+
+    @Fact
+    func Issue5868_CollectionInitializerDeconstructionCapture_PreservesCSharpOutput() {
+        const source = `using System;
+using System.Collections.Generic;
+public static class Obj {
+    public static string Run() {
+        var items = new List<(string, int)> { (null!, 0), ("abc", 1) };
+        var callbacks = new List<Func<int>>();
+        foreach (var (a, b) in items) {
+            if (a is null) continue;
+            callbacks.Add(() => a.Length);
+        }
+        string result = "";
+        foreach (var callback in callbacks) result += callback() + ",";
+        return result;
+    }
+}`
+        AssertParity(source, Translate(source), "3,")
+    }
+
+    @Theory
+    @InlineData("local")
+    @InlineData("chain")
+    @InlineData("conditional")
+    @InlineData("parameter")
+    @InlineData("return")
+    @InlineData("field")
+    @InlineData("nested")
+    @InlineData("nullable")
+    @InlineData("guarded-nullable")
+    @InlineData("array")
+    @InlineData("jagged-array")
+    @InlineData("array-copy")
+    @InlineData("array-allocation")
+    @InlineData("rectangular-allocation")
+    func Issue5880_WholeTupleRefStorage_PreservesCSharpOutput(shape string) {
+        let source = switch shape {
+            case "array-allocation": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[1];
+        ref (string, int) alias = ref rows[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+            case "rectangular-allocation": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[1, 1];
+        ref (string, int) alias = ref rows[0, 0];
+        alias = (null, 1);
+        return rows[0, 0].Item1 ?? "null";
+    }
+}`
+            case "array-copy": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 1) };
+        var copy = rows;
+        ref (string, int) alias = ref copy[0];
+        alias = (null!, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+            case "array": `public static class Obj {
+    public static string Run() {
+        var rows = new (string, int)[] { ("x", 1) };
+        ref (string, int) alias = ref rows[0];
+        alias = (null!, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+            case "jagged-array": `public static class Obj {
+    public static string Run() {
+        var rows = new[] { new (string, int)[] { ("x", 1) } };
+        ref (string, int) alias = ref rows[0][0];
+        alias = (null!, 1);
+        return rows[0][0].Item1 ?? "null";
+    }
+}`
+            case "parameter": `public static class Obj {
+    private static void Clear(ref (string, int) value) { value = (null, 1); }
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        Clear(ref row);
+        return row.Item1 ?? "null";
+    }
+}`
+            case "return": `public static class Obj {
+    private static ref (string, int) Borrow(ref (string, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref (string, int) alias = ref Borrow(ref row);
+        alias = (null, 1);
+        return row.Item1 ?? "null";
+    }
+}`
+            case "field": `public static class Obj {
+    private static (string, int) row = ("x", 1);
+    public static string Run() {
+        ref (string, int) alias = ref row;
+        alias = (null, 1);
+        return row.Item1 ?? "null";
+    }
+}`
+            case "nested": `public static class Obj {
+    public static string Run() {
+        ((string, int), int) row = (("x", 1), 2);
+        ref ((string, int), int) alias = ref row;
+        alias = ((null, 1), 2);
+        return (row.Item1.Item1 ?? "null") + ":" + row.Item1.Item2 + ":" + row.Item2;
+    }
+}`
+            case "conditional": `public static class Obj {
+    private static string Select(bool choose) {
+        (string, int) first = ("x", 1);
+        (string, int) second = ("y", 2);
+        ref (string, int) alias = ref (choose ? ref first : ref second);
+        alias = (null, 1);
+        return (first.Item1 ?? "null") + ":" + (second.Item1 ?? "null");
+    }
+    public static string Run() => Select(true) + "," + Select(false);
+}`
+            case "chain": `public static class Obj {
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref (string, int) first = ref row;
+        ref (string, int) alias = ref first;
+        alias = (null, 1);
+        return row.Item1 ?? "null";
+    }
+}`
+            case "nullable": `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string?, int) row = (null, 1);
+#nullable disable
+        ref (string, int) alias = ref row;
+        return alias.Item1 ?? "null";
+    }
+}`
+            case "guarded-nullable": `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string?, int) row = ("x", 1);
+#nullable disable
+        if (row.Item1 != null) {
+            ref (string, int) alias = ref row;
+            alias = (null, 1);
+        }
+        return row.Item1 ?? "null";
+    }
+}`
+            default: `public static class Obj {
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref (string, int) alias = ref row;
+        alias = (null, 1);
+        return row.Item1 ?? "null";
+    }
+}`
+        }
+        let expected = switch shape {
+            case "nested": "null:1:2"
+            case "conditional": "null:y,x:null"
+            default: "null"
+        }
+        AssertParity(source, Translate(source), expected)
+    }
+
+    @Theory
+    @InlineData("inferred")
+    @InlineData("explicit")
+    @InlineData("nullable-constraint")
+    @InlineData("mixed-fixed")
+    func Issue5880_GenericTupleRefStorage_PreservesCSharpOutput(shape string) {
+        let method = if shape == "nullable-constraint" {
+            "#nullable enable\nprivate static void Keep<T>(ref (T, int) value) where T : class? { }\n#nullable disable"
+        } else {
+            "private static void Keep<T>(ref (T, int) value) { }"
+        }
+        let call = if shape == "explicit" {
+            "Keep<string>(ref row);"
+        } else {
+            "Keep(ref row);"
+        }
+        let fixedRow = if shape == "mixed-fixed" {
+            "#nullable enable\n(string, int) fixedRow = (\"fixed\", 1);\nKeep(ref fixedRow);\n#nullable disable"
+        } else {
+            ""
+        }
+        let source = `public static class Obj {
+    ` + method + `
+    public static string Run() {
+        ` + fixedRow + `
+        (string, int) row = (null!, 0);
+        ` + call + `
+        return row.Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        if shape == "explicit" {
+            Assert.Contains("Keep[string?]", printed)
+        }
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData("array")
+    @InlineData("jagged")
+    @InlineData("rectangular")
+    func Issue5880_GenericArrayTupleRefStorage_PreservesCSharpOutput(shape string) {
+        let creation = switch shape {
+            case "jagged": "new[] { new (string, int)[] { (\"x\", 1) } }"
+            case "rectangular": "new (string, int)[1, 1] { { (\"x\", 1) } }"
+            default: "new (string, int)[] { (\"x\", 1) }"
+        }
+        let element = switch shape {
+            case "jagged": "rows[0][0]"
+            case "rectangular": "rows[0, 0]"
+            default: "rows[0]"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref (T, int) value) { }
+    public static string Run() {
+        var rows = ` + creation + `;
+        ref (string, int) alias = ref ` + element + `;
+        alias = (null!, 0);
+        Keep<string>(ref ` + element + `);
+        return ` + element + `.Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string?]", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData("whole")
+    @InlineData("member")
+    @InlineData("leaf")
+    func Issue5880_GenericProjectedTupleRefStorage_PreservesCSharpOutput(aliasKind string) {
+        let mutation = switch aliasKind {
+            case "member": "ref (string, int) alias = ref row.Item1; alias = (null, 1);"
+            case "leaf": "ref string alias = ref row.Item1.Item1; alias = null;"
+            default: "ref ((string, int), int) alias = ref row; alias = ((null, 1), 2);"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref (T, int) value) { }
+    public static string Run() {
+        ((string, int), int) row = (("x", 1), 2);
+        ` + mutation + `
+        Keep<string>(ref row.Item1);
+        return (row.Item1.Item1 ?? "null") + ":" + row.Item1.Item2 + ":" + row.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string?]", printed)
+        AssertParity(source, printed, "null:1:2")
+    }
+
+    @Theory
+    @InlineData("explicit-leaf")
+    @InlineData("inferred-leaf")
+    @InlineData("whole-tuple")
+    @InlineData("whole-notnull")
+    @InlineData("whole-out-first")
+    @InlineData("whole-ref-first")
+    @InlineData("leaf-out-first")
+    @InlineData("leaf-ref-first")
+    @InlineData("leaf-both-out")
+    @InlineData("whole-both-out")
+    @InlineData("leaf-out-taints-ref")
+    @InlineData("whole-out-taints-ref")
+    @InlineData("annotated-leaf")
+    @InlineData("implicit-in-and-ref")
+    func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
+        let method = switch shape {
+            case "whole-tuple": "private static void Keep<T>(ref T a, ref T b) { }"
+            case "whole-notnull": "private static void Keep<T>(ref T a, ref T b) where T : notnull { }"
+            case "whole-out-first": "private static void Keep<T>(out T a, ref T b) { a = b; }"
+            case "whole-ref-first": "private static void Keep<T>(ref T b, out T a) { a = b; }"
+            case "leaf-out-first": "private static void Keep<T>(out (T, int) a, ref (T, int) b) { a = b; }"
+            case "leaf-ref-first": "private static void Keep<T>(ref (T, int) b, out (T, int) a) { a = b; }"
+            case "leaf-both-out": "private static void Keep<T>(T value, out (T, int) a, out (T, int) b) { a = (value, 1); b = (value, 2); }"
+            case "whole-both-out": "private static void Keep<T>(T value, out T a, out T b) { a = value; b = value; }"
+            case "leaf-out-taints-ref": "private static void Keep<T>(out (T, int) dst, ref (T, int) src) { dst = src; }"
+            case "whole-out-taints-ref": "private static void Keep<T>(out T dst, ref T src) { dst = src; }"
+            case "implicit-in-and-ref": "private static void Keep<T>(in (T, int) input, ref (T, int) writable) { writable = input; }"
+            default: "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
+        }
+        let bDeclaration = if shape == "annotated-leaf" {
+            "#nullable enable\n        (string?, int) b = (null, 0);\n#nullable disable"
+        } else {
+            "(string, int) b = (null!, 0);"
+        }
+        let taintedCall = switch shape {
+            case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref a, ref b);"
+            case "implicit-in-and-ref": "Keep<string>(b, ref a);"
+            case "whole-out-first" or "leaf-out-first": "Keep(out a, ref b);"
+            case "whole-ref-first" or "leaf-ref-first": "Keep(ref b, out a);"
+            case "leaf-both-out": "Keep<string>(\"ok\", out a, out b);"
+            case "whole-both-out": "Keep((\"ok\", 1), out a, out b);"
+            case "leaf-out-taints-ref": "Keep<string>(out b, ref a);"
+            case "whole-out-taints-ref": "Keep(out b, ref a);"
+            default: "Keep(ref a, ref b);"
+        }
+        let cleanCall = switch shape {
+            case "explicit-leaf" or "annotated-leaf": "Keep<string>(ref cleanA, ref cleanB);"
+            case "implicit-in-and-ref": "Keep<string>(cleanB, ref cleanA);"
+            case "whole-out-first" or "leaf-out-first": "Keep(out cleanA, ref cleanB);"
+            case "whole-ref-first" or "leaf-ref-first": "Keep(ref cleanB, out cleanA);"
+            case "leaf-both-out": "Keep<string>(\"keep\", out cleanA, out cleanB);"
+            case "whole-both-out": "Keep((\"keep\", 2), out cleanA, out cleanB);"
+            case "leaf-out-taints-ref": "Keep<string>(out cleanB, ref cleanA);"
+            case "whole-out-taints-ref": "Keep(out cleanB, ref cleanA);"
+            default: "Keep(ref cleanA, ref cleanB);"
+        }
+        let source = `public static class Obj {
+    ` + method + `
+    public static string Run() {
+        (string, int) a = ("x", 1);
+        ` + bDeclaration + `
+        ` + taintedCall + `
+        (string, int) cleanA = ("keep", 2);
+        (string, int) cleanB = ("stay", 3);
+        ` + cleanCall + `
+        return (a.Item1 ?? "null") + ":" + (b.Item1 ?? "null") + ":" + cleanA.Item1 + ":" + cleanB.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("var a (string?, int32)", printed)
+        Assert.DoesNotContain("cleanA (string?, int32)", printed)
+        if shape == "annotated-leaf" {
+            Assert.Contains("var cleanA (string, int32) = (\"keep\", 2)", printed)
+        } else {
+            Assert.Contains("var cleanA = (\"keep\", 2)", printed)
+        }
+        if shape is "explicit-leaf" or
+            "leaf-both-out" or
+            "leaf-out-taints-ref" or
+            "annotated-leaf" or
+            "implicit-in-and-ref" {
+            Assert.Contains("Keep[string?]", printed)
+            Assert.Contains("Keep[string]", printed)
+        }
+        let expected = switch shape {
+            case "leaf-both-out" or "whole-both-out": "ok:ok:keep:keep"
+            case "leaf-out-taints-ref" or "whole-out-taints-ref": "x:x:keep:keep"
+            case "whole-out-first" or
+                "whole-ref-first" or
+                "leaf-out-first" or
+                "leaf-ref-first" or
+                "implicit-in-and-ref": "null:null:stay:stay"
+            default: "x:null:keep:stay"
+        }
+        AssertParity(source, printed, expected)
+    }
+
+    @Theory
+    @InlineData("tuple-taints-scalar")
+    @InlineData("scalar-taints-tuple")
+    @InlineData("fixed-scalar-peer")
+    @InlineData("fixed-tuple-peer")
+    func Issue5880_SharedGenericScalarAndTupleRefArguments_SynchronizePerInvocation(shape string) {
+        if shape is "fixed-scalar-peer" or "fixed-tuple-peer" {
+            let declarations = if shape == "fixed-scalar-peer" {
+                `#nullable enable
+        string a = "ok";
+#nullable disable
+        (string, int) b = ("x", 1);`
+            } else {
+                `string a = "ok";
+#nullable enable
+        (string, int) b = ("x", 1);
+#nullable disable`
+            }
+            let source = `public static class Obj {
+    private static void Keep<T>(ref T a, ref (T, int) b) { }
+    public static string Run() {
+        ` + declarations + `
+        Keep<string>(ref a, ref b);
+        return (a ?? "fallback") + ":" + (b.Item1 ?? "fallback") + ":" + b.Item2;
+    }
+}`
+            let printed = Translate(source)
+            Assert.DoesNotContain("string?", printed)
+            AssertParity(source, printed, "ok:x:1")
+            return
+        }
+        let aInit = if shape == "scalar-taints-tuple" {
+            "null!"
+        } else {
+            "\"ok\""
+        }
+        let bInit = if shape == "scalar-taints-tuple" {
+            "(\"ok\", 1)"
+        } else {
+            "(null!, 0)"
+        }
+        let expected = if shape == "scalar-taints-tuple" {
+            "null:ok:keep:stay"
+        } else {
+            "ok:null:keep:stay"
+        }
+        let source = `public static class Obj {
+    private static void Keep<T>(ref T a, ref (T, int) b) { }
+    public static string Run() {
+        string a = ` + aInit + `;
+        (string, int) b = ` + bInit + `;
+        Keep<string>(ref a, ref b);
+        string cleanA = "keep";
+        (string, int) cleanB = ("stay", 2);
+        Keep<string>(ref cleanA, ref cleanB);
+        return (a ?? "null") + ":" + (b.Item1 ?? "null") + ":" + cleanA + ":" + cleanB.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var a string?", printed)
+        Assert.Contains("var b (string?, int32)", printed)
+        Assert.Contains("var cleanA = \"keep\"", printed)
+        Assert.Contains("var cleanB = (\"stay\", 2)", printed)
+        Assert.Contains("Keep[string?](&a, &b)", printed)
+        Assert.Contains("Keep[string](&cleanA, &cleanB)", printed)
+        AssertParity(source, printed, expected)
+    }
+
+    @Theory
+    @InlineData("parameter-write")
+    @InlineData("local-to-return")
+    @InlineData("captured-local-to-return")
+    @InlineData("forwarded-generic-return")
+    @InlineData("local-ref-to-parameter")
+    func Issue5880_GenericMethodBodyTupleFlows_PromoteOwnDeclarations(shape string) {
+        let source = switch shape {
+            case "local-to-return": `public static class Obj {
+    private static (T, int) Create<T>() where T : class? {
+        (T, int) row = (null, 0);
+        return row;
+    }
+    public static string Run() {
+        (string, int) row = Create<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "captured-local-to-return": `public static class Obj {
+    private static (T, int) Create<T>() where T : class? {
+        (T, int) row = (null, 0);
+        (T, int) Local() => row;
+        return Local();
+    }
+    public static string Run() {
+        (string, int) row = Create<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "forwarded-generic-return": `public static class Obj {
+    private static (T, int) Make<T>() where T : class? => (null, 0);
+    private static (T, int) Forward<T>() where T : class? => Make<T>();
+    public static string Run() {
+        (string, int) row = Forward<string>();
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            case "local-ref-to-parameter": `public static class Obj {
+    private static void Clear<T>(ref (T, int) value) where T : class? {
+        ref T item = ref value.Item1;
+        item = null;
+    }
+    public static string Run() {
+        (string, int) row = ("ok", 0);
+        Clear<string>(ref row);
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+            default: `public static class Obj {
+    private static void Clear<T>(ref (T, int) value) where T : class? {
+        value = (null, 0);
+    }
+    public static string Run() {
+        (string, int) row = ("ok", 1);
+        Clear<string>(ref row);
+        return (row.Item1 ?? "null") + ":" + row.Item2;
+    }
+}`
+        }
+        let printed = Translate(source)
+        Assert.Contains("(T?, int32)", printed)
+        Assert.Contains("row (string?, int32)", printed)
+        AssertParity(source, printed, "null:0")
+    }
+
+    @Fact
+    func Issue5880_GenericLocalFunctionRefParameter_KeepsNullableAndFixedCallsIndependent() {
+        const source = `public static class Obj {
+    public static string Run() {
+        void Keep<T>(ref (T, int) value) where T : class? { }
+        (string, int) nullableRow = (null, 1);
+        Keep(ref nullableRow);
+#nullable enable
+        (string, int) fixedRow = ("ok", 2);
+#nullable disable
+        Keep(ref fixedRow);
+        return (nullableRow.Item1 ?? "null") + ":" + fixedRow.Item1 + ":" + fixedRow.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("var nullableRow (string?, int32)", printed)
+        Assert.DoesNotContain("var fixedRow (string?, int32)", printed)
+        AssertParity(source, printed, "null:ok:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefReturnNonParameterStorage_IgnoresUnrelatedFixedParameter() {
+        const source = `public static class Obj {
+    private static (string, int) saved = ("x", 0);
+    private static ref (string, int) Borrow<T>(ref (string, int) unused) => ref saved;
+    public static string Run() {
+#nullable enable
+        (string, int) fixedRow = ("keep", 2);
+#nullable disable
+        ref var alias = ref Borrow<int>(ref fixedRow);
+        alias = (null, 1);
+        return (saved.Item1 ?? "null") + ":" + saved.Item2 + ":" + fixedRow.Item1 + ":" + fixedRow.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var saved (string?, int32)", printed)
+        Assert.Contains("var ref alias (string?, int32)", printed)
+        Assert.DoesNotContain("var fixedRow (string?, int32)", printed)
+        AssertParity(source, printed, "null:1:keep:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefReturnArrayParameter_UpdatesExplicitTypeArguments() {
+        const source = `public static class Obj {
+    private static ref (T, int) Borrow<T>((T, int)[] rows) => ref rows[0];
+    public static string Run() {
+        (string, int)[] rows = new[] { ("x", 1) };
+        ref var alias = ref Borrow<string>(rows);
+        alias = (null, 1);
+        (string, int)[] clean = new[] { ("keep", 2) };
+        ref var cleanAlias = ref Borrow<string>(clean);
+        return (rows[0].Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean[0].Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("Borrow[string?](rows)", printed)
+        Assert.Contains("Borrow[string](clean)", printed)
+        AssertParity(source, printed, "null:keep:2")
+    }
+
+    @Fact
+    func Issue5880_GenericRefTupleWithFormalNullableAnnotation_KeepsFixedPeerNonNull() {
+        const source = `#nullable enable
+public static class Obj {
+    private static void Keep<T>(ref (T, int) a, ref (T?, int) b) where T : class? {
+        b = (null, b.Item2);
+    }
+    public static string Run() {
+        (string, int) a = ("ok", 1);
+        (string?, int) b = ("x", 2);
+        Keep<string>(ref a, ref b);
+        return a.Item1 + ":" + (b.Item1 ?? "null") + ":" + b.Item2;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Keep[string](&a, &b)", printed)
+        Assert.DoesNotContain("Keep[string?]", printed)
+        AssertParity(source, printed, "ok:null:2")
+    }
+
+    @Theory
+    @InlineData("tuple-parameter")
+    @InlineData("explicit-call")
+    @InlineData("whole-generic")
+    @InlineData("whole-notnull")
+    @InlineData("projected-return")
+    @InlineData("conditional-return")
+    @InlineData("chained-return")
+    @InlineData("extension-parameter")
+    @InlineData("extension-receiver-nested")
+    func Issue5880_GenericRefReturnTupleStorage_PreservesCSharpOutput(shape string) {
+        let source = switch shape {
+            case "explicit-call": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow<string>(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow<string>(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "whole-generic": `public static class Obj {
+    private static ref T Borrow<T>(ref T value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "whole-notnull": `public static class Obj {
+#nullable enable
+    private static ref T Borrow<T>(ref T value) where T : notnull => ref value;
+#nullable disable
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "projected-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref ((T, int), int) value) => ref value.Item1;
+    public static string Run() {
+        ((string, int), int) row = (("x", 1), 3);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        ((string, int), int) clean = (("keep", 2), 4);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item1.Item2;
+    }
+}`
+            case "conditional-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(bool choose, ref (T, int) first, ref (T, int) second) {
+        if (choose) return ref first;
+        return ref second;
+    }
+    public static string Run() {
+        (string, int) left = ("x", 1);
+        (string, int) right = ("y", 1);
+        ref var alias = ref Borrow(true, ref left, ref right);
+        alias = (null, 1);
+        (string, int) cleanLeft = ("keep", 2);
+        (string, int) cleanRight = ("stay", 2);
+        ref var cleanAlias = ref Borrow(false, ref cleanLeft, ref cleanRight);
+        return (left.Item1 ?? "null") + ":" + (right.Item1 ?? "null") + ":" + cleanAlias.Item1;
+    }
+}`
+            case "chained-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref Borrow(ref row));
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref Borrow(ref clean));
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "extension-parameter": `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this int tag, ref (T, int) value) => ref value;
+}
+public static class Obj {
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref 1.Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref 2.Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "extension-receiver-nested": `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this int tag, ref (T, int) value) => ref value;
+}
+public static class Obj {
+    private static ref (T, int) Forward<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Forward(ref 1.Borrow(ref row));
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Forward(ref 2.Borrow(ref clean));
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            default: `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+        }
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("let ref cleanAlias (string, int32)", printed)
+        let expected = if shape == "conditional-return" {
+            "null:y:stay"
+        } else {
+            "null:keep:2"
+        }
+        AssertParity(source, printed, expected)
+    }
+
+    @Fact
+    func Issue5880_NestedRefExtensionReceiver_ResolvesReceiverStorage() {
+        const source = `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this ref (T, int) value) => ref value;
+}
+public static class Obj {
+    private static void Consume<T>(ref (T, int) value) { }
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref row.Borrow();
+        alias = (null, 1);
+        Consume(ref row.Borrow());
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref clean.Borrow();
+        Consume(ref clean.Borrow());
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var row (string?, int32)", printed)
+        Assert.Contains("let ref cleanAlias (string, int32)", printed)
+    }
+
+    @Theory
+    @InlineData("declaration")
+    @InlineData("parameter")
+    @InlineData("generic-parameter")
+    @InlineData("generic-constrained")
+    func Issue5880_WholeTupleRefStorage_PreservesFixedLeafContracts(contract string) {
+        let declaration = if contract == "declaration" {
+            "#nullable enable"
+        } else {
+            "#nullable disable"
+        }
+        let call = switch contract {
+            case "parameter" or "generic-constrained": "Keep(ref alias);"
+            case "generic-parameter": "Keep<int>(ref alias);"
+            default: ""
+        }
+        let method = switch contract {
+            case "generic-parameter": "private static void Keep<T>(ref (string, int) value) { }"
+            case "generic-constrained": "private static void Keep<T>(ref (T, int) value) where T : class { }"
+            default: "private static void Keep(ref (string, int) value) { }"
+        }
+        let source = `#nullable enable
+public static class Obj {
+    ` + method + `
+    public static string Run() {
+` + declaration + `
+        (string, int) row = ("x", 1);
+#nullable disable
+        ref (string, int) alias = ref row;
+        alias = (null, 1);
+        ` + call + `
+        return row.Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var ref alias (string, int32) = row", printed)
+        Assert.DoesNotContain("(string?, int32)", printed)
+    }
+
+    @Fact
+    func Issue5880_ArrayElementRefStorage_PreservesFixedLeafContracts() {
+        const source = `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string, int)[] rows = { ("x", 1) };
+#nullable disable
+        ref (string, int) alias = ref rows[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var ref alias (string, int32) = rows[0]", printed)
+        Assert.DoesNotContain("(string?, int32)", printed)
+    }
+
+    @Fact
+    func Issue5880_ArrayCopyRefStorage_PreservesFixedLeafContracts() {
+        const source = `#nullable enable
+public static class Obj {
+    public static string Run() {
+        (string, int)[] rows = { ("x", 1) };
+#nullable disable
+        (string, int)[] copy = rows;
+        ref (string, int) alias = ref copy[0];
+        alias = (null, 1);
+        return rows[0].Item1 ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("var ref alias (string, int32) = copy[0]", printed)
+        Assert.DoesNotContain("(string?, int32)", printed)
+    }
+
+    @Fact
     func GuardedIteratorAlias_PreservesNullableStorageAndCSharpOutput() {
         const source = `using System.Collections.Generic;
 public static class Obj {

@@ -3940,20 +3940,7 @@ internal partial class StatementBinder {
     // The one header rule: an alias that [`header`](paramref) assigns, or that an unknown callable in it can assign,
     // is no longer known to be external.
     private func RemoveHeaderAffectedAliases(aliases HashSet[VariableSymbol], header BoundExpression) {
-        if ContainsUserLabel(header) {
-            aliases.Clear()
-            return
-        }
-        let collector = NewCollector(nil, aliases)
-        collector.VisitExpression(header)
-        if collector.MayMutateAnyRootViaPointer {
-            aliases.Clear()
-        }
-        RemoveAssignedAliases(aliases, collector)
-        if collector.MayMutateAnyRoot || collector.MayRunEscapedClosure {
-            aliases.IntersectWith(collector.DefinitelyExternalFunctionValues)
-        }
-        RemoveCollectorFilterAffectedAliases(aliases, header.Syntax, collector)
+        aliases.IntersectWith(AliasesAfter(header, aliases, header.Syntax))
     }
 
     /// ADR-0208 R9, R10, R11, R12, R14, R15 (#5637, #5238): applies the narrowing and callable-alias effects
@@ -5409,6 +5396,8 @@ internal partial class StatementBinder {
         let aliasesBefore = CaptureExternalCallableAliases()
         let nonNullByRefBefore = CaptureNonNullByRefVariables()
         let pattern = patterns.BindPattern(valueSyntax, discriminant.Type)
+        RestoreExternalCallableAliases(aliasesBefore)
+        RestoreNonNullByRefVariables(nonNullByRefBefore)
         ApplySwitchArmTestEffects(valueSyntax, discriminant.Type, pattern, aliasesBefore)
         let evaluated = LocalVariableSymbol("<switch-value>", true, discriminant.Type)
         ApplyHeaderCallableEffects(BoundIsExpression(valueSyntax, BoundVariableExpression(nil, evaluated), pattern))
@@ -5425,10 +5414,13 @@ internal partial class StatementBinder {
         var guardMayRemove = false
         if guardSyntax != nil {
             let guardAliasesBefore = CaptureExternalCallableAliases()
+            let guardNonNullByRefBefore = CaptureNonNullByRefVariables()
             let bound = BindGuardExpressionWithNarrowing(guardSyntax, frame)
+            RestoreExternalCallableAliases(guardAliasesBefore)
+            RestoreNonNullByRefVariables(guardNonNullByRefBefore)
             ApplySwitchGuardEffects(guardSyntax, bound, frame, guardAliasesBefore)
             ApplyHeaderCallableEffects(bound)
-            guardMayRemove = EffectsMayRemoveFactOf(discriminant, bound, nil)
+            guardMayRemove = EffectsMayRemoveFactOf(discriminant, bound, nil, guardAliasesBefore)
             boundGuard = bound
         }
         aliasesBefore.ExceptWith(externalCallableAliases)
@@ -5501,6 +5493,7 @@ internal partial class StatementBinder {
         let entryAliases = CaptureExternalCallableAliases()
         let entryNonNullByRef = CaptureNonNullByRefVariables()
         bindLaterTests()
+        let aliasesAfterLaterTests = CaptureExternalCallableAliases()
         let headerKills = conditionKillJournal!!
         conditionKillJournal = outer
         let bound = bind()
@@ -5520,7 +5513,11 @@ internal partial class StatementBinder {
                     default: default(BoundStatement?)
                 }
                 if boundStatement != nil {
-                    InvalidateNarrowingsForAssignedVariables(boundSyntax, boundStatement, aliasesAtEntry: entryAliases)
+                    InvalidateNarrowingsForAssignedVariables(
+                        boundSyntax,
+                        boundStatement,
+                        aliasesAtEntry: aliasesAfterLaterTests
+                    )
                 }
             }
         }

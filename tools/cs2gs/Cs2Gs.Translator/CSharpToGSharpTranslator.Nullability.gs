@@ -576,36 +576,50 @@ partial class CSharpToGSharpTranslator {
             return this.PromoteTupleTypeArguments(mapped, returnType, symbol, path)
         }
 
-        // Issue #3641: `var prepared = new List<(string, byte[])>()` renders the
-        // CREATED type, not the local's declared type, so promoting only the
-        // declaration would leave the initializer's `List[(string, []uint8)]`
-        // unconvertible to the promoted `List[(string, []?uint8)]`. G# tuple
-        // types agree structurally: the construction that feeds a promoted sink
-        // has to be spelled with the same elements. The sink's own element paths
-        // are reused directly — the mapper walks the CREATED type's arguments,
-        // which coincide with the sink's for the covariant collection hand-offs
-        // this shape uses (`List<T>` stored as `IReadOnlyList<T>`) and simply ask
-        // an untainted key otherwise.
+        // Constructions retain their initializer evidence, including temporaries.
+        // Storage projections map tuple slots before the created type is rendered.
         private func PromoteCreationTupleArguments(
             type GTypeReference?,
             typeSymbol ITypeSymbol?,
-            creation BaseObjectCreationExpressionSyntax
+            creation ExpressionSyntax
         ) GTypeReference? {
             if type == nil || typeSymbol == nil {
                 return type
             }
-            let sink ISymbol? = ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(
+            let (sink, elementPosition) = this.ResolveArrayStorageSink(creation)
+            let prefix = elementPosition
+                .Split('.')
+                .SkipLast(1)
+                .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                .ToList()
+            let positions = ObliviousNullabilityAnalyzer.NullableTupleConstructionPositions(
+                this.context.Compilation,
                 creation,
-                this.context.SemanticModel
+                typeSymbol,
+                sink,
+                prefix,
+                this.context.SemanticModel,
+                this.context.SiblingCompilations
             )
+            let objectCreation = creation as BaseObjectCreationExpressionSyntax
+            let creationSink ISymbol? = if objectCreation != nil {
+                ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(objectCreation, this.context.SemanticModel)
+            } else {
+                default(ISymbol?)
+            }
             return this.typeMapper.PromoteTupleTypeArguments(
                 type,
                 typeSymbol,
-                sink,
+                creationSink,
                 this.context,
                 List[int32](),
-                typeSymbol as INamedTypeSymbol,
-                creation
+                if objectCreation != nil {
+                    typeSymbol as INamedTypeSymbol
+                } else {
+                    default(INamedTypeSymbol?)
+                },
+                objectCreation,
+                positions
             )
         }
 
@@ -2248,7 +2262,12 @@ partial class CSharpToGSharpTranslator {
             if checkRefStorage && this.TryGetRefStorageSlot(symbol, 0) is {} slot {
                 return this.RefStorageIsNullable(slot, includeArrays: true)
             }
-            if this.RefStorageContractIsFrozen(symbol, 0) {
+            if this.RefStorageContractIsFrozen(symbol, 0) || ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+                this.context.Compilation,
+                symbol,
+                string.Empty,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            ) {
                 return false
             }
             // Issue #4356 follow-up: a field or property declared in ANOTHER
@@ -2450,25 +2469,8 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? {
-            let symbol = if reference.Parent is EqualsValueClauseSyntax{Parent: VariableDeclaratorSyntax declaration} {
-                model.GetDeclaredSymbol(declaration)
-            } else if reference.Parent is ReturnStatementSyntax or ArrowExpressionClauseSyntax {
-                model.GetEnclosingSymbol(reference.SpanStart)
-            } else {
-                default(ISymbol?)
-            }
-            let normalized = if symbol is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
-                cast[ISymbol](property)
-            } else {
-                symbol
-            }
-            return if ObliviousNullabilityAnalyzer.IsRefStorageSymbol(normalized) {
-                normalized?.OriginalDefinition
-            } else {
-                default(ISymbol?)
-            }
-        }
+        private func RefStorageDestination(reference RefExpressionSyntax, model SemanticModel) ISymbol? ->
+        ObliviousNullabilityAnalyzer.RefStorageDestination(reference, model)?.OriginalDefinition
 
         private func GetRefStorageSlot(symbol ISymbol, depth int32) RefStorageSlot {
             let identity = RefStorageIdentity(symbol)
@@ -2484,15 +2486,20 @@ partial class CSharpToGSharpTranslator {
             return slot
         }
 
-        private func ConnectRefStorage(target RefStorageSlot, expression ExpressionSyntax, model SemanticModel) {
+        private func ConnectRefStorage(
+            target RefStorageSlot,
+            expression ExpressionSyntax,
+            model SemanticModel,
+            visited HashSet[SyntaxNode]? = nil
+        ) {
             let storage = UnwrapParenthesesAndSuppressions(expression)!!
             if storage is RefExpressionSyntax nested {
-                this.ConnectRefStorage(target, nested.Expression, model)
+                this.ConnectRefStorage(target, nested.Expression, model, visited)
                 return
             }
             if storage is ConditionalExpressionSyntax conditional {
-                this.ConnectRefStorage(target, conditional.WhenTrue, model)
-                this.ConnectRefStorage(target, conditional.WhenFalse, model)
+                this.ConnectRefStorage(target, conditional.WhenTrue, model, visited)
+                this.ConnectRefStorage(target, conditional.WhenFalse, model, visited)
                 return
             }
             var receiver ExpressionSyntax = storage
@@ -2512,8 +2519,33 @@ partial class CSharpToGSharpTranslator {
             if source is IMethodSymbol{AssociatedSymbol: IPropertySymbol property} {
                 source = property
             }
-            if source == nil || source is IDiscardSymbol {
+            if source == nil ||
+                source is IDiscardSymbol ||
+                (source is IFieldSymbol field && field.ContainingType.IsTupleType) {
                 return
+            }
+            let activeVisited = visited ?? HashSet[SyntaxNode]()
+            if depth == 0 &&
+                receiver is InvocationExpressionSyntax invocation &&
+                source is IMethodSymbol method &&
+                ObliviousNullabilityAnalyzer.IsRefStorageSymbol(method) && activeVisited.Add(invocation) {
+                var forwarded = false
+                for (forwardedArgument, forwardedPrefix) in ObliviousNullabilityAnalyzer
+                    .GetRefInvocationForwardedArguments(invocation, method, model) {
+                    if forwardedPrefix.Length == 0 {
+                        forwarded = true
+                        this.ConnectRefStorage(target, forwardedArgument, model, activeVisited)
+                    }
+                }
+                if forwarded && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(method, string.Empty) &&
+                    this
+                    .RefStoragePositionType(source, depth)
+                    ?.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated {
+                    return
+                }
             }
             if receiver is InvocationExpressionSyntax{
                 Expression: MemberAccessExpressionSyntax{Name: IdentifierNameSyntax} access
@@ -2601,6 +2633,9 @@ partial class CSharpToGSharpTranslator {
                             .CodeAnalysis
                             .NullableAnnotation
                             .NotAnnotated {
+                            continue
+                        }
+                        if ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(parameter, string.Empty) {
                             continue
                         }
                         this.ConnectRefStorage(this.GetRefStorageSlot(parameter, 0), argument.Expression, model)
@@ -2830,11 +2865,25 @@ partial class CSharpToGSharpTranslator {
             if type?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
                 return false
             }
-            if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) || this.RefStoragePositionType(
-                slot.Symbol.OriginalDefinition,
-                slot.Depth
-            )
-                ?.IsReferenceType != true {
+            if this.RefStorageContractIsFrozen(slot.Symbol, slot.Depth) ||
+                (
+                slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsTupleContractFixed(
+                    this.context.Compilation,
+                    slot.Symbol,
+                    string.Empty,
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                )
+            ) ||
+                (
+                this.RefStoragePositionType(slot.Symbol.OriginalDefinition, slot.Depth)
+                    ?.IsReferenceType != true &&
+                    !(
+                    slot.Depth == 0 && ObliviousNullabilityAnalyzer.IsSubstitutableMethodPosition(
+                        slot.Symbol,
+                        string.Empty
+                    )
+                )
+            ) {
                 return true
             }
             if type?.NullableAnnotation != Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated {

@@ -742,7 +742,13 @@ partial class CSharpToGSharpTranslator {
             spellingLocation ??= tp.Locations.FirstOrDefault()
             let flags = List[string]()
             if tp.HasReferenceTypeConstraint {
-                flags.Add("class")
+                flags.Add(
+                    if tp.ReferenceTypeConstraintNullableAnnotation == NullableAnnotation.Annotated {
+                        "class?"
+                    } else {
+                        "class"
+                    }
+                )
             }
             if tp.HasUnmanagedTypeConstraint {
                 // Issue #1336: C# `where T : unmanaged` maps to the G# `unmanaged`
