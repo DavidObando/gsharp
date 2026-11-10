@@ -87,7 +87,7 @@ internal shared class ClosureCaptureLegalityChecker {
                 location,
                 "managed pointer '${capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable"
             )
-        } else if capturedVariable.Type is PointerTypeSymbol {
+        } else if capturedVariable.Type is PointerTypeSymbol && !IsCompilerGeneratedTemporary(capturedVariable) {
             diagnostics?.ReportFixedPointerCannotEscape(location, capturedVariable.Name)
         } else if capturedVariable is ParameterSymbol{RefKind: RefKind.Ref or RefKind.Out or RefKind.In} refParameter {
             diagnostics?.ReportRefParameterCannotBeCaptured(

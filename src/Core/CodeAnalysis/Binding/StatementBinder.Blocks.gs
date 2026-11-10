@@ -1621,8 +1621,11 @@ internal partial class StatementBinder {
             case BoundVariableExpression {
                 return receiver
             }
-            case dereference is BoundDereferenceExpression when isDefer {
+            case dereference is BoundDereferenceExpression {
                 if dereference.Operand.Type is ByRefTypeSymbol {
+                    if !isDefer {
+                        return CaptureReceiverOperand(receiver, prefix, isDefer)
+                    }
                     // Keep the scoped alias visible to suspension-liveness analysis.
                     let captured = CaptureOpaqueCallReceiver(receiver, prefix, isDefer)
                     prefix.Add(BoundExpressionStatement(nil, captured))
@@ -1632,7 +1635,9 @@ internal partial class StatementBinder {
                     dereference.Syntax,
                     CaptureReceiverOperand(dereference.Operand, prefix, isDefer)
                 )
-                prefix.Add(BoundExpressionStatement(nil, captured))
+                if isDefer {
+                    prefix.Add(BoundExpressionStatement(nil, captured))
+                }
                 return captured
             }
             default {

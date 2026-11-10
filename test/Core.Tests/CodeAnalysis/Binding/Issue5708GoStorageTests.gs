@@ -87,13 +87,48 @@ import GSharp.Core.Tests.Fixtures
     @InlineData("defer")
     func UnmanagedPointerArguments_AreValues(keyword string) {
         let source = `package Issue5708Pointer
+struct Pair {
+    var first int32
+    var second int32
+}
+struct Counter {
+    var n int32
+    var pair Pair
+    func Bump() { n++ }
+}
+unsafe func GetPointer(items []int32) *int32 -> &items[0]
+unsafe func GetCounterPointer(items []Counter) *Counter -> &items[0]
 unsafe func Write(pointer *int32) { *pointer = 42 }
 unsafe func Run() {
-    let items = []int32{0}
+    let items = []int32{0, 0}
+    let counters = []Counter{Counter{}}
     ` + keyword + ` Write(&items[0])
+    ` + keyword + ` Write(&*GetPointer(items))
+    ` + keyword + ` Write(&GetPointer(items)[1])
+    ` + keyword + ` Write(&(*GetCounterPointer(counters)).n)
+    ` + keyword + ` Write(&(*GetCounterPointer(counters)).pair.first)
+    ` + keyword + ` Write(GetPointer(items))
+    ` + keyword + ` (*GetCounterPointer(counters)).Bump()
 }
 `
         Assert.Empty(BindErrors(source))
+    }
+
+    @Fact
+    func FixedPointerCapturedInGo_StillReportsGS9008() {
+        let source = `package Issue5836FixedPointer
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    var items = []int32{0}
+    fixed p *int32 = items {
+        scope {
+            go Write(&*p)
+        }
+    }
+}
+`
+        let error = Assert.Single(BindErrors(source))
+        Assert.Equal("GS9008", error.Id)
     }
 
     @Theory

@@ -469,17 +469,73 @@ scope {
     @Fact
     func UnmanagedPointerArgument_CompilesAndMutatesTheArray() {
         let source = `package Issue5708PointerDriver
-import System
-var items []int32 = []int32{0}
-unsafe func Write(pointer *int32) { *pointer = 42 }
-unsafe func Run() {
-    scope { go Write(&items[0]) }
-    Console.WriteLine(items[0])
+` + Prelude + `
+struct Pair {
+    var first int32
+    var second int32
 }
-Run()
+struct Counter {
+    var n int32
+    var pair Pair
+    func Bump() { n++ }
+}
+struct Outer {
+    var inner Counter
+}
+var items []int32 = []int32{0, 0, 0, 0}
+var counters []Counter = []Counter{Counter{}, Counter{}, Counter{}}
+var outers []Outer = []Outer{Outer{}}
+var order string = ""
+unsafe func GetPointer(tag string, index int32) *int32 {
+    order += tag
+    return &items[index]
+}
+unsafe func GetCounterPointer(tag string, index int32) *Counter {
+    order += tag
+    return &counters[index]
+}
+unsafe func GetOuterPointer(tag string) *Outer {
+    order += tag
+    return &outers[0]
+}
+unsafe func Write(pointer *int32, value int32) { *pointer = value }
+unsafe func Run(release ManualResetEventSlim) {
+    let originalItems = items
+    let originalCounters = counters
+    let originalOuters = outers
+    scope {
+        go Write(&items[0], 42)
+        go Write(&*GetPointer("a;", 1), 43)
+        go Write(&GetPointer("b;", 0)[2], 44)
+        go Write(&(*GetCounterPointer("c;", 0)).n, 10)
+        go Write(&(*GetCounterPointer("d;", 0)).pair.first, 20)
+        go Write(GetPointer("e;", 3), 45)
+        go (*GetCounterPointer("f;", 1)).Bump()
+        go GetCounterPointer("g;", 0)[2].Bump()
+        go (*GetOuterPointer("h;")).inner.Bump()
+        order += "queued"
+        items = []int32{99, 99, 99, 99}
+        counters = []Counter{Counter{n: 99}, Counter{n: 99}, Counter{n: 99}}
+        outers = []Outer{Outer{inner: Counter{n: 99}}}
+        release.Set()
+    }
+    Log.Add("order " + order)
+    Log.Add("items " + originalItems[0].ToString() + "/" + originalItems[1].ToString() + "/" + originalItems[2].ToString() + "/" + originalItems[3].ToString() + " replacement=" + items[0].ToString())
+    Log.Add("counters " + originalCounters[0].n.ToString() + "/" + originalCounters[0].pair.first.ToString() + "/" + originalCounters[1].n.ToString() + "/" + originalCounters[2].n.ToString() + " replacement=" + counters[0].n.ToString())
+    Log.Add("outers " + originalOuters[0].inner.n.ToString() + " replacement=" + outers[0].inner.n.ToString())
+}
+RestrictPool()
+Blocked((release ManualResetEventSlim) -> Run(release))
 `
         let assemblyPath = Compile(source, "Issue5708PointerValue")
-        Assert.Equal("42\n".ReplaceLineEndings(Environment.NewLine), RunBounded(assemblyPath, "PointerValue"))
+        let expected = `counters 10/20/1/1 replacement=99
+items 42/43/44/45 replacement=99
+order a;b;c;d;e;f;g;h;queued
+outers 1 replacement=99
+`.ReplaceLineEndings(Environment.NewLine)
+        for var i = 0; i < 3; i++ {
+            Assert.Equal(expected, RunBounded(assemblyPath, "PointerValue"))
+        }
     }
 
     @Theory
