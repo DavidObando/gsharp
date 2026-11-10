@@ -1777,46 +1777,59 @@ namespace RecordDeconstruction {
         public DerivedHolder(D child) : base(child) { this.derivedChild = child; }
         public override D Child { get { Reads++; return derivedChild; } }
     }
+    public class BaseList {
+        public int Count => 1;
+        public R this[int i] => new R { X = 2, Y = 1 };
+    }
+    public class DerivedList : BaseList {
+        public new int Count => 1;
+        public new R this[int i] => new R { X = 2, Y = 1 };
+    }
     public static class Probe {
         public static unsafe string Run() {
-            var item = new OverloadedPtr();
-            int* ip;
-            int itag;
-            item.Deconstruct(out ip, out itag);
-            long* lp;
-            int ltag;
-            item.Deconstruct(out lp, out ltag);
-            int* eip;
-            int ea, eb;
-            UnsafeExtensions.Deconstruct(item, out eip, out ea, out eb);
-            long* elp;
-            int ela, elb;
-            UnsafeExtensions.Deconstruct(item, out elp, out ela, out elb);
-            var (rx, ry, rz) = new R { X = 2, Y = 3 };
-            var mp = new MultiParts();
-            int mi1, mi2;
-            mp.Deconstruct(out mi1, out mi2);
-            string ms1;
-            int ms2;
-            mp.Deconstruct(out ms1, out ms2);
-            IGenericParts<int> gpi = mp;
-            var (gix, giy) = gpi;
-            IGenericParts<string> gps = mp;
-            var (gsx, gsy) = gps;
-            var bc = new BoxedCounter { Count = 1 };
-            var (bc1, _) = bc;
-            var (bc2, _) = bc;
-            IBoxedParts bp = new BoxedCounter { Count = 1 };
-            var (bp1, _) = bp;
-            var (bp2, _) = bp;
-            R?[] listItems = new R?[] { new R { X = 2, Y = 1 } };
-            R.ClearFirst = () => listItems[0] = null;
-            var listMatched = listItems is [R(0, _)] or [R(10, 2)];
-            R.ClearFirst = null;
-            Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
-            var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
-            var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
-            return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{listMatched},{matched},{untypedCovariant}";
+            fixed (int* pinnedInt = OverloadedPtr.IntCells)
+            fixed (long* pinnedLong = OverloadedPtr.LongCells) {
+                var item = new OverloadedPtr();
+                int* ip;
+                int itag;
+                item.Deconstruct(out ip, out itag);
+                long* lp;
+                int ltag;
+                item.Deconstruct(out lp, out ltag);
+                int* eip;
+                int ea, eb;
+                UnsafeExtensions.Deconstruct(item, out eip, out ea, out eb);
+                long* elp;
+                int ela, elb;
+                UnsafeExtensions.Deconstruct(item, out elp, out ela, out elb);
+                var (rx, ry, rz) = new R { X = 2, Y = 3 };
+                var mp = new MultiParts();
+                int mi1, mi2;
+                mp.Deconstruct(out mi1, out mi2);
+                string ms1;
+                int ms2;
+                mp.Deconstruct(out ms1, out ms2);
+                IGenericParts<int> gpi = mp;
+                var (gix, giy) = gpi;
+                IGenericParts<string> gps = mp;
+                var (gsx, gsy) = gps;
+                var bc = new BoxedCounter { Count = 1 };
+                var (bc1, _) = bc;
+                var (bc2, _) = bc;
+                IBoxedParts bp = new BoxedCounter { Count = 1 };
+                var (bp1, _) = bp;
+                var (bp2, _) = bp;
+                R?[] listItems = new R?[] { new R { X = 2, Y = 1 } };
+                R.ClearFirst = () => listItems[0] = null;
+                var listMatched = listItems is [R(0, _)] or [R(10, 2)];
+                R.ClearFirst = null;
+                BaseList xs = new DerivedList();
+                var hiddenListMatch = xs is (DerivedList and [R(0, _)]) or (BaseList and [R(10, 2)]);
+                Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
+                var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
+                var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
+                return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{listMatched},{hiddenListMatch},{matched},{untypedCovariant}";
+            }
         }
     }
 }`)
@@ -1855,6 +1868,10 @@ namespace ExternalContracts {
     public class KeywordBase {
         public virtual int func() => 1;
     }
+    public unsafe interface IPtrParts {
+        void Deconstruct(out int* p, out int y);
+    }
+    public unsafe interface IDerivedPtrParts : IPtrParts { }
     public class UnrenamedBase {
         public int X = 4;
         public int Y = 7;
@@ -1863,6 +1880,20 @@ namespace ExternalContracts {
 }`
         let consumerSource = `
 namespace RecordDeconstruction {
+    public unsafe class PtrBase : ExternalContracts.IPtrParts {
+        public static int[] Cells = new[] { 19 };
+        public void Deconstruct(out int* p, out int y) {
+            fixed (int* ptr = Cells) { p = ptr; }
+            y = 7;
+        }
+    }
+    public unsafe record SourcePtrRecord : ExternalContracts.IPtrParts {
+        public void Deconstruct(out int* p, out int y) {
+            fixed (int* ptr = PtrBase.Cells) { p = ptr; }
+            y = 3;
+        }
+    }
+    public class SafeInheritedUnsafeParts : PtrBase, ExternalContracts.IDerivedPtrParts { }
     public abstract record RefCtorBase {
         public int Seed;
         protected RefCtorBase(ref RefCtorBase other) {
@@ -1970,7 +2001,19 @@ namespace RecordDeconstruction {
             var (ubx, uby) = unsafeBridge;
             ExternalContracts.IParts copyBridge = new CopyCtorDerived(new CopyCtorDerived(12, 1), 99);
             var (cbx, cby) = copyBridge;
-            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby}";
+            int ptrVal = 0;
+            int ptrTag = 0;
+            unsafe {
+                fixed (int* pinned = PtrBase.Cells) {
+                    ExternalContracts.IDerivedPtrParts spp = new SafeInheritedUnsafeParts();
+                    int* up;
+                    int uy;
+                    spp.Deconstruct(out up, out uy);
+                    ptrVal = *up;
+                    ptrTag = uy;
+                }
+            }
+            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby},{ptrVal},{ptrTag}";
         }
     }
 }`
@@ -1989,6 +2032,7 @@ namespace Producer {
 }`
         let consumerSource = `
 namespace RecordDeconstruction {
+    public delegate void Read(out int x, out int y);
     public interface I {
         int deconstruct();
     }
@@ -1996,15 +2040,57 @@ namespace RecordDeconstruction {
         public int deconstruct() => 7;
     }
     public static class Probe {
+        public static int Makes;
+        public static Producer.R Make() {
+            Makes++;
+            return new Producer.R { X = 4, Y = 5 };
+        }
+        public static Producer.R Accept(Read r) => Make();
         public static string Run() {
             var d = new D { X = 4, Y = 5 };
             I i = d;
             var (x, y) = d;
-            return $"{x},{y},{d.deconstruct()},{i.deconstruct()}";
+            Read saved = Accept(Make().Deconstruct).Deconstruct;
+            saved(out var mx, out var my);
+            return $"{x},{y},{d.deconstruct()},{i.deconstruct()},{mx},{my},{Makes}";
         }
     }
 }`
         VerifyMigratedProducerAndConsumer(producerSource, consumerSource)
+    }
+
+    @Fact
+    func SelectedExtensionDeconstructWithRefLikeOutput_ReportsUnsupportedDiagnosticAtConsumer() {
+        let source = `
+namespace RecordDeconstruction {
+    public record R {
+        public int X = 2;
+        public int Y = 3;
+        public void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
+    public static class Extensions {
+        public static void Deconstruct(this R r, out System.Span<int> span, out int y, out int z) {
+            span = default;
+            y = r.X;
+            z = r.Y;
+        }
+    }
+    public static class Probe {
+        public static int Run() {
+            var (span, y, z) = new R();
+            return span.Length + y + z;
+        }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+        Assert.Contains(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+        )
     }
 
     shared {

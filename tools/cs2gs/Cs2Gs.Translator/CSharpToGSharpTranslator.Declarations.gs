@@ -1658,7 +1658,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            let isUnsafe = node.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword) ||
+            var isUnsafe = node.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword) ||
                 (
                 otherParts != nil && otherParts.Any(
                     (p TypeDeclarationSyntax) -> p.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword)
@@ -1671,6 +1671,12 @@ partial class CSharpToGSharpTranslator {
                 .ShouldAttachOwnedExtensions(node, symbol) {
                 if kind == TypeDeclarationKind.Class {
                     for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
+                        if this.TypeContainsPointerOrFunctionPointer(inheritedContract.ReturnType) ||
+                            inheritedContract
+                            .Parameters
+                            .Any((p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)) {
+                            isUnsafe = true
+                        }
                         members.Add(
                             this.BuildDeconstructContractForwardingMethod(
                                 inheritedContract,
@@ -1686,6 +1692,14 @@ partial class CSharpToGSharpTranslator {
                 let emittedForwarderKeys = HashSet[string](StringComparer.Ordinal)
                 let emittedAdapterKeys = HashSet[string](StringComparer.Ordinal)
                 for (slot, impl) in this.GetInheritedRenamedDeconstructInterfaceContracts(symbol) {
+                    if this.TypeContainsPointerOrFunctionPointer(slot.ReturnType) || slot.Parameters.Any(
+                        (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
+                    ) ||
+                        this.TypeContainsPointerOrFunctionPointer(impl.ReturnType) || impl.Parameters.Any(
+                        (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
+                    ) {
+                        isUnsafe = true
+                    }
                     let forwarder = this.BuildDeconstructContractForwardingMethod(
                         slot,
                         this.EmittedName(slot, slot.Name)!!,

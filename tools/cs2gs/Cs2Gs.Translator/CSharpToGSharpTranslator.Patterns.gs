@@ -2089,6 +2089,26 @@ partial class CSharpToGSharpTranslator {
             } else {
                 receiver
             }
+            if this
+                .context
+                .SemanticModel
+                .GetOperation(listPattern) is IListPatternOperation inputListOp &&
+                inputListOp.InputType != nil &&
+                receiverType != nil &&
+                !SymbolEqualityComparer
+                .Default
+                .Equals(UnwrapNullablePatternType(inputListOp.InputType), UnwrapNullablePatternType(receiverType)) {
+                let narrowedListType = this.typeMapper.Map(
+                    UnwrapNullablePatternType(inputListOp.InputType),
+                    this.context,
+                    listPattern.GetLocation()
+                )
+                if narrowedListType != nil {
+                    receiver = NonNullAssertionExpression(
+                        ParenthesizedExpression(BinaryExpression(receiver, "as", TypeExpression(narrowedListType)))
+                    )
+                }
+            }
             this.BindPatternDesignation(listPattern.Designation, receiver)
             let lengthSymbol ISymbol? = if this
                 .context

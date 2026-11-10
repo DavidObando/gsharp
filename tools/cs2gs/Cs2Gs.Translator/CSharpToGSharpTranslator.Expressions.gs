@@ -1423,6 +1423,25 @@ partial class CSharpToGSharpTranslator {
             // never be null, so wrapping it would be meaningless (and,
             // historically, hit a gsc IL-emission gap for the earlier
             // value-type-based lowering this replaces).
+            if !this.InAnalyzerApiMode &&
+                this
+                .context
+                .GetSymbolInfo(member)
+                .Symbol is IMethodSymbol{Name: "Deconstruct"} deconstructMethod &&
+                this.EmittedName(deconstructMethod, member.Name.Identifier.ValueText) != deconstructMethod.Name {
+                let isInvocationTarget = member.Parent is InvocationExpressionSyntax invocation &&
+                    invocation.Expression == member
+                let isNameOfTarget = member.Parent is ArgumentSyntax nameOfArg && IsNameOfArgument(nameOfArg)
+                if !isInvocationTarget && !isNameOfTarget && this.TryResolveMigratedProducerDeconstruct(
+                    deconstructMethod,
+                    out _,
+                    out _
+                ) &&
+                    this
+                    .TryGetConvertedDelegateInvoke(member, out var invoke) {
+                    return this.TranslateExactMethodGroupArgument(member, deconstructMethod, invoke)
+                }
+            }
             let receiverIsAnonymousType = this.context.GetTypeInfo(member.Expression).Type is {IsAnonymousType: true}
             var target GExpression?
             var __spill0 ISymbol?
@@ -1512,22 +1531,6 @@ partial class CSharpToGSharpTranslator {
                 this
                 .TryGetImportedBaseDeconstructHelperName(member, baseDeconstruct, out var baseHelperName) {
                 return MemberAccessExpression(target, baseHelperName, isArrow)
-            }
-            if memberSymbol is IMethodSymbol{Name: "Deconstruct"} deconstructMethod &&
-                emittedMemberName != deconstructMethod
-                .Name {
-                let isInvocationTarget = member.Parent is InvocationExpressionSyntax invocation &&
-                    invocation.Expression == member
-                let isNameOfTarget = member.Parent is ArgumentSyntax nameOfArg && IsNameOfArgument(nameOfArg)
-                if !isInvocationTarget && !isNameOfTarget && this.TryResolveMigratedProducerDeconstruct(
-                    deconstructMethod,
-                    out _,
-                    out _
-                ) &&
-                    this
-                    .TryGetConvertedDelegateInvoke(member, out var invoke) {
-                    return this.TranslateExactMethodGroupArgument(member, deconstructMethod, invoke)
-                }
             }
             return MemberAccessExpression(target, emittedMemberName, isArrow)
         }

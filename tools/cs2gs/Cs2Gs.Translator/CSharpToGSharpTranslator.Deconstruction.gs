@@ -1875,6 +1875,17 @@ partial class CSharpToGSharpTranslator {
             } else {
                 nil
             }
+            if method != nil && this.UsesRecordDeconstructionAdapter(method, receiverType) &&
+                this
+                .GetDeconstructOutputParameters(method).Any(
+                (parameter IParameterSymbol) -> parameter.Type.IsRefLikeType
+            ) {
+                this.context.ReportUnsupported(
+                    diagnosticSite,
+                    "record Deconstruct outputs with ref-like types cannot use a tuple adapter."
+                )
+                return value
+            }
             if this.IsImportedRecordUserDeconstruct(method) {
                 var receiver = if receiverSyntax != nil {
                     this.TranslateReceiverWithNullForgiveness(receiverSyntax, value)
@@ -2767,21 +2778,37 @@ partial class CSharpToGSharpTranslator {
                     case slice is SlicePatternSyntax when slice.Parent is ListPatternSyntax list {
                         let sliceIndex = list.Patterns.IndexOf(slice)
                         let suffixCount = list.Patterns.Count - sliceIndex - 1
+                        let listOp = this.context.SemanticModel.GetOperation(list) as IListPatternOperation
+                        let sliceOp = this.context.SemanticModel.GetOperation(slice) as ISlicePatternOperation
+                        let sliceKey = this.GetCanonicalPatternMemberSlotKey(
+                            sliceOp?.SliceSymbol ?? listOp?.IndexerSymbol
+                        )
+                        let lengthKey = this.GetCanonicalPatternMemberSlotKey(listOp?.LengthSymbol)
                         steps.Insert(
                             0,
-                            "slice:" + sliceIndex.ToString(CultureInfo.InvariantCulture) + ":^" + suffixCount.ToString(
+                            "slice:" + sliceKey + ":" + lengthKey + ":" + sliceIndex.ToString(
                                 CultureInfo.InvariantCulture
-                            )
+                            ) +
+                                ":^" +
+                                suffixCount.ToString(CultureInfo.InvariantCulture)
                         )
                     }
                     case pattern is PatternSyntax when pattern.Parent is ListPatternSyntax list {
                         let index = list.Patterns.IndexOf(pattern)
                         let sliceIndex = FindSlicePatternIndex(list.Patterns)
+                        let listOp = this.context.SemanticModel.GetOperation(list) as IListPatternOperation
+                        let indexerKey = this.GetCanonicalPatternMemberSlotKey(listOp?.IndexerSymbol)
                         if sliceIndex >= 0 && index > sliceIndex {
                             let fromEnd = list.Patterns.Count - index
-                            steps.Insert(0, "list:^" + fromEnd.ToString(CultureInfo.InvariantCulture))
+                            let lengthKey = this.GetCanonicalPatternMemberSlotKey(listOp?.LengthSymbol)
+                            steps.Insert(
+                                0,
+                                "list:" + indexerKey + ":" + lengthKey + ":^" + fromEnd.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                            )
                         } else {
-                            steps.Insert(0, "list:" + index.ToString(CultureInfo.InvariantCulture))
+                            steps.Insert(0, "list:" + indexerKey + ":" + index.ToString(CultureInfo.InvariantCulture))
                         }
                     }
                 }
