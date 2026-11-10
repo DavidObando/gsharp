@@ -1633,6 +1633,20 @@ class CSharpTypeMapper {
             !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType) {
             return mapped
         }
+        if mapped is ArrayTypeReference array && declaredType is IArrayTypeSymbol arrayType {
+            path.Add(0)
+            let element = this.PromoteTupleTypeArguments(
+                array.ElementType,
+                arrayType.ElementType,
+                symbol,
+                context,
+                path
+            )
+            path.RemoveAt(path.Count - 1)
+            if !object.ReferenceEquals(element, array.ElementType) {
+                mapped = ArrayTypeReference(element!!, array.Rank){IsNullable = array.IsNullable}
+            }
+        }
         if mapped is TupleTypeReference tuple &&
             declaredType is INamedTypeSymbol{IsTupleType: true} tupleType &&
             tuple

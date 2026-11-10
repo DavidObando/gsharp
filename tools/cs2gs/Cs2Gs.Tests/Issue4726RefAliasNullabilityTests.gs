@@ -16,6 +16,468 @@ import System.Text
 import Xunit
 
 class Issue4726RefAliasNullabilityTests {
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleProjectedContainerReturn_CarriesItsOwningLeafContract(copy bool) {
+        let result = if copy {
+            "var result = state.Rows; return result;"
+        } else {
+            "return state.Rows;"
+        }
+        let source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    private static (string Text, int Code)[] Read() {
+        ref string alias = ref state.Rows[0].Text;
+        alias = null;
+        ` + result + `
+    }
+    public static string Run() => Read()[0].Code.ToString();
+}`
+        let printed = Translate(source)
+        Assert.Contains("func Read() [](Text string?, Code int32)", printed)
+        AssertParity(source, printed, "1")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleRefConstructorArgument_SharesItsFixedNullableContract(targetTyped bool) {
+        let creation = if targetTyped {
+            "new(ref row.Text)"
+        } else {
+            "new Reset(ref row.Text)"
+        }
+        let source = `#nullable enable
+public class Reset {
+    public Reset(ref string? text) { text = null; }
+}
+#nullable disable
+public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Run() {
+        Reset reset = ` + creation + `;
+        return row.Text ?? "null";
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("row (Text string?,", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleRefAlias_SharesContractsThroughElementContainers(projected bool) {
+        let declaration = if projected {
+            "private static (((string Text, int Code)[] Rows, int Flag) Inner, int Marker) state = " +
+                "((new[] { (\"x\", 1) }, 2), 3);"
+        } else {
+            "private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { (\"x\", 1) }, 2);"
+        }
+        let storage = if projected {
+            "state.Inner"
+        } else {
+            "state"
+        }
+        let source = `public static class Obj {
+    ` + declaration + `
+    public static string Run() {
+        ref ((string? Text, int Code)[] Rows, int Flag) alias = ref ` + storage + `;
+        return alias.Rows[0].Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Rows [](Text string?,", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ConditionalTupleRefArgument_SharesBothLeafContracts(flag bool) {
+        let choice = if flag {
+            "true"
+        } else {
+            "false"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) left = ("left", 1);
+    private static (string Text, int Code) right = ("right", 2);
+#nullable enable
+    private static void Apply(ref string? text) { text = null; }
+#nullable disable
+    public static string Run() {
+        Apply(ref (` + choice + ` ? ref left.Text : ref right.Text));
+        return (left.Text ?? "null") + ":" + (right.Text ?? "null");
+    }
+}`
+        let printed = Translate(source)
+        Assert.True(printed.Contains("left (Text string?,", StringComparison.Ordinal), printed)
+        Assert.True(printed.Contains("right (Text string?,", StringComparison.Ordinal), printed)
+        AssertParity(
+            source,
+            printed,
+            if flag {
+                "null:right"
+            } else {
+                "left:null"
+            }
+        )
+    }
+
+    @Fact
+    func TupleProjectedArrayRefAlias_SharesNestedNullableContracts() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    public static string Run() {
+        ref (string? Text, int Code)[] alias = ref state.Rows;
+        return alias[0].Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Rows [](Text string?,", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData("state.Inner!.Rows[0].Text")
+    @InlineData("(state.Inner!).Rows[0].Text")
+    func SuppressedProjectedArrayRefAlias_RetainsTheOwningDeclaration(storage string) {
+        let source = `public static class Obj {
+    private static (((string Text, int Code)[] Rows, int Marker) Inner, int Flag) state =
+        ((new[] { ("x", 1) }, 2), 3);
+    private static string Read() {
+        ref string? alias = ref ` + storage + `;
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ArrayTupleElementReturn_CarriesItsOwningLeafContract(copy bool) {
+        let result = if copy {
+            "var result = rows[0]; return result;"
+        } else {
+            "return rows[0];"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code)[] rows = new[] { ("x", 1) };
+    private static (string Text, int Code) Read() {
+        ref string alias = ref rows[0].Text;
+        alias = null;
+        ` + result + `
+    }
+    public static string Run() => Read().Code.ToString();
+}`
+        let printed = Translate(source)
+        Assert.Contains("func Read() (Text string?, Code int32)", printed)
+        AssertParity(source, printed, "1")
+    }
+
+    @Fact
+    func TupleProjectedArrayRefAlias_PromotesTheDeclarationLeaf() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code)[] Rows, int Flag) state = (new[] { ("x", 1) }, 2);
+    private static string Read() {
+        ref string alias = ref state.Rows[0].Text;
+        alias = null;
+        return state.Rows[0].Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Fact
+    func TupleRefIndexer_SharesNullableLeavesWithItsBackingStorage() {
+        const source = `public class Holder {
+    private (string Text, int Code) row = ("x", 1);
+    public ref (string Text, int Code) this[int index] => ref row;
+}
+public static class Obj {
+    public static string Run() {
+        var holder = new Holder();
+        ref (string? Text, int Code) alias = ref holder[0];
+        return alias.Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Fact
+    func ArrayValuedTupleLeaf_PreservesItsNullableReturn() {
+        const source = `public static class Obj {
+    private static (string[] Values, int Code) Read() => (null, 1);
+    public static string Run() => Read().Values == null ? "null" : "wrong";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Values []?string", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Fact
+    func TupleOutArgument_DoesNotFreezeTheCallersLeaf() {
+        const source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out string value) { value = "p"; }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Text);
+        ref string alias = ref row.Text;
+        alias = null;
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData("ref")
+    @InlineData("out")
+    @InlineData("in")
+    func TupleLeafRefArgument_SharesTheParameterContract(kind string) {
+        let body = if kind == "in" {
+            ""
+        } else {
+            "text = null;"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Apply(` + kind + ` string? text) { ` + body + ` }
+#nullable disable
+    private static string Read() {
+        Apply(` + kind + ` row.Text);
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(
+            source,
+            printed,
+            if kind == "in" {
+                "x"
+            } else {
+                "null"
+            }
+        )
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func FixedTupleRefReturn_ConstrainsItsObliviousLeaf(readOnly bool) {
+        let modifier = if readOnly {
+            "ref readonly"
+        } else {
+            "ref"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    public static ` + modifier + ` string Borrow() => ref row.Text;
+#nullable disable
+    public static string Run() {
+        ` + modifier + ` string alias = ref Borrow();
+        return alias ?? "fallback";
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func ArrayTupleLeafRefAlias_PromotesTheOwningStorage(nested bool) {
+        let declaration = if nested {
+            "((string Text, int Code) Inner, int Flag)[][] rows = new[] { new[] { ((\"x\", 1), 2) } };"
+        } else {
+            "(string Text, int Code)[] rows = new[] { (\"x\", 1) };"
+        }
+        let storage = if nested {
+            "rows[0][0].Inner.Text"
+        } else {
+            "rows[0].Text"
+        }
+        let source = `public static class Obj {
+    private static ` + declaration + `
+    private static string Read() {
+        ref string alias = ref ` + storage + `;
+        alias = null;
+        return ` + storage + `;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Fact
+    func SuppressedNestedTupleReceiver_ForwardsItsNullableLeafToTheAlias() {
+        const source = `public static class Obj {
+    private static ((string Text, int Code) Inner, int Flag) row = ((null, 1), 2);
+    private static string Read() {
+        ref string alias = ref row.Inner!.Text;
+        return alias;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("ref alias string? = row.Inner.Text", printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleValuedRefAlias_SharesNullableLeavesWithItsStorage(nested bool) {
+        let tuple = if nested {
+            "((string Text, int Code) Inner, int Flag)"
+        } else {
+            "(string Text, int Code)"
+        }
+        let initial = if nested {
+            "((\"x\", 1), 2)"
+        } else {
+            "(\"x\", 1)"
+        }
+        let storage = if nested {
+            "row.Inner"
+        } else {
+            "row"
+        }
+        let source = `public static class Obj {
+    private static ` + tuple + ` row = ` + initial + `;
+    public static string Run() {
+        ref (string? Text, int Code) alias = ref ` + storage + `;
+        return alias.Text;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData("row.Text!")
+    @InlineData("(row.Text!)")
+    func SuppressedTupleRefAlias_StillSharesNullableStorage(expression string) {
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Read() {
+        ref string alias = ref ` + expression + `;
+        alias = null;
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        Assert.Contains("ref alias string? =", printed)
+        Assert.True(!printed.Contains("!!", StringComparison.Ordinal), printed)
+        AssertParity(source, printed, "null")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NullableTupleRefAlias_SeedsItsStorageWithoutANullWrite(readOnly bool) {
+        let modifier = if readOnly {
+            "ref readonly"
+        } else {
+            "ref"
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    public static string Run() {
+        ` + modifier + ` string? alias = ref row.Text;
+        return alias;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains("Text string?", printed)
+        Assert.Contains(
+            "ref " +
+                (
+                if readOnly {
+                    "readonly "
+                } else {
+                    ""
+                }
+            ) +
+                "alias string? = row.Text",
+            printed
+        )
+        AssertParity(source, printed, "x")
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func TupleElementAlias_PreservesTheStorageAndNullWrites(clear bool) {
+        let assigned = if clear {
+            "null"
+        } else {
+            "\"keep\""
+        }
+        let source = `public static class Obj {
+    private static (string Text, int Code) Read() {
+        (string Text, int Code) row = ("x", 1);
+        ref string alias = ref row.Text;
+        alias = ` + assigned + `;
+        return row;
+    }
+    public static string Run() {
+        var row = Read();
+        return ` + (
+            if clear {
+                "(row.Text ?? \"null\")"
+            } else {
+                "row.Text"
+            }
+        ) + ` + ":" + row.Code;
+    }
+}`
+        let printed = Translate(source)
+        Assert.Contains(
+            if clear {
+                "ref alias string? = row.Text"
+            } else {
+                "ref alias string = row.Text"
+            },
+            printed
+        )
+        AssertParity(
+            source,
+            printed,
+            if clear {
+                "null:1"
+            } else {
+                "keep:1"
+            }
+        )
+    }
+
     @Fact
     func GuardedIteratorAlias_PreservesNullableStorageAndCSharpOutput() {
         const source = `using System.Collections.Generic;
