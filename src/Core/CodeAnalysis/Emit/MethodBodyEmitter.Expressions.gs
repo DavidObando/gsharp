@@ -2500,6 +2500,9 @@ internal partial class MethodBodyEmitter {
         if declared is NullableTypeSymbol nts && nts.UnderlyingType == narrowed {
             return
         }
+        if declared is PlatformTypeSymbol pts && pts.UnderlyingType == narrowed {
+            return
+        }
         // Skip when both sides are non-null CLR types that resolve to the
         // same runtime type (e.g. an imported alias).
         if declared?.ClrType != nil && narrowed.ClrType != nil && declared.ClrType == narrowed.ClrType {

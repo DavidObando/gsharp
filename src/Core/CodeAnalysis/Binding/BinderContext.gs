@@ -1026,7 +1026,11 @@ internal class BinderContext {
             return true
         }
         if expression is BoundClrPropertyAccessExpression clrAccess {
-            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.Type)
+            if clrAccess.NarrowedType is {} clrNarrowed {
+                narrowedType = clrNarrowed
+                return true
+            }
+            let declared = MemberLookup.GetDeclaredAccessPathType(stablePath, clrAccess.EffectiveDeclaredType)
             if !object.Equals(clrAccess.Type, declared) {
                 narrowedType = clrAccess.Type
                 return true
@@ -1183,8 +1187,11 @@ internal class BinderContext {
             !TypeMemberModel
             .GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty
 
-        func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol) bool {
-            if declaredType == narrowedType {
+        func NarrowedReadChangesRuntimeType(declaredType TypeSymbol, narrowedType TypeSymbol?) bool {
+            if narrowedType == nil || declaredType == narrowedType {
+                return false
+            }
+            if declaredType is PlatformTypeSymbol platform && platform.UnderlyingType == narrowedType {
                 return false
             }
             if declaredType is NullableTypeSymbol nullable && nullable.UnderlyingType == narrowedType {

@@ -1633,16 +1633,8 @@ internal partial class StatementBinder {
                         receiver
                     }
                 }
-                return BoundClrPropertyAccessExpression(
-                    clrField.Syntax,
-                    CaptureCallReceiverCore(instance, prefix, retainedVariables, retainRemaining, isDefer),
-                    clrField.Member,
-                    clrField.Type,
-                    clrField.StaticContainerType,
-                    clrField.ConstrainedReceiverTypeParameter,
-                    clrField.ConstrainedInterfaceType,
-                    clrField.IsAddressableStaticField,
-                    clrField.IsReadOnlySubmissionGlobal
+                return clrField.WithReceiver(
+                    CaptureCallReceiverCore(instance, prefix, retainedVariables, retainRemaining, isDefer)
                 )
             }
             case element is BoundIndexExpression when element.IsArrayBackedElementAccess {
@@ -3433,10 +3425,7 @@ internal partial class StatementBinder {
             let declaredType = switch expression {
                 case variable is BoundVariableExpression: variable.Variable.Type
                 case field is BoundFieldAccessExpression: field.SubstitutedType ?? field.Field.Type
-                case BoundClrPropertyAccessExpression{Member: FieldInfo}: ExpressionBinder.AddressedLeafStorageType(
-                    expression,
-                    useEffectiveNullability: false
-                )
+                case access is BoundClrPropertyAccessExpression when access.Member is FieldInfo: access.EffectiveDeclaredType
                 default: expression.Type
             }
             return IsUnboxedValueType(expression.Type) && IsUnboxedValueType(declaredType)

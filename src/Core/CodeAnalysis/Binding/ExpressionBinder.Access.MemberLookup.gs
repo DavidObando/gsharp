@@ -496,7 +496,11 @@ internal partial class ExpressionBinder {
                 DeclaredReceiver(path.Root, receiver.Syntax)
             }
         }
-        let declaredType = MemberLookup.GetDeclaredAccessPathType(path, receiver.Type)
+        let declaredType = if receiver is BoundClrPropertyAccessExpression clrReceiver {
+            clrReceiver.EffectiveDeclaredType
+        } else {
+            MemberLookup.GetDeclaredAccessPathType(path, receiver.Type)
+        }
         if declaredType is NullableTypeSymbol {
             return nil
         }
@@ -530,7 +534,9 @@ internal partial class ExpressionBinder {
                     declaredType,
                     property.StaticContainerType,
                     property.ConstrainedReceiverTypeParameter,
-                    property.ConstrainedInterfaceType
+                    property.ConstrainedInterfaceType,
+                    property.IsAddressableStaticField,
+                    property.IsReadOnlySubmissionGlobal
                 )
             }
         }
@@ -1109,11 +1115,13 @@ internal partial class ExpressionBinder {
                                 return BoundErrorExpression(nil)
                             }
                             return ConversionClassifier.AutoDereferenceRefReturn(
-                                BoundClrPropertyAccessExpression(
-                                    nil,
-                                    receiver,
-                                    clrProp,
-                                    GetInheritedClrMemberType(receiver.Type, clrProp)
+                                ApplyMemberNarrowing(
+                                    BoundClrPropertyAccessExpression(
+                                        nil,
+                                        receiver,
+                                        clrProp,
+                                        GetInheritedClrMemberType(receiver.Type, clrProp)
+                                    )
                                 )
                             )
                         }
@@ -1132,11 +1140,13 @@ internal partial class ExpressionBinder {
                                 )
                                 return BoundErrorExpression(nil)
                             }
-                            return BoundClrPropertyAccessExpression(
-                                nil,
-                                receiver,
-                                clrFld,
-                                GetInheritedClrMemberType(receiver.Type, clrFld)
+                            return ApplyMemberNarrowing(
+                                BoundClrPropertyAccessExpression(
+                                    nil,
+                                    receiver,
+                                    clrFld,
+                                    GetInheritedClrMemberType(receiver.Type, clrFld)
+                                )
                             )
                         }
                     }
@@ -1238,11 +1248,13 @@ internal partial class ExpressionBinder {
                             importedPropertyReceiver!!
                         )
                         return ConversionClassifier.AutoDereferenceRefReturn(
-                            BoundClrPropertyAccessExpression(
-                                nil,
-                                propertyReceiver,
-                                clrProp,
-                                GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                            ApplyMemberNarrowing(
+                                BoundClrPropertyAccessExpression(
+                                    nil,
+                                    propertyReceiver,
+                                    clrProp,
+                                    GetInheritedClrMemberType(importedPropertyReceiver!!, clrProp)
+                                )
                             )
                         )
                     }
@@ -1253,11 +1265,13 @@ internal partial class ExpressionBinder {
                             BindingFlags.Public | BindingFlags.Instance
                         )
                         if clrFld != nil {
-                            return BoundClrPropertyAccessExpression(
-                                nil,
-                                receiver,
-                                clrFld,
-                                GetInheritedClrMemberType(receiver.Type, clrFld)
+                            return ApplyMemberNarrowing(
+                                BoundClrPropertyAccessExpression(
+                                    nil,
+                                    receiver,
+                                    clrFld,
+                                    GetInheritedClrMemberType(receiver.Type, clrFld)
+                                )
                             )
                         }
                     }
@@ -1359,7 +1373,7 @@ internal partial class ExpressionBinder {
                         }
                         propType = NormalizeImportedSemanticAggregate(propType, prop)
                         return ConversionClassifier.AutoDereferenceRefReturn(
-                            BoundClrPropertyAccessExpression(nil, receiver!!, prop, propType)
+                            ApplyMemberNarrowing(BoundClrPropertyAccessExpression(nil, receiver!!, prop, propType))
                         )
                     }
                     let fld FieldInfo? = SafeGetVisibleInstanceField(clrReceiverType, memberName)
@@ -1368,15 +1382,17 @@ internal partial class ExpressionBinder {
                             MemberLookup.GetClrFieldTypeSymbol(clrInstanceReceiverType, fld),
                             fld
                         )
-                        return BoundClrPropertyAccessExpression(
-                            nil,
-                            Invariant.Required(
-                                receiver,
-                                "an instance field lookup has a receiver",
-                                expression: "receiver"
-                            ),
-                            fld,
-                            fieldType
+                        return ApplyMemberNarrowing(
+                            BoundClrPropertyAccessExpression(
+                                nil,
+                                Invariant.Required(
+                                    receiver,
+                                    "an instance field lookup has a receiver",
+                                    expression: "receiver"
+                                ),
+                                fld,
+                                fieldType
+                            )
                         )
                     }
                     // Issue #337: an instance member name that resolves to a
@@ -5472,13 +5488,15 @@ internal partial class ExpressionBinder {
                     clrProperty
                 )
                 return ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrPropertyAccessExpression(
-                        nil,
-                        receiver,
-                        clrProperty,
-                        propertyType,
-                        constrainedReceiverTypeParameter: tpRecv,
-                        constrainedInterfaceType: declaringConstraint
+                    ApplyMemberNarrowing(
+                        BoundClrPropertyAccessExpression(
+                            nil,
+                            receiver,
+                            clrProperty,
+                            propertyType,
+                            constrainedReceiverTypeParameter: tpRecv,
+                            constrainedInterfaceType: declaringConstraint
+                        )
                     )
                 )
             }
@@ -5513,13 +5531,15 @@ internal partial class ExpressionBinder {
                     clrProperty
                 )
                 return ConversionClassifier.AutoDereferenceRefReturn(
-                    BoundClrPropertyAccessExpression(
-                        nil,
-                        receiver,
-                        clrProperty,
-                        propertyType,
-                        constrainedReceiverTypeParameter: tpRecv,
-                        constrainedInterfaceType: declaringInterface
+                    ApplyMemberNarrowing(
+                        BoundClrPropertyAccessExpression(
+                            nil,
+                            receiver,
+                            clrProperty,
+                            propertyType,
+                            constrainedReceiverTypeParameter: tpRecv,
+                            constrainedInterfaceType: declaringInterface
+                        )
                     )
                 )
             }

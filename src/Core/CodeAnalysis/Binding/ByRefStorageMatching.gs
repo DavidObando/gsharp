@@ -92,9 +92,11 @@ internal shared class ByRefStorageMatching {
     /// @param refKind Out arguments use declared storage, not a narrowed read type.
     /// @returns The storage type, or `null`.
     func TryGetStorageType(argument BoundExpression?, refKind RefKind = RefKind.None) TypeSymbol? {
-        if refKind == RefKind.Out &&
-            argument is BoundAddressOfExpression address &&
-            ExpressionBinder.TryGetAddressedStorageType(address.Operand, out var declaredStorage) &&
+        if argument is BoundAddressOfExpression address && ExpressionBinder.TryGetAddressedStorageType(
+            address.Operand,
+            out var declaredStorage,
+            useEffectiveNullability: refKind != RefKind.Out
+        ) &&
             declaredStorage != TypeSymbol.Error {
             return declaredStorage
         }

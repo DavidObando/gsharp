@@ -2435,7 +2435,7 @@ internal partial class OverloadResolver {
                             refArgumentLocation,
                             parameter.Name,
                             refParameterType,
-                            operandType
+                            ByRefStorageMatching.TryGetStorageType(addr, parameter.RefKind) ?? operandType
                         )
                         hasErrors = true
                     }
