@@ -1779,7 +1779,7 @@ internal partial class StatementBinder {
         if operand is BoundAddressOfExpression{
             Operand: BoundDereferenceExpression{Operand: BoundBlockExpression block}
         } outerAddress {
-            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> tail)
+            let rewritten = HoistArgumentBlock(block, prefix, (tail BoundExpression) -> CaptureGoOperand(tail, prefix))
             if rewritten is BoundBlockExpression {
                 return outerAddress.Update(BoundDereferenceExpression(outerAddress.Operand.Syntax, rewritten))
             }

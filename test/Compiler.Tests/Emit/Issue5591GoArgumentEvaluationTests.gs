@@ -485,11 +485,15 @@ struct Outer {
 unsafe struct SlotHolder {
     var slot *int32
 }
-var items []int32 = []int32{0, 0, 0, 0, 0}
+var items []int32 = []int32{0, 0, 0, 0, 0, 0}
 var counters []Counter = []Counter{Counter{}, Counter{}, Counter{}}
 var outers []Outer = []Outer{Outer{}}
 var slotHolders []SlotHolder = []SlotHolder{SlotHolder{}}
 var order string = ""
+func Next(tag string, value int32) int32 {
+    order += tag
+    return value
+}
 unsafe func GetPointer(tag string, index int32) *int32 {
     order += tag
     return &items[index]
@@ -509,7 +513,7 @@ unsafe func GetOuterPointer(tag string) *Outer {
 unsafe func Write(pointer *int32, value int32) { *pointer = value }
 unsafe func ClearSlot(slot **int32) { *slot = nil }
 unsafe func Run(release ManualResetEventSlim) {
-    var slots = []*int32{&items[0], &items[1], &items[2]}
+    var slots = []*int32{&items[0], &items[1], &items[2], &items[4]}
     slotHolders[0] = SlotHolder{slot: &items[3]}
     let originalItems = items
     let originalCounters = counters
@@ -528,28 +532,37 @@ unsafe func Run(release ManualResetEventSlim) {
             order += "block;"
             (&items[hidden])
         }, 46)
+        go Write(&*{
+            let _ = 0
+            order += "deref-block;"
+            GetPointer("k;", 5)
+        }, Next("next;", 47))
         go (*GetCounterPointer("f;", 1)).Bump()
         go GetCounterPointer("g;", 0)[2].Bump()
         go (*GetOuterPointer("h;")).inner.Bump()
         go ClearSlot(&slots[0])
         go ClearSlot(&*GetSlot("i;", slots, 1))
         go ClearSlot(&GetSlot("j;", slots, 0)[2])
+        go ClearSlot(&*{
+            let _ = 0
+            GetSlot("l;", slots, 3)
+        })
         go ClearSlot(&slotHolders[0].slot)
         var hidden = 7
         Log.Add("hidden " + hidden.ToString())
         order += "queued"
-        items = []int32{99, 99, 99, 99, 99}
+        items = []int32{99, 99, 99, 99, 99, 99}
         counters = []Counter{Counter{n: 99}, Counter{n: 99}, Counter{n: 99}}
         outers = []Outer{Outer{inner: Counter{n: 99}}}
-        slots = []*int32{&items[0], &items[1], &items[2]}
+        slots = []*int32{&items[0], &items[1], &items[2], &items[4]}
         slotHolders = []SlotHolder{SlotHolder{slot: &items[3]}}
         release.Set()
     }
     Log.Add("order " + order)
-    Log.Add("items " + originalItems[0].ToString() + "/" + originalItems[1].ToString() + "/" + originalItems[2].ToString() + "/" + originalItems[3].ToString() + "/" + originalItems[4].ToString() + " replacement=" + items[0].ToString())
+    Log.Add("items " + originalItems[0].ToString() + "/" + originalItems[1].ToString() + "/" + originalItems[2].ToString() + "/" + originalItems[3].ToString() + "/" + originalItems[4].ToString() + "/" + originalItems[5].ToString() + " replacement=" + items[0].ToString() + "/" + items[5].ToString())
     Log.Add("counters " + originalCounters[0].n.ToString() + "/" + originalCounters[0].pair.first.ToString() + "/" + originalCounters[1].n.ToString() + "/" + originalCounters[2].n.ToString() + " replacement=" + counters[0].n.ToString())
     Log.Add("outers " + originalOuters[0].inner.n.ToString() + " replacement=" + outers[0].inner.n.ToString())
-    Log.Add("slots " + (originalSlots[0] == nil).ToString() + "/" + (originalSlots[1] == nil).ToString() + "/" + (originalSlots[2] == nil).ToString() + "/" + (originalSlotHolders[0].slot == nil).ToString() + " replacement=" + (slots[0] == nil).ToString() + "/" + (slotHolders[0].slot == nil).ToString())
+    Log.Add("slots " + (originalSlots[0] == nil).ToString() + "/" + (originalSlots[1] == nil).ToString() + "/" + (originalSlots[2] == nil).ToString() + "/" + (originalSlots[3] == nil).ToString() + "/" + (originalSlotHolders[0].slot == nil).ToString() + " replacement=" + (slots[0] == nil).ToString() + "/" + (slots[3] == nil).ToString() + "/" + (slotHolders[0].slot == nil).ToString())
 }
 RestrictPool()
 Blocked((release ManualResetEventSlim) -> Run(release))
@@ -557,10 +570,10 @@ Blocked((release ManualResetEventSlim) -> Run(release))
         let assemblyPath = Compile(source, "Issue5708PointerValue")
         let expected = `counters 10/20/1/1 replacement=99
 hidden 7
-items 42/43/44/45/46 replacement=99
-order a;b;c;d;e;block;f;g;h;i;j;queued
+items 42/43/44/45/46/47 replacement=99/99
+order a;b;c;d;e;block;deref-block;k;next;f;g;h;i;j;l;queued
 outers 1 replacement=99
-slots True/True/True/True replacement=False/False
+slots True/True/True/True/True replacement=False/False/False
 `.ReplaceLineEndings(Environment.NewLine)
         for var i = 0; i < 3; i++ {
             Assert.Equal(expected, RunBounded(assemblyPath, "PointerValue"))

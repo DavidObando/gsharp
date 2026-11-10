@@ -107,6 +107,10 @@ unsafe func Run() {
     let counters = []Counter{Counter{}}
     ` + keyword + ` Write(&items[0])
     ` + keyword + ` Write(&*GetPointer(items))
+    ` + keyword + ` Write(&*{
+        let _ = 0
+        GetPointer(items)
+    })
     ` + keyword + ` Write(&GetPointer(items)[1])
     ` + keyword + ` Write(&(*GetCounterPointer(counters)).n)
     ` + keyword + ` Write(&(*GetCounterPointer(counters)).pair.first)
@@ -114,6 +118,10 @@ unsafe func Run() {
     ` + keyword + ` (*GetCounterPointer(counters)).Bump()
     ` + keyword + ` ClearSlot(&slots[0])
     ` + keyword + ` ClearSlot(&*GetSlot(slots))
+    ` + keyword + ` ClearSlot(&*{
+        let _ = 0
+        GetSlot(slots)
+    })
     ` + keyword + ` ClearSlot(&GetSlot(slots)[1])
 }
 `
