@@ -3395,9 +3395,8 @@ implementation had to refine it.
     A call with a `ref`, `out`, or `in` argument is rejected with GS0460, as for `defer`.
     Unmanaged pointer-valued arguments remain values and follow the existing unsafe and capture checks.
     This includes implicit `in` arguments; copy the value inside a `go` block when a child needs a readonly reference.
-    Two operand kinds keep the old in-child evaluation:
-    a byref-like value and an operand that reads a variable no closure may
-    capture (the statement is rejected by capture legality in that case). An
+    By-ref-like (`ref struct`) receivers and arguments cannot enter a work-item field and are rejected with GS0219 instead of evaluating in the child (issue #5836).
+    An operand that reads a variable no closure may capture stays in place so capture legality rejects the statement and names the variable. An
     explicit `await` in an argument (including under an implicit suspending
     completion) is still GS0576. `async let` (D15) still evaluates its
     initializer in the child; its locals from `?.` and type patterns now
