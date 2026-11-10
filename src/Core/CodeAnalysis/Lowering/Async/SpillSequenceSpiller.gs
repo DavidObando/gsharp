@@ -1220,6 +1220,33 @@ shared class SpillSequenceSpiller {
                     )
                 }
                 case indirectAssign is BoundIndirectAssignmentExpression {
+                    if indirectAssign.Pointer is BoundAddressOfExpression{
+                        Operand: BoundTupleElementAccessExpression tuple,
+                        IsUnmanaged: false
+                    } address &&
+                        SideEffectSpiller
+                        .IsInPlaceStorageWriteReceiver(tuple.Receiver) {
+                        return SpillTwoOperand(
+                            indirectAssign,
+                            tuple.Receiver,
+                            indirectAssign.Value,
+                            func (recv BoundExpression, val BoundExpression) BoundExpression {
+                                return BoundIndirectAssignmentExpression(
+                                    nil,
+                                    address.Update(
+                                        BoundTupleElementAccessExpression(
+                                            tuple.Syntax,
+                                            recv,
+                                            tuple.TupleType,
+                                            tuple.Index
+                                        )
+                                    ),
+                                    val
+                                )
+                            },
+                            preserveReceiverStorage: true
+                        )
+                    }
                     return SpillTwoOperand(
                         indirectAssign,
                         indirectAssign.Pointer,
@@ -3660,14 +3687,29 @@ shared class SpillSequenceSpiller {
             }
             let locals = ImmutableArray.CreateBuilder[LocalVariableSymbol]()
             let sideEffects = ImmutableArray.CreateBuilder[BoundStatement]()
-            var left = a
+            var left = if preserveReceiverStorage && SideEffectSpiller.IsInPlaceStorageWriteReceiver(a) {
+                PreserveStorageReceiver(a)
+            } else {
+                a
+            }
             if aHasAwait {
-                let spilledA = SpillExpression(a)
+                let spilledA = SpillExpression(left)
                 locals.AddRange(spilledA.Locals)
                 sideEffects.AddRange(spilledA.SideEffects)
                 left = spilledA.Value
             }
-            if bHasAwait {
+            var right = if preserveReceiverStorage {
+                SideEffectSpiller.SubstituteReceiver(b, a, left)
+            } else {
+                b
+            }
+            let rightHasAwait = if preserveReceiverStorage && !object.ReferenceEquals(right, b) {
+                HasAwait(right)
+            } else {
+                bHasAwait
+            }
+            if rightHasAwait {
+                let previousLeft = left
                 if preserveReceiverStorage && SideEffectSpiller.IsInPlaceStorageWriteReceiver(left) {
                     // This pass also lifts control-flow blocks before SideEffectSpiller runs.
                     left = propertyReceiverSpiller.CapturePropertyStorageReceiver(
@@ -3679,13 +3721,9 @@ shared class SpillSequenceSpiller {
                 } else if !CanDeferAcrossLift(left) {
                     left = StoreOperand(left, locals, sideEffects)
                 }
-            }
-            var right = if preserveReceiverStorage {
-                SideEffectSpiller.SubstituteReceiver(b, a, left)
-            } else {
-                b
-            }
-            if bHasAwait {
+                if preserveReceiverStorage && !object.ReferenceEquals(left, previousLeft) {
+                    right = SideEffectSpiller.SubstituteReceiver(right, previousLeft, left)
+                }
                 let spilledB = SpillExpression(right)
                 locals.AddRange(spilledB.Locals)
                 sideEffects.AddRange(spilledB.SideEffects)
@@ -3693,6 +3731,90 @@ shared class SpillSequenceSpiller {
             }
             let value = rebuild(left, right)
             return BoundSpillSequenceExpression(nil, locals.ToImmutable(), sideEffects.ToImmutable(), value)
+        }
+
+        private func PreserveStorageReceiver(receiver BoundExpression) BoundExpression -> switch receiver {
+            case block is BoundBlockExpression: BoundBlockExpression(
+                block.Syntax,
+                block.Statements,
+                PreserveStorageReceiver(block.Expression)
+            )
+            case conditional is BoundConditionalExpression: BoundDereferenceExpression(
+                conditional.Syntax,
+                BoundConditionalAddressExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    PreserveStorageReceiver(conditional.WhenTrue),
+                    PreserveStorageReceiver(conditional.WhenFalse),
+                    conditional.Type
+                )
+            )
+            case BoundDereferenceExpression{Operand: BoundAddressOfExpression address}: PreserveStorageReceiver(
+                address.Operand
+            )
+            case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference: BoundBlockExpression(
+                block.Syntax,
+                block.Statements,
+                PreserveStorageReceiver(BoundDereferenceExpression(dereference.Syntax, block.Expression))
+            )
+            case BoundDereferenceExpression{
+                Operand: BoundConditionalExpression conditional
+            } dereference: BoundDereferenceExpression(
+                dereference.Syntax,
+                BoundConditionalAddressExpression(
+                    conditional.Syntax,
+                    conditional.Condition,
+                    PreserveStorageReceiver(
+                        BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue)
+                    ),
+                    PreserveStorageReceiver(
+                        BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse)
+                    ),
+                    dereference.Type
+                )
+            )
+            case BoundDereferenceExpression{
+                Operand: BoundConditionalAddressExpression address
+            } dereference: BoundDereferenceExpression(
+                dereference.Syntax,
+                BoundConditionalAddressExpression(
+                    address.Syntax,
+                    address.Condition,
+                    PreserveStorageReceiver(address.WhenTrueOperand),
+                    PreserveStorageReceiver(address.WhenFalseOperand),
+                    address.PointeeType
+                )
+            )
+            case tuple is BoundTupleElementAccessExpression: BoundTupleElementAccessExpression(
+                tuple.Syntax,
+                PreserveStorageReceiver(tuple.Receiver),
+                tuple.TupleType,
+                tuple.Index
+            )
+            case field is BoundFieldAccessExpression when field.Receiver != nil && !Binder.IsReferenceTypeForConstraint(
+                field.Receiver.Type
+            ): BoundFieldAccessExpression(
+                field.Syntax,
+                PreserveStorageReceiver(field.Receiver!!),
+                BoundNodeForm.DeclaringType(field),
+                field.Field,
+                field.SubstitutedType,
+                field.NarrowedType
+            )
+            case clrField is BoundClrPropertyAccessExpression when clrField.Member is FieldInfo &&
+                clrField.Receiver != nil &&
+                !Binder.IsReferenceTypeForConstraint(clrField.Receiver.Type): BoundClrPropertyAccessExpression(
+                clrField.Syntax,
+                PreserveStorageReceiver(clrField.Receiver!!),
+                clrField.Member,
+                clrField.Type,
+                clrField.StaticContainerType,
+                clrField.ConstrainedReceiverTypeParameter,
+                clrField.ConstrainedInterfaceType,
+                clrField.IsAddressableStaticField,
+                clrField.IsReadOnlySubmissionGlobal
+            )
+            default: receiver
         }
 
         /// Spills a list of arguments. When argument K contains an await,

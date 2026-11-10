@@ -259,6 +259,27 @@ internal partial class ExpressionBinder {
             return false
         }
         let globalType = ClrNullability.GetFieldTypeSymbol(globalField)
+        if globalType is TupleTypeSymbol tupleGlobalType {
+            let tupleReceiver = BoundClrPropertyAccessExpression(
+                nil,
+                receiver: nil,
+                globalField,
+                globalType,
+                isAddressableStaticField: true,
+                isReadOnlySubmissionGlobal: resolvedDeclared.IsReadOnly
+            )
+            result = BindTupleElementAssignment(
+                syntax,
+                tupleReceiver,
+                tupleGlobalType,
+                syntax.FieldIdentifier.ValueText,
+                syntax.FieldIdentifier.Location,
+                syntax.EqualsToken.Location,
+                syntax.Value,
+                name
+            )
+            return true
+        }
         if globalType?.ClrType == nil {
             return false
         }

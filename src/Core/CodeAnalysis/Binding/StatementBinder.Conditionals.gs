@@ -2032,8 +2032,15 @@ internal partial class StatementBinder {
                 return true
             }
             case indirect is BoundIndirectAssignmentExpression {
-                let dereference = BoundDereferenceExpression(targetSyntax, indirect.Pointer)
-                plan = CreateAddressedMultiAssignmentTarget(indirect.Value, dereference, targetSyntax, captures)
+                let storage = if indirect.Pointer is BoundAddressOfExpression{
+                    Operand: var operand,
+                    IsUnmanaged: false
+                } {
+                    operand
+                } else {
+                    BoundDereferenceExpression(targetSyntax, indirect.Pointer)
+                }
+                plan = CreateAddressedMultiAssignmentTarget(indirect.Value, storage, targetSyntax, captures)
                 return true
             }
             default {
@@ -2099,6 +2106,10 @@ internal partial class StatementBinder {
                         field.NarrowedType
                     )
                 }
+            }
+            case tuple is BoundTupleElementAccessExpression {
+                let receiver = PrepareMultiAssignmentStorageReceiver(tuple.Receiver, targetSyntax, captures)
+                return BoundTupleElementAccessExpression(tuple.Syntax, receiver, tuple.TupleType, tuple.Index)
             }
             case index is BoundIndexExpression {
                 let capturedIndexTarget = CaptureMultiAssignmentValue(index.Target, targetSyntax, captures)

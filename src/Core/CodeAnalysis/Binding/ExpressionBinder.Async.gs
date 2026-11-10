@@ -642,7 +642,14 @@ internal partial class ExpressionBinder {
             )
             ApplySubExpressionNarrowingEffects(accessor.LeftPart, boundReceiver)
             if boundReceiver.Type is TupleTypeSymbol tupleType {
-                eventName = GetTupleFieldName(eventName, tupleType)
+                return BindTupleCompoundAssignment(
+                    boundReceiver,
+                    tupleType,
+                    eventName,
+                    eventNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind
+                )
             }
             // A nearer source field/property hides an inherited event, while
             // an event declared at the same level retains event precedence.

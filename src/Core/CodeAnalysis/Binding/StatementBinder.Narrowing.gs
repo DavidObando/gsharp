@@ -5944,12 +5944,12 @@ internal partial class StatementBinder {
                 pointer = assertion.Operand
             }
             if pointer is BoundAddressOfExpression address {
-                RecordWritableReference(address.Operand, invalidateCallableState: true)
+                RecordWritableReference(address.Operand, invalidateCallableState: true, isDirectWrite: true)
             } else if pointer is BoundVariableExpression variable && writableReferenceAliases.TryGetValue(
                 variable.Variable,
                 out var operand
             ) {
-                RecordWritableReference(operand, invalidateCallableState: true)
+                RecordWritableReference(operand, invalidateCallableState: true, isDirectWrite: true)
             } else {
                 MayMutateAnyRoot = true
                 MayMutateAnyRootViaPointer = true
@@ -6311,6 +6311,9 @@ internal partial class StatementBinder {
                 }
                 case BoundUnaryExpression{Op: {Kind: BoundUnaryOperatorKind.NullAssertion}} assertion {
                     CollectOccurrences(assertion.Operand, isReference, byReference, byValue)
+                }
+                case tuple is BoundTupleElementAccessExpression {
+                    CollectOccurrences(tuple.Receiver, isReference, byReference, byValue)
                 }
                 case conditionalAddress is BoundConditionalAddressExpression {
                     CollectOccurrences(conditionalAddress.WhenTrueOperand, true, byReference, byValue)
@@ -7578,7 +7581,11 @@ internal partial class StatementBinder {
             base.VisitAddressOfExpression(node)
         }
 
-        private func RecordWritableReference(expression BoundExpression, invalidateCallableState bool = false) {
+        private func RecordWritableReference(
+            expression BoundExpression,
+            invalidateCallableState bool = false,
+            isDirectWrite bool = false
+        ) {
             var expression = expression
             while true {
                 expression = switch expression {
@@ -7587,19 +7594,24 @@ internal partial class StatementBinder {
                     case BoundUnaryExpression{
                         Op: {Kind: BoundUnaryOperatorKind.NullAssertion}
                     } assertion: assertion.Operand
+                    case tuple is BoundTupleElementAccessExpression: tuple.Receiver
                     default: expression
                 }
                 if !(expression is BoundAddressOfExpression) &&
                     !(expression is BoundConversionExpression) &&
                     !(
                     expression is BoundUnaryExpression && expression.Op.Kind == BoundUnaryOperatorKind.NullAssertion
-                ) {
+                ) &&
+                    !(expression is BoundTupleElementAccessExpression) {
                     break
                 }
             }
             if expression is BoundVariableExpression variable {
                 Roots.Add(variable.Variable)
                 WritableReferenceRoots.Add(variable.Variable)
+                if isDirectWrite {
+                    callAliasedRoots.Add(ResolveStorage(variable.Variable))
+                }
                 if invalidateCallableState {
                     normalCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
                     allEntryCallableState.InvalidateVariable(variable.Variable, mayShareStorage, tryAssignedVariables)
@@ -7607,8 +7619,8 @@ internal partial class StatementBinder {
                 return
             }
             if expression is BoundConditionalAddressExpression conditional {
-                RecordWritableReference(conditional.WhenTrueOperand, invalidateCallableState)
-                RecordWritableReference(conditional.WhenFalseOperand, invalidateCallableState)
+                RecordWritableReference(conditional.WhenTrueOperand, invalidateCallableState, isDirectWrite)
+                RecordWritableReference(conditional.WhenFalseOperand, invalidateCallableState, isDirectWrite)
                 return
             }
             if expression is BoundFieldAccessExpression fieldAccess && fieldAccess.Field != nil {
@@ -11699,6 +11711,33 @@ internal partial class StatementBinder {
             ImplicitStaticFieldVariableSymbol or
             ImplicitStaticPropertyVariableSymbol
 
+        internal func IsTupleElementAlias(root VariableSymbol) bool {
+            var current VariableSymbol? = root
+            let visited = List[VariableSymbol]()
+            while current is LocalVariableSymbol local && local.RefKind != RefKind.None && !visited.Contains(current) {
+                visited.Add(current)
+                var origin BoundExpression? = local.ManagedReferenceOrigin
+                while true {
+                    if origin is BoundConversionExpression conversion {
+                        origin = conversion.Expression
+                    } else if origin is BoundUnaryExpression unary &&
+                        unary
+                        .Op
+                        .Kind == BoundUnaryOperatorKind.NullAssertion {
+                        origin = unary.Operand
+                    } else if origin is BoundTupleElementAccessExpression {
+                        return true
+                    } else if origin is BoundBlockExpression block {
+                        origin = block.Expression
+                    } else {
+                        break
+                    }
+                }
+                current = (origin as BoundVariableExpression)?.Variable
+            }
+            return false
+        }
+
         internal func DropsOnMemberMutation(
             path AccessPath,
             mayMutateMemberPaths bool,
@@ -11706,8 +11745,13 @@ internal partial class StatementBinder {
         ) bool -> (HasMemberLinks(path) && mayMutateMemberPaths) ||
             (
             EffectiveMemberRoot(path) is {} root &&
-                IsExternalStorageAlias(root) &&
-                (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(root)))
+                (
+                (IsTupleElementAlias(root) && mayMutateReferenceStorage) ||
+                    (
+                    IsExternalStorageAlias(root) &&
+                        (mayMutateReferenceStorage || (mayMutateMemberPaths && CallsMayWriteAliasedStorage(root)))
+                )
+            )
         )
 
         /// ADR-0208 R21 (#5786, #5830): a fact on a bare member name (an implicit member symbol) is a fact on the

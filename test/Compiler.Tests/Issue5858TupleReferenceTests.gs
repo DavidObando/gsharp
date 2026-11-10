@@ -670,6 +670,206 @@ func Main() {
         Assert.Equal(Encoding.UTF8.GetBytes("keep\n"), fixture.RunBytes(dll))
     }
 
+    @Fact
+    func TupleElementAssignment_MutatesStorageInPlaceAcrossForms() {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package TupleAssign5897
+import System
+import System.Threading.Tasks
+
+class Holder {
+    let InitRow (Text string?, Code int32)
+    var Row (Text string?, Code int32) = ("init", 1)
+    var Calls int32
+
+    init() {
+        InitRow = ("ctor", 0)
+        InitRow.Text = "ctor-updated"
+        this.InitRow.Code += 7
+    }
+
+    func Self() Holder {
+        Calls++
+        return this
+    }
+}
+
+func MutateByRef[T any](ref row (Value T, Code int32), next T) {
+    row.Value = next
+    row.Code += 3
+}
+
+async func YieldNext(value int32) Task[int32] {
+    await Task.Yield()
+    return value
+}
+
+async func MutateAsync() string {
+    var row (Text string?, Code int32) = ("start", 1)
+    var alt (Text string?, Code int32) = ("alt", 10)
+    var flag = true
+    row.Text = await Task.FromResult[string?](nil)
+    row.Text ??= await Task.FromResult("async-fallback")
+    row.Code += await YieldNext(4)
+    (flag ? row : alt).Code = await YieldNext(9)
+    var p = &alt
+    (*p).Code = await YieldNext(12)
+    let box = Holder()
+    box.Self().Calls += await YieldNext(4)
+    return "${row.Text}:${row.Code}:${alt.Code}:${box.Calls}"
+}
+
+func Main() {
+    var row (Text string?, Code int32) = ("x", 1)
+    row.Text = nil
+    Console.WriteLine(row.Text ?? "null1")
+    row.Item1 = "ordinal"
+    row.Item2 += 4
+    let oldCode = row.Code++
+    let newCode = ++row.1
+    row.Text = nil
+    let coalesced = (row.Text ??= "coalesced")
+    Console.WriteLine("${row.Text}:${oldCode}:${newCode}:${coalesced}")
+
+    row.Text, row.Code = "multi", 20
+    Console.WriteLine("${row.Item1}:${row.1}")
+
+    var nested (Inner (Text string?, Code int32), Flag bool) = (("inner", 2), false)
+    nested.Inner.Text = nil
+    nested.Inner.Text ??= "rebuilt"
+    nested.Inner.Code += 8
+    var nestedIfSteps = 0
+    ({
+        if true {
+            nestedIfSteps++
+        }
+        nested
+    }).Inner.Code += 5
+    nested.Flag = true
+    Console.WriteLine("${nested.Inner.Text}:${nested.Inner.Code}:${nested.Flag}:${nestedIfSteps}")
+
+    var longTuple (
+        int32,
+        int32,
+        int32,
+        int32,
+        int32,
+        int32,
+        int32,
+        Eighth string?,
+        int32,
+        int32,
+        int32,
+        int32,
+        int32,
+        int32,
+        Fifteenth int32
+    ) = (1, 2, 3, 4, 5, 6, 7, "eight", 9, 10, 11, 12, 13, 14, 15)
+    longTuple.Eighth = nil
+    longTuple.Item8 ??= "eight-again"
+    longTuple.Fifteenth += 5
+    longTuple.14++
+    Console.WriteLine("${longTuple.Eighth}:${longTuple.Fifteenth}")
+
+    let holder = Holder()
+    holder.Self().Row.Code += 9
+    holder.Self().Row.Text = nil
+    holder.Self().Row.Text ??= "holder-coalesced"
+    Console.WriteLine("${holder.InitRow.Text}:${holder.InitRow.Code}:${holder.Row.Text}:${holder.Row.Code}:${holder.Calls}")
+
+    var rows = [](Text string?, Code int32){("elem", 3), ("second", 30)}
+    var idxCalls = 0
+    let nextIndex = () -> {
+        idxCalls++
+        return 0
+    }
+    rows[nextIndex()].Code += 6
+    rows[nextIndex()].Text = nil
+    rows[nextIndex()].Text ??= "array-coalesced"
+    let originalRows = rows
+    var i = 0
+    let changeIndex = () -> {
+        i = 1
+        return 42
+    }
+    rows[i].Code = changeIndex()
+    let replaceRows = () -> {
+        rows = [](Text string?, Code int32){("replaced0", -1), ("replaced1", -2)}
+        return 77
+    }
+    rows[i].Code = replaceRows()
+    Console.WriteLine(
+        "${originalRows[0].Text}:${originalRows[0].Code}:${originalRows[1].Code}:${rows[0].Code}:${rows[1].Code}:${idxCalls}"
+    )
+
+    var left (Text string?, Code int32) = ("left", 10)
+    var right (Text string?, Code int32) = ("right", 20)
+    var chooseCalls = 0
+    let choose = () -> {
+        chooseCalls++
+        return chooseCalls == 1
+    }
+    (choose() ? left : right).Code += 5
+    var blockSteps = 0
+    ({
+        blockSteps++
+        right
+    }).Code += 7
+    var pickCalls = 0
+    let pick = () -> {
+        pickCalls++
+        return pickCalls == 1
+    }
+    (*(pick() ? &left : &right)).Code += 3
+    var derefBlockSteps = 0
+    (*({
+        derefBlockSteps++
+        &right
+    })).Code += 4
+    var p = &left
+    var q = &right
+    var ptrPickCalls = 0
+    let pickPtr = () -> {
+        ptrPickCalls++
+        return ptrPickCalls == 1
+    }
+    (*(pickPtr() ? p : q)).Code += 2
+    var ptrBlockCalls = 0
+    (*({
+        ptrBlockCalls++
+        q
+    })).Code += 6
+    var ifConditionSteps = 0
+    ({
+        if true {
+            ifConditionSteps++
+        }
+        true
+    } ? left : right).Code += 5
+    Console.WriteLine(
+        "${left.Code}:${right.Code}:${chooseCalls}:${blockSteps}:${pickCalls}:${derefBlockSteps}:${ptrPickCalls}:${ptrBlockCalls}:${ifConditionSteps}"
+    )
+
+    var ref whole = row
+    whole.Text = "via-ref"
+    MutateByRef[string?](ref row, "generic-ref")
+    let closure = () -> {
+        row.Text = "closed"
+        row.Code += 10
+    }
+    closure()
+    Console.WriteLine("${row.Text}:${row.Code}")
+    Console.WriteLine(MutateAsync().GetAwaiter().GetResult())
+}`, "TupleAssign5897", executable: true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                "null1\ncoalesced:5:7:coalesced\nmulti:20\nrebuilt:15:True:1\neight-again:21\nctor-updated:7:holder-coalesced:10:3\narray-coalesced:42:77:-1:-2:3\n25:37:1:1:1:1:1:1:1\nclosed:33\nasync-fallback:9:12:5\n"
+            ),
+            fixture.RunBytes(dll)
+        )
+    }
+
     shared {
         private func AssertTupleElementForwarder(method MethodInfo, restCount int32) {
             // Incoming-byref returns use C#-equivalent IL and runtime witnesses; ILVerify rejects them too (#5862).

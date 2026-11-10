@@ -457,6 +457,58 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
         return BoundBlockExpression(rewritten.Syntax, statements.ToImmutable(), assignment)
     }
 
+    protected override func RewriteIndirectAssignmentExpression(
+        node BoundIndirectAssignmentExpression
+    ) BoundExpression {
+        if !(
+            node.Pointer is BoundAddressOfExpression{
+                Operand: BoundTupleElementAccessExpression originalTuple,
+                IsUnmanaged: false
+            } address
+        ) ||
+            !IsInPlaceStorageWriteReceiver(originalTuple.Receiver) {
+            return base.RewriteIndirectAssignmentExpression(node)
+        }
+        let rewrittenReceiver = this.RewriteExpression(originalTuple.Receiver)
+        let statements = ImmutableArray.CreateBuilder[BoundStatement]()
+        let capturedReceiver = this.CapturePropertyStorageReceiver(
+            rewrittenReceiver,
+            statements,
+            captureComponents: true
+        )
+        var value = if !object.ReferenceEquals(capturedReceiver, originalTuple.Receiver) {
+            ReceiverSubstitutionRewriter.Replace(node.Value, originalTuple.Receiver, capturedReceiver)
+        } else {
+            node.Value
+        }
+        value = this.RewriteExpression(value)
+        let spillValue = SideEffectAnalyzer.HasObservableSideEffect(value)
+        if spillValue {
+            this.ProbeStorageReceiver(capturedReceiver, statements)
+            value = this.MaybeSpill(value, true, "val", statements)
+        }
+        let capturedTuple = if object.ReferenceEquals(capturedReceiver, originalTuple.Receiver) {
+            originalTuple
+        } else {
+            BoundTupleElementAccessExpression(
+                originalTuple.Syntax,
+                capturedReceiver,
+                originalTuple.TupleType,
+                originalTuple.Index
+            )
+        }
+        if !spillValue && statements.Count == 0 && object.ReferenceEquals(capturedTuple, originalTuple) &&
+            object.ReferenceEquals(value, node.Value) {
+            return node
+        }
+        let assignment = BoundIndirectAssignmentExpression(node.Syntax, address.Update(capturedTuple), value)
+        return if statements.Count == 0 {
+            assignment
+        } else {
+            BoundBlockExpression(node.Syntax, statements.ToImmutable(), assignment)
+        }
+    }
+
     internal func CapturePropertyStorageReceiver(
         receiver BoundExpression,
         statements ImmutableArray[BoundStatement].Builder,
@@ -556,8 +608,52 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
             return CaptureOpaqueStorageReceiver(receiver, receiver.Syntax, statements, local)
         }
         switch receiver {
+            case block is BoundBlockExpression {
+                statements.AddRange(block.Statements)
+                return this.SpillStorageReceiverParts(block.Expression, statements, captureComponents)
+            }
+            case conditional is BoundConditionalExpression {
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(
+                        conditional.Syntax,
+                        BoundConditionalAddressExpression(
+                            conditional.Syntax,
+                            conditional.Condition,
+                            conditional.WhenTrue,
+                            conditional.WhenFalse,
+                            conditional.Type
+                        )
+                    ),
+                    statements,
+                    captureComponents
+                )
+            }
             case BoundDereferenceExpression{Operand: BoundAddressOfExpression address} {
                 return this.SpillStorageReceiverParts(address.Operand, statements, captureComponents: true)
+            }
+            case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                statements.AddRange(block.Statements)
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(dereference.Syntax, block.Expression),
+                    statements,
+                    captureComponents: true
+                )
+            }
+            case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} dereference {
+                return this.SpillStorageReceiverParts(
+                    BoundDereferenceExpression(
+                        dereference.Syntax,
+                        BoundConditionalAddressExpression(
+                            conditional.Syntax,
+                            conditional.Condition,
+                            BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue),
+                            BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse),
+                            dereference.Type
+                        )
+                    ),
+                    statements,
+                    captureComponents: true
+                )
             }
             case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(dereference.Operand) {
                 return BoundDereferenceExpression(
@@ -616,6 +712,44 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     address.PointeeType
                 )
                 return BoundDereferenceExpression(dereference.Syntax, captured)
+            }
+            case dereference is BoundDereferenceExpression when TypeSymbol.IsUnmanagedPointer(
+                dereference.Operand.Type
+            ) {
+                let operand = this.MaybeSpill(
+                    dereference.Operand,
+                    !IsStableLocalRead(dereference.Operand) &&
+                        (captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)),
+                    "ptr",
+                    statements
+                )
+                return if object.ReferenceEquals(operand, dereference.Operand) {
+                    dereference
+                } else {
+                    BoundDereferenceExpression(dereference.Syntax, operand)
+                }
+            }
+            case dereference is BoundDereferenceExpression when dereference.Operand.Type is ByRefTypeSymbol {
+                if IsStableLocalRead(dereference.Operand) ||
+                    !(captureComponents || SideEffectAnalyzer.HasObservableSideEffect(dereference.Operand)) {
+                    return dereference
+                }
+                let local = LocalVariableSymbol(
+                    "${this.tempPrefix}ptr${this.counter++}",
+                    isReadOnly: true,
+                    type: dereference.Operand.Type
+                )
+                statements.Add(
+                    BoundVariableDeclaration(
+                        dereference.Syntax,
+                        local,
+                        BoundAddressOfExpression(dereference.Syntax, dereference, unmanaged: false)
+                    )
+                )
+                return BoundDereferenceExpression(
+                    dereference.Syntax,
+                    BoundVariableExpression(dereference.Syntax, local)
+                )
             }
             case element is BoundIndexExpression {
                 {
@@ -1012,10 +1146,34 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                         receiver = address.Operand
                         continue
                     }
+                    case BoundDereferenceExpression{Operand: BoundBlockExpression block} dereference {
+                        receiver = BoundDereferenceExpression(dereference.Syntax, block.Expression)
+                        continue
+                    }
+                    case BoundDereferenceExpression{Operand: BoundConditionalExpression conditional} {
+                        return IsInPlaceStorageWriteReceiver(
+                            BoundDereferenceExpression(conditional.WhenTrue.Syntax, conditional.WhenTrue)
+                        ) &&
+                            IsInPlaceStorageWriteReceiver(
+                            BoundDereferenceExpression(conditional.WhenFalse.Syntax, conditional.WhenFalse)
+                        )
+                    }
                     case dereference is BoundDereferenceExpression when IsNativeSliceElementOperand(
                         dereference.Operand
-                    ) {
+                    ) ||
+                        TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type) ||
+                        dereference
+                        .Operand
+                        .Type is ByRefTypeSymbol {
                         return true
+                    }
+                    case block is BoundBlockExpression {
+                        receiver = block.Expression
+                        continue
+                    }
+                    case conditional is BoundConditionalExpression {
+                        return IsInPlaceStorageWriteReceiver(conditional.WhenTrue) &&
+                            IsInPlaceStorageWriteReceiver(conditional.WhenFalse)
                     }
                     case tuple is BoundTupleElementAccessExpression {
                         receiver = tuple.Receiver

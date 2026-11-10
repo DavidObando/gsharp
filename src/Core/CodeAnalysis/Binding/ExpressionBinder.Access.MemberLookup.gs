@@ -6186,15 +6186,6 @@ internal partial class ExpressionBinder {
             return false
         }
 
-        private func GetTupleFieldName(
-            memberName string,
-            tupleType TupleTypeSymbol
-        ) string -> if TryGetTupleElementIndex(memberName, tupleType, out var index) {
-            "Item" + (index + 1).ToString(CultureInfo.InvariantCulture)
-        } else {
-            memberName ?? string.Empty
-        }
-
         private func RequiresSymbolicTupleElementInvocation(tupleType TupleTypeSymbol, index int32) bool {
             if !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(tupleType.ElementTypes[index], out _) {
                 return false

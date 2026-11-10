@@ -456,7 +456,9 @@ internal partial class ExpressionBinder {
         assignedValueType TypeSymbol? = nil
     )(Read BoundExpression?, Write BoundExpression?) {
         let memberReceiver = GetNullCoalescingReceiver(boundRead)
-        if memberReceiver != nil && !ReceiverTypeIsReference(memberReceiver.Type) {
+        if memberReceiver != nil &&
+            !ReceiverTypeIsReference(memberReceiver.Type) &&
+            !IsWritableStructFieldReceiver(memberReceiver) {
             if ReceiverBlocksValueTypeMemberWrite(memberReceiver) || RefCapabilities.IsReadOnlyReference(
                 memberReceiver
             ) {
@@ -466,9 +468,7 @@ internal partial class ExpressionBinder {
                 )
                 return (nil, nil)
             }
-            if !IsWritableStructFieldReceiver(memberReceiver) && !RefCapabilities.IsNativeRefReturningCall(
-                memberReceiver
-            ) {
+            if !RefCapabilities.IsNativeRefReturningCall(memberReceiver) {
                 Diagnostics.ReportFieldAssignmentThroughStructTemporary(
                     syntax.OperatorToken.Location,
                     GetNullCoalescingTargetMemberName(boundRead, syntax.Target),
@@ -497,6 +497,28 @@ internal partial class ExpressionBinder {
                     }
                     let write = BoundAssignmentExpression(writeAnchor, varExpr.Variable, boundRhs, assignedValueType)
                     return (boundRead, write)
+                }
+            }
+            case tupleAccess is BoundTupleElementAccessExpression {
+                {
+                    let receiver = CaptureStorageReceiver(
+                        captureAnchor,
+                        tupleAccess.Receiver,
+                        preStatements,
+                        forceCapture: SnapshotsReference(tupleAccess.Receiver)
+                    )
+                    let read = BoundTupleElementAccessExpression(
+                        readAnchor,
+                        receiver,
+                        tupleAccess.TupleType,
+                        tupleAccess.Index
+                    )
+                    let write = BoundIndirectAssignmentExpression(
+                        writeAnchor,
+                        BoundAddressOfExpression(writeAnchor, read, unmanaged: false),
+                        boundRhs
+                    )
+                    return (read, write)
                 }
             }
             case fieldAccess is BoundFieldAccessExpression {
@@ -1449,6 +1471,7 @@ internal partial class ExpressionBinder {
             case field is BoundFieldAccessExpression: field.Receiver
             case property is BoundPropertyAccessExpression: property.Receiver
             case imported is BoundClrPropertyAccessExpression: imported.Receiver
+            case tuple is BoundTupleElementAccessExpression: tuple.Receiver
             case index is BoundClrIndexExpression: index.Target
             case userCall is BoundUserInstanceCallExpression when FindIndexerByGetter(
                 userCall.Receiver.Type,
@@ -1698,6 +1721,13 @@ internal partial class ExpressionBinder {
             case field is BoundFieldAccessExpression: field.Field.Name
             case property is BoundPropertyAccessExpression: property.Property.Name
             case clr is BoundClrPropertyAccessExpression: clr.Member.Name
+            case tuple is BoundTupleElementAccessExpression: if targetSyntax is AccessorExpressionSyntax{
+                RightPart: NameExpressionSyntax name
+            } {
+                name.IdentifierToken.ValueText
+            } else {
+                "Item" + (tuple.Index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            }
             case index is BoundClrIndexExpression: index.Indexer.Name
             case userCall is BoundUserInstanceCallExpression when FindIndexerByGetter(
                 userCall.Receiver.Type,

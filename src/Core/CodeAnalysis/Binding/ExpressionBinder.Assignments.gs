@@ -562,6 +562,14 @@ internal partial class ExpressionBinder {
     }
 
     private func IsWritableStructFieldReceiver(receiver BoundExpression) bool {
+        if receiver is BoundBlockExpression block {
+            return IsWritableStructFieldReceiver(block.Expression)
+        }
+        if receiver is BoundConditionalExpression conditional {
+            return IsLvalue(conditional) &&
+                IsWritableStructFieldReceiver(conditional.WhenTrue) &&
+                IsWritableStructFieldReceiver(conditional.WhenFalse)
+        }
         if receiver is BoundTupleElementAccessExpression tuple {
             return IsWritableStructFieldReceiver(tuple.Receiver)
         }
@@ -1209,6 +1217,23 @@ internal partial class ExpressionBinder {
             NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)
         )
         let assignmentReceiverType = assignmentReceiver.Type
+        if assignmentReceiverType is TupleTypeSymbol tupleType {
+            let readOnlyReportName = if variable.IsReadOnly && !ReceiverVariableIsThis(variable) {
+                receiverName
+            } else {
+                syntax.FieldIdentifier.ValueText
+            }
+            return BindTupleElementAssignment(
+                syntax,
+                assignmentReceiver,
+                tupleType,
+                syntax.FieldIdentifier.ValueText,
+                syntax.FieldIdentifier.Location,
+                syntax.EqualsToken.Location,
+                syntax.Value,
+                readOnlyReportName
+            )
+        }
         // Stream B: instance-CLR receiver → property/field write via reflection.
         if !(assignmentReceiverType is StructSymbol) &&
             !(assignmentReceiverType is NullableTypeSymbol) &&
@@ -3129,6 +3154,160 @@ internal partial class ExpressionBinder {
         )
     )
 
+    internal func BindTupleElementAssignment(
+        syntax ExpressionSyntax,
+        receiver BoundExpression,
+        tupleType TupleTypeSymbol,
+        memberName string,
+        memberLocation TextLocation,
+        equalsLocation TextLocation,
+        valueSyntax ExpressionSyntax,
+        readOnlyReportName string? = nil
+    ) BoundExpression {
+        if !TryGetTupleElementIndex(memberName, tupleType, out var index) {
+            Diagnostics.ReportUnableToFindMember(memberLocation, memberName)
+            let _ = BindExpression(valueSyntax)
+            return BoundErrorExpression(nil)
+        }
+        let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
+        let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
+            receiver
+        } else {
+            conversions.BindConversion(memberLocation, receiver, resolvedTuple)
+        }
+        let elementType = resolvedTuple.ElementTypes[index]
+        let boundValue = BindAssignmentRhs(valueSyntax, elementType)
+        let convertedValue = conversions.BindConversion(valueSyntax.Location, boundValue, elementType)
+        if SubmissionBinding.ReportGlobalMemberWriteBlocked(this, resolvedReceiver, memberName, equalsLocation) {
+            return BoundErrorExpression(syntax)
+        }
+        if !IsWritableStructFieldReceiver(resolvedReceiver) {
+            if ReceiverBlocksValueTypeMemberWrite(resolvedReceiver) {
+                Diagnostics.ReportCannotAssign(equalsLocation, readOnlyReportName ?? memberName)
+            } else {
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(equalsLocation, memberName, resolvedTuple)
+            }
+            return BoundErrorExpression(syntax)
+        }
+        let tupleAccess = BoundTupleElementAccessExpression(nil, resolvedReceiver, resolvedTuple, index)
+        return BoundIndirectAssignmentExpression(
+            syntax,
+            BoundAddressOfExpression(nil, tupleAccess, unmanaged: false),
+            convertedValue
+        )
+    }
+
+    internal func BindTupleCompoundAssignment(
+        boundReceiver BoundExpression,
+        tupleType TupleTypeSymbol,
+        memberName string,
+        memberNameSyntax NameExpressionSyntax,
+        syntax EventSubscriptionExpressionSyntax,
+        baseOpSyntaxKind SyntaxKind
+    ) BoundExpression {
+        if TrySaveNativeElementReceiver(boundReceiver, out var savedReceiver, out var prefix) {
+            let savedAssignment = BindTupleCompoundAssignment(
+                savedReceiver,
+                tupleType,
+                memberName,
+                memberNameSyntax,
+                syntax,
+                baseOpSyntaxKind
+            )
+            return BoundBlockExpression(syntax, prefix, savedAssignment)
+        }
+        if TrySavePostfixReceiver(syntax, boundReceiver, out savedReceiver, out prefix) {
+            let savedAssignment = BindTupleCompoundAssignment(
+                savedReceiver,
+                tupleType,
+                memberName,
+                memberNameSyntax,
+                syntax,
+                baseOpSyntaxKind
+            )
+            return BoundBlockExpression(syntax, prefix, savedAssignment)
+        }
+        if !TryGetTupleElementIndex(memberName, tupleType, out var index) {
+            Diagnostics.ReportUnableToFindMember(memberNameSyntax.Location, memberName)
+            let _ = BindExpression(syntax.Value)
+            return BoundErrorExpression(nil)
+        }
+        let resolvedTuple = cast[TupleTypeSymbol](TupleTypeSymbol.ResolveNilElements(tupleType))
+        let resolvedReceiver = if object.ReferenceEquals(resolvedTuple, tupleType) {
+            boundReceiver
+        } else {
+            conversions.BindConversion(memberNameSyntax.Location, boundReceiver, resolvedTuple)
+        }
+        if SubmissionBinding.ReportGlobalMemberWriteBlocked(
+            this,
+            resolvedReceiver,
+            memberName,
+            syntax.OperatorToken.Location
+        ) {
+            return BoundErrorExpression(syntax)
+        }
+        if !IsWritableStructFieldReceiver(resolvedReceiver) {
+            if ReceiverBlocksValueTypeMemberWrite(resolvedReceiver) {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName)
+            } else {
+                Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                    syntax.OperatorToken.Location,
+                    memberName,
+                    resolvedTuple
+                )
+            }
+            let _ = BindExpression(syntax.Value)
+            return BoundErrorExpression(syntax)
+        }
+        let elementType = resolvedTuple.ElementTypes[index]
+        let compoundTarget BoundExpression = BoundTupleElementAccessExpression(
+            nil,
+            resolvedReceiver,
+            resolvedTuple,
+            index
+        )
+        ApplySubExpressionNarrowingEffects(memberNameSyntax, compoundTarget)
+        let boundRhs = BindExpression(syntax.Value)
+        var leftRead = compoundTarget
+        let previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            &leftRead,
+            out var previousDeclaration
+        )
+        let userCompound BoundExpression? = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            compoundTarget,
+            boundRhs,
+            syntax.Value.Location
+        )
+        if userCompound != nil {
+            return FinishUserCompoundIncrement(syntax, compoundTarget, userCompound, previousDeclaration, previousValue)
+        }
+        let binary BoundExpression? = TryBindCompoundBinaryOperation(
+            baseOpSyntaxKind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location
+        )
+        if binary == nil {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                elementType,
+                boundRhs.Type
+            )
+            return BoundErrorExpression(nil)
+        }
+        let converted = conversions.BindConversion(syntax.Value.Location, binary, elementType)
+        let assignment = BoundIndirectAssignmentExpression(
+            syntax,
+            BoundAddressOfExpression(nil, compoundTarget, unmanaged: false),
+            converted
+        )
+        return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment)
+    }
+
     /// Issue #648 (generalized by issue #2154): compound assignment fallback
     /// for chained CLR member access (e.g. `obj.Prop += 1`, `obj.Prop *=
     /// 2` where Prop is a property/field on a CLR type).
@@ -4425,11 +4604,18 @@ internal partial class ExpressionBinder {
         receiver = PlatformCoercion.InsertCheck(receiver, syntax.Receiver.Location, "a member assignment receiver")
         ApplySubExpressionNarrowingEffects(syntax.Receiver, receiver)
         let receiverType = receiver.Type
-        let fieldName = if receiverType is TupleTypeSymbol tupleType {
-            GetTupleFieldName(syntax.FieldIdentifier.ValueText, tupleType)
-        } else {
-            syntax.FieldIdentifier.ValueText
+        if receiverType is TupleTypeSymbol tupleType {
+            return BindTupleElementAssignment(
+                syntax,
+                receiver,
+                tupleType,
+                syntax.FieldIdentifier.ValueText,
+                syntax.FieldIdentifier.Location,
+                syntax.EqualsToken.Location,
+                syntax.Value
+            )
         }
+        let fieldName = syntax.FieldIdentifier.ValueText
         var value BoundExpression? = nil
         let BindValue = func (targetType TypeSymbol) BoundExpression {
             return (
