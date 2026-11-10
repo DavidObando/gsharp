@@ -944,11 +944,57 @@ public static class Obj {
     }
 
     @Theory
+    @InlineData("explicit-leaf")
+    @InlineData("inferred-leaf")
+    @InlineData("whole-tuple")
+    func Issue5880_SharedGenericTupleRefArguments_SynchronizePerInvocation(shape string) {
+        let method = if shape == "whole-tuple" {
+            "private static void Keep<T>(ref T a, ref T b) { }"
+        } else {
+            "private static void Keep<T>(ref (T, int) a, ref (T, int) b) { }"
+        }
+        let taintedCall = if shape == "explicit-leaf" {
+            "Keep<string>(ref a, ref b);"
+        } else {
+            "Keep(ref a, ref b);"
+        }
+        let cleanCall = if shape == "explicit-leaf" {
+            "Keep<string>(ref cleanA, ref cleanB);"
+        } else {
+            "Keep(ref cleanA, ref cleanB);"
+        }
+        let source = `public static class Obj {
+    ` + method + `
+    public static string Run() {
+        (string, int) a = ("x", 1);
+        (string, int) b = (null!, 0);
+        ` + taintedCall + `
+        (string, int) cleanA = ("keep", 2);
+        (string, int) cleanB = ("stay", 3);
+        ` + cleanCall + `
+        return (a.Item1 ?? "null") + ":" + (b.Item1 ?? "null") + ":" + cleanA.Item1 + ":" + cleanB.Item1;
+    }
+}`
+        let printed = Translate(source)
+        Assert.DoesNotContain("(T?, int32)", printed)
+        Assert.Contains("var a (string?, int32)", printed)
+        Assert.Contains("var cleanA = (\"keep\", 2)", printed)
+        if shape == "explicit-leaf" {
+            Assert.Contains("Keep[string?](&a, &b)", printed)
+            Assert.Contains("Keep[string](&cleanA, &cleanB)", printed)
+        }
+        AssertParity(source, printed, "x:null:keep:stay")
+    }
+
+    @Theory
     @InlineData("tuple-parameter")
     @InlineData("explicit-call")
     @InlineData("whole-generic")
+    @InlineData("whole-notnull")
     @InlineData("projected-return")
     @InlineData("conditional-return")
+    @InlineData("chained-return")
+    @InlineData("extension-parameter")
     func Issue5880_GenericRefReturnTupleStorage_PreservesCSharpOutput(shape string) {
         let source = switch shape {
             case "explicit-call": `public static class Obj {
@@ -964,6 +1010,19 @@ public static class Obj {
 }`
             case "whole-generic": `public static class Obj {
     private static ref T Borrow<T>(ref T value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "whole-notnull": `public static class Obj {
+#nullable enable
+    private static ref T Borrow<T>(ref T value) where T : notnull => ref value;
+#nullable disable
     public static string Run() {
         (string, int) row = ("x", 1);
         ref var alias = ref Borrow(ref row);
@@ -998,6 +1057,30 @@ public static class Obj {
         (string, int) cleanRight = ("stay", 2);
         ref var cleanAlias = ref Borrow(false, ref cleanLeft, ref cleanRight);
         return (left.Item1 ?? "null") + ":" + (right.Item1 ?? "null") + ":" + cleanAlias.Item1;
+    }
+}`
+            case "chained-return": `public static class Obj {
+    private static ref (T, int) Borrow<T>(ref (T, int) value) => ref value;
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref Borrow(ref Borrow(ref row));
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref Borrow(ref Borrow(ref clean));
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
+    }
+}`
+            case "extension-parameter": `public static class Extensions {
+    public static ref (T, int) Borrow<T>(this int tag, ref (T, int) value) => ref value;
+}
+public static class Obj {
+    public static string Run() {
+        (string, int) row = ("x", 1);
+        ref var alias = ref 1.Borrow(ref row);
+        alias = (null, 1);
+        (string, int) clean = ("keep", 2);
+        ref var cleanAlias = ref 2.Borrow(ref clean);
+        return (row.Item1 ?? "null") + ":" + cleanAlias.Item1 + ":" + clean.Item2;
     }
 }`
             default: `public static class Obj {
