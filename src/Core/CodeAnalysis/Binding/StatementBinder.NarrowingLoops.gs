@@ -774,14 +774,22 @@ internal partial class StatementBinder {
     private func ResolveReceiverPath(
         path RegionReceiverPath,
         effects RegionEffects,
-        keepNullableValueAtEnd bool = false
+        keepNullableValueAtEnd bool = false,
+        keepReferenceNullabilityAtEnd bool = false,
+        forStorageAtEnd bool = false
     ) List[ReceiverType]? {
-        let saved = keepNullableValueTypes
+        let savedValue = keepNullableValueTypes
+        let savedReference = keepReferenceNullability
+        let savedStorage = forStorageRoot
         try {
             keepNullableValueTypes = keepNullableValueAtEnd || path.Steps.Length > 0
-            return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd)
+            keepReferenceNullability = keepReferenceNullabilityAtEnd && path.Steps.Length == 0
+            forStorageRoot = forStorageAtEnd && path.Steps.Length == 0
+            return ResolveReceiverPathCore(path, effects, keepNullableValueAtEnd, keepReferenceNullabilityAtEnd)
         } finally {
-            keepNullableValueTypes = saved
+            keepNullableValueTypes = savedValue
+            keepReferenceNullability = savedReference
+            forStorageRoot = savedStorage
         }
     }
 
@@ -789,10 +797,17 @@ internal partial class StatementBinder {
     // the end of a path.
     private var keepNullableValueTypes bool = false
 
+    // Whether (cref:AddSymbolType) keeps reference nullability at the end of an overload-resolution argument path.
+    private var keepReferenceNullability bool = false
+
+    // Whether (cref:AddRootTypes) resolves a root variable's declared storage type without read narrowings.
+    private var forStorageRoot bool = false
+
     private func ResolveReceiverPathCore(
         path RegionReceiverPath,
         effects RegionEffects,
-        keepNullableValueAtEnd bool
+        keepNullableValueAtEnd bool,
+        keepReferenceNullabilityAtEnd bool
     ) List[ReceiverType]? {
         var types = List[ReceiverType]()
         if path.RootType != nil {
@@ -807,7 +822,8 @@ internal partial class StatementBinder {
             }
             types.Add(
                 ReceiverType(
-                    if nullable != nil && NullableLifting.IsAnyValueTypeNullable(nullable) {
+                    if nullable != nil &&
+                        (keepReferenceNullability || NullableLifting.IsAnyValueTypeNullable(nullable)) {
                         nullable
                     } else {
                         declared
@@ -829,7 +845,10 @@ internal partial class StatementBinder {
         }
         for var stepIndex = 0; stepIndex < path.Steps.Length; stepIndex++ {
             let step = path.Steps[stepIndex]
-            keepNullableValueTypes = keepNullableValueAtEnd || stepIndex < path.Steps.Length - 1
+            let isLastStep = stepIndex == path.Steps.Length - 1
+            keepNullableValueTypes = keepNullableValueAtEnd || !isLastStep
+            keepReferenceNullability = keepReferenceNullabilityAtEnd && isLastStep
+            forStorageRoot = false
             let next = List[ReceiverType]()
             for type in types {
                 let outcome = AddStepTypes(type, step, next)
@@ -935,13 +954,20 @@ internal partial class StatementBinder {
         }
         let symbol = $scope.TryLookupSymbol(root)
         if symbol is VariableSymbol variable {
+            if forStorageRoot {
+                return AddSymbolType(variable.Type, types)
+            }
             let narrowed = binderCtx.NarrowedVariables.Query(AccessPath.ForVariable(variable))
             // A narrowing that survives the region stands for the value, and the declared type loses its `?`. One that
             // the region can remove (a write, or a writer that the walker does not see) leaves the declared type.
+            let survives = narrowed != nil && NarrowingSurvivesRegion(variable, effects)
             let keep = keepNullableValueTypes
-            keepNullableValueTypes = keep && (narrowed == nil || !NarrowingSurvivesRegion(variable, effects))
+            let keepReference = keepReferenceNullability
+            keepNullableValueTypes = keep && !survives
+            keepReferenceNullability = keepReference && !survives
             let declaredAdded = AddSymbolType(variable.Type, types)
             keepNullableValueTypes = keep
+            keepReferenceNullability = keepReference
             if !declaredAdded {
                 return false
             }
@@ -967,7 +993,7 @@ internal partial class StatementBinder {
             }
             found = true
         }
-        if ResolveTypeName(root) is {} named {
+        if !forStorageRoot && ResolveTypeName(root) is {} named {
             types.Add(ReceiverType(named, nil))
             found = true
         }
@@ -986,7 +1012,20 @@ internal partial class StatementBinder {
     // Adds a type symbol without its nullability. A type parameter that a member returns is substituted by the
     // binder, which the walker does not do, so it does not resolve.
     private func AddSymbolType(type TypeSymbol?, types List[ReceiverType]) bool {
-        let stripped = if keepNullableValueTypes {
+        let stripped = if keepReferenceNullability {
+            let unref = if type is ByRefTypeSymbol byRef {
+                byRef.PointeeType
+            } else {
+                type
+            }
+            if !keepNullableValueTypes && unref is NullableTypeSymbol nullable {
+                nullable.UnderlyingType
+            } else if !keepNullableValueTypes && unref is PlatformTypeSymbol platform {
+                platform.UnderlyingType
+            } else {
+                unref
+            }
+        } else if keepNullableValueTypes {
             StripReferenceNullability(type)
         } else {
             StripAllNullability(type)
@@ -1784,9 +1823,11 @@ internal partial class StatementBinder {
         if !TryBuildCallArgumentInfo(
             call.Arguments,
             call.ArgumentForms,
+            call.Syntax,
             effects,
             operatorResultsKnown,
             out var argumentTypes,
+            out var overloadArgumentTypes,
             out var kinds
         ) {
             return true
@@ -1794,10 +1835,19 @@ internal partial class StatementBinder {
         // Issue #5662: when every argument has a resolved type, `out var` or `nil`, use the binder's own overload
         // resolution (OverloadResolver and ClrOverloadResolution) to select the candidate and substitute its type
         // arguments on each receiver alternative.
-        if name != RegionEffectScanner.IndexMemberName && CanResolveOverloadArguments(argumentTypes, kinds) {
-            return ResolvedCallArgumentsRunUserConversion(call, name, effects, argumentTypes, kinds)
+        if name != RegionEffectScanner.IndexMemberName &&
+            CanResolveOverloadArguments(overloadArgumentTypes, kinds) &&
+            TryResolveCallArgumentsRunUserConversion(
+            call,
+            name,
+            effects,
+            overloadArgumentTypes,
+            kinds,
+            out var runsConversion
+        ) {
+            return runsConversion
         }
-        // Fallback for index accesses and calls with untyped operator or function-literal arguments.
+        // Fallback for index accesses and calls with unresolved, untyped operator or function-literal arguments.
         guard let candidates = CandidateParameterLists(call, name, effects, argumentTypes.Count) else {
             return true
         }
@@ -1817,31 +1867,30 @@ internal partial class StatementBinder {
     private func TryBuildCallArgumentInfo(
         arguments List[RegionReceiverPath?],
         argumentForms List[RegionArgumentForm],
+        callSyntax CallExpressionSyntax?,
         effects RegionEffects,
         operatorResultsKnown bool,
         out argumentTypes List[List[TypeSymbol]?],
+        out overloadArgumentTypes List[List[TypeSymbol]?],
         out kinds List[int32]
     ) bool {
         argumentTypes = List[List[TypeSymbol]?]()
+        overloadArgumentTypes = List[List[TypeSymbol]?]()
         kinds = List[int32]()
         for var index = 0; index < arguments.Count; index++ {
             let form = argumentForms[index]
             if form == RegionArgumentForm.Named {
                 return false
             }
+            let argSyntax = if callSyntax != nil && index < callSyntax.Arguments.Count {
+                callSyntax.Arguments[index]
+            } else {
+                default(ExpressionSyntax?)
+            }
             if form == RegionArgumentForm.ByReference || form == RegionArgumentForm.ReadOnlyReference {
-                if arguments[index] is not{} path ||
-                    path
-                    .RootType
-                    ?.HasTypeArguments == true &&
-                    path
-                    .Steps
-                    .Length == 0 ||
-                    ConversionTypes(path, effects) is not{} types ||
-                    types.Count == 0 {
-                    return false
-                }
-                argumentTypes.Add(types)
+                let storageTypes = StorageTypes(arguments[index], argSyntax, effects)
+                argumentTypes.Add(storageTypes)
+                overloadArgumentTypes.Add(storageTypes)
                 kinds.Add(
                     if form == RegionArgumentForm.ReadOnlyReference {
                         ArgumentReadOnlyReference
@@ -1851,27 +1900,22 @@ internal partial class StatementBinder {
                 )
             } else if form == RegionArgumentForm.FunctionLiteral {
                 argumentTypes.Add(nil)
+                overloadArgumentTypes.Add(nil)
                 kinds.Add(ArgumentFunction)
             } else if form == RegionArgumentForm.InlineDeclaration {
                 if arguments[index] is {} path {
-                    if path
-                        .RootType
-                        ?.HasTypeArguments == true &&
-                        path
-                        .Steps
-                        .Length == 0 ||
-                        ConversionTypes(path, effects) is not{} types ||
-                        types.Count == 0 {
-                        return false
-                    }
-                    argumentTypes.Add(types)
+                    let storageTypes = StorageTypes(path, argSyntax, effects)
+                    argumentTypes.Add(storageTypes)
+                    overloadArgumentTypes.Add(storageTypes)
                     kinds.Add(ArgumentByReference)
                 } else {
                     argumentTypes.Add(nil)
+                    overloadArgumentTypes.Add(nil)
                     kinds.Add(ArgumentInlineDeclaration)
                 }
             } else if form == RegionArgumentForm.Range {
                 argumentTypes.Add(nil)
+                overloadArgumentTypes.Add(nil)
                 kinds.Add(ArgumentSkipped)
             } else if form == RegionArgumentForm.StringByForm {
                 if !operatorResultsKnown {
@@ -1880,15 +1924,18 @@ internal partial class StatementBinder {
                 let text = List[TypeSymbol]()
                 text.Add(TypeSymbol.String)
                 argumentTypes.Add(text)
+                overloadArgumentTypes.Add(text)
                 kinds.Add(ArgumentTyped)
             } else if form == RegionArgumentForm.Nil {
                 argumentTypes.Add(nil)
+                overloadArgumentTypes.Add(nil)
                 kinds.Add(ArgumentNil)
             } else if form == RegionArgumentForm.BuiltInByForm {
                 if !operatorResultsKnown {
                     return false
                 }
                 argumentTypes.Add(nil)
+                overloadArgumentTypes.Add(nil)
                 kinds.Add(ArgumentBuiltIn)
             } else {
                 if arguments[index] is not{} path || path.RootType?.HasTypeArguments == true && path.Steps.Length == 0 {
@@ -1898,6 +1945,7 @@ internal partial class StatementBinder {
                     return false
                 }
                 argumentTypes.Add(types)
+                overloadArgumentTypes.Add(OverloadValueTypes(path, effects))
                 kinds.Add(ArgumentTyped)
             }
         }
@@ -1961,11 +2009,15 @@ internal partial class StatementBinder {
         return combinations
     }
 
-    private func BuildSyntheticBoundArguments(
+    private func TryBuildSyntheticBoundArguments(
         combination List[TypeSymbol?],
         kinds List[int32],
-        callSyntax CallExpressionSyntax?
-    ) ImmutableArray[BoundExpression] {
+        callArguments List[RegionReceiverPath?],
+        callSyntax CallExpressionSyntax?,
+        effects RegionEffects,
+        out boundArguments ImmutableArray[BoundExpression]
+    ) bool {
+        boundArguments = default(ImmutableArray[BoundExpression])
         let builder = ImmutableArray.CreateBuilder[BoundExpression](combination.Count)
         for var i = 0; i < combination.Count; i++ {
             let argSyntax = if callSyntax != nil && i < callSyntax.Arguments.Count {
@@ -1996,12 +2048,155 @@ internal partial class StatementBinder {
                 }
                 if unwrapped is LiteralExpressionSyntax literal && literal.Value != nil {
                     builder.Add(BoundLiteralExpression(literal, literal.Value))
+                } else if ExpressionBinder.IsIntegerType(argType) {
+                    if !TryBuildIntegerBoundArgument(
+                        argSyntax,
+                        unwrapped,
+                        argType,
+                        if i < callArguments.Count {
+                            callArguments[i]
+                        } else {
+                            default(RegionReceiverPath?)
+                        },
+                        effects,
+                        out var intArg
+                    ) {
+                        return false
+                    }
+                    builder.Add(intArg!!)
                 } else {
                     builder.Add(BoundDefaultExpression(argSyntax, argType))
                 }
             }
         }
-        return builder.MoveToImmutable()
+        boundArguments = builder.MoveToImmutable()
+        return true
+    }
+
+    private func HasEnclosingDeclaration(node SyntaxNode?, name string, constOnly bool) bool {
+        for var current SyntaxNode? = node; current != nil; current = current?.Parent {
+            if current is BlockStatementSyntax block {
+                for statement in block.Statements {
+                    if statement is VariableDeclarationSyntax declaration &&
+                        declaration
+                        .Identifier
+                        .ValueText == name &&
+                        (!constOnly || declaration.Keyword?.Kind == SyntaxKind.ConstKeyword) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private func TryBuildIntegerBoundArgument(
+        argSyntax ExpressionSyntax?,
+        unwrapped ExpressionSyntax?,
+        argType TypeSymbol,
+        argPath RegionReceiverPath?,
+        effects RegionEffects,
+        out boundArg BoundExpression?
+    ) bool {
+        boundArg = nil
+        switch unwrapped {
+            case DefaultExpressionSyntax {
+                boundArg = BoundDefaultExpression(argSyntax, argType)
+                return true
+            }
+            case nameExpr is NameExpressionSyntax {
+                let ident = nameExpr.IdentifierToken.ValueText
+                if HasEnclosingDeclaration(argSyntax, ident, constOnly: true) {
+                    return false
+                }
+                if argPath == nil ||
+                    argPath
+                    .Steps
+                    .Length > 0 ||
+                    argPath.RootIsCall ||
+                    argPath.RootType != nil ||
+                    argPath.RootName != ident ||
+                    HasEnclosingDeclaration(argSyntax, ident, constOnly: false) {
+                    boundArg = BoundDefaultExpression(argSyntax, argType)
+                    return true
+                }
+                switch $scope.TryLookupSymbol(ident) {
+                    case global is GlobalVariableSymbol when global.IsConst {
+                        if global.ConstantValue == nil {
+                            return false
+                        }
+                        boundArg = BoundVariableExpression(argSyntax, global)
+                        return true
+                    }
+                    case localConst is LocalVariableSymbol when localConst.IsConst {
+                        if localConst.ConstantValue == nil {
+                            return false
+                        }
+                        boundArg = BoundVariableExpression(argSyntax, localConst)
+                        return true
+                    }
+                    case staticField is ImplicitStaticFieldVariableSymbol when staticField.Field.IsConst {
+                        if !staticField.Field.HasConstantValue || staticField.Field.ConstantValue == nil {
+                            return false
+                        }
+                        boundArg = BoundFieldAccessExpression(argSyntax, nil, staticField.StructType, staticField.Field)
+                        return true
+                    }
+                    case VariableSymbol {
+                        boundArg = BoundDefaultExpression(argSyntax, argType)
+                        return true
+                    }
+                    default {
+                        return false
+                    }
+                }
+            }
+            case IndexExpressionSyntax {
+                boundArg = BoundDefaultExpression(argSyntax, argType)
+                return true
+            }
+            case callExpr is CallExpressionSyntax {
+                if argPath?.RootType != nil || callExpr.ConversionTypeClause != nil {
+                    return false
+                }
+                boundArg = BoundDefaultExpression(argSyntax, argType)
+                return true
+            }
+            default {
+                guard let path = argPath else {
+                    return false
+                }
+                if path
+                    .Steps
+                    .Length == 1 &&
+                    path
+                    .Steps[0]
+                    .Kind == RegionReceiverStepKind.Member &&
+                    !path.RootIsCall &&
+                    path.RootType == nil &&
+                    path.RootName is {} rootName {
+                    if !HasEnclosingDeclaration(argSyntax, rootName, constOnly: false) &&
+                        ResolveTypeName(rootName) is StructSymbol owner {
+                        if TypeMemberModel.TryGetStaticFieldIncludingInherited(
+                            owner,
+                            path.Steps[0].Name ?? "",
+                            out var field,
+                            out _
+                        ) &&
+                            field is {} constField &&
+                            constField
+                            .IsConst {
+                            if !constField.HasConstantValue || constField.ConstantValue == nil {
+                                return false
+                            }
+                            boundArg = BoundFieldAccessExpression(argSyntax, nil, owner, constField)
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+        }
     }
 
     private func TryResolveCallExplicitTypeArguments(
@@ -2059,22 +2254,32 @@ internal partial class StatementBinder {
         return true
     }
 
-    private func ResolvedCallArgumentsRunUserConversion(
+    private func TryResolveCallArgumentsRunUserConversion(
         call RegionCall,
         name string,
         effects RegionEffects,
         argumentTypes List[List[TypeSymbol]?],
-        kinds List[int32]
+        kinds List[int32],
+        out runsConversion bool
     ) bool {
+        runsConversion = true
         guard let combinations = BuildArgumentTypeCombinations(argumentTypes, kinds) else {
-            return true
+            return false
         }
         if call.Kind == RegionCallKind.NamedInvocation {
             let functions = $scope.TryLookupFunctions(name)
             if functions.IsDefaultOrEmpty {
-                return true
+                return false
             }
-            return SourceCallRunsUserConversion(functions, nil, call, combinations, kinds)
+            return TryResolveSourceCallRunsUserConversion(
+                functions,
+                nil,
+                call,
+                effects,
+                combinations,
+                kinds,
+                out runsConversion
+            )
         }
         var receivers List[ReceiverType]? = nil
         if call.ReceiverName is {} receiverName {
@@ -2086,40 +2291,64 @@ internal partial class StatementBinder {
             receivers = ResolveReceiverPath(path, effects)
         }
         guard let resolved = receivers else {
-            return true
+            return false
         }
         let staticAccess = ReceiverNamesType(call)
         var anyReceiverApplies = false
+        var allReceiversResolved = true
         for receiver in resolved {
-            if ReceiverCallRunsUserConversion(
+            if !TryResolveReceiverCallRunsUserConversion(
                 receiver,
                 name,
                 staticAccess,
                 call,
+                effects,
                 combinations,
                 kinds,
-                out var receiverApplies
+                out var receiverApplies,
+                out var receiverRunsConversion
             ) {
+                allReceiversResolved = false
+                continue
+            }
+            if receiverRunsConversion {
+                runsConversion = true
                 return true
             }
             anyReceiverApplies = anyReceiverApplies || receiverApplies
         }
-        return !anyReceiverApplies
+        if !allReceiversResolved || !anyReceiverApplies {
+            return false
+        }
+        runsConversion = false
+        return true
     }
 
-    private func SourceCallRunsUserConversion(
+    private func TryResolveSourceCallRunsUserConversion(
         methods ImmutableArray[FunctionSymbol],
         receiverType TypeSymbol?,
         call RegionCall,
+        effects RegionEffects,
         combinations List[List[TypeSymbol?]],
-        kinds List[int32]
+        kinds List[int32],
+        out runsConversion bool
     ) bool {
+        runsConversion = true
         if Overloads == nil || !TryResolveCallExplicitTypeArguments(call.Syntax, out var explicitTypeArguments) {
-            return true
+            return false
         }
+        var allResolved = true
         for combination in combinations {
-            let boundArgs = BuildSyntheticBoundArguments(combination, kinds, call.Syntax)
-            if !Overloads!!.TryResolveLoopCallParameters(
+            if !TryBuildSyntheticBoundArguments(
+                combination,
+                kinds,
+                call.Arguments,
+                call.Syntax,
+                effects,
+                out var boundArgs
+            ) ||
+                !Overloads!!
+                .TryResolveLoopCallParameters(
                 methods,
                 boundArgs,
                 call.Syntax,
@@ -2127,13 +2356,16 @@ internal partial class StatementBinder {
                 explicitTypeArguments,
                 out var parameters
             ) {
-                return true
+                allResolved = false
+                continue
             }
             if !ResolvedParametersPassWithoutCode(parameters, combination, kinds) {
+                runsConversion = true
                 return true
             }
         }
-        return false
+        runsConversion = false
+        return allResolved
     }
 
     private func ResolvedParametersPassWithoutCode(
@@ -2179,16 +2411,19 @@ internal partial class StatementBinder {
         return false
     }
 
-    private func ReceiverCallRunsUserConversion(
+    private func TryResolveReceiverCallRunsUserConversion(
         receiver ReceiverType,
         name string,
         staticAccess bool,
         call RegionCall,
+        effects RegionEffects,
         combinations List[List[TypeSymbol?]],
         kinds List[int32],
-        out receiverApplies bool
+        out receiverApplies bool,
+        out runsConversion bool
     ) bool {
         receiverApplies = false
+        runsConversion = false
         switch receiver.Symbol {
             case declared is StructSymbol {
                 let query = if staticAccess {
@@ -2199,16 +2434,23 @@ internal partial class StatementBinder {
                 let methods = TypeMemberModel.GetMethods(declared, name, query)
                 if !methods.IsDefaultOrEmpty {
                     receiverApplies = true
-                    return SourceCallRunsUserConversion(methods, declared, call, combinations, kinds)
+                    return TryResolveSourceCallRunsUserConversion(
+                        methods,
+                        declared,
+                        call,
+                        effects,
+                        combinations,
+                        kinds,
+                        out runsConversion
+                    )
                 }
                 if !staticAccess &&
                     (HasDefaultInterfaceMethod(declared, name) || HasExtensionFunction(declared, name)) {
-                    receiverApplies = true
-                    return true
+                    return false
                 }
                 let importedBase = declared.GetHierarchy().Last().ImportedBaseType
                 if staticAccess && importedBase == nil {
-                    return false
+                    return true
                 }
                 let baseClr = importedBase?.ClrType ??
                     (
@@ -2218,16 +2460,19 @@ internal partial class StatementBinder {
                         typeof(object)
                     }
                 )
-                return ClrReceiverCallRunsUserConversion(
+                return TryResolveClrReceiverCallRunsUserConversion(
                     baseClr,
                     importedBase,
                     name,
                     staticAccess,
                     call,
+                    effects,
                     combinations,
                     kinds,
                     out receiverApplies,
-                    ReceiverType(declared, nil)
+                    out runsConversion,
+                    ReceiverType(declared, nil),
+                    allowProtectedInherited: !staticAccess && Expressions?.GetFamilyAccessBase() != nil
                 )
             }
             case contract is InterfaceSymbol {
@@ -2235,8 +2480,7 @@ internal partial class StatementBinder {
                     level.EnsureMembersResolved()
                     for clrBase in level.BaseClrInterfaces {
                         if (MemberShape(clrBase, name) & MemberIsMethod) != 0 {
-                            receiverApplies = true
-                            return true
+                            return false
                         }
                     }
                 }
@@ -2248,101 +2492,154 @@ internal partial class StatementBinder {
                 let methods = TypeMemberModel.GetMethods(contract, name, query)
                 if !methods.IsDefaultOrEmpty {
                     receiverApplies = true
-                    return SourceCallRunsUserConversion(methods, contract, call, combinations, kinds)
+                    return TryResolveSourceCallRunsUserConversion(
+                        methods,
+                        contract,
+                        call,
+                        effects,
+                        combinations,
+                        kinds,
+                        out runsConversion
+                    )
                 }
                 if !staticAccess {
                     if ExtensionMayBind(receiver, name, call.Arguments.Count) {
-                        receiverApplies = true
-                        return true
+                        return false
                     }
-                    return ClrReceiverCallRunsUserConversion(
+                    return TryResolveClrReceiverCallRunsUserConversion(
                         typeof(object),
                         nil,
                         name,
                         staticAccess: false,
                         call,
+                        effects,
                         combinations,
                         kinds,
                         out receiverApplies,
-                        receiver
+                        out runsConversion,
+                        receiver,
+                        allowProtectedInherited: false
                     )
                 }
-                return false
+                return true
             }
             default {
                 let symbolic = receiver.Symbol
                 let clrType = receiver.Clr ?? symbolic?.ClrType
-                return ClrReceiverCallRunsUserConversion(
+                return TryResolveClrReceiverCallRunsUserConversion(
                     clrType,
                     symbolic,
                     name,
                     staticAccess,
                     call,
+                    effects,
                     combinations,
                     kinds,
                     out receiverApplies,
-                    receiver
+                    out runsConversion,
+                    receiver,
+                    allowProtectedInherited: false
                 )
             }
         }
     }
 
-    private func CollectClrCandidateMethods(reflected Type, name string, staticAccess bool) List[MethodInfo] {
-        let methods = List[MethodInfo]()
-        let searched = List[Type]()
-        searched.Add(reflected)
-        if reflected.IsInterface && !staticAccess {
-            searched.AddRange(reflected.GetInterfaces())
-            searched.Add(typeof(object))
+    private func CollectClrCandidateMethods(
+        reflected Type,
+        name string,
+        staticAccess bool,
+        allowProtectedInherited bool = false
+    ) List[MethodInfo] {
+        if staticAccess {
+            let imported = if Expressions != nil {
+                Expressions!!.WithFamilyAccess(
+                    ImportedClassSymbol(reflected, declaration: nil, references: $scope.References)
+                )
+            } else {
+                ImportedClassSymbol(reflected, declaration: nil, references: $scope.References)
+            }
+            return imported.GetVisibleStaticCandidateMethods(name)
         }
-        let flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
-        for searchedType in searched {
-            for member in searchedType.GetMember(name, flags) {
-                if member is MethodInfo method && method.IsStatic == staticAccess && !methods.Contains(method) {
-                    methods.Add(method)
+        let canAccessInternals(Type?) -> bool = (type Type?) -> type != nil &&
+            binderCtx
+            .References
+            .CanAccessInternalMembers(type.Assembly)
+        let methods = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+            reflected,
+            name,
+            includeInternal: canAccessInternals(reflected),
+            includeExplicitInterfaceMembers: false,
+            canAccessInternals: canAccessInternals
+        )
+            .ToList()
+        if reflected.IsInterface {
+            for objectMethod in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+                typeof(object),
+                name,
+                includeInternal: false,
+                includeExplicitInterfaceMembers: false
+            ) {
+                if !MemberLookup.HasSameSignature(methods, objectMethod) {
+                    methods.Add(objectMethod)
+                }
+            }
+        }
+        if allowProtectedInherited && Expressions != nil {
+            for protectedCandidate in Expressions!!.CollectBaseClrMethodCandidates(reflected, name) {
+                if !MemberLookup.HasSameSignature(methods, protectedCandidate) {
+                    methods.Add(protectedCandidate)
                 }
             }
         }
         return methods
     }
 
-    private func ClrReceiverCallRunsUserConversion(
+    private func TryResolveClrReceiverCallRunsUserConversion(
         clrType Type?,
         symbolic TypeSymbol?,
         name string,
         staticAccess bool,
         call RegionCall,
+        effects RegionEffects,
         combinations List[List[TypeSymbol?]],
         kinds List[int32],
         out receiverApplies bool,
-        extensionReceiver ReceiverType
+        out runsConversion bool,
+        extensionReceiver ReceiverType,
+        allowProtectedInherited bool
     ) bool {
         receiverApplies = false
+        runsConversion = false
         if clrType == nil || ReflectionType(clrType) is not{} reflected {
-            receiverApplies = true
-            return true
+            return false
         }
         try {
             if reflected.IsInterface {
                 for contract in reflected.GetInterfaces() {
                     if (ClrMemberShape(contract, name) & MemberIsMethod) != 0 {
-                        receiverApplies = true
-                        return true
+                        return false
                     }
                 }
             }
-            let methods = CollectClrCandidateMethods(reflected, name, staticAccess)
+            let methods = CollectClrCandidateMethods(reflected, name, staticAccess, allowProtectedInherited)
             if methods.Count == 0 {
                 if !staticAccess && ExtensionMayBind(extensionReceiver, name, call.Arguments.Count) {
-                    receiverApplies = true
-                    return true
+                    return false
                 }
-                return false
+                return true
             }
             receiverApplies = true
+            var allResolved = true
             for combination in combinations {
-                let boundArgs = BuildSyntheticBoundArguments(combination, kinds, call.Syntax)
-                if !TryResolveClrCandidate(
+                if !TryBuildSyntheticBoundArguments(
+                    combination,
+                    kinds,
+                    call.Arguments,
+                    call.Syntax,
+                    effects,
+                    out var boundArgs
+                ) ||
+                    !TryResolveClrCandidate(
                     methods,
                     symbolic,
                     call.Syntax,
@@ -2354,7 +2651,8 @@ internal partial class StatementBinder {
                     out var isExpanded,
                     out var symbolicMethodTypeArgs
                 ) {
-                    return true
+                    allResolved = false
+                    continue
                 }
                 if !ClrResolvedParametersPassWithoutCode(
                     symbolic,
@@ -2365,13 +2663,14 @@ internal partial class StatementBinder {
                     kinds,
                     call.Syntax
                 ) {
+                    runsConversion = true
                     return true
                 }
             }
-            return false
+            runsConversion = false
+            return allResolved
         } catch (ex NotSupportedException) {
-            receiverApplies = true
-            return true
+            return false
         }
     }
 
@@ -2444,6 +2743,7 @@ internal partial class StatementBinder {
             clrArgTypes,
             explicitTypeArgs,
             binderCtx.References.MapClrTypeToReferences,
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArgs),
             recoverTypeArgSymbols: recoverTypeArgSymbols,
             symbolicArgTypes: symbolicArgs,
             symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(
@@ -2645,8 +2945,10 @@ internal partial class StatementBinder {
         if !TryBuildCallArgumentInfo(
             step.Arguments,
             step.ArgumentForms,
+            step.CallSyntax,
             effects,
             operatorResultsKnown,
+            out _,
             out var argumentTypes,
             out var kinds
         ) ||
@@ -2670,7 +2972,8 @@ internal partial class StatementBinder {
         if clrType == nil || ReflectionType(clrType) is not{} reflected {
             return false
         }
-        let methods = CollectClrCandidateMethods(reflected, name, staticAccess: false)
+        let allowProtectedInherited = receiver.Symbol is StructSymbol && Expressions?.GetFamilyAccessBase() != nil
+        let methods = CollectClrCandidateMethods(reflected, name, staticAccess: false, allowProtectedInherited)
         if methods.Count == 0 {
             return false
         }
@@ -2678,8 +2981,15 @@ internal partial class StatementBinder {
             return false
         }
         for combination in combinations {
-            let boundArgs = BuildSyntheticBoundArguments(combination, kinds, step.CallSyntax)
-            if !TryResolveClrCandidate(
+            if !TryBuildSyntheticBoundArguments(
+                combination,
+                kinds,
+                step.Arguments,
+                step.CallSyntax,
+                effects,
+                out var boundArgs
+            ) ||
+                !TryResolveClrCandidate(
                 methods,
                 symbolic,
                 step.CallSyntax,
@@ -3032,31 +3342,29 @@ internal partial class StatementBinder {
                     }
                 }
             }
-            for member in reflected.GetMember(
-                name,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
-            ) {
-                if member is MethodInfo method && method.IsStatic == staticAccess {
-                    let methodParameters = method.GetParameters()
-                    let types = ClrParameterTypes(symbolic, method, methodParameters)
-                    lists.Add(types)
-                    // The CLR resolver also takes a candidate in expanded form, which converts each argument to the
-                    // element type at any arity, or with omitted optional parameters.
-                    if methodParameters.Length > 0 &&
-                        methodParameters[methodParameters.Length - 1]
-                        .GetCustomAttributesData().Any(
-                        (data CustomAttributeData) -> data
-                            .AttributeType
-                            .FullName == "System.ParamArrayAttribute" ||
-                            data
-                            .AttributeType
-                            .FullName == "System.Runtime.CompilerServices.ParamCollectionAttribute"
-                    ) {
-                        return false
-                    }
-                    if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) {
-                        otherArity.Add(types)
-                    }
+            let allowProtectedInherited = !staticAccess &&
+                receiver.Symbol is StructSymbol &&
+                Expressions?.GetFamilyAccessBase() != nil
+            for method in CollectClrCandidateMethods(reflected, name, staticAccess, allowProtectedInherited) {
+                let methodParameters = method.GetParameters()
+                let types = ClrParameterTypes(symbolic, method, methodParameters)
+                lists.Add(types)
+                // The CLR resolver also takes a candidate in expanded form, which converts each argument to the
+                // element type at any arity, or with omitted optional parameters.
+                if methodParameters.Length > 0 &&
+                    methodParameters[methodParameters.Length - 1]
+                    .GetCustomAttributesData().Any(
+                    (data CustomAttributeData) -> data
+                        .AttributeType
+                        .FullName == "System.ParamArrayAttribute" ||
+                        data
+                        .AttributeType
+                        .FullName == "System.Runtime.CompilerServices.ParamCollectionAttribute"
+                ) {
+                    return false
+                }
+                if methodParameters.Any((parameter ParameterInfo) -> parameter.IsOptional) {
+                    otherArity.Add(types)
                 }
             }
         } catch (ex NotSupportedException) {
@@ -3324,6 +3632,105 @@ internal partial class StatementBinder {
         input,
         valueIsNull
     )
+
+    private func StorageOperandNamesRoot(argSyntax ExpressionSyntax?, root string) bool {
+        if argSyntax == nil {
+            return true
+        }
+        var operand ExpressionSyntax? = argSyntax
+        while operand is ParenthesizedExpressionSyntax parenthesized {
+            operand = parenthesized.Expression
+        }
+        if operand is RefArgumentExpressionSyntax refArg {
+            operand = refArg.Expression
+        } else if operand is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} address {
+            operand = address.Operand
+        }
+        while operand is ParenthesizedExpressionSyntax parenthesized {
+            operand = parenthesized.Expression
+        }
+        return operand is NameExpressionSyntax name && name.IdentifierToken.ValueText == root
+    }
+
+    private func StorageTypes(path RegionReceiverPath?, argSyntax ExpressionSyntax?, effects RegionEffects) List[
+        TypeSymbol
+    ]? {
+        if path is not{} origin || origin.RootType?.HasTypeArguments == true && origin.Steps.Length == 0 {
+            return nil
+        }
+        if origin
+            .Steps
+            .Length == 0 &&
+            !origin.RootIsCall &&
+            origin.RootName is {} root &&
+            (HasEnclosingDeclaration(argSyntax, root, constOnly: false) || !StorageOperandNamesRoot(argSyntax, root)) {
+            return nil
+        }
+        if ResolveReceiverPath(
+            origin,
+            effects,
+            keepNullableValueAtEnd: true,
+            keepReferenceNullabilityAtEnd: true,
+            forStorageAtEnd: true
+        ) is not{} types {
+            return nil
+        }
+        let result = List[TypeSymbol]()
+        for type in types {
+            if type.Symbol is {} symbol {
+                if TypeSymbol.ContainsTypeParameter(symbol) || symbol.ClrType?.ContainsGenericParameters == true {
+                    return nil
+                }
+                result.Add(symbol)
+            } else if type.Clr is {} clr {
+                if origin.Steps.Length > 0 && !clr.IsValueType {
+                    return nil
+                }
+                result.Add(
+                    BuiltInType(clr.FullName) ?? TypeSymbol.FromClrTypeWithoutNullability(
+                        clr,
+                        NullabilityFreeReason.ResolvedTypeName
+                    )
+                )
+            }
+        }
+        return if result.Count == 0 {
+            default(List[TypeSymbol]?)
+        } else {
+            result
+        }
+    }
+
+    private func OverloadValueTypes(path RegionReceiverPath, effects RegionEffects) List[TypeSymbol]? {
+        if ResolveReceiverPath(
+            path,
+            effects,
+            keepNullableValueAtEnd: true,
+            keepReferenceNullabilityAtEnd: true
+        ) is not{} types {
+            return nil
+        }
+        let result = List[TypeSymbol]()
+        for type in types {
+            if type.Symbol is {} symbol {
+                result.Add(symbol)
+            } else if type.Clr is {} clr {
+                let resolved = BuiltInType(clr.FullName) ?? TypeSymbol.FromClrTypeWithoutNullability(
+                    clr,
+                    NullabilityFreeReason.ResolvedTypeName
+                )
+                result.Add(resolved)
+                if path.Steps.Length > 0 && !clr.IsValueType {
+                    result.Add(NullableTypeSymbol.Get(resolved))
+                }
+            }
+        }
+        return if result.Count == 0 {
+            default(List[TypeSymbol]?)
+        } else {
+            result
+        }
+    }
 
     // The types of a value at a conversion site. A nullable value type keeps its `?` (`DateTime?` and `DateTime`
     // take different conversions); reference nullability does not change one.

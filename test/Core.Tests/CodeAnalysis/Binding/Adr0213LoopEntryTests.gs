@@ -4048,6 +4048,66 @@ func Run(ref text string?, holder Holder) int32 {
     return n
 }
 func Main() { }`, "")
+            Add("narrowed-nullable-value-in-argument-keeps-storage-type (A3, #5662)", `package T
+import System
+func Read(in v int32, d DateTime) { }
+func Read(in v int32?, d DateTimeOffset) { }
+func Run(ref text string?, x0 int32?, dt DateTime) int32 {
+    var x int32? = x0
+    if text == nil || x == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n = n + x * 0 + 1
+        Read(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("nullable-reference-argument-selects-conversion-overload (A3, #5662)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit (value string?) Token { return Token{Raw: 1} }
+func Use(s string) { }
+func Use(t Token) { }
+func Run(ref text string?, maybe string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(maybe)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("named-constant-narrowing-selects-conversion-overload (A3, #5662)", `package T
+import System
+func Use(b uint8, d DateTimeOffset) { }
+func Use(n int64, o object) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    const k int32 = 1
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(k, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("address-of-and-typed-inline-out-keep-a-by-reference-fact (A3, #5662)", `package T
+import System
+func Bump(ref v int32) { v++ }
+func Fill(out arr []int32, v int32) { arr = []int32{v} }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        Bump(&n)
+        Fill(out var items []int32, n)
+    }
+    return n
+}
+func Main() { }`, "")
             return rows
         }
     }

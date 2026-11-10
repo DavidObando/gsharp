@@ -4136,7 +4136,7 @@ internal partial class ExpressionBinder {
             }
             return generalConditionalRef
         }
-        let operand = BindExpression(expression)
+        let operand = UnwrapTerminalLvalueStorage(BindExpression(expression))
         if operand is BoundErrorExpression {
             return operand
         }

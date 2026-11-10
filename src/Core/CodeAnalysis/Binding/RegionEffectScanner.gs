@@ -2586,26 +2586,7 @@ internal sealed class RegionEffectScanner {
         let arguments = List[RegionReceiverPath?]()
         let argumentForms = List[RegionArgumentForm]()
         for argument in call.Arguments {
-            var form = ArgumentForm(argument)
-            var path = if form == RegionArgumentForm.Path {
-                BuildPath(argument)
-            } else {
-                default(RegionReceiverPath?)
-            }
-            // A `ref` or `out` argument binds a parameter of its exact type; an `out var` takes the parameter's.
-            if argument is RefArgumentExpressionSyntax byReference {
-                if byReference.IsInlineDeclaration {
-                    form = RegionArgumentForm.InlineDeclaration
-                    if byReference.DeclaredType != nil {
-                        path = TypeOrigin(byReference.DeclaredType)
-                    }
-                } else if byReference.Expression != nil {
-                    path = BuildPath(byReference.Expression)
-                    if byReference.RefKindModifier.Text == "in" {
-                        form = RegionArgumentForm.ReadOnlyReference
-                    }
-                }
-            }
+            ClassifyCallArgument(argument, out var form, out var path)
             argumentForms.Add(form)
             arguments.Add(path)
             switch argument {
@@ -2874,6 +2855,39 @@ internal sealed class RegionEffectScanner {
         }
     }
 
+    private func ClassifyCallArgument(
+        argument ExpressionSyntax,
+        out form RegionArgumentForm,
+        out path RegionReceiverPath?
+    ) {
+        form = ArgumentForm(argument)
+        path = if form == RegionArgumentForm.Path {
+            BuildPath(argument)
+        } else {
+            default(RegionReceiverPath?)
+        }
+        var unwrapped = argument
+        while unwrapped is ParenthesizedExpressionSyntax parenthesized {
+            unwrapped = parenthesized.Expression
+        }
+        // A `ref`, `out` or `&` argument binds a parameter of its exact storage type; an `out var` takes the parameter's.
+        if unwrapped is RefArgumentExpressionSyntax byReference {
+            if byReference.IsInlineDeclaration {
+                form = RegionArgumentForm.InlineDeclaration
+                if byReference.DeclaredType != nil {
+                    path = TypeOrigin(byReference.DeclaredType)
+                }
+            } else if byReference.Expression != nil {
+                path = BuildPath(byReference.Expression)
+                if byReference.RefKindModifier.Text == "in" {
+                    form = RegionArgumentForm.ReadOnlyReference
+                }
+            }
+        } else if unwrapped is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.AmpersandToken}} address {
+            path = BuildPath(address.Operand)
+        }
+    }
+
     private func BuildStepCallArguments(
         call CallExpressionSyntax,
         out arguments List[RegionReceiverPath?],
@@ -2882,25 +2896,7 @@ internal sealed class RegionEffectScanner {
         arguments = List[RegionReceiverPath?]()
         argumentForms = List[RegionArgumentForm]()
         for argument in call.Arguments {
-            var form = ArgumentForm(argument)
-            var path = if form == RegionArgumentForm.Path {
-                BuildPath(argument)
-            } else {
-                default(RegionReceiverPath?)
-            }
-            if argument is RefArgumentExpressionSyntax byReference {
-                if byReference.IsInlineDeclaration {
-                    form = RegionArgumentForm.InlineDeclaration
-                    if byReference.DeclaredType != nil {
-                        path = TypeOrigin(byReference.DeclaredType)
-                    }
-                } else if byReference.Expression != nil {
-                    path = BuildPath(byReference.Expression)
-                    if byReference.RefKindModifier.Text == "in" {
-                        form = RegionArgumentForm.ReadOnlyReference
-                    }
-                }
-            }
+            ClassifyCallArgument(argument, out var form, out var path)
             argumentForms.Add(form)
             arguments.Add(path)
         }

@@ -707,6 +707,20 @@ class ImportedClassSymbol : Symbol {
         @NotNullWhen(true) out function ImportedFunctionSymbol?
     ) bool -> TryLookupFunction(text, callExpression, arguments, out function, out _)
 
+    /// Gets the visible static candidate methods from the nearest declaration
+    /// level that contains [`text`](paramref), including generic definitions.
+    /// @param text The method-group name.
+    /// @returns The visible static candidate methods at the winning level.
+    internal func GetVisibleStaticCandidateMethods(text string) List[MethodInfo] {
+        let methods = List[MethodInfo]()
+        for method in FindNearestNamedMemberLevel(text).Methods {
+            if method.IsStatic && IsVisibleToCurrentCompilation(method) {
+                methods.Add(method)
+            }
+        }
+        return methods
+    }
+
     /// Gets the visible static methods from the nearest declaration level that
     /// contains [`text`](paramref). A declaration on a derived type hides
     /// every same-named base member when it is accessible, including when it is

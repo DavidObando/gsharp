@@ -3255,7 +3255,7 @@ internal partial class ExpressionBinder {
     /// @param clrBase The CLR base type to search (its base chain is walked by reflection).
     /// @param methodName The invoked method name.
     /// @returns The deduplicated candidate methods (most-derived signature wins).
-    private func CollectBaseClrMethodCandidates(clrBase Type?, methodName string) IReadOnlyList[MethodInfo] {
+    internal func CollectBaseClrMethodCandidates(clrBase Type?, methodName string) IReadOnlyList[MethodInfo] {
         let result = List[MethodInfo]()
         if clrBase == nil {
             return result

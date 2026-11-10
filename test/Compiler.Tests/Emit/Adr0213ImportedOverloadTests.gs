@@ -161,4 +161,83 @@ func Main() { }`
             .ToArray()
         Assert.Equal("GS0158@7:16", string.Join(" ", errors))
     }
+
+    private const FriendInternalLibrarySource string = `[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("FriendApp")]
+namespace FriendLib;
+public struct Token { public int Raw; }
+public struct Payload {
+    public int Raw;
+    public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
+}
+public class S {
+    public void Use(object o, int extra = 0) { }
+    internal void Use(Payload p) { }
+}`
+
+    @Fact
+    func FriendAssemblyInternalOverloadWithAConversion_RemovesAByReferenceFact() {
+        let source = `package T
+import System
+import FriendLib
+func Run(ref text string?, s S, tok Token) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        s.Use(tok)
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(FriendInternalLibrarySource, assemblyName: "FriendLib")
+        using let references = fixture.RuntimeReferences()
+        references.CurrentAssemblyName = "FriendApp"
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@7:16", string.Join(" ", errors))
+    }
+
+    private const ConstantNarrowingLibrarySource string = `namespace NarrowLib;
+public struct Token { public int Raw; }
+public struct Payload {
+    public int Raw;
+    public static implicit operator Payload(Token t) => new Payload { Raw = t.Raw };
+}
+public class S {
+    public void Use(byte b, Payload p) { }
+    public void Use(long l, object o) { }
+    public void TakeByte(byte b) { }
+}`
+
+    @Theory
+    @InlineData("s.Use(1, tok)", "GS0158@7:16")
+    @InlineData("s.TakeByte(1)", "")
+    func ImportedConstantNarrowingOverload_MatchesNormalBinding(call string, expected string) {
+        let source = `package T
+import System
+import NarrowLib
+func Run(ref text string?, s S, tok Token) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        ` + call + `
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(ConstantNarrowingLibrarySource, assemblyName: "NarrowLib")
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal(expected, string.Join(" ", errors))
+    }
 }
