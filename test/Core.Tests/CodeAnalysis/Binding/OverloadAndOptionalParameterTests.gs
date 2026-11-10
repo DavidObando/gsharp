@@ -227,6 +227,49 @@ f(10)
         Assert.Equal(11, result.Value)
     }
 
+    @Fact
+    func DecimalOptionalParameter_SupportsLiteralsConstantsAndWidening() {
+        let source = `
+import System
+
+delegate PickDelegate(value decimal = 4.50m) decimal;
+
+class Bag(seed decimal = 1.50m, bonus decimal? = 0.25m) {
+    public const BaseRate decimal = 2.25m
+
+    func Total(extra decimal = BaseRate, scaled decimal? = -3.75m, widened decimal = 5, ch decimal? = 'A', zero decimal = default(decimal), missing decimal? = nil) string {
+        let pick PickDelegate = (value decimal) -> value
+        let local = (value decimal = 1.50m, negZero decimal = -0.00m) -> "${value}|${decimal.GetBits(value)[3]}|${decimal.GetBits(negZero)[3]}"
+        return "${seed + (bonus ?? 0m) + extra + (scaled ?? 0m) + widened + (ch ?? 0m) + zero}|${missing == nil}|${pick()}|${local()}"
+    }
+}
+
+func Bounds(low decimal = decimal.MinValue, high decimal = decimal.MaxValue) bool ->
+    low == decimal.MinValue && high == decimal.MaxValue
+
+"${Bag().Total()}|${Bounds()}"
+`
+        let result = Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal("70.25|True|4.50|1.50|131072|-2147352576|True", result.Value)
+    }
+
+    @Fact
+    func DecimalOptionalParameter_RejectsMismatchedFunctionContractScaleOrSign() {
+        let scaleMismatch = Evaluate(`
+var f = (x decimal = 1.00m) -> x
+f = (x decimal = 1.0m) -> x
+f()
+`)
+        AssertHasDiagnosticId(scaleMismatch.Diagnostics, "GS0155")
+        let signMismatch = Evaluate(`
+var f = (x decimal = 0.00m) -> x
+f = (x decimal = -0.00m) -> x
+f()
+`)
+        AssertHasDiagnosticId(signMismatch.Diagnostics, "GS0155")
+    }
+
     shared {
         private func AssertHasDiagnosticId(diagnostics ImmutableArray[Diagnostic], id string) {
             Assert.Contains(diagnostics, (d Diagnostic) -> d.Id == id)

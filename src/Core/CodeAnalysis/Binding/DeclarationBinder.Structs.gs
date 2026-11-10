@@ -1095,8 +1095,11 @@ internal partial class DeclarationBinder {
                     () -> {
                         if declaringDefault.HasExplicitDefaultValue &&
                             implementingParameter.HasExplicitDefaultValue &&
-                            !object
-                            .Equals(declaringDefault.ExplicitDefaultValue, implementingParameter.ExplicitDefaultValue) {
+                            !FunctionTypeSymbol
+                            .DefaultValuesEqual(
+                            declaringDefault.ExplicitDefaultValue,
+                            implementingParameter.ExplicitDefaultValue
+                        ) {
                             Disagree("parameter $parameterNumber's default value ($ResolvesDifferently)")
                         }
                     }

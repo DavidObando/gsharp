@@ -871,6 +871,13 @@ class ImportedTypeSymbol : TypeSymbol {
         private func TryGetOptionalDefault(parameter ParameterInfo, out value object?) bool {
             value = nil
             try {
+                if ConstantExpressionEvaluator.TryGetDecimalConstantAttributeValue(
+                    parameter.GetCustomAttributesData(),
+                    out var decimalValue
+                ) {
+                    value = decimalValue
+                    return true
+                }
                 if !parameter.IsOptional && !parameter.HasDefaultValue {
                     return false
                 }

@@ -94,16 +94,6 @@ class FunctionTypeSymbol : TypeSymbol {
         return true
     }
 
-    private func DefaultValuesEqual(left object?, right object?) bool {
-        if left is float64 leftDouble && right is float64 rightDouble {
-            return BitConverter.DoubleToInt64Bits(leftDouble) == BitConverter.DoubleToInt64Bits(rightDouble)
-        }
-        if left is float32 leftSingle && right is float32 rightSingle {
-            return BitConverter.SingleToInt32Bits(leftSingle) == BitConverter.SingleToInt32Bits(rightSingle)
-        }
-        return object.Equals(left, right)
-    }
-
     /// Gets the per-parameter variadic flags (ADR-0102 follow-up / issue #818).
     /// Always parallel to (cref:ParameterTypes) — entry `i` is
     /// `true` iff the corresponding parameter is the
@@ -129,6 +119,24 @@ class FunctionTypeSymbol : TypeSymbol {
     prop HasVariadic bool -> !IsVariadic.IsDefaultOrEmpty && IsVariadic[IsVariadic.Length - 1]
 
     shared {
+        internal func DefaultValuesEqual(left object?, right object?) bool {
+            if left is float64 leftDouble && right is float64 rightDouble {
+                return BitConverter.DoubleToInt64Bits(leftDouble) == BitConverter.DoubleToInt64Bits(rightDouble)
+            }
+            if left is float32 leftSingle && right is float32 rightSingle {
+                return BitConverter.SingleToInt32Bits(leftSingle) == BitConverter.SingleToInt32Bits(rightSingle)
+            }
+            if left is decimal leftDecimal && right is decimal rightDecimal {
+                let leftBits = decimal.GetBits(leftDecimal)
+                let rightBits = decimal.GetBits(rightDecimal)
+                return leftBits[0] == rightBits[0] &&
+                    leftBits[1] == rightBits[1] &&
+                    leftBits[2] == rightBits[2] &&
+                    leftBits[3] == rightBits[3]
+            }
+            return object.Equals(left, right)
+        }
+
         internal func ContainsOptionalContract(type TypeSymbol) bool {
             if type is ByRefTypeSymbol byRef {
                 return ContainsOptionalContract(byRef.PointeeType)

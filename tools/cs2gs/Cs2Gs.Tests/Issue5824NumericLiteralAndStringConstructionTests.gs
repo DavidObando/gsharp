@@ -47,7 +47,7 @@ open class Issue5824NumericLiteralTranslationTests {
             "long.MinValue"
         }
         let types = if position == "default" {
-            []string{"float", "float?", "double", "double?"}
+            []string{"float", "float?", "double", "double?", "decimal", "decimal?"}
         } else {
             []string{"float", "float?", "double", "decimal"}
         }
