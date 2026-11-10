@@ -295,30 +295,54 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
-    func TryReserveMemberName(member IMethodSymbol, name string, out assignedName string) bool {
+    func TryReserveContractMemberNames(
+        members IReadOnlyCollection[IMethodSymbol],
+        name string,
+        out assignedName string
+    ) bool {
         lock this.gate {
-            let key = (member.PartialDefinitionPart ?? member).OriginalDefinition
-            if this.assigned.TryGetValue(key, out assignedName) {
-                return true
+            assignedName = name
+            let keys = List[IMethodSymbol]()
+            let seenKeys = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+            for member in members {
+                let key = (member.PartialDefinitionPart ?? member).OriginalDefinition
+                if seenKeys.Add(key) {
+                    keys.Add(key)
+                }
+            }
+            for key in keys {
+                if this.assigned.TryGetValue(key, out var existingAssigned) {
+                    assignedName = existingAssigned
+                    return true
+                }
             }
             assignedName = name
-            let owner = key.ContainingType.OriginalDefinition
-            if !this.usedByType.TryGetValue(owner, out var used) {
-                used = HashSet[string](StringComparer.Ordinal)
-                this.usedByType.Add(owner, used)
+            for key in keys {
+                let owner = key.ContainingType.OriginalDefinition
+                if !this.usedByType.TryGetValue(owner, out var used) {
+                    used = HashSet[string](StringComparer.Ordinal)
+                    this.usedByType.Add(owner, used)
+                }
+                if used.Contains(name) || this.RelatedAssignedNameExists(owner, name, recordAdaptersOnly: false) ||
+                    this
+                    .aliasNames
+                    .Contains(name) ||
+                    (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
+                    return false
+                }
             }
-            if used.Contains(name) || this.RelatedAssignedNameExists(owner, name, recordAdaptersOnly: false) ||
-                this
-                .aliasNames
-                .Contains(name) || (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
-                return false
-            }
-            used.Add(name)
             this.helperNames.Add(name)
-            this.assigned.Add(key, name)
+            for key in keys {
+                let owner = key.ContainingType.OriginalDefinition
+                this.usedByType[owner].Add(name)
+                this.assigned[key] = name
+            }
             return true
         }
     }
+
+    func TryReserveMemberName(member IMethodSymbol, name string, out assignedName string) bool ->
+    this.TryReserveContractMemberNames([]IMethodSymbol{member}, name, out assignedName)
 
     private func RelatedAssignedNameExists(owner ISymbol, name string, recordAdaptersOnly bool) bool {
         if owner is not INamedTypeSymbol type || !this.helperNames.Contains(name) {
@@ -352,6 +376,11 @@ internal class LiftedLocalFunctionNameAllocator {
                 return true
             }
             current = current.BaseType
+        }
+        for iface in type.AllInterfaces {
+            if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, expected.OriginalDefinition) {
+                return true
+            }
         }
         return false
     }

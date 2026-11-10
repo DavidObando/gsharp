@@ -7976,7 +7976,8 @@ partial class CSharpToGSharpTranslator {
                     )
                 }
                 if !this.HasPointerDeconstructTupleCarrier(
-                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method
+                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
+                    this.context.GetTypeInfo(assignment.Right).Type
                 ) &&
                     this
                     .TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {

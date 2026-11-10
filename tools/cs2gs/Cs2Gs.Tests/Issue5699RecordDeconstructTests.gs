@@ -63,11 +63,18 @@ namespace Producer {
         public virtual void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
 }`
-        let consumer = if shape == "unqualified" {
-            `
-namespace RecordDeconstruction {
-    public record Child : Producer.R {
+        if shape == "unqualified" {
+            const middle = `
+namespace Middle {
+    public record Mid : Producer.R {
         public int deconstruct2 = 9;
+        public int deconstruct3 = 11;
+        public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
+    }
+}`
+            const thirdConsumer = `
+namespace RecordDeconstruction {
+    public record Child : Middle.Mid {
         public delegate void Parts(out int x, out int y);
         public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
         public Parts Save() => Deconstruct;
@@ -77,14 +84,16 @@ namespace RecordDeconstruction {
             var child = new Child();
             var saved = child.Save();
             saved(out var x, out var y);
-            Producer.R asBase = child;
-            var (bx, by) = asBase;
-            return $"{x},{y},{bx},{by},{child.deconstruct2}";
+            Middle.Mid mid = child;
+            var (mx, my) = mid;
+            return $"{x},{y},{mx},{my},{mid.deconstruct2}";
         }
     }
 }`
-        } else {
-            (`
+            VerifyThreeMigratedCompilations(producer, middle, thirdConsumer)
+            return
+        }
+        let consumer = (`
 namespace RecordDeconstruction {
     public static class Extensions {
         public static void Deconstruct(this RECEIVER r, out int x, out int y, out int z) {
@@ -98,25 +107,24 @@ namespace RecordDeconstruction {
         }
     }
 }`).Replace(
-                "STATEMENT",
-                switch shape {
-                    case "extension" or "broad extension": "var (x, y, z) = r; return $\"{x},{y},{z}\";"
-                    case "extension foreach" or "broad extension foreach":
-                    "int x = 0, y = 0, z = 0; foreach (var (a, b, c) in new[] { r }) { x = a; y = b; z = c; } return $\"{x},{y},{z}\";"
-                    case "interface deconstruct":
-                    "Producer.IParts parts = r; var (x, y) = parts; return $\"{x},{y}\";"
-                    default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y); return $\"{x},{y}\";"
-                }
-            )
-                .Replace(
-                "RECEIVER",
-                if shape.StartsWith("broad", StringComparison.Ordinal) {
-                    "object"
-                } else {
-                    "Producer.R"
-                }
-            )
-        }
+            "STATEMENT",
+            switch shape {
+                case "extension" or "broad extension": "var (x, y, z) = r; return $\"{x},{y},{z}\";"
+                case "extension foreach" or "broad extension foreach":
+                "int x = 0, y = 0, z = 0; foreach (var (a, b, c) in new[] { r }) { x = a; y = b; z = c; } return $\"{x},{y},{z}\";"
+                case "interface deconstruct":
+                "Producer.IParts parts = r; var (x, y) = parts; return $\"{x},{y}\";"
+                default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y); return $\"{x},{y}\";"
+            }
+        )
+            .Replace(
+            "RECEIVER",
+            if shape.StartsWith("broad", StringComparison.Ordinal) {
+                "object"
+            } else {
+                "Producer.R"
+            }
+        )
         VerifyMigratedProducerAndConsumer(producer, consumer)
     }
 
@@ -438,6 +446,13 @@ namespace RecordDeconstruction {
         public static int[] Cells = new[] { 42 };
         public unsafe void Deconstruct(PARAMETERS) { BODY }
     }
+    public static class PtrExt {
+        public static unsafe void Deconstruct(this object value, out int* p, out int n, out int tag) {
+            fixed (int* ptr = R.Cells) p = ptr;
+            n = 5;
+            tag = 7;
+        }
+    }
     public static class Probe {
         public static unsafe string Run() {
             fixed (int* cell = R.Cells) {
@@ -469,14 +484,17 @@ namespace RecordDeconstruction {
                     "var pat = r is R(var p) ? *p : -1; r.Deconstruct(out var direct); return $\"{pat},{*direct}\";"
                 } else {
                     `var (p, n) = r;
+                    var (ep, en, etag) = r;
                     int* a = null;
                     int b = 0;
+                    int t = 0;
                     (a, b) = r;
+                    (a, b, t) = r;
                     var total = 0;
                     foreach (var (qp, qn) in new[] { r }) total += *qp + qn;
                     var pat = r is R(var pp, var pn) ? *pp + pn : -1;
                     r.Deconstruct(out var dp, out var dn);
-                    return $"{*p},{n},{*a},{b},{total},{pat},{*dp},{dn}";`
+                    return $"{*p},{n},{*ep},{en},{etag},{*a},{b},{t},{total},{pat},{*dp},{dn}";`
                 }
             )
         }
@@ -819,7 +837,17 @@ namespace External {
     }
     public record Base {
         public int X, Y;
+        public Base() { }
+        public Base(ref int seed) { X = ++seed; Y = seed + 1; }
         public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
+        protected virtual void Deconstruct(out int x, out int y, out int z) { x = X; y = Y; z = X + Y; }
+        public string RunProtected() {
+            Deconstruct(out var x, out var y, out var z);
+            return $"{x},{y},{z}";
+        }
+    }
+    public abstract record AbstractExternal {
+        protected abstract void Deconstruct(out int x, out int y);
     }
     public unsafe record ExtPtr {
         public static int[] Cells = new[] { 42 };
@@ -861,7 +889,7 @@ namespace RecordDeconstruction {
     }
     EXTRA_TYPES
     public static class Probe {
-        public static unsafe string Run() {
+        public static string Run() {
             var r = new R { X = 2, Y = 3 };
             r.Deconstruct(out var x, out var y);
             var (a, b) = r;
@@ -869,9 +897,14 @@ namespace RecordDeconstruction {
             contract.Deconstruct(out var c, out var d);
             var (e, f) = contract;
             var (ex1, ex2, ex3) = r;
-            var (ptr, len) = new External.ExtPtr();
+            int ptrCell = 0, len = 0;
+            unsafe {
+                var (ptr, ptrLen) = new External.ExtPtr();
+                ptrCell = *ptr;
+                len = ptrLen;
+            }
             EXTRA_ASSERT
-            return $"{x},{y},{a},{b},{c},{d},{e},{f},{ex1},{ex2},{ex3},{*ptr},{len},{extra},{r == new R { X = 2, Y = 3 }}";
+            return $"{x},{y},{a},{b},{c},{d},{e},{f},{ex1},{ex2},{ex3},{ptrCell},{len},{extra},{r == new R { X = 2, Y = 3 }}";
         }
     }
 }`).Replace(
@@ -898,7 +931,18 @@ namespace RecordDeconstruction {
         ).Replace(
             "EXTRA_TYPES",
             if overrideBase {
-                "public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }"
+                `public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }
+                public record ProtectedRecord : External.Base {
+                    public ProtectedRecord(ref int seed) : base(ref seed) { }
+                    protected override void Deconstruct(out int x, out int y, out int z) {
+                        base.Deconstruct(out var bx, out var by, out var bz);
+                        x = bx * 10; y = by * 10; z = bz * 10;
+                    }
+                    public string ReadSelf() { var (px, py, pz) = this; return $"{px},{py},{pz}"; }
+                }
+                public abstract record AbstractDerived : External.AbstractExternal {
+                    protected override void Deconstruct(out int x, out int y) { x = 1; y = 2; }
+                }`
             } else {
                 `public class C : External.IParts {
                     public int X, Y;
@@ -906,14 +950,25 @@ namespace RecordDeconstruction {
                     public int Reset() => Count;
                     public int Deconstruct(int scale) => (X + Y) * scale;
                     public void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
+                }
+                public record BaseRec {
+                    public int Tag;
+                    internal BaseRec(int v) { Tag = v; }
+                    public void Deconstruct(out int x, out int y) { x = Tag * 10; y = 1; }
+                }
+                public record InheritedImpl : BaseRec, External.IParts {
+                    public InheritedImpl(int v) : base(v) { }
+                    public int Count => Tag;
+                    public int Reset() => Tag;
+                    public int Deconstruct(int scale) => Tag * scale;
                 }`
             }
         ).Replace(
             "EXTRA_ASSERT",
             if overrideBase {
-                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; var extra = $\"{dx},{dy}\";"
+                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var extra = $\"{cx},{cy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; var extra = $\"{cx},{cy},{ix},{iy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
@@ -1114,16 +1169,25 @@ namespace RecordDeconstruction {
         }
         Verify((`
 namespace RecordDeconstruction {
-    public interface IParts { void Deconstruct(out int x, out int y); }
+    public interface IParts {
+        void Deconstruct(out int x, out int y) { x = 11; y = 22; }
+    }
+    public class DefaultImpl : IParts { }
     public record R : IParts {
         public int X;
         public int Y;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public int Check() {
+            int deconstructTuple(int n) => n <= 0 ? X + Y : deconstructTuple(n - 1);
+            return deconstructTuple(1);
+        }
     }
     public static class Probe {
         public static string Run() {
             BODY
-            return $"{x},{y}";
+            IParts defParts = new DefaultImpl();
+            var (dx, dy) = defParts;
+            return $"{x},{y},{dx},{dy},{new R { X = 2, Y = 3 }.Check()}";
         }
     }
 }`).Replace("BODY", body))
@@ -1724,6 +1788,151 @@ namespace RecordDeconstruction {
                 expected + "\n",
                 CompileProducerAndConsumerAndRun(producerPrinted, consumerPrinted, producerName).Replace("\r\n", "\n")
             )
+        }
+
+        private func VerifyThreeMigratedCompilations(
+            producerSource string,
+            middleSource string,
+            consumerSource string
+        ) {
+            const producerName = "Producer"
+            const middleName = "Middle"
+            let producer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Producer.cs", producerSource)},
+                assemblyName: producerName
+            )
+            Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
+            using let producerImage = MemoryStream()
+            Assert.True(producer.Compilation.Emit(producerImage).Success)
+            let producerBytes = producerImage.ToArray()
+            let middleRefs = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(producerBytes))
+                .ToArray()
+            let middle = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Middle.cs", middleSource)},
+                middleRefs,
+                assemblyName: middleName
+            )
+            Assert.True(middle.BoundWithoutErrors, string.Join("\n", middle.ErrorDiagnostics))
+            using let middleImage = MemoryStream()
+            Assert.True(middle.Compilation.Emit(middleImage).Success)
+            let middleBytes = middleImage.ToArray()
+            let consumerRefs = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(producerBytes))
+                .Append(MetadataReference.CreateFromImage(middleBytes))
+                .ToArray()
+            let consumer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Consumer.cs", consumerSource)},
+                consumerRefs,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
+            using let consumerImage = MemoryStream()
+            Assert.True(consumer.Compilation.Emit(consumerImage).Success)
+            let loadContext = AssemblyLoadContext(
+                "ThreeProjectContext" + Guid.NewGuid().ToString("N"),
+                isCollectible: true
+            )
+            var expected = ""
+            try {
+                using let producerStream = MemoryStream(producerBytes)
+                loadContext.LoadFromStream(producerStream)
+                using let middleStream = MemoryStream(middleBytes)
+                loadContext.LoadFromStream(middleStream)
+                using let consumerStream = MemoryStream(consumerImage.ToArray())
+                let loadedConsumer = loadContext.LoadFromStream(consumerStream)
+                expected = cast[string](
+                    loadedConsumer.GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+                )
+            } finally {
+                loadContext.Unload()
+            }
+            let compilations = []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{producer.Compilation, middle.Compilation, consumer.Compilation}
+            let producerDoc = Assert.Single(producer.Documents)
+            let producerContext = TranslationContext(
+                producer.Compilation,
+                producerDoc.SemanticModel,
+                producerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let producerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(producerDoc, producerContext)
+            )
+            let middleDoc = Assert.Single(middle.Documents)
+            let middleContext = TranslationContext(
+                middle.Compilation,
+                middleDoc.SemanticModel,
+                middleDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let middlePrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(middleDoc, middleContext)
+            )
+            let consumerDoc = Assert.Single(consumer.Documents)
+            let consumerContext = TranslationContext(
+                consumer.Compilation,
+                consumerDoc.SemanticModel,
+                consumerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let consumerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(consumerDoc, consumerContext)
+            )
+            var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
+                root = root.Parent
+            }
+            Assert.NotNull(root)
+            let configuration = if AppContext.BaseDirectory.Contains(
+                Path.DirectorySeparatorChar + "Release" + Path.DirectorySeparatorChar
+            ) {
+                "Release"
+            } else {
+                "Debug"
+            }
+            let compiler = Path.Combine(root!!.FullName, "out", "bin", configuration, "Compiler", "gsc.dll")
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue-5699", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let producerDll = Path.Combine(directory, producerName + ".dll")
+                let producerGs = Path.Combine(directory, "Producer.gs")
+                File.WriteAllText(producerGs, producerPrinted)
+                let compileProducer = RunDotnet(
+                    []string{compiler, "/target:library", "/out:" + producerDll, producerGs}
+                )
+                Assert.True(compileProducer.Exit == 0, compileProducer.Output + "\n" + producerPrinted)
+                let middleDll = Path.Combine(directory, middleName + ".dll")
+                let middleGs = Path.Combine(directory, "Middle.gs")
+                File.WriteAllText(middleGs, middlePrinted)
+                let compileMiddle = RunDotnet(
+                    []string{compiler, "/target:library", "/out:" + middleDll, "/r:" + producerDll, middleGs}
+                )
+                Assert.True(compileMiddle.Exit == 0, compileMiddle.Output + "\n" + middlePrinted)
+                let consumerDll = Path.Combine(directory, "Snippet.dll")
+                let consumerGs = Path.Combine(directory, "Consumer.gs")
+                File.WriteAllText(consumerGs, consumerPrinted + "\nSystem.Console.WriteLine(Probe.Run())\n")
+                let compileConsumer = RunDotnet(
+                    []string{
+                        compiler,
+                        "/target:exe",
+                        "/out:" + consumerDll,
+                        "/r:" + producerDll,
+                        "/r:" + middleDll,
+                        consumerGs
+                    }
+                )
+                Assert.True(compileConsumer.Exit == 0, compileConsumer.Output + "\n" + consumerPrinted)
+                let run = RunDotnet([]string{consumerDll})
+                Assert.True(run.Exit == 0, run.Output)
+                Assert.Equal(expected + "\n", run.Output.Replace("\r\n", "\n"))
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
         }
 
         private func CompileAndRun(

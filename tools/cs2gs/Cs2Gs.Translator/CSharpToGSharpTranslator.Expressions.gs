@@ -8928,7 +8928,8 @@ partial class CSharpToGSharpTranslator {
                         }
                     }
                     return this.RecordDeconstructionRunsUserCode(
-                        this.context.SemanticModel.GetDeconstructionInfo(assignment)
+                        this.context.SemanticModel.GetDeconstructionInfo(assignment),
+                        this.context.GetTypeInfo(assignment.Right).Type
                     ) ||
                         this.WritesThroughStorage(assignment.Left, isArgument: false)
                 }
@@ -9183,11 +9184,14 @@ partial class CSharpToGSharpTranslator {
         /// Deconstructing loops run selected Deconstruct methods and emitted leaf conversions before the body.
         /// Tuple reads run no code. Source record positional getters run code unless their outputs are discarded.
         private func DeconstructingForEachRunsUserCode(forEach ForEachVariableStatementSyntax) bool {
-            if this.RecordDeconstructionRunsUserCode(this.context.SemanticModel.GetDeconstructionInfo(forEach)) ||
+            let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
+            if this.RecordDeconstructionRunsUserCode(
+                this.context.SemanticModel.GetDeconstructionInfo(forEach),
+                element
+            ) ||
                 this.ForEachLeafConversionsRunUserCode(forEach) {
                 return true
             }
-            let element = this.context.SemanticModel.GetForEachStatementInfo(forEach).ElementType
             if element is INamedTypeSymbol{IsTupleType: true} {
                 return false
             }

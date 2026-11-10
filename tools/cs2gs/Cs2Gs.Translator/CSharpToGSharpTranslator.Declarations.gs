@@ -1660,6 +1660,20 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.TypeHasUnsafeSignatureMember(mergedMembers)
+            if kind == TypeDeclarationKind.Class && symbol != nil && this.ShouldAttachOwnedExtensions(node, symbol) {
+                for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
+                    members.Add(
+                        this.BuildDeconstructContractForwardingMethod(
+                            inheritedContract,
+                            "Deconstruct",
+                            ThisExpression(),
+                            this.EmittedName(inheritedContract, inheritedContract.Name)!!,
+                            isOpen: !symbol.IsSealed,
+                            isOverride: false
+                        )
+                    )
+                }
+            }
             if kind == TypeDeclarationKind.DataClass && symbol != nil && this.HasImportedDeconstructContractBridge(
                 symbol
             ) {

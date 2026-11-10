@@ -77,6 +77,10 @@ partial class CSharpToGSharpTranslator {
                         if forwarder != nil {
                             yield (forwarder, false)
                         }
+                        let protectedHook = this.BuildImportedProtectedDeconstructHook(deconstruct, ownerKind)
+                        if protectedHook != nil {
+                            yield (protectedHook, false)
+                        }
                         let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
                         if adapter != nil {
                             yield (adapter, deconstruct.IsStatic)
@@ -2101,10 +2105,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsStaticExtensionHelper(method IMethodSymbol?) bool {
+            let original IMethodSymbol? = method?.ReducedFrom ?? method
+            if original != nil &&
+                original.IsExtensionMethod &&
+                (
+                this.TypeContainsPointerOrFunctionPointer(original.ReturnType) || original.Parameters.Any(
+                    (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                )
+            ) {
+                return true
+            }
             if this.IsPreservedOwnedExtension(method) || this.ownedExtensions.IsStaticHelper(method) {
                 return true
             }
-            let original IMethodSymbol? = method?.ReducedFrom ?? method
             if !CSharpToGSharpTranslator.RequiresOwnerScopedExtension(original) ||
                 this
                 .context
