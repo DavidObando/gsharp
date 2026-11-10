@@ -173,6 +173,16 @@ internal partial class StatementBinder {
 
     private prop Diagnostics DiagnosticBag -> binderCtx.Diagnostics
 
+    internal prop Overloads GSharp.Core.CodeAnalysis.Binding.OverloadResolution.OverloadResolver? {
+        get;
+        set;
+    }
+
+    internal prop Expressions ExpressionBinder? {
+        get;
+        set;
+    }
+
     private prop $scope BoundScope {
         get -> binderCtx.RootScope
         set -> this.binderCtx.RootScope = value

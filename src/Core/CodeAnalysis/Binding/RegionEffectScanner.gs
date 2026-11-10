@@ -1389,7 +1389,8 @@ internal sealed class RegionEffectScanner {
                 receiver,
                 arguments,
                 call.ArgumentForms,
-                call.HasTypeArguments
+                call.HasTypeArguments,
+                call.Syntax
             )
         }
         RebaseIndexAccesses(current.IndexAccesses, indexAccessesBefore)
@@ -2595,6 +2596,9 @@ internal sealed class RegionEffectScanner {
             if argument is RefArgumentExpressionSyntax byReference {
                 if byReference.IsInlineDeclaration {
                     form = RegionArgumentForm.InlineDeclaration
+                    if byReference.DeclaredType != nil {
+                        path = TypeOrigin(byReference.DeclaredType)
+                    }
                 } else if byReference.Expression != nil {
                     path = BuildPath(byReference.Expression)
                     if byReference.RefKindModifier.Text == "in" {
@@ -2675,7 +2679,8 @@ internal sealed class RegionEffectScanner {
                     },
                     arguments,
                     argumentForms,
-                    call.TypeArgumentList != nil
+                    call.TypeArgumentList != nil,
+                    call
                 )
             )
         }
@@ -2848,7 +2853,14 @@ internal sealed class RegionEffectScanner {
                 if call.Callee != nil || call.TypeArgumentList != nil {
                     return nil
                 }
-                return prefix.Append(RegionReceiverStepKind.Call, call.Identifier.ValueText)
+                BuildStepCallArguments(call, out var arguments, out var argumentForms)
+                return prefix.Append(
+                    RegionReceiverStepKind.Call,
+                    call.Identifier.ValueText,
+                    arguments,
+                    argumentForms,
+                    call
+                )
             }
             case index is IndexExpressionSyntax {
                 return AppendPath(prefix, index.Target)?.Append(RegionReceiverStepKind.Index, nil)
@@ -2859,6 +2871,38 @@ internal sealed class RegionEffectScanner {
             default {
                 return nil
             }
+        }
+    }
+
+    private func BuildStepCallArguments(
+        call CallExpressionSyntax,
+        out arguments List[RegionReceiverPath?],
+        out argumentForms List[RegionArgumentForm]
+    ) {
+        arguments = List[RegionReceiverPath?]()
+        argumentForms = List[RegionArgumentForm]()
+        for argument in call.Arguments {
+            var form = ArgumentForm(argument)
+            var path = if form == RegionArgumentForm.Path {
+                BuildPath(argument)
+            } else {
+                default(RegionReceiverPath?)
+            }
+            if argument is RefArgumentExpressionSyntax byReference {
+                if byReference.IsInlineDeclaration {
+                    form = RegionArgumentForm.InlineDeclaration
+                    if byReference.DeclaredType != nil {
+                        path = TypeOrigin(byReference.DeclaredType)
+                    }
+                } else if byReference.Expression != nil {
+                    path = BuildPath(byReference.Expression)
+                    if byReference.RefKindModifier.Text == "in" {
+                        form = RegionArgumentForm.ReadOnlyReference
+                    }
+                }
+            }
+            argumentForms.Add(form)
+            arguments.Add(path)
         }
     }
 
@@ -2885,14 +2929,42 @@ internal sealed class RegionEffectScanner {
 
     // A path of a nested record whose root the enclosing region declares starts at the root's origin.
     private func Rebase(path RegionReceiverPath) RegionReceiverPath? {
-        let root = path.RootName
-        if root == nil || !IsDeclared(root) {
-            return path
+        var rebased = path
+        if path.Steps.Any((step RegionReceiverStep) -> step.Arguments.Count > 0) {
+            let steps = ImmutableArray.CreateBuilder[RegionReceiverStep](path.Steps.Length)
+            for step in path.Steps {
+                if step.Arguments.Count == 0 {
+                    steps.Add(step)
+                    continue
+                }
+                let arguments = List[RegionReceiverPath?](step.Arguments.Count)
+                for argument in step.Arguments {
+                    arguments.Add(
+                        if argument == nil {
+                            default(RegionReceiverPath?)
+                        } else {
+                            Rebase(argument)
+                        }
+                    )
+                }
+                steps.Add(RegionReceiverStep(step.Kind, step.Name, arguments, step.ArgumentForms, step.CallSyntax))
+            }
+            rebased = RegionReceiverPath(
+                path.RootName,
+                path.RootIsCall,
+                path.RootType,
+                path.RootLiteralType,
+                steps.MoveToImmutable()
+            )
         }
-        if path.RootIsCall {
+        let root = rebased.RootName
+        if root == nil || !IsDeclared(root) {
+            return rebased
+        }
+        if rebased.RootIsCall {
             return nil
         }
-        return OriginOf(root)?.Concat(path)
+        return OriginOf(root)?.Concat(rebased)
     }
 
     private func SetOrigin(name string, origin RegionReceiverPath?) {

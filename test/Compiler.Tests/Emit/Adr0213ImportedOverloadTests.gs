@@ -108,6 +108,34 @@ func Main() { }`
         Assert.Equal("GS0158@7:16", string.Join(" ", errors))
     }
 
+    @Theory
+    @InlineData("s.Use(\"ab\")")
+    @InlineData("s.Create(\"ab\").Run()")
+    func ApplicableInstanceMethodBesideAnImportedExtension_KeepsAByReferenceFact(call string) {
+        let source = `package T
+import System
+import ExtLib
+func Run(ref text string?, s S) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        ` + call + `
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(ExtensionLibrarySource, assemblyName: "ExtLib")
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError)
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("", string.Join(" ", errors))
+    }
+
     @Fact
     func ImportedOptionalOverloadWithAConversion_RemovesAByReferenceFact() {
         let source = `package T

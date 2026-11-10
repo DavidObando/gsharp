@@ -707,6 +707,8 @@ partial class Binder {
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
         // sees fully-initialized siblings.
+        statements.Overloads = overloads
+        statements.Expressions = expressions
         this.function = function
         if function != nil {
             // Pre-compute parameter names once so both instance-member and
