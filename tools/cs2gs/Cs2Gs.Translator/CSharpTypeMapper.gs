@@ -3981,7 +3981,10 @@ class CSharpTypeMapper {
                                 index >= namedSymbol
                                     .TypeParameters
                                     .Length ||
-                                    !TypeParameterForbidsNullableReferenceArgument(namedSymbol.TypeParameters[index])
+                                    !TypeParameterForbidsNullableReferenceArgument(
+                                    namedSymbol.TypeParameters[index],
+                                    namedSymbol
+                                )
                             ) {
                                 WithNullable(normalized, true)!!
                             } else {
@@ -4013,23 +4016,70 @@ class CSharpTypeMapper {
         }
 
         private func TypeParameterForbidsNullableReferenceArgument(
-            parameter ITypeParameterSymbol
-        ) bool -> parameter.HasNotNullConstraint ||
-            (
-            parameter.HasReferenceTypeConstraint &&
-                parameter.ReferenceTypeConstraintNullableAnnotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
-        ) ||
-            parameter
-            .ConstraintNullableAnnotations
-            .Any(
-            (annotation Microsoft.CodeAnalysis.NullableAnnotation) -> annotation != Microsoft
-                .CodeAnalysis
-                .NullableAnnotation
-                .Annotated
-        )
+            parameter ITypeParameterSymbol,
+            owner INamedTypeSymbol? = nil,
+            visited HashSet[ITypeParameterSymbol]? = nil
+        ) bool {
+            let isSourceDeclared = parameter.Locations.Any((location Location) -> location.IsInSource)
+            if parameter.HasNotNullConstraint {
+                return true
+            }
+            if parameter.HasReferenceTypeConstraint &&
+                (
+                isSourceDeclared ||
+                    parameter.ReferenceTypeConstraintNullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated
+            ) {
+                return true
+            }
+            var seen = visited
+            if seen != nil && !seen.Add(parameter) {
+                return false
+            }
+            try {
+                for var i = 0; i < parameter.ConstraintTypes.Length; i++ {
+                    let constraintType = parameter.ConstraintTypes[i]
+                    if constraintType is ITypeParameterSymbol boundParameter {
+                        if owner != nil &&
+                            boundParameter.Ordinal >= 0 &&
+                            boundParameter.Ordinal < owner
+                            .TypeParameters
+                            .Length &&
+                            boundParameter.Ordinal < owner
+                            .TypeArguments
+                            .Length &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(owner.TypeParameters[boundParameter.Ordinal], boundParameter) &&
+                            !owner
+                            .TypeArguments[boundParameter.Ordinal]
+                            .IsReferenceType {
+                            return true
+                        }
+                        seen ??= HashSet[ITypeParameterSymbol](SymbolEqualityComparer.Default){parameter}
+                        if TypeParameterForbidsNullableReferenceArgument(boundParameter, owner, seen) {
+                            return true
+                        }
+                        continue
+                    }
+                    if isSourceDeclared ||
+                        i >= parameter
+                        .ConstraintNullableAnnotations
+                        .Length ||
+                        parameter.ConstraintNullableAnnotations[i] != Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        return true
+                    }
+                }
+                return false
+            } finally {
+                seen?.Remove(parameter)
+            }
+        }
 
         private func AnonymousShapeKey(properties IReadOnlyList[IPropertySymbol]) string -> string.Join(
             "|",

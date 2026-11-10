@@ -485,6 +485,55 @@ namespace Demo
         Assert.DoesNotContain("struct unmanaged", printed)
     }
 
+    /// Issue #5910: C# `where K : notnull` maps to the G# `notnull` flag constraint so constrained type parameters forward to `ConcurrentDictionary` and `ReadOnlyDictionary`.
+    @Fact
+    func NotNullConstraint_EmitsNotNullFlagAndForwardsToNotNullConstrainedGeneric() {
+        let (printed, context) = Translate(`
+#nullable enable
+namespace Demo
+{
+    using System.Collections.Concurrent;
+    using System.Collections.Generic;
+    using System.Collections.ObjectModel;
+
+    public sealed class SyncMap<K, V>
+        where K : notnull
+    {
+        private ConcurrentDictionary<K, V> items;
+        private ReadOnlyDictionary<K, V> readOnlyItems;
+
+        public SyncMap()
+        {
+            items = new ConcurrentDictionary<K, V>();
+            readOnlyItems = new ReadOnlyDictionary<K, V>(new Dictionary<K, V>());
+        }
+
+        public void Store(K key, V value)
+        {
+            items[key] = value;
+        }
+
+        public int Length() => items.Count + readOnlyItems.Count;
+    }
+
+    public static class Runner
+    {
+        public static void Run()
+        {
+            var map = new SyncMap<string, int>();
+            map.Store("a", 1);
+            System.Console.WriteLine(map.Length());
+        }
+    }
+}`)
+        Assert.Contains("class SyncMap[K notnull, V]", printed)
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            (d TranslationDiagnostic) -> d.ConstructKind == "TypeParameterConstraintClause"
+        )
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Demo.Runner.Run()", "1")
+    }
+
     shared {
         private func TranslateUnit(source string) string {
             let (printed, _) = Translate(source)
