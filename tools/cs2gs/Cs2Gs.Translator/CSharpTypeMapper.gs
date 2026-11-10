@@ -1651,6 +1651,24 @@ class CSharpTypeMapper {
                 mapped = ArrayTypeReference(element!!, array.Rank){IsNullable = array.IsNullable}
             }
         }
+        if mapped is TupleTypeReference &&
+            declaredType is INamedTypeSymbol{
+            OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+            TypeArguments: {Length: 1}
+        } nullableTuple {
+            path.Add(0)
+            let promoted = this.PromoteTupleTypeArguments(
+                mapped,
+                nullableTuple.TypeArguments[0],
+                symbol,
+                context,
+                path,
+                createdType,
+                creation
+            )
+            path.RemoveAt(path.Count - 1)
+            return promoted
+        }
         if mapped is TupleTypeReference tuple &&
             declaredType is INamedTypeSymbol{IsTupleType: true} tupleType &&
             tuple
@@ -1975,6 +1993,13 @@ class CSharpTypeMapper {
                     .Select(
                     (e IFieldSymbol, i int32) -> if e.IsImplicitlyDeclared || e.Name == "Item" + (i + 1).ToString() {
                         default(string?)
+                    } else if GSharp
+                        .Core
+                        .CodeAnalysis
+                        .Syntax
+                        .SyntaxFacts
+                        .IsReservedIdentifier(e.Name, IdentifierNameContext.General) {
+                        "$$" + e.Name
                     } else {
                         e.Name
                     }

@@ -617,13 +617,25 @@ partial class CSharpToGSharpTranslator {
         private func ResolveValueSink(value ExpressionSyntax?) ISymbol? {
             var node SyntaxNode? = value
             while true {
-                if (node!!.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
+                if (
+                    node!!.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax
+                ) ||
+                    (
+                    node!!.Parent is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                        SyntaxKind.SuppressNullableWarningExpression
+                    )
+                ) {
                     node = node!!.Parent
                     continue
                 }
                 if node!!.Parent is ConditionalExpressionSyntax conditional &&
                     (conditional.WhenTrue == node || conditional.WhenFalse == node) {
                     node = conditional
+                    continue
+                }
+                if node!!.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                    (coalesce.Left == node || coalesce.Right == node) {
+                    node = coalesce
                     continue
                 }
                 if node!!.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node {
@@ -664,7 +676,22 @@ partial class CSharpToGSharpTranslator {
                     SyntaxKind.SimpleAssignmentExpression
                 ) &&
                     assignment.Right == node {
-                    let symbol ISymbol? = this.context.GetSymbolInfo(assignment.Left).Symbol
+                    let assigned = this.context.GetSymbolInfo(assignment.Left).Symbol
+                    let symbol ISymbol? = if assigned != nil &&
+                        assigned is not IFieldSymbol{ContainingType: {IsTupleType: true}} {
+                        assigned
+                    } else if ObliviousNullabilityAnalyzer.TryResolveTupleContainerSource(
+                        assignment.Left,
+                        this.context.SemanticModel,
+                        out var containerOwner,
+                        out _,
+                        out _,
+                        unwrapSuppressions: true
+                    ) {
+                        containerOwner
+                    } else {
+                        assigned
+                    }
                     return if symbol is IDiscardSymbol {
                         default(ISymbol?)
                     } else {
@@ -1101,6 +1128,18 @@ partial class CSharpToGSharpTranslator {
             } else {
                 mappedElementType
             }
+            if literal != nil {
+                let (sink, position) = this.ResolveArrayStorageSink(literal)
+                elementType = this.PromoteTupleTypeArguments(
+                    elementType,
+                    elementTypeSymbol,
+                    sink,
+                    position
+                        .Split('.')
+                        .Select((index string) -> int32.Parse(index, CultureInfo.InvariantCulture))
+                        .ToList()
+                )
+            }
             if literal is ImplicitArrayCreationExpressionSyntax implicitArray {
                 elementType = this.PromoteInferredDelegateArrayElementType(
                     elementType,
@@ -1192,14 +1231,25 @@ partial class CSharpToGSharpTranslator {
                 return (nil, "0")
             }
             var node ExpressionSyntax = value
+            let steps = List[(IsArray bool, Index int32)]{(true, 0)}
             while true {
-                if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) {
+                if node.Parent is (ParenthesizedExpressionSyntax or CastExpressionSyntax or CheckedExpressionSyntax) ||
+                    (
+                    node.Parent is PostfixUnaryExpressionSyntax suppress && suppress.IsKind(
+                        SyntaxKind.SuppressNullableWarningExpression
+                    )
+                ) {
                     node = cast[ExpressionSyntax](node.Parent)
                     continue
                 }
                 if node.Parent is ConditionalExpressionSyntax conditional &&
                     (conditional.WhenTrue == node || conditional.WhenFalse == node) {
                     node = conditional
+                    continue
+                }
+                if node.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) &&
+                    (coalesce.Left == node || coalesce.Right == node) {
+                    node = coalesce
                     continue
                 }
                 if node.Parent is SwitchExpressionArmSyntax arm &&
@@ -1213,10 +1263,57 @@ partial class CSharpToGSharpTranslator {
                     node = cast[ExpressionSyntax](node.Parent)
                     continue
                 }
+                if node.Parent is InitializerExpressionSyntax initializer && initializer.IsKind(
+                    SyntaxKind.ArrayInitializerExpression
+                ) {
+                    var outer = initializer
+                    while outer.Parent is InitializerExpressionSyntax dimension && dimension.IsKind(
+                        SyntaxKind.ArrayInitializerExpression
+                    ) {
+                        outer = dimension
+                    }
+                    steps.Insert(0, (true, 0))
+                    node = outer
+                    continue
+                }
+                if node.Parent is ArgumentSyntax{Parent: TupleExpressionSyntax tuple} argument {
+                    let index = tuple.Arguments.IndexOf(argument)
+                    if index >= 0 {
+                        steps.Insert(0, (false, index))
+                        node = tuple
+                        continue
+                    }
+                }
                 break
             }
             let (sink, prefix) = this.DirectValueSink(node)
-            return (sink, JoinPosition(prefix, "0"))
+            var current ITypeSymbol? = ObliviousNullabilityAnalyzer.TuplePositionType(sink, prefix)
+            var position = prefix
+            for (isArray, index) in steps {
+                while current is INamedTypeSymbol nullableNamed &&
+                    nullableNamed
+                    .OriginalDefinition
+                    .SpecialType == SpecialType.System_Nullable_T &&
+                    nullableNamed
+                    .TypeArguments
+                    .Length == 1 {
+                    position = JoinPosition(position, "0")
+                    current = nullableNamed.TypeArguments[0]
+                }
+                position = JoinPosition(position, index.ToString(CultureInfo.InvariantCulture))
+                if isArray {
+                    current = (current as IArrayTypeSymbol)?.ElementType
+                } else if current is INamedTypeSymbol{IsTupleType: true} tuple &&
+                    index >= 0 &&
+                    index < tuple
+                    .TupleElements
+                    .Length {
+                    current = tuple.TupleElements[index].Type
+                } else {
+                    current = nil
+                }
+            }
+            return (sink, position)
         }
 
         private func IsWidenedArrayCreationElement(value ExpressionSyntax?) bool {
