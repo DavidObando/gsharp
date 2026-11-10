@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Binding
 
 import System
+import System.Collections.Generic
 import System.Diagnostics.CodeAnalysis
 import System.Globalization
 import System.Linq.Expressions
@@ -105,7 +106,20 @@ internal shared class ConstantExpressionEvaluator {
         if !field.IsStatic || !field.IsInitOnly || !field.FieldType.IsSameAs(typeof(decimal)) {
             return false
         }
-        for attribute in field.GetCustomAttributesData() {
+        if TryGetDecimalConstantAttributeValue(field.GetCustomAttributesData(), out var decimalValue) {
+            value = decimalValue
+            return true
+        }
+        return false
+    }
+
+    /// Reads a `DecimalConstantAttribute` from custom attribute metadata.
+    /// @param attributes The custom attributes on the field or parameter.
+    /// @param value The decoded decimal value on success.
+    /// @returns `true` when a valid `DecimalConstantAttribute` is present.
+    internal func TryGetDecimalConstantAttributeValue(attributes IList[CustomAttributeData], out value decimal) bool {
+        value = default(decimal)
+        for attribute in attributes {
             if attribute
                 .AttributeType
                 .FullName != "System.Runtime.CompilerServices.DecimalConstantAttribute" ||

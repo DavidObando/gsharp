@@ -32,8 +32,8 @@ class Issue5589NullableConstantDefaultEmitTests {
                 EmitGSharp(GSharpLibrary, library, "Issue5589.Library", Array.Empty[string]())
                 let consumer = EmitCSharp(CSharpConsumer, Path.Combine(directory, "Issue5589.Consumer.dll"), library)
                 Assert.Equal(
-                    "1 5 7 3 1.5 True q RightToLeft 5 nil 1/RightToLeft/2 1/LeftToRight/0.5 g:6 9 LeftToRight 1:4 b:11 sq 5 12 13/RightToLeft RightToLeft z 14:RightToLeft 15:LeftToRight" +
-                        "|1 5 7 3 1.5 True q RightToLeft 5 nil",
+                    "1 5 7 3 1.5 1.5 -3 True q RightToLeft 5 5 nil 1/RightToLeft/2 1/LeftToRight/0.5 g:6 9 LeftToRight 1:4 b:11 sq 5 12 13/RightToLeft RightToLeft z 14:RightToLeft 15:LeftToRight" +
+                        "|1 5 7 3 1.5 1.5 -3 True q RightToLeft 5 5 nil",
                     Invoke(library, consumer, "Issue5589Consumer")
                 )
             }
@@ -116,10 +116,13 @@ class Defaults {
         func I64(x int64? = 7) string -> "$x"
         func U8(x uint8? = 3) string -> "$x"
         func F64(x float64? = 1.5) string -> "$x"
+        func Money(x decimal? = 1.5m) string -> "$x"
+        func Negative(x decimal? = -3m) string -> "$x"
         func Flag(x bool? = true) string -> "$x"
         func Letter(x char? = 'q') string -> "$x"
         func Way(x Direction? = Direction.RightToLeft) string -> "$x"
         func Widened(x int64? = 5) string -> "$x"
+        func WidenedDecimal(x decimal? = 5) string -> "$x"
         func Missing(x int32? = nil) string -> if x == nil { "nil" } else { "$x" }
         func Named(a int32? = 1, b Direction? = Direction.RightToLeft, c float64? = 0.5) string -> "$a/$b/$c"
         func Generic[T](t T, x int32? = 6) string -> "$t:$x"
@@ -134,10 +137,13 @@ class Defaults {
                 I64(),
                 U8(),
                 F64(),
+                Money(),
+                Negative(),
                 Flag(),
                 Letter(),
                 Way(),
                 Widened(),
+                WidenedDecimal(),
                 Missing(),
                 Named(c: 2.0),
                 Named(b: Direction.LeftToRight),
@@ -166,7 +172,8 @@ public static class Issue5589Consumer
     {
         var gsharp = Defaults.RunGSharp();
         return gsharp + "|" + string.Join(" ", Defaults.Read(), Defaults.I32(), Defaults.I64(), Defaults.U8(),
-            Defaults.F64(), Defaults.Flag(), Defaults.Letter(), Defaults.Way(), Defaults.Widened(), Defaults.Missing());
+            Defaults.F64(), Defaults.Money(), Defaults.Negative(), Defaults.Flag(), Defaults.Letter(),
+            Defaults.Way(), Defaults.Widened(), Defaults.WidenedDecimal(), Defaults.Missing());
     }
 }`
 

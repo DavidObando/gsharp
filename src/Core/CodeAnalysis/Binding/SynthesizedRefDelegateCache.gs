@@ -125,7 +125,18 @@ internal class SynthesizedRefDelegateCache {
                 FunctionTypeSymbol.AppendIdentityKey(sb, parameter.Type)
                 if parameter.HasExplicitDefaultValue {
                     sb.Append('=')
-                    if parameter.ExplicitDefaultValue is {} defaultValue {
+                    if parameter.ExplicitDefaultValue is decimal decimalDefault {
+                        let bits = decimal.GetBits(decimalDefault)
+                        sb
+                            .Append("System.Decimal:")
+                            .Append(bits[0])
+                            .Append(',')
+                            .Append(bits[1])
+                            .Append(',')
+                            .Append(bits[2])
+                            .Append(',')
+                            .Append(bits[3])
+                    } else if parameter.ExplicitDefaultValue is {} defaultValue {
                         let defaultText = Convert.ToString(defaultValue, CultureInfo.InvariantCulture) ?? string.Empty
                         sb
                             .Append(defaultValue.GetType().FullName)
