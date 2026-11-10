@@ -19,11 +19,12 @@ internal shared class ManagedReferenceOrigins {
             current = unwrap.Operand
         }
         return switch current {
-            case block is BoundBlockExpression: BoundBlockExpression(
-                block.Syntax,
-                block.Statements,
-                StorageLocation(block.Expression)
-            )
+            case block is BoundBlockExpression: if StorageLocation(block.Expression) is var inner &&
+                !object.ReferenceEquals(inner, block.Expression) {
+                BoundBlockExpression(block.Syntax, block.Statements, inner)
+            } else {
+                block
+            }
             case variable is BoundVariableExpression when BinderContext.NarrowedReadChangesRuntimeType(
                 variable.Variable.Type,
                 variable.NarrowedType
@@ -320,7 +321,7 @@ internal shared class ManagedReferenceOrigins {
         receiver.Type
     ) {
         default(string?)
-    } else if !object.ReferenceEquals(StorageLocation(receiver), receiver) {
+    } else if BinderContext.NarrowedReadChangesRuntimeType(StorageLocation(receiver).Type, receiver.Type) {
         "boxed value storage cannot be retained as a struct owner"
     } else {
         Rejection(receiver)

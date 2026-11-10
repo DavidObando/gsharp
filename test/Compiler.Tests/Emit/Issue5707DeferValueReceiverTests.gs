@@ -807,7 +807,17 @@ if propBox.Prop is Counter {
 if propBox.Prop is Counter c {
     Console.WriteLine(c.n)
 }
-`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\nnil\n3\n2\n2\n", fixture.AssemblyPath, Path.Combine(
+func CaptureBlockOwner() int32 {
+    var localCounter = Counter{n: 11}
+    let fieldHandle = managed(({
+        let _ = 0
+        localCounter
+    }).n)
+    *fieldHandle = 12
+    return localCounter.n
+}
+Console.WriteLine(CaptureBlockOwner())
+`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\nnil\n3\n2\n2\n12\n", fixture.AssemblyPath, Path.Combine(
                 AppContext.BaseDirectory,
                 "Gsharp.Runtime.Values.dll"
             ))
