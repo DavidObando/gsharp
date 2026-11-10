@@ -4879,10 +4879,13 @@ internal class ReflectionMetadataEmitter {
         if receiver is BoundDereferenceExpression {
             return false
         }
-        if IsValueTypeSymbol(receiver.Type) && SideEffectSpiller.GetReceiverStorageView(receiver) is {} storage &&
-            !object.ReferenceEquals(storage, receiver) && Binder.IsReferenceTypeForConstraint(
-            storage.Type.StripToBareShape()
-        ) {
+        if receiver.Type is not TypeParameterSymbol &&
+            IsValueTypeSymbol(receiver.Type) &&
+            SideEffectSpiller.GetReceiverStorageView(receiver) is {} storage && !object.ReferenceEquals(
+            storage,
+            receiver
+        ) &&
+            Binder.IsReferenceTypeForConstraint(storage.Type.StripToBareShape()) {
             return false
         }
         if receiver is BoundTupleElementAccessExpression && this.IsAddressableReceiverStorage(

@@ -1910,6 +1910,9 @@ internal partial class MethodBodyEmitter {
     }
 
     internal func TryEmitBoxedValueTypeReceiver(receiver BoundExpression) bool {
+        if receiver.Type is TypeParameterSymbol {
+            return false
+        }
         if receiver is BoundVariableExpression bve {
             return this.TryLoadStructVariableAddress(bve)
         }

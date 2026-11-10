@@ -434,6 +434,12 @@ if box.GetOnlyProp is Counter {
 
         let incompatibleInSource = `import Imported5814
 func TakeInString(in s string) int32 -> s.Length
+func ReturnRefCounter(b Box) ref readonly Counter {
+    if b.readonlyField is Counter {
+        return ref b.readonlyField
+    }
+    throw System.Exception()
+}
 let box = Box(Counter())
 if box.readonlyField is Counter {
     let _ = TakeInString(in box.readonlyField)
@@ -445,14 +451,15 @@ if box.readonlyField is Counter {
             incompatibleInCompilation.GlobalScope,
             incompatibleInCompilation.References
         )
-        let incompatibleInError = Assert.Single(
-            incompatibleInTree
-                .Diagnostics
-                .Concat(incompatibleInCompilation.GlobalScope.Diagnostics)
-                .Concat(incompatibleInProgram.Diagnostics)
-                .Where((d Diagnostic) -> d.IsError)
-        )
-        Assert.Equal("GS0154", incompatibleInError.Id)
+        let incompatibleInErrors = incompatibleInTree
+            .Diagnostics
+            .Concat(incompatibleInCompilation.GlobalScope.Diagnostics)
+            .Concat(incompatibleInProgram.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .ToArray()
+        Assert.Equal(2, incompatibleInErrors.Length)
+        Assert.Equal("GS0154", incompatibleInErrors[0].Id)
+        Assert.Equal("GS0155", incompatibleInErrors[1].Id)
 
         for member in[]string{"mutableField", "MutableProp"} {
             let call = "Bump()"

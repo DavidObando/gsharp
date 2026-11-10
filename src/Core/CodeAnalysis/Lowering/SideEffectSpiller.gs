@@ -904,17 +904,27 @@ internal class SideEffectSpiller : NestedFunctionBodyRewriter {
                     narrowedType: nil
                 )
             }
-            case field is BoundClrPropertyAccessExpression when field.NarrowedType != nil && field.Member is FieldInfo:
+            case property is BoundPropertyAccessExpression when property.NarrowedType != nil:
+            BoundPropertyAccessExpression(
+                property.Syntax,
+                property.Receiver,
+                property.StructType,
+                property.Property,
+                property.SubstitutedType,
+                narrowedType: nil,
+                property.InterfaceType
+            )
+            case clrAccess is BoundClrPropertyAccessExpression when clrAccess.NarrowedType != nil:
             BoundClrPropertyAccessExpression(
-                field.Syntax,
-                field.Receiver,
-                field.Member,
-                field.EffectiveDeclaredType,
-                field.StaticContainerType,
-                field.ConstrainedReceiverTypeParameter,
-                field.ConstrainedInterfaceType,
-                field.IsAddressableStaticField,
-                field.IsReadOnlySubmissionGlobal
+                clrAccess.Syntax,
+                clrAccess.Receiver,
+                clrAccess.Member,
+                clrAccess.EffectiveDeclaredType,
+                clrAccess.StaticContainerType,
+                clrAccess.ConstrainedReceiverTypeParameter,
+                clrAccess.ConstrainedInterfaceType,
+                clrAccess.IsAddressableStaticField,
+                clrAccess.IsReadOnlySubmissionGlobal
             )
             default: receiver
         }

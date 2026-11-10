@@ -690,6 +690,7 @@ namespace Imported5707 {
 }`)
         AssertRuns(`import System
 import System.Linq.Expressions
+import System.Runtime.CompilerServices
 import System.Threading.Tasks
 import Imported5707
 
@@ -716,6 +717,13 @@ func TakeIn(in c Counter) int32 {
 func Observe(in view string?, out target string?) string {
     target = nil
     return view ?? "nil"
+}
+
+func ReadTupleLength[T ITuple struct](x object) int32 {
+    if x is T {
+        return x.Length
+    }
+    return -1
 }
 
 class SourceBox {
@@ -782,7 +790,27 @@ var aliased string? = "initial"
 if aliased != nil {
     Console.WriteLine(Observe(in aliased, out aliased))
 }
-`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\nnil\n", fixture.AssemblyPath)
+if imported.value is Counter {
+    let handle = readonly managed(imported.value)
+    if *handle is Counter c {
+        Console.WriteLine(c.n)
+    }
+}
+Console.WriteLine(ReadTupleLength[ValueTuple[int32, int32]](ValueTuple.Create(10, 20)))
+let propBox = Box(Counter())
+if propBox.Prop is Counter {
+    propBox.Prop.Bump()
+}
+if propBox.Prop is Counter {
+    defer propBox.Prop.Bump()
+}
+if propBox.Prop is Counter c {
+    Console.WriteLine(c.n)
+}
+`, "7\n5\n1\n1\n1\n17\n2\n3\n10\n2\n1\n5\nnil\n3\n2\n2\n", fixture.AssemblyPath, Path.Combine(
+                AppContext.BaseDirectory,
+                "Gsharp.Runtime.Values.dll"
+            ))
     }
 
     shared {
