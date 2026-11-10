@@ -345,7 +345,8 @@ shared class ClrTypeUtilities {
             }
         }
         // Same-context fast path covers inheritance / interfaces.
-        if object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType() {
+        if !(target.IsInterface && target.IsGenericType) &&
+            (object.ReferenceEquals(target.Assembly, source.Assembly) || target.GetType() == source.GetType()) {
             try {
                 // A TypeBuilderInstantiation target always throws from IsAssignableFrom;
                 // go straight to the by-name walk below.

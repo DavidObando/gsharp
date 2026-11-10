@@ -1626,6 +1626,8 @@ class CSharpTypeMapper {
         symbol ISymbol?,
         context TranslationContext,
         path List[int32],
+        createdType INamedTypeSymbol? = nil,
+        creation BaseObjectCreationExpressionSyntax? = nil,
         nullablePositions HashSet[string]? = nil
     ) GTypeReference? {
         var mapped = mapped
@@ -1633,6 +1635,23 @@ class CSharpTypeMapper {
             !(declaredType is INamedTypeSymbol && declaredType.IsTupleType == true) &&
             !ObliviousNullabilityAnalyzer.HasNestedTupleSlots(declaredType) {
             return mapped
+        }
+        if mapped is ArrayTypeReference array && declaredType is IArrayTypeSymbol arrayType {
+            path.Add(0)
+            let element = this.PromoteTupleTypeArguments(
+                array.ElementType,
+                arrayType.ElementType,
+                symbol,
+                context,
+                path,
+                createdType,
+                creation,
+                nullablePositions
+            )
+            path.RemoveAt(path.Count - 1)
+            if !object.ReferenceEquals(element, array.ElementType) {
+                mapped = ArrayTypeReference(element!!, array.Rank){IsNullable = array.IsNullable}
+            }
         }
         if mapped is TupleTypeReference &&
             declaredType is INamedTypeSymbol{
@@ -1646,6 +1665,8 @@ class CSharpTypeMapper {
                 symbol,
                 context,
                 path,
+                createdType,
+                creation,
                 nullablePositions
             )
             path.RemoveAt(path.Count - 1)
@@ -1668,6 +1689,8 @@ class CSharpTypeMapper {
                     symbol,
                     context,
                     path,
+                    createdType,
+                    creation,
                     nullablePositions
                 )
                 path.RemoveAt(path.Count - 1)
@@ -1680,64 +1703,101 @@ class CSharpTypeMapper {
                 mapped
             }
         }
-        if mapped is ArrayTypeReference array && declaredType is IArrayTypeSymbol arrayType {
-            path.Add(0)
-            let element = this.PromoteTupleTypeArguments(
-                array.ElementType,
-                arrayType.ElementType,
+        if mapped is NamedTypeReference named && declaredType is INamedTypeSymbol declaredNamed {
+            mapped = this.PromoteNamedTypeChain(
+                named,
+                declaredNamed,
                 symbol,
                 context,
                 path,
+                createdType,
+                creation,
                 nullablePositions
             )
-            path.RemoveAt(path.Count - 1)
-            if !object.ReferenceEquals(element, array.ElementType) {
-                mapped = ArrayTypeReference(element, array.Rank){IsNullable = array.IsNullable}
-            }
         }
-        if mapped is NamedTypeReference named &&
-            declaredType is INamedTypeSymbol declaredNamed &&
-            named
-            .TypeArguments
-            .Count > 0 &&
-            named
-            .TypeArguments
-            .Count == declaredNamed
-            .TypeArguments
-            .Length {
-            let arguments = List[GTypeReference](named.TypeArguments.Count)
-            var changed = false
-            for var i = 0; i < named.TypeArguments.Count; i++ {
-                path.Add(i)
-                let argument GTypeReference? = this.PromoteTupleTypeArguments(
-                    named.TypeArguments[i],
-                    declaredNamed.TypeArguments[i],
-                    symbol,
-                    context,
-                    path,
-                    nullablePositions
-                )
-                path.RemoveAt(path.Count - 1)
-                changed |= !object.ReferenceEquals(argument, named.TypeArguments[i])
-                arguments.Add(argument!!)
-            }
-            if changed {
-                mapped = NamedTypeReference(named.Name, arguments, named.ContainingType){IsNullable = named.IsNullable}
-            }
-        }
-        return if path.Count > 0 &&
-            !mapped!!.IsNullable &&
-            (
+        let isTainted = if createdType != nil {
+            (nullablePositions?.Contains(string.Join(".", path)) == true) ||
+                ObliviousNullabilityAnalyzer
+                .IsCreationTupleElementTainted(
+                context.Compilation,
+                symbol,
+                createdType,
+                path,
+                context.SiblingCompilations,
+                creation
+            )
+        } else {
             nullablePositions?.Contains(string.Join(".", path)) ?? ObliviousNullabilityAnalyzer.IsTupleElementTainted(
                 context.Compilation,
                 symbol,
                 path,
                 context.SiblingCompilations
             )
-        ) {
+        }
+        return if path.Count > 0 && !mapped!!.IsNullable && isTainted {
             WithNullable(mapped, true)
         } else {
             mapped
+        }
+    }
+
+    private func PromoteNamedTypeChain(
+        named NamedTypeReference,
+        declaredNamed INamedTypeSymbol,
+        symbol ISymbol?,
+        context TranslationContext,
+        path List[int32],
+        createdType INamedTypeSymbol?,
+        creation BaseObjectCreationExpressionSyntax?,
+        nullablePositions HashSet[string]?
+    ) NamedTypeReference {
+        var containingType GTypeReference? = named.ContainingType
+        if containingType is NamedTypeReference containingNamed &&
+            declaredNamed.ContainingType is INamedTypeSymbol declaredContaining {
+            containingType = this.PromoteNamedTypeChain(
+                containingNamed,
+                declaredContaining,
+                symbol,
+                context,
+                path,
+                createdType,
+                creation,
+                nullablePositions
+            )
+        }
+        let offset = if declaredNamed.ContainingType is INamedTypeSymbol parent {
+            ObliviousNullabilityAnalyzer.EffectiveTypeArguments(parent).Count
+        } else {
+            0
+        }
+        var arguments = named.TypeArguments
+        var argumentsChanged = false
+        if named.TypeArguments.Count > 0 && named.TypeArguments.Count == declaredNamed.TypeArguments.Length {
+            let promotedArguments = List[GTypeReference](named.TypeArguments.Count)
+            for var i = 0; i < named.TypeArguments.Count; i++ {
+                path.Add(offset + i)
+                let argument GTypeReference? = this.PromoteTupleTypeArguments(
+                    named.TypeArguments[i],
+                    declaredNamed.TypeArguments[i],
+                    symbol,
+                    context,
+                    path,
+                    createdType,
+                    creation,
+                    nullablePositions
+                )
+                path.RemoveAt(path.Count - 1)
+                argumentsChanged |= !object.ReferenceEquals(argument, named.TypeArguments[i])
+                promotedArguments.Add(argument!!)
+            }
+            if argumentsChanged {
+                arguments = promotedArguments
+            }
+        }
+        return if argumentsChanged || !object.ReferenceEquals(containingType, named.ContainingType) {
+            NamedTypeReference(named.Name, arguments, containingType){IsNullable = named.IsNullable}
+        } else {
+            named
         }
     }
 

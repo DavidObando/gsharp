@@ -652,6 +652,7 @@ partial class CSharpToGSharpTranslator {
             } else {
                 cast[GTypeReference](NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType))
             }
+            type = this.PromoteCreationTupleArguments(type, typeSymbol, creation)
             // Issue #5541: a target-typed construction states the same nullable
             // positions as an explicit one.
             type = this.PromoteObliviousContainerCreation(type, typeSymbol, creation)

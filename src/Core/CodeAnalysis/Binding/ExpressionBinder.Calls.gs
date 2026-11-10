@@ -3195,6 +3195,9 @@ internal partial class ExpressionBinder {
             if !TypeMemberModel.GetMethods(type, "Add", MemberQuery.Instance(MemberKinds.Method)).IsDefaultOrEmpty {
                 return true
             }
+            if type is StructSymbol source && TypeMemberModel.GetNearestImportedBase(source) is {} importedBase {
+                return HasCollectionAdd(importedBase)
+            }
             // Issue #4013: the collection-literal `Add` probe deliberately keeps
             // seeing an explicitly-implemented interface `Add`, which the
             // ordinary-call candidate view no longer offers. `Dictionary[K, V]`
@@ -3216,6 +3219,9 @@ internal partial class ExpressionBinder {
                 IsCallableWithSingleArgument
             ) {
                 return true
+            }
+            if type is StructSymbol source && TypeMemberModel.GetNearestImportedBase(source) is {} importedBase {
+                return HasUnaryCollectionAdd(importedBase)
             }
             if type.ClrType is not{} clrType {
                 return false

@@ -5,6 +5,72 @@ import System.Text
 import Xunit
 
 class Issue5815OptionalAndHeaderLiteralDriverTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1TypedCallbackArgumentsVerifyOnInheritedCollectionReceivers(property bool, inherited bool) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let member = if property {
+            "prop Callback ((int32) -> int32) -> int32 { get { return func(f (int32) -> int32) int32 { return f(7) } } }"
+        } else {
+            "var Callback ((int32) -> int32) -> int32 = func(f (int32) -> int32) int32 { return f(7) }"
+        }
+        let baseType = if inherited {
+            " : List[string?]"
+        } else {
+            ""
+        }
+        let dll = fixture.Compile(
+            "package TypedCallback5892\nimport System.Collections.Generic\nclass Holder$baseType {\n$member\n}\n" +
+                "System.Console.Write(Holder().Callback((x int32) -> x + 1))",
+            "typed-callback",
+            true
+        )
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("8"), fixture.RunBytes(dll))
+    }
+
+    @Theory
+    @InlineData("var Value T")
+    @InlineData("prop Value T { get; set; }")
+    func Issue5892GenericMemberDefaultsVerifyAndExecute(member string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        let dll = fixture.Compile(`package FieldDefaults5892
+import System
+class Box[T] {
+` + member + `
+init(value T) { Value = value }
+}
+func MakeBox[T](value T) Box[T] -> Box[T](value)
+let first = MakeBox((x int32 = 7) -> x)
+let second = MakeBox((x int32 = 9, y int32 = 2) -> x * 10 + y)
+let many = MakeBox((x int32 = 4, tail ...int32) -> x + tail.Length)
+Console.Write("${first.Value()}:${second.Value(y: 3)}:${many.Value()}:${many.Value(tail: []int32{1, 2})}")
+`, "generic-member-defaults", true)
+        IlVerifier.Verify(dll)
+        Assert.Equal(Encoding.UTF8.GetBytes("7:93:4:6"), fixture.RunBytes(dll))
+    }
+
+    @Theory
+    @InlineData("var Value Callback = (x int32) -> x")
+    @InlineData("prop Value Callback -> (x int32) -> x")
+    func Issue5892DirectMemberDefaultsVerifyAndExecute(member string) {
+        using let fixture = NativeSliceLanguageTests.Fixture()
+        for value in[]int32{7, 9} {
+            let dll = fixture.Compile(
+                "package DirectDefaults5892\nimport System\ndelegate Callback(x int32 = $value) int32;\nclass Box {\n" +
+                    member +
+                    "\n}\nConsole.Write(Box().Value())",
+                "direct-member-defaults" + value.ToString(),
+                true
+            )
+            IlVerifier.Verify(dll)
+            Assert.Equal(Encoding.UTF8.GetBytes(value.ToString()), fixture.RunBytes(dll))
+        }
+    }
+
     @Fact
     func Review6CheckedWritableAliasReportsTheCastLocation() {
         using let fixture = NativeSliceLanguageTests.Fixture()

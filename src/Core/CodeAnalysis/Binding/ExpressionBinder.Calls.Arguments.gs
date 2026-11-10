@@ -755,91 +755,18 @@ internal partial class ExpressionBinder {
             )
             return true
         }
-        // ADR-0102 follow-up / issue #818: when the field's declared
-        // function type spells a trailing variadic parameter, pack /
-        // pass-through trailing args at the call site.
-        let fldIsVariadic = functionType.HasVariadic
-        let fldFixedCount = if fldIsVariadic {
-            functionType.ParameterTypes.Length - 1
-        } else {
-            functionType.ParameterTypes.Length
-        }
-        if fldIsVariadic {
-            if arguments.Length < fldFixedCount {
-                Diagnostics.ReportTooFewArgumentsForVariadic(ce.Location, methodName, fldFixedCount, arguments.Length)
-                result = BoundErrorExpression(nil)
-                return true
-            }
-        } else if arguments.Length != functionType.ParameterTypes.Length {
-            Diagnostics.ReportWrongArgumentCount(
-                ce.Location,
-                methodName,
-                functionType.ParameterTypes.Length,
-                arguments.Length
-            )
+        if !overloads.TryBindFunctionTypeArguments(
+            methodName,
+            functionType,
+            ce,
+            arguments,
+            StatementBinder.GetCallableParameterNames(memberLoad),
+            out var convertedArgs
+        ) {
             result = BoundErrorExpression(nil)
             return true
         }
-        var permutedArgs = arguments
-        if fldIsVariadic {
-            let sliceType = functionType.ParameterTypes[functionType.ParameterTypes.Length - 1]
-            var hasVariadicErrors = false
-            // Issue #1823: route through the #1630 canonical helper so
-            // trailing elements get the same per-element coercion applied
-            // at every other variadic pack site (previously packed raw,
-            // uncoerced elements here).
-            let variadicArgumentLocation(int32) -> TextLocation = (i int32) -> if i < ce.Arguments.Count {
-                ce.Arguments[i].Location
-            } else {
-                ce.Location
-            }
-            permutedArgs = OverloadResolver.PackOrPassThroughVariadicArguments(
-                conversions,
-                Diagnostics,
-                ce,
-                arguments,
-                fldFixedCount,
-                sliceType,
-                methodName,
-                variadicArgumentLocation,
-                &hasVariadicErrors
-            )
-            if hasVariadicErrors {
-                result = BoundErrorExpression(nil)
-                return true
-            }
-        }
-        let convertedArgs = ImmutableArray.CreateBuilder[BoundExpression](permutedArgs.Length)
-        for var i = 0; i < permutedArgs.Length; i++ {
-            let argLoc = if i < ce.Arguments.Count {
-                ce.Arguments[i].Location
-            } else {
-                ce.Location
-            }
-            var argument = permutedArgs[i]
-            if argument is BoundErrorExpression{Syntax: LambdaExpressionSyntax lambda} {
-                let sourceArgSyntax = if i < ce.Arguments.Count {
-                    OverloadResolver.UnwrapNamedArgumentValue(ce.Arguments[i])
-                } else {
-                    cast[ExpressionSyntax](lambda)
-                }
-                if TryBindLambdaExpressionWithTargetType(
-                    sourceArgSyntax,
-                    functionType.ParameterTypes[i],
-                    out var boundCallableArgLambda
-                ) {
-                    argument = boundCallableArgLambda!!
-                }
-            }
-            convertedArgs.Add(conversions.BindConversion(argLoc, argument, functionType.ParameterTypes[i]))
-        }
-        result = BuildDelegateMemberInvocation(
-            ce,
-            memberLoad,
-            callableType,
-            functionType,
-            convertedArgs.MoveToImmutable()
-        )
+        result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, convertedArgs)
         return true
     }
 

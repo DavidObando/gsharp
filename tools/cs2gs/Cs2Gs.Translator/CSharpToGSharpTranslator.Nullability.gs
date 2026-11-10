@@ -601,12 +601,24 @@ partial class CSharpToGSharpTranslator {
                 this.context.SemanticModel,
                 this.context.SiblingCompilations
             )
+            let objectCreation = creation as BaseObjectCreationExpressionSyntax
+            let creationSink ISymbol? = if objectCreation != nil {
+                ObliviousNullabilityAnalyzer.ResolveCreationTupleSink(objectCreation, this.context.SemanticModel)
+            } else {
+                default(ISymbol?)
+            }
             return this.typeMapper.PromoteTupleTypeArguments(
                 type,
                 typeSymbol,
-                nil,
+                creationSink,
                 this.context,
                 List[int32](),
+                if objectCreation != nil {
+                    typeSymbol as INamedTypeSymbol
+                } else {
+                    default(INamedTypeSymbol?)
+                },
+                objectCreation,
                 positions
             )
         }

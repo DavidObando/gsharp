@@ -3465,10 +3465,15 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return translated
             }
-            if !this.IsPureForwardingPromotedTarget(targetSymbol) && !this.IsActivePatternBinding(value) &&
-                !this.LambdaResultFeedsNullableObservedInvocation(value) && !this.IsNilableOnlyInEmittedGSharp(value) &&
-                this
-                .ReceiverNeedsNullForgiveness(value) {
+            let isTupleElement = SkipValuePreservingParents(value)?.Parent is ArgumentSyntax{
+                Parent: TupleExpressionSyntax
+            }
+            if !this.IsPureForwardingPromotedTarget(targetSymbol) &&
+                !(
+                isTupleElement && targetType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+            ) &&
+                !this.IsActivePatternBinding(value) && !this.LambdaResultFeedsNullableObservedInvocation(value) &&
+                !this.IsNilableOnlyInEmittedGSharp(value) && this.ReceiverNeedsNullForgiveness(value) {
                 return this.ReportStoreBridge(value, translated, EnsureNonNullAssertion(translated), targetSymbol)
             }
             let includePromotedLambdaArm = IsBranchArm(value) &&
@@ -3478,12 +3483,17 @@ partial class CSharpToGSharpTranslator {
                 value
             ) &&
                 this.LambdaTargetIsTranslatedSourceOrSiblingSlot(branchLambda)
+            let includePromotedTupleElement = isTupleElement && this.SlotTypeIsDeclared(targetSymbol, value) &&
+                targetType?.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
             return this.ForgiveNullableReferenceValue(
                 value,
                 translated,
                 targetType,
                 targetSymbol,
-                includePromotedValue: includePromotedLambdaArm
+                includePromotedValue: includePromotedLambdaArm || includePromotedTupleElement
             )
         }
 
@@ -5870,17 +5880,18 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return bridgedTuple
             }
-            let valueSymbol ISymbol? = this.context.GetSymbolInfo(value).Symbol
+            let unwrappedValue = Unparenthesize(value)
+            let valueSymbol ISymbol? = this.context.GetSymbolInfo(unwrappedValue).Symbol
             let valueLocal ILocalSymbol? = valueSymbol as ILocalSymbol ??
-                GetReferencedLocal(this.context.SemanticModel.GetOperation(value!!))
+                GetReferencedLocal(this.context.SemanticModel.GetOperation(unwrappedValue!!))
             let isFlowNarrowedLocal = valueLocal != nil &&
                 (
-                this.IsDominatedByNullCheckGuard(value, valueLocal) ||
+                this.IsDominatedByNullCheckGuard(unwrappedValue, valueLocal) ||
                     (
                     !this.IsObliviousCompilation() &&
                         this
                         .context
-                        .GetTypeInfo(value)
+                        .GetTypeInfo(unwrappedValue)
                         .Nullability
                         .FlowState == Microsoft
                         .CodeAnalysis
@@ -5889,13 +5900,13 @@ partial class CSharpToGSharpTranslator {
                 )
             )
             let nullableObservedLambdaResult = this.LambdaResultFeedsNullableObservedInvocation(value)
-            let importedStatedNullableValue = value is InvocationExpressionSyntax &&
+            let importedStatedNullableValue = unwrappedValue is InvocationExpressionSyntax &&
                 ObliviousNullabilityAnalyzer.IsImportedStatedNullablePosition(valueSymbol, this.context.Compilation)
-            let emittedNullableInvocationResult = value is InvocationExpressionSyntax &&
+            let emittedNullableInvocationResult = unwrappedValue is InvocationExpressionSyntax &&
                 valueSymbol is IMethodSymbol &&
                 (
                 this.ShouldPromoteToNullableReference(valueSymbol) || ObliviousNullabilityAnalyzer.IsDirectlyNullable(
-                    this.context.SemanticModel.GetOperation(value),
+                    this.context.SemanticModel.GetOperation(unwrappedValue),
                     this.context.SemanticModel,
                     respectNullGuards: true
                 )

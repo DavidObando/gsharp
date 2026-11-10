@@ -12,6 +12,60 @@ import System.Linq
 import Xunit
 
 class Issue5815InferredOptionalFunctionTests {
+    @Theory
+    @InlineData(false, false)
+    @InlineData(true, false)
+    @InlineData(false, true)
+    @InlineData(true, true)
+    func Review1DeferredTypedMemberLambdasRetainTargetTyping(property bool, inherited bool) {
+        let member = if property {
+            "prop Callback ((int32) -> int32) -> int32 { get { return func(f (int32) -> int32) int32 { return f(7) } } }"
+        } else {
+            "var Callback ((int32) -> int32) -> int32 = func(f (int32) -> int32) int32 { return f(7) }"
+        }
+        let baseType = if inherited {
+            " : List[string?]"
+        } else {
+            ""
+        }
+        let result = EmittedOracle.Evaluate(
+            "import System.Collections.Generic\nclass Holder$baseType {\n$member\n}\n" +
+                "Holder().Callback((x int32) -> x + 1)"
+        )
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(8, result.Value)
+    }
+
+    @Theory
+    @InlineData("var Value T")
+    @InlineData("prop Value T { get; set; }")
+    func Issue5892GenericCallableMembersMaterializeOptionalArguments(member string) {
+        let result = EmittedOracle.Evaluate(`class Box[T] {
+` + member + `
+init(value T) { Value = value }
+}
+func MakeBox[T](value T) Box[T] -> Box[T](value)
+let first = MakeBox((x int32 = 7) -> x)
+let second = MakeBox((x int32 = 9, y int32 = 2) -> x * 10 + y)
+let many = MakeBox((x int32 = 4, tail ...int32) -> x + tail.Length)
+first.Value() * 10000 + second.Value(y: 3) * 100 + many.Value() * 10 + many.Value(tail: []int32{1, 2})`)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(79346, result.Value)
+    }
+
+    @Theory
+    @InlineData("var Value Callback = (x int32) -> x")
+    @InlineData("prop Value Callback -> (x int32) -> x")
+    func Issue5892DirectCallableMembersMaterializeOptionalArguments(member string) {
+        for value in[]int32{7, 9} {
+            let result = EmittedOracle.Evaluate(
+                "delegate Callback(x int32 = $value) int32;\nclass Box {\n" + member + "\n}\nBox().Value()"
+            )
+            Assert.Empty(result.Diagnostics)
+            Assert.Equal(value, result.Value)
+        }
+    }
+
     @Fact
     func Review6MixedDelegatesCompareInvokeContracts() {
         let parameter = ParameterSymbol("x", TypeSymbol.Int32)
