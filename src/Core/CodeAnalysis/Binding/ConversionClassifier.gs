@@ -5693,13 +5693,6 @@ internal class ConversionClassifier {
                     )
                 }
             }
-            if IsMissingParameterDefault(parameter) {
-                let missingType = parameter.ParameterType.Assembly.GetType("System.Reflection.Missing")
-                let valueField FieldInfo? = missingType?.GetField("Value", BindingFlags.Public | BindingFlags.Static)
-                if valueField != nil {
-                    return BoundClrPropertyAccessExpression(nil, nil, valueField, typeSymbol)
-                }
-            }
             if TryGetConstantParameterDefault(parameter, out var constant) {
                 let literal = BoundLiteralExpression(nil, constant)
                 // Metadata constants retain their value type; object slots therefore require boxing.
@@ -5711,6 +5704,13 @@ internal class ConversionClassifier {
                     },
                     typeSymbol
                 )
+            }
+            if IsMissingParameterDefault(parameter) {
+                let missingType = parameter.ParameterType.Assembly.GetType("System.Reflection.Missing")
+                let valueField FieldInfo? = missingType?.GetField("Value", BindingFlags.Public | BindingFlags.Static)
+                if valueField != nil {
+                    return BoundClrPropertyAccessExpression(nil, nil, valueField, typeSymbol)
+                }
             }
             return BoundDefaultExpression(nil, typeSymbol)
         }
@@ -5724,10 +5724,14 @@ internal class ConversionClassifier {
             if value == nil {
                 return BoundDefaultExpression(nil, parameterType)
             }
-            return LiftOptionalDefaultValue(
-                BoundLiteralExpression(nil, value, GetOptionalDefaultValueType(parameterType)),
-                parameterType
-            )
+            let valueType = GetOptionalDefaultValueType(parameterType)
+            if valueType.StripToBareShape() == TypeSymbol.Object {
+                let literal = BoundLiteralExpression(nil, value)
+                if literal.Type != valueType {
+                    return BoundConversionExpression(nil, parameterType, literal)
+                }
+            }
+            return LiftOptionalDefaultValue(BoundLiteralExpression(nil, value, valueType), parameterType)
         }
 
         // Issue #5589: a non-null default of a value-type `T?` parameter is a `T` value.
@@ -7488,13 +7492,20 @@ internal class ConversionClassifier {
             @NotNullWhen(true) out value object?
         ) bool {
             value = nil
-            var raw object?
+            var raw object? = nil
             try {
                 raw = parameter.RawDefaultValue
-            } catch {
-                return false
-            }
-            if raw == nil || raw is DBNull {
+            } catch { }
+            if raw == nil || raw is DBNull || raw is Missing || raw.GetType().FullName == "System.Reflection.Missing" {
+                try {
+                    if ConstantExpressionEvaluator.TryGetDecimalConstantAttributeValue(
+                        parameter.GetCustomAttributesData(),
+                        out var decimalValue
+                    ) {
+                        value = decimalValue
+                        return true
+                    }
+                } catch { }
                 return false
             }
             // Only primitive/string constants flow through BoundLiteralExpression's
@@ -7788,19 +7799,26 @@ internal class ConversionClassifier {
             if targetType.IsEnum {
                 targetType = Enum.GetUnderlyingType(targetType)
             }
-            normalized = switch Type.GetTypeCode(targetType) {
+            let typeCode = Type.GetTypeCode(targetType)
+            let convertible = if value is char ch && typeCode != TypeCode.Char {
+                cast[object](uint16(ch))
+            } else {
+                value
+            }
+            normalized = switch typeCode {
                 case TypeCode.Boolean when value is bool: value
                 case TypeCode.Char when value is char: value
-                case TypeCode.SByte: Convert.ToSByte(value, CultureInfo.InvariantCulture)
-                case TypeCode.Byte: Convert.ToByte(value, CultureInfo.InvariantCulture)
-                case TypeCode.Int16: Convert.ToInt16(value, CultureInfo.InvariantCulture)
-                case TypeCode.UInt16: Convert.ToUInt16(value, CultureInfo.InvariantCulture)
-                case TypeCode.Int32: Convert.ToInt32(value, CultureInfo.InvariantCulture)
-                case TypeCode.UInt32: Convert.ToUInt32(value, CultureInfo.InvariantCulture)
-                case TypeCode.Int64: Convert.ToInt64(value, CultureInfo.InvariantCulture)
-                case TypeCode.UInt64: Convert.ToUInt64(value, CultureInfo.InvariantCulture)
-                case TypeCode.Single: Convert.ToSingle(value, CultureInfo.InvariantCulture)
-                case TypeCode.Double: Convert.ToDouble(value, CultureInfo.InvariantCulture)
+                case TypeCode.SByte: Convert.ToSByte(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Byte: Convert.ToByte(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Int16: Convert.ToInt16(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.UInt16: Convert.ToUInt16(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Int32: Convert.ToInt32(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.UInt32: Convert.ToUInt32(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Int64: Convert.ToInt64(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.UInt64: Convert.ToUInt64(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Single: Convert.ToSingle(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Double: Convert.ToDouble(convertible, CultureInfo.InvariantCulture)
+                case TypeCode.Decimal: Convert.ToDecimal(convertible, CultureInfo.InvariantCulture)
                 case TypeCode.String when value is string: value
                 default: default(object?)
             }

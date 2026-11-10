@@ -5,6 +5,7 @@
 package GSharp.Core.CodeAnalysis.Symbols
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
 import System
 import System.Collections.Generic
@@ -366,6 +367,12 @@ shared class ClrNullability {
                 return false
             }
             let rawDefault object? = parameter.RawDefaultValue
+            if rawDefault is decimal || ConstantExpressionEvaluator.TryGetDecimalConstantAttributeValue(
+                parameter.GetCustomAttributesData(),
+                out _
+            ) {
+                return false
+            }
             return rawDefault == nil || object.ReferenceEquals(rawDefault, Missing.Value) || object.ReferenceEquals(
                 rawDefault,
                 DBNull.Value

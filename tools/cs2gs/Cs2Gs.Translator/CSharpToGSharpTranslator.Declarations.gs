@@ -906,7 +906,12 @@ partial class CSharpToGSharpTranslator {
                         LiteralExpression.Float(this.ToFloatLiteralText(f, isSingle: true))
                 }
                 case m is decimal {
-                    return LiteralExpression.Float(m.ToString(CultureInfo.InvariantCulture))
+                    let prefix = if m == 0m && decimal.IsNegative(m) {
+                        "-"
+                    } else {
+                        ""
+                    }
+                    return LiteralExpression.Float(prefix + m.ToString(CultureInfo.InvariantCulture) + "m")
                 }
                 default {
                     return if IsIntegral(value) {

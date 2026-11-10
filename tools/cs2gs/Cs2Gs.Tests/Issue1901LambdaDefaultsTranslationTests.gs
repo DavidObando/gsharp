@@ -341,12 +341,9 @@ namespace Corpus.Issue1901
     }
 }
 `)
-        Assert.Contains("x decimal = 1.5", rendered, StringComparison.Ordinal)
-        Assert.Contains("Console.WriteLine(f(1.5))", rendered, StringComparison.Ordinal)
-        AssertRoundTripParses(
-            rendered,
-            "G# currently types decimal literal defaults as float64 and cannot bind them to decimal parameters."
-        )
+        Assert.Contains("x decimal = 1.5m", rendered, StringComparison.Ordinal)
+        Assert.Contains("Console.WriteLine(f(1.5m))", rendered, StringComparison.Ordinal)
+        AssertRoundTripParses(rendered)
     }
 
     shared {
