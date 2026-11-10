@@ -466,8 +466,9 @@ namespace Demo
 {
     public class Box<T>
     {
-        public Box(T value) { Value = value; }
+        public Box(T value) { Value = value; Items = new T[] { value }; }
         public T Value;
+        public T[] Items;
         public T Get() => Value;
         public T this[int index] => Value;
     }
@@ -477,6 +478,7 @@ namespace Demo
         static T Id<T>(T x) => x;
         static T Call<T>(System.Func<T> f) => f();
         static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static T Unwrap<T>((T Value, int Tag) p) => p.Value;
         static int LocalResult()
         {
             var task = Task.FromResult(Volatile.Read(ref cache!));
@@ -494,6 +496,9 @@ namespace Demo
         static int Awaiter() =>
             (Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() switch { var w => w.Count }) +
             (Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter().GetResult() is var x ? x.Count : -1) - 1;
+        static int StructSubpatternAwaiter() =>
+            Wrap(Task.FromResult(Volatile.Read(ref cache!)).GetAwaiter()) is { Value: var aw } && aw.GetResult() is var awRes ?
+                awRes.Count : -1;
         static int ResultArm() => Task.FromResult(Volatile.Read(ref cache!)).Result switch { var r => r.Count };
         static int ResultCase()
         {
@@ -512,16 +517,24 @@ namespace Demo
         static int IndexerAndDelegate()
         {
             var read = () => Volatile.Read(ref cache!);
+            var f1 = true ? read : read;
+            var f2 = true ? f1 : f1;
+            var pair = (Volatile.Read(ref cache!), 0);
             return (Wrap(Volatile.Read(ref cache!))[0] is var idx ? idx.Count : -1) +
                 (Wrap(Volatile.Read(ref cache!))[0] switch { var idxArm => idxArm.Count }) +
+                (Wrap(Volatile.Read(ref cache!)).Items[0] switch { var itemArm => itemArm.Count }) +
+                (Wrap(Volatile.Read(ref cache!)).Items[0] is var itemIs ? itemIs.Count : -1) +
+                (Unwrap(pair) switch { var tupArm => tupArm.Count }) +
+                (Unwrap(pair) is var tupIs ? tupIs.Count : -1) +
                 (read() is var invoked ? invoked.Count : -1) +
-                (read() switch { var invokedArm => invokedArm.Count }) - 3;
+                (f2() is var branchedInvoked ? branchedInvoked.Count : -1) +
+                (read() switch { var invokedArm => invokedArm.Count }) - 8;
         }
         static int Nested() => (` + nested + ` switch { var n => n.Count }) + (` + nested + ` is var p ? p.Count : -1) - 1;
         public static string Run() =>
             ResultArm() + " " + ResultCase() + " " + ResultIs() + " " + AwaitArm().Result + " " + BoxArm() + " " +
             Nested() + " " + LocalResult() + " " + BlockCallback(true) + " " + ReceiverGet() + " " + Awaiter() + " " +
-            CapturedTask() + " " + IndexerAndDelegate();
+            CapturedTask() + " " + IndexerAndDelegate() + " " + StructSubpatternAwaiter();
     }
 }`)
         Assert.Contains("case var r: r!!.Count", printed)
@@ -545,9 +558,14 @@ namespace Demo
         Assert.Contains("is var u { u!!.Count }", printed)
         Assert.Contains("is var idx { idx!!.Count }", printed)
         Assert.Contains("case var idxArm: idxArm!!.Count", printed)
+        Assert.Contains("case var itemArm: itemArm!!.Count", printed)
+        Assert.Contains("is var itemIs { itemIs!!.Count }", printed)
+        Assert.Contains("case var tupArm: tupArm!!.Count", printed)
+        Assert.Contains("is var tupIs { tupIs!!.Count }", printed)
         Assert.Contains("is var invoked { invoked!!.Count }", printed)
         Assert.Contains("case var invokedArm: invokedArm!!.Count", printed)
-        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1 1 1")
+        Assert.Contains("awRes!!.Count", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 1 1 1 1 1 1")
     }
 
     /// Issue #5656: the issue's repro and target-aware nullable slots over a generic member read. `LookupArm`,
@@ -746,6 +764,7 @@ namespace Demo
         static Node Name<T>(T x) => new Holder(default(Node)!).Child;
         static T Keep<T, U>(System.Func<T, U> f, T x) => x;
         static T Pick<T>(T? ignored, T value) where T : class => value;
+        static T UnwrapSecond<T>((T? Ignored, T Value) p) where T : class => p.Value;
         static string PairIs() =>
             Id(Second(Volatile.Read(ref cache!), new Holder(default(Node)!).Child)) is var c ? new Sink().Take(c) : "none";
         static string PairArm() =>
@@ -758,11 +777,16 @@ namespace Demo
             Keep((Node _) => Volatile.Read(ref cache!), new Holder(default(Node)!).Child) switch { var k => new Sink().Take(k) };
         static string PickIs() => Pick(Volatile.Read(ref cache!), new Holder(default(Node)!).Child) is var q ? new Sink().Take(q) : "none";
         static string PickArm() => Pick(Volatile.Read(ref cache!), new Holder(default(Node)!).Child) switch { var q => new Sink().Take(q) };
+        static string TupleWrapperIs()
+        {
+            var pair = (Volatile.Read(ref cache!), new Holder(default(Node)!).Child);
+            return UnwrapSecond(pair) is var tw ? new Sink().Take(tw) : "none";
+        }
         static string SecondMemberArm() =>
             Id(MakePair(Volatile.Read(ref cache!), new Holder(default(Node)!).Child).Second) switch { var s => new Sink().Take(s) };
         public static string Run() =>
             PairIs() + " " + PairArm() + " " + NameIs() + " " + NameArm() + " " + KeepIs() + " " + KeepArm() + " " +
-            PickIs() + " " + PickArm() + " " + SecondMemberArm();
+            PickIs() + " " + PickArm() + " " + TupleWrapperIs() + " " + SecondMemberArm();
     }
 }`)
         Assert.Contains("is var c { Sink().Take(c) }", printed)
@@ -773,8 +797,9 @@ namespace Demo
         Assert.Contains("case var k: Sink().Take(k)\n", printed)
         Assert.Contains("is var q { Sink().Take(q) }", printed)
         Assert.Contains("case var q: Sink().Take(q)\n", printed)
+        Assert.Contains("is var tw { Sink().Take(tw) }", printed)
         Assert.Contains("case var s: Sink().Take(s)\n", printed)
-        RunsAs(printed, "taken taken taken taken taken taken taken taken taken")
+        RunsAs(printed, "taken taken taken taken taken taken taken taken taken taken")
     }
 
     /// G# infers `Volatile.Read(ref h.Value)` from the emitted storage of `h.Value`, which `[AllowNull]` widens
@@ -875,13 +900,22 @@ namespace Demo
         RunsAs(printed, "taken taken taken taken taken taken taken taken")
     }
 
-    /// The capture query records each expression it decides, so a nest of 24 generic calls over a non-null
-    /// value translates without asking each inner call again at each level, and the capture needs no `!!`.
-    /// Translation only: gsc binds such a nest in exponential time (#5652).
+    /// The capture query records each expression it decides, so a nest of 24 generic calls or a 24-link
+    /// branching callable alias chain over a non-null value translates without asking each inner node again
+    /// at each level, and the capture needs no `!!`. Translation only: gsc binds such a nest in exponential
+    /// time (#5652).
     @Fact
     func ADeepNestOfGenericCalls_IsDecidedOncePerCall() {
+        let chain = String.Concat(
+            Enumerable.Range(1, 24).Select(
+                (i int32) -> "(flag ? f" + (i - 1).ToString() + " : f" + (i - 1).ToString() +
+                    ") is var f" +
+                    i.ToString() + " && "
+            )
+        )
         let printed = TranslateOnly(`
 #nullable enable
+using System;
 using System.Collections.Generic;
 using System.Threading;
 namespace Demo
@@ -891,9 +925,15 @@ namespace Demo
         private static Dictionary<string, int>? cache;
         static T Id<T>(T x) => x;
         static int Nested() => ` + Nest(24, "new Dictionary<string, int>()") + ` switch { var n => n.Count };
+        static int CallableChain(bool flag)
+        {
+            Func<Dictionary<string, int>> f0 = () => new Dictionary<string, int>();
+            return ` + chain + `f24() is var c ? c.Count : -1;
+        }
     }
 }`)
         Assert.Contains("case var n: n.Count", printed)
+        Assert.Contains("is var c { c.Count }", printed)
     }
 
     /// With #5651's by-reference narrowing (#5617): a narrowed `ref` parameter read after an accessor that
