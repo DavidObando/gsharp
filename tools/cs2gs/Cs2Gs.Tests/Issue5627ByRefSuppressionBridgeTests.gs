@@ -20,11 +20,12 @@ import Xunit
 /// `YieldsValueNilableBeyondItsCSharpType` always `false`, the argument, return, assignment, composed and null
 /// rows do not bind. Without its walk into the operands of a conditional, a switch expression or `??`, the
 /// composed receivers and the `??` return do not bind. Without the target check, the nullable control rows
-/// assert and throw `NullReferenceException`. `SlotTypeIsDeclared` limits the new `!!` to a slot whose type the
-/// program text writes: when it counts a slot typed by a type parameter, a `var` or deconstructed local, a
-/// reassigned local whose emitted storage is `T?`, the result of a lambda stored into an inferred slot or a
-/// value with no slot symbol, the matching control rows assert and throw; when it drops a field, a property,
-/// a method result or the storage of an asserted initializer, the matching rows do not bind.
+/// assert and throw `NullReferenceException`. `SlotTypeIsDeclared` limits the new `!!` to a slot whose emitted
+/// G# storage is non-null (#5627, #5686, #5701): when it counts a slot typed by an inferred type parameter, an
+/// inferred `var` or deconstructed local, a reassigned local or array element whose emitted storage is `T?`, or
+/// the result of a lambda stored into an inferred slot, the matching control rows assert and throw; when it
+/// drops a field, a property, a method result, an asserted or non-null `var` local, an array element or a
+/// member of a receiver with written type arguments, the matching rows do not bind.
 open class Issue5627ByRefSuppressionBridgeTests {
     /// The issue's repro: an argument, a return and a conditional receiver of a dropped by-ref suppression.
     @Fact
@@ -624,6 +625,85 @@ namespace Demo
         Assert.Contains("Sink()[Volatile.Read(&cache), 0]", printed)
         Assert.Contains("return t[Volatile.Read(&cache)]", printed)
         RunsAs(printed, "1 -1 1")
+    }
+
+    /// Issue #5701: a reassigned `var` local whose declaration emitted non-null storage, an array element whose
+    /// emitted element type is non-null and a type-parameter field, property, indexer or parameter of a receiver
+    /// whose type arguments are written assert the value (`!!`), while their nullable and inferred counterparts
+    /// take a null `cache` unasserted as C# does.
+    @Fact
+    func AVarLocalAnArrayElementOrATypeParameterMember_FollowsItsEmittedSlot() {
+        let printed = Translate(`
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+namespace Demo
+{
+    public class Box<T>
+    {
+        public Box(T value) { Value = value; Prop = value; Items = new T[] { value }; }
+        public T Value;
+        public T Prop { get; set; }
+        public T[] Items;
+        public T this[int index] { get => Value; set => Value = value; }
+        public int Accept(T value) => 1;
+    }
+    public static class P
+    {
+        private static Dictionary<string, int>? cache;
+        private static Dictionary<string, int>? full = new Dictionary<string, int> { ["a"] = 1 };
+        private static Box<Dictionary<string, int>>? fullBox = new Box<Dictionary<string, int>>(new Dictionary<string, int> { ["a"] = 1 });
+        static Box<T> Wrap<T>(T value) => new Box<T>(value);
+        static T[] MakeArray<T>(T value) => new T[] { value };
+        static int VarReassign() { var d = new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
+        static int VarReassignArm(bool flag) { var d = new Dictionary<string, int>(); d = flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return d.Count; }
+        static int VarReassignAlias() { var a = new Dictionary<string, int>(); var d = a; d = Volatile.Read(ref full!); return d.Count; }
+        static int VarNewBoxReassign() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)); b = Volatile.Read(ref fullBox!); return b.Value.Count; }
+        static int Element(Dictionary<string, int>[] arr) { arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
+        static int VarArrayElement() { var arr = new Dictionary<string, int>[1]; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
+        static int ImplicitArrayNonNullElement() { var arr = new[] { new Dictionary<string, int>() }; arr[0] = Volatile.Read(ref full!); return arr[0].Count; }
+        static int ArrayInitializers() { var arr = new Dictionary<string, int>[] { Volatile.Read(ref full!) }; Dictionary<string, int>[] typedImplicit = new[] { Volatile.Read(ref full!) }; return arr[0].Count + typedImplicit[0].Count; }
+        static int TypedBox() { Box<Dictionary<string, int>> b = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
+        static int TypedBoxMembers() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)) { Value = Volatile.Read(ref full!) }; b.Prop = Volatile.Read(ref full!); b[0] = Volatile.Read(ref full!); b.Items[0] = Volatile.Read(ref full!); return b.Accept(Volatile.Read(ref full!)) + b.Value.Count + b.Prop.Count + b[0].Count + b.Items[0].Count; }
+        static int ForEachTypedBox() { var total = 0; foreach (var item in new[] { new Box<Dictionary<string, int>>(new Dictionary<string, int>()) }) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
+        static int CollectionInitializers() { var list = new List<Dictionary<string, int>> { Volatile.Read(ref full!) }; var map = new Dictionary<Dictionary<string, int>, Dictionary<string, int>> { [Volatile.Read(ref full!)] = Volatile.Read(ref full!) }; return list[0].Count + map.Count; }
+        static bool VarWidenedByNull(bool flag) { var d = new Dictionary<string, int>(); if (flag) d = null; d = Volatile.Read(ref cache!); return d == null; }
+        static bool NullableArrayElement() { Dictionary<string, int>?[] arr = new Dictionary<string, int>?[1]; arr[0] = Volatile.Read(ref cache!); return arr[0] == null; }
+        static int InferredArrayElement() { var arr = MakeArray(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref cache!); return 1; }
+        static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); return 1; }
+        static int InferredBoxItemsElement() { var b = Wrap(Volatile.Read(ref cache!)); b.Items[0] = Volatile.Read(ref cache!); return 1; }
+        static bool NullableTypedBox() { var b = new Box<Dictionary<string, int>?>(Volatile.Read(ref cache!)); b.Value = Volatile.Read(ref cache!); b.Prop = Volatile.Read(ref cache!); return b.Value == null && b.Prop == null; }
+        static int DeconstructedBox() { (Box<Dictionary<string, int>> b, int n) = (Wrap(Volatile.Read(ref cache!)), 0); b.Value = Volatile.Read(ref cache!); return 1; }
+        static int ForEachInferredBox() { foreach (var item in MakeArray(Wrap(Volatile.Read(ref cache!)))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
+        public static string Run() =>
+            VarReassign() + " " + VarReassignArm(true) + " " + VarReassignAlias() + " " + VarNewBoxReassign() + " " +
+            Element(new Dictionary<string, int>[1]) + " " + VarArrayElement() + " " + ImplicitArrayNonNullElement() + " " + ArrayInitializers() + " " +
+            TypedBox() + " " + TypedBoxMembers() + " " + ForEachTypedBox() + " " + CollectionInitializers() + " " +
+            VarWidenedByNull(true) + " " + NullableArrayElement() + " " + InferredArrayElement() + " " + ImplicitInferredArrayElement() + " " +
+            InferredBoxItemsElement() + " " + NullableTypedBox() + " " + DeconstructedBox() + " " + ForEachInferredBox();
+    }
+}`)
+        Assert.Contains("var d = Dictionary[string, int32]()\n        d = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("d = if flag { Volatile.Read(&full)!! } else { Dictionary[string, int32]() }\n", printed)
+        Assert.Contains("b = Volatile.Read(&fullBox)!!\n", printed)
+        Assert.Contains("arr[0] = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("[]Dictionary[string, int32]{Volatile.Read(&full)!!}", printed)
+        Assert.Contains("b.Value = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("b.Prop = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("b[0] = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("b.Items[0] = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("b.Accept(Volatile.Read(&full)!!)", printed)
+        Assert.Contains("item!!.Value = Volatile.Read(&full)!!\n", printed)
+        Assert.Contains("List[Dictionary[string, int32]]{ Volatile.Read(&full)!! }", printed)
+        Assert.Contains("[Volatile.Read(&full)!!] = Volatile.Read(&full)!!", printed)
+        Assert.Contains("d = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("arr[0] = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("[]Dictionary[string, int32]?{Volatile.Read(&cache)}", printed)
+        Assert.Contains("b.Items[0] = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("b.Value = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("b.Prop = Volatile.Read(&cache)\n", printed)
+        Assert.Contains("item!!.Value = Volatile.Read(&cache)\n", printed)
+        RunsAs(printed, "1 1 1 1 1 1 1 2 1 5 1 2 True True 1 1 1 True 1 1")
     }
 
     /// A null `cache` at a non-null slot. C# passes, returns or stores the null, and the first dereference

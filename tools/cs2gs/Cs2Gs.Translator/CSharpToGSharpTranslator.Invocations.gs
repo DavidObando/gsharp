@@ -3398,8 +3398,13 @@ partial class CSharpToGSharpTranslator {
             // property has no null evidence of its own and stays non-null. The
             // C# accepted the initializer only by trusting the generated
             // annotation, so asserting restores the contract it assumed.
+            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbolForPromotionCheck, valueExpression) &&
+                this.YieldsValueNilableBeyondItsCSharpType(valueExpression)
             return if (
-                this.NullableReferenceValueMayBeNull(valueExpression, respectDeclaredCallResults: true) ||
+                emittedNilableValue || this.NullableReferenceValueMayBeNull(
+                    valueExpression,
+                    respectDeclaredCallResults: true
+                ) ||
                     (
                     if this.IsObliviousCompilation() {
                         this.IsNullablePromotedValue(valueExpression)
@@ -3408,10 +3413,27 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             ) {
+                let assertionOperand GExpression? = if (
+                    valueExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax or
+                        Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionSyntax or
+                        ConditionalAccessExpressionSyntax
+                ) {
+                    cast[GExpression](ParenthesizedExpression(translatedValue))
+                } else {
+                    translatedValue
+                }
                 this.ReportStoreBridge(
                     valueExpression,
                     translatedValue,
-                    EnsureNonNullAssertion(translatedValue),
+                    EnsureNonNullAssertion(assertionOperand),
                     targetSymbolForPromotionCheck,
                     targetType
                 )
