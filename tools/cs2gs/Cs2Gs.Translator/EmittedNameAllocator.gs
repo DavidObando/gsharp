@@ -173,8 +173,20 @@ internal class EmittedNameAllocator {
                     StringComparer.Ordinal
                 )
                 for member in contract {
-                    if member is IMethodSymbol method && IsUserRecordDeconstruct(method) {
-                        taken.UnionWith(this.GetDeconstructionReservedNames(method))
+                    if member is IMethodSymbol method {
+                        if IsUserRecordDeconstruct(method) {
+                            taken.UnionWith(this.GetDeconstructionReservedNames(method))
+                        }
+                        if !method
+                            .ExplicitInterfaceImplementations
+                            .IsDefaultOrEmpty &&
+                            method
+                            .ContainingType
+                            .GetMembers("Deconstruct")
+                            .OfType[IMethodSymbol]()
+                            .Any((candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared) {
+                            taken.Add("deconstruct")
+                        }
                     }
                 }
                 var renamed = "deconstruct"
@@ -182,7 +194,22 @@ internal class EmittedNameAllocator {
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {
-                    this.emittedNames[member] = if member.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                    let keepOriginalName = member
+                        .DeclaringSyntaxReferences
+                        .IsDefaultOrEmpty ||
+                        (
+                        member is IMethodSymbol explicitMethod &&
+                            !explicitMethod
+                            .ContainingType
+                            .IsRecord &&
+                            !explicitMethod
+                            .ExplicitInterfaceImplementations
+                            .IsDefaultOrEmpty &&
+                            explicitMethod
+                            .ExplicitInterfaceImplementations
+                            .All((slot IMethodSymbol) -> slot.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                    )
+                    this.emittedNames[member] = if keepOriginalName {
                         SourceName(member)
                     } else {
                         renamed

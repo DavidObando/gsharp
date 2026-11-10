@@ -997,6 +997,12 @@ namespace RecordDeconstruction {
                     public int Reset() => 5;
                     public int Deconstruct(int scale) => 5 * scale;
                     public void Deconstruct(out int x, out int y) { x = 50; y = 5; }
+                }
+                public record ExplicitRec : External.IParts {
+                    public int Count => 6;
+                    public int Reset() => 6;
+                    int External.IParts.Deconstruct(int scale) => 6 * scale;
+                    void External.IParts.Deconstruct(out int x, out int y) { x = 60; y = 6; }
                 }`
             }
         ).Replace(
@@ -1004,7 +1010,7 @@ namespace RecordDeconstruction {
             if overrideBase {
                 "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})

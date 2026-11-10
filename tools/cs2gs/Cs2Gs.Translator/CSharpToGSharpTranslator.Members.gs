@@ -1208,10 +1208,17 @@ partial class CSharpToGSharpTranslator {
                     return (nil, false)
                 }
             }
+            let bridgedExplicitRecordDeconstruct = isExplicitInterfaceImpl &&
+                symbol != nil &&
+                symbol
+                .ContainingType
+                .IsRecord &&
+                this.DirectlyImplementsImportedDeconstructContract(symbol)
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a clause-compatible explicit implementation, or null for an
             // ordinary method / safe fallback.
-            let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl {
+            let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl &&
+                !bridgedExplicitRecordDeconstruct {
                 this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
                     this.context,
@@ -1447,7 +1454,9 @@ partial class CSharpToGSharpTranslator {
             // where an explicit impl is not publicly callable by the type name.
             //
             // Fallbacks still rely on name-based dispatch and stay public.
-            let explicitInterfaceVisibility = if isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl {
+            let explicitInterfaceVisibility = if bridgedExplicitRecordDeconstruct {
+                Visibility.Internal
+            } else if isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl {
                 Visibility.Default
             } else {
                 MapVisibility(symbol, this.context, node)

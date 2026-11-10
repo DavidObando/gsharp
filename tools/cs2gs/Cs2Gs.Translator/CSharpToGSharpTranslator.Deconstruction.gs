@@ -781,7 +781,9 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func DirectlyImplementsImportedDeconstructContract(method IMethodSymbol?) bool {
-            if method == nil || method.IsStatic || method.Name != "Deconstruct" {
+            if method == nil ||
+                method.IsStatic ||
+                (method.Name != "Deconstruct" && !method.Name.EndsWith(".Deconstruct", StringComparison.Ordinal)) {
                 return false
             }
             if method.IsOverride {
@@ -790,6 +792,15 @@ partial class CSharpToGSharpTranslator {
                     .DeclaringSyntaxReferences
                     .IsDefaultOrEmpty &&
                     !this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
+            }
+            for explicitSlot in method.ExplicitInterfaceImplementations {
+                if explicitSlot.Name == "Deconstruct" &&
+                    explicitSlot
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _) {
+                    return true
+                }
             }
             let owner = method.ContainingType
             if owner == nil {
@@ -814,7 +825,7 @@ partial class CSharpToGSharpTranslator {
         private func GetImportedDeconstructContractMethods(symbol INamedTypeSymbol) List[IMethodSymbol] {
             let results = List[IMethodSymbol]()
             let seen = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
-            for method in symbol.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+            for method in symbol.GetMembers().OfType[IMethodSymbol]() {
                 if !method.IsPartialDefinition && EmittedNameAllocator.IsUserRecordDeconstruct(method) &&
                     this.DirectlyImplementsImportedDeconstructContract(method) && seen.Add(method) {
                     results.Add(method)
