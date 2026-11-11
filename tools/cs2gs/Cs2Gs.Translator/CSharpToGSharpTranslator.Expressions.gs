@@ -4269,6 +4269,14 @@ partial class CSharpToGSharpTranslator {
                     this.context.GetTypeInfo(unwrapped).Type ?? this.context.GetTypeInfo(unwrapped).ConvertedType
                 ) as IArrayTypeSymbol
                 return arrayType != nil && !this.ReceiverTargetContainsTypeParameter(arrayType.ElementType, slotType) &&
+                    !(
+                    unwrapped is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ArrayCreationExpressionSyntax explicitArray &&
+                        this.ExplicitArrayElementAcceptsNil(explicitArray, arrayType)
+                ) &&
                     (
                     unwrapped is not ImplicitArrayCreationExpressionSyntax implicitArray ||
                         this
@@ -5200,6 +5208,30 @@ partial class CSharpToGSharpTranslator {
             if unwrapped == nil {
                 return
             }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) &&
+                parameterType is not ITypeParameterSymbol {
+                this.CollectRelevantInferenceSubexpressions(
+                    coalesce.Left,
+                    parameterType,
+                    relevantOrdinals,
+                    results,
+                    ref sawVerifiedDeclaredInput,
+                    ref sawRejectedNilableInput,
+                    visitedLocals
+                )
+                this.CollectRelevantInferenceSubexpressions(
+                    coalesce.Right,
+                    parameterType,
+                    relevantOrdinals,
+                    results,
+                    ref sawVerifiedDeclaredInput,
+                    ref sawRejectedNilableInput,
+                    visitedLocals
+                )
+                return
+            }
             if this.ComposedValueOperands(unwrapped) is {} operands {
                 for operand in operands {
                     this.CollectRelevantInferenceSubexpressions(
@@ -5215,28 +5247,86 @@ partial class CSharpToGSharpTranslator {
                 return
             }
             if parameterType is IArrayTypeSymbol arrayParamType {
-                let arrayInit = switch unwrapped {
-                    case implicitArr is ImplicitArrayCreationExpressionSyntax: implicitArr.Initializer
-                    case explicitArr is Microsoft
-                        .CodeAnalysis
-                        .CSharp
-                        .Syntax
-                        .ArrayCreationExpressionSyntax: explicitArr.Initializer
-                    default: default(InitializerExpressionSyntax?)
+                if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArr {
+                    if arrayParamType.ElementType is ITypeParameterSymbol {
+                        if this.ImplicitArrayDelegateSlotIsDeclared(
+                            implicitArr,
+                            arrayAccessDepth: 1,
+                            stopAtIntermediateArrayRef: true
+                        ) {
+                            sawVerifiedDeclaredInput = true
+                        } else {
+                            sawRejectedNilableInput = true
+                        }
+                        return
+                    }
+                    if implicitArr.Initializer != nil {
+                        for elemExpr in implicitArr.Initializer.Expressions {
+                            this.CollectRelevantInferenceSubexpressions(
+                                elemExpr,
+                                arrayParamType.ElementType,
+                                relevantOrdinals,
+                                results,
+                                ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
+                                visitedLocals
+                            )
+                        }
+                        return
+                    }
                 }
-                if arrayInit != nil {
-                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
-                    this.CollectArrayInitializerLeaves(arrayInit, leaves)
-                    for leaf in leaves {
-                        this.CollectRelevantInferenceSubexpressions(
-                            leaf,
-                            arrayParamType.ElementType,
-                            relevantOrdinals,
-                            results,
-                            ref sawVerifiedDeclaredInput,
-                            ref sawRejectedNilableInput,
-                            visitedLocals
-                        )
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax explicitArr {
+                    let explicitArrayType = this.context.GetTypeInfo(explicitArr).Type as IArrayTypeSymbol
+                    if arrayParamType.ElementType is ITypeParameterSymbol {
+                        if explicitArrayType != nil && !this.ExplicitArrayElementAcceptsNil(
+                            explicitArr,
+                            explicitArrayType
+                        ) {
+                            sawVerifiedDeclaredInput = true
+                        } else {
+                            sawRejectedNilableInput = true
+                        }
+                        return
+                    }
+                    if explicitArrayType != nil && !this.ExplicitArrayElementAcceptsNil(
+                        explicitArr,
+                        explicitArrayType
+                    ) &&
+                        explicitArr.Initializer == nil {
+                        sawVerifiedDeclaredInput = true
+                        return
+                    }
+                    if explicitArr.Initializer is {} explicitInit {
+                        for elemExpr in explicitInit.Expressions {
+                            this.CollectRelevantInferenceSubexpressions(
+                                elemExpr,
+                                arrayParamType.ElementType,
+                                relevantOrdinals,
+                                results,
+                                ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
+                                visitedLocals
+                            )
+                        }
+                        return
+                    }
+                }
+                if arrayParamType.ElementType is ITypeParameterSymbol {
+                    let exprArrayType = this.context.GetTypeInfo(unwrapped).Type as IArrayTypeSymbol
+                    if exprArrayType == nil ||
+                        exprArrayType
+                        .ElementType
+                        .NullableAnnotation == Microsoft
+                        .CodeAnalysis
+                        .NullableAnnotation
+                        .Annotated {
+                        sawRejectedNilableInput = true
+                        return
+                    }
+                    if this.ReceiverTypeArgumentsAreDeclared(unwrapped, nil, nil, nil, 1) {
+                        sawVerifiedDeclaredInput = true
+                    } else {
+                        sawRejectedNilableInput = true
                     }
                     return
                 }
@@ -5437,6 +5527,34 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             results.Add(localRef)
+        }
+
+        private func ExplicitArrayElementAcceptsNil(
+            explicitArr Microsoft.CodeAnalysis.CSharp.Syntax.ArrayCreationExpressionSyntax,
+            explicitArrayType IArrayTypeSymbol
+        ) bool {
+            let elemType = explicitArrayType.ElementType
+            if elemType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return true
+            }
+            if !elemType.IsReferenceType {
+                return false
+            }
+            if this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(explicitArr)) ||
+                this.IsWidenedArrayCreationElement(explicitArr) || this.ObliviousContainerPositions(
+                this.ResolveValueSink(explicitArr)
+            )
+                ?.Contains("0") == true {
+                return true
+            }
+            if explicitArr.Initializer is {} explicitInit {
+                for element in explicitInit.Expressions {
+                    if element != nil && (IsNullOrDefaultLiteral(element) || this.IsNullDataRowRead(element)) {
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
         private func ResultMentionsValueNilableOnlyInEmittedGSharp(
