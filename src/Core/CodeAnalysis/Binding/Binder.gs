@@ -315,8 +315,13 @@ partial class Binder {
                     () -> Lambdas.BindLambdaExpression(syntax, targetType)
                 )
             },
-            bindUserTypeStaticCall: (structSym StructSymbol, ce CallExpressionSyntax) -> {
-                return Expressions.BindUserTypeStaticCall(structSym, ce)
+            bindUserTypeStaticCall: (
+                structSym StructSymbol,
+                ce CallExpressionSyntax,
+                arguments ImmutableArray[BoundExpression],
+                preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot
+            ) -> {
+                return Expressions.BindUserTypeStaticCall(structSym, ce, arguments, preArgumentsNarrowing)
             },
             bindImportedClrStaticCall: (clrType Type, ce CallExpressionSyntax) -> {
                 return Expressions.BindAccessorCall(

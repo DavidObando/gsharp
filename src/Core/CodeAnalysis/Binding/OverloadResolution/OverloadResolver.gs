@@ -117,7 +117,14 @@ internal partial class OverloadResolver {
     private let describeConstraint(TypeParameterSymbol) -> string
     private let getCurrentFunction() -> FunctionSymbol?
     private let bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)?
-    private let bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)?
+    private let bindUserTypeStaticCall(
+        (
+            StructSymbol,
+            CallExpressionSyntax,
+            ImmutableArray[BoundExpression],
+            StatementBinder.NarrowingBindSnapshot
+        ) -> BoundExpression
+    )?
     private let bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)?
     private let applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)?
     private let captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)?
@@ -277,7 +284,14 @@ internal partial class OverloadResolver {
         describeConstraint(TypeParameterSymbol) -> string,
         getCurrentFunction() -> FunctionSymbol?,
         bindLambdaWithTarget((LambdaExpressionSyntax, FunctionTypeSymbol) -> BoundExpression)? = nil,
-        bindUserTypeStaticCall((StructSymbol, CallExpressionSyntax) -> BoundExpression)? = nil,
+        bindUserTypeStaticCall(
+            (
+                StructSymbol,
+                CallExpressionSyntax,
+                ImmutableArray[BoundExpression],
+                StatementBinder.NarrowingBindSnapshot
+            ) -> BoundExpression
+        )? = nil,
         bindImportedClrStaticCall((Type, CallExpressionSyntax) -> BoundExpression)? = nil,
         applySubExpressionEffects((SyntaxNode?, BoundExpression?) -> void)? = nil,
         captureNarrowingSnapshot(() -> StatementBinder.NarrowingBindSnapshot)? = nil,
