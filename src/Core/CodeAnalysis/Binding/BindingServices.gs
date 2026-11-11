@@ -84,6 +84,7 @@ internal sealed class CallEffectSummary {
         WrittenFieldTypes = List[TypeSymbol]()
         WrittenElementTypes = List[TypeSymbol]()
         WritesAnyStorage = false
+        InvokesCallbackParameter = false
     }
 
     prop WrittenFieldTypes List[TypeSymbol] {
@@ -99,7 +100,15 @@ internal sealed class CallEffectSummary {
         set;
     }
 
-    prop IsEmpty bool -> !WritesAnyStorage && WrittenFieldTypes.Count == 0 && WrittenElementTypes.Count == 0
+    prop InvokesCallbackParameter bool {
+        get;
+        set;
+    }
+
+    prop IsEmpty bool -> !WritesAnyStorage &&
+        !InvokesCallbackParameter &&
+        WrittenFieldTypes.Count == 0 &&
+        WrittenElementTypes.Count == 0
 
     func AddFieldType(type TypeSymbol?) {
         if WritesAnyStorage || type == nil {
@@ -160,6 +169,9 @@ internal sealed class CallEffectSummary {
         if other.WritesAnyStorage {
             WritesAnyStorage = true
             return
+        }
+        if other.InvokesCallbackParameter {
+            InvokesCallbackParameter = true
         }
         for fieldType in other.WrittenFieldTypes {
             AddFieldType(fieldType)

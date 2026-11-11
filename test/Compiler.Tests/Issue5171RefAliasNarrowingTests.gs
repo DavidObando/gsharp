@@ -1082,6 +1082,146 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
+            yield []object{"issue-5326-tuple-element-ref-alias-cleared-by-slot-write", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalSlot C? = C{}
+func ClearSlot() {
+    globalSlot = nil
+}
+func Run(ref row (C?, int32)) int32 {
+    let ref a = row.Item1
+    if a == nil { return 0 }
+    ClearSlot()
+    return a.Value
+}
+var pair = (C{}, 1)
+Console.WriteLine(Run(ref pair))
+`}
+            yield []object{"issue-5326-structural-equality-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Trigger {
+    override func Equals(obj object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+data struct Pair(Item Trigger)
+func Run(ref a C?, x Pair, y Pair) int32 {
+    if a == nil { return 0 }
+    let same = x == y
+    if same {
+        return a.Value
+    }
+    return 0
+}
+let t = Pair(Trigger{})
+Console.WriteLine(Run(ref globalC, t, t))
+`}
+            yield []object{"issue-5326-nested-equality-callback-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class InnerKey {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+class OuterKey {
+    var Inner Dictionary[InnerKey, int32] = Dictionary[InnerKey, int32]()
+    override func GetHashCode() int32 {
+        let _ = Inner.ContainsKey(InnerKey{})
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+func ProbeOuter(d Dictionary[OuterKey, int32], k OuterKey) bool -> d.ContainsKey(k)
+func Run(ref a C?, d Dictionary[OuterKey, int32], k OuterKey) int32 {
+    if a == nil { return 0 }
+    let _ = ProbeOuter(d, k)
+    return a.Value
+}
+let d = Dictionary[OuterKey, int32]()
+Console.WriteLine(Run(ref globalC, d, OuterKey{}))
+`}
+            yield []object{"issue-5326-parameter-callback-wrapper-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func InvokeCallback(cb () -> void) {
+    cb()
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    InvokeCallback(() -> { globalC = nil })
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-struct-literal-field-initializer-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ClearGlobal() int32 {
+    globalC = nil
+    return 1
+}
+class Reset {
+    var N int32 = ClearGlobal()
+}
+func MakeReset() {
+    let _ = Reset{}
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    MakeReset()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-user-toarray-returns-shared-buffer", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class BufferHolder {
+    var Items []C? = []C?{C{}}
+    func ToArray() []C? -> Items
+}
+func ClearViaToArray(h BufferHolder) {
+    let xs = h.ToArray()
+    xs[0] = nil
+}
+func Run(ref a C?, h BufferHolder) int32 {
+    if a == nil { return 0 }
+    ClearViaToArray(h)
+    return a.Value
+}
+let h = BufferHolder{}
+Console.WriteLine(Run(ref h.Items[0], h))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -1443,6 +1583,28 @@ func Main() {
     Console.WriteLine(Run(ref x, other))
 }
 `, []string{"1"}}
+            yield []object{"issue-5326-safe-base-method-call-preserves-narrowing", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+open class BaseWorker {
+    open func Noop() int32 -> 4
+}
+class DerivedWorker : BaseWorker {
+    func Run(ref a C?) int32 {
+        if a == nil { return 0 }
+        let n = base.Noop()
+        return a.Value + n
+    }
+}
+func Main() {
+    var x C? = C{}
+    let w = DerivedWorker{}
+    Console.WriteLine(w.Run(ref x))
+}
+`, []string{"5"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

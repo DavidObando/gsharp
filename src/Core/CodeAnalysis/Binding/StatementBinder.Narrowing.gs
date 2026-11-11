@@ -5868,7 +5868,11 @@ internal partial class StatementBinder {
                 let chain = StatementBinder.AliasChain(root)
                 let targetRoot = chain[chain.Count - 1]
                 for call in callExpressions {
-                    if callEffectsMayOverwriteRoot!!(call, targetRoot.Type) {
+                    if callEffectsMayOverwriteRoot!!(call, root.Type) ||
+                        (
+                        !object.ReferenceEquals(targetRoot, root) &&
+                            callEffectsMayOverwriteRoot!!(call, targetRoot.Type)
+                    ) {
                         return true
                     }
                 }
@@ -6090,7 +6094,8 @@ internal partial class StatementBinder {
                 (
                 !isStableSystemIndexOp && StatementBinder.IsPotentiallyMutatingMemberPathExpression(node.Kind) &&
                     node is not BoundCallOperationExpression &&
-                    node is not BoundConstructorCallExpression
+                    node is not BoundConstructorCallExpression &&
+                    node is not BoundBaseClassCallExpression{IsPropertyAccessor: false}
             ) {
                 RecordReferenceStorageWrite(node)
             }
@@ -6193,9 +6198,14 @@ internal partial class StatementBinder {
                 runsEscapedClosureHere = true
                 callExpressions.Add(node)
             }
-            if node is BoundBaseClassCallExpression baseClassCall &&
-                (baseClassCall.Method != nil || baseClassCall.IsSetterAccessor) {
-                callExpressions.Add(node)
+            if node is BoundBaseClassCallExpression baseClassCall {
+                if !baseClassCall.IsPropertyAccessor && baseClassCall.Method != nil {
+                    MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
+                    runsEscapedClosureHere = true
+                    callExpressions.Add(node)
+                } else if baseClassCall.IsSetterAccessor {
+                    callExpressions.Add(node)
+                }
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
                 // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.
@@ -6503,10 +6513,10 @@ internal partial class StatementBinder {
                 VisitExpression(node.Left)
                 VisitExpression(node.Right)
                 if StatementBinder.BinaryEqualityRunsUserCode(node) {
-                    // ADR-0208 R19 (#5710): structural equality calls `Equals`, which can be user code. It is a plain
-                    // method call, so it does not write by-reference storage (R12, amendment A3).
+                    // ADR-0208 R19 (#5710, #5326): structural equality calls `Equals`, which can be user code.
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                     InvalidateCallableStateForUnknownClosure()
+                    callExpressions.Add(node)
                 }
                 return
             }
@@ -6542,6 +6552,7 @@ internal partial class StatementBinder {
                 if StatementBinder.BinaryEqualityRunsUserCode(bin) {
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                     InvalidateCallableStateForUnknownClosure()
+                    callExpressions.Add(bin)
                 }
             }
         }
@@ -6661,7 +6672,10 @@ internal partial class StatementBinder {
         protected open override func VisitBaseClassCallExpression(node BoundBaseClassCallExpression) {
             // ADR-0208 R11 (#5170): a base method or computed accessor runs user code.
             if node.Method != nil {
-                MarkMayMutateGlobalRoots(invalidateCallableAliases: false)
+                MarkMayMutateGlobalRoots(
+                    writesReferenceStorage: node.IsPropertyAccessor,
+                    invalidateCallableAliases: false
+                )
             }
             VisitExpression(node.Receiver)
             VisitCallableArguments(node.Arguments)
