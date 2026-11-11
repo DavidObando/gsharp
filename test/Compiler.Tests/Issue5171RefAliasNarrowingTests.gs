@@ -1611,6 +1611,73 @@ func Run(ref a C?, t Token) int32 {
 }
 Console.WriteLine(Run(ref globalC, Token{Id: 1}))
 `}
+            yield []object{"issue-5326-distinctby-deferred-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.DistinctBy((x int32) -> {
+    globalC = nil
+    return x
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-where-method-group-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ClearPredicate(x int32) bool {
+    globalC = nil
+    return true
+}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.Where(ClearPredicate)
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-count-global-helper-deferred-where-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+let xs = List[int32](){1}
+var globalSeq IEnumerable[int32] = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+func CountGlobal() int32 {
+    return Enumerable.Count(globalSeq)
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = CountGlobal()
+    return a.Value + n
+}
+Console.WriteLine(Run(ref globalC))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
