@@ -951,6 +951,30 @@ internal sealed class RegionEffectScanner {
                 RecordConstruction(node)
                 VisitChildren(node)
             }
+            case SyntaxKind.InterpolatedStringExpression {
+                let interp = cast[InterpolatedStringExpressionSyntax](node)
+                if Active() {
+                    current.ContainsCall = true
+                    for segment in interp.Segments {
+                        if segment.IsExpression && segment.Expression is {} holeExpr {
+                            current.Calls.Add(
+                                RegionCall(
+                                    RegionCallKind.MemberInvocation,
+                                    "ToString",
+                                    List[string](),
+                                    List[string](),
+                                    false,
+                                    node.Span.Start,
+                                    nil,
+                                    BuildPath(holeExpr),
+                                    nil
+                                )
+                            )
+                        }
+                    }
+                }
+                VisitChildren(node)
+            }
             default {
                 // Every other listed kind has the class Structural, Call or Declaration. A Call kind
                 // without a case above runs code the walker cannot see (rule W4).

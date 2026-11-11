@@ -6170,6 +6170,7 @@ internal partial class StatementBinder {
                 if interpolation.Handler != nil {
                     MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                     runsEscapedClosureHere = true
+                    callExpressions.Add(interpolation)
                 } else {
                     for part in interpolation.Parts {
                         if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
@@ -6177,6 +6178,7 @@ internal partial class StatementBinder {
                         ) {
                             MarkMayMutateGlobalRoots(writesReferenceStorage: false, invalidateCallableAliases: false)
                             runsEscapedClosureHere = true
+                            callExpressions.Add(interpolation)
                             break
                         }
                     }

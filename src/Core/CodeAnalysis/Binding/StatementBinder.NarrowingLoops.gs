@@ -5831,7 +5831,7 @@ internal partial class StatementBinder {
             }
             case impCall is BoundImportedCallExpression {
                 let argTypes = ExtractBoundArgumentTypes(impCall.Arguments)
-                return AnalyzeImportedMethodEffects(
+                let raw = AnalyzeImportedMethodEffects(
                     impCall.Function.Method,
                     impCall.StaticContainerType,
                     argTypes,
@@ -5839,11 +5839,12 @@ internal partial class StatementBinder {
                     includeOverrides: !impCall.Function.Method.IsStatic,
                     visiting
                 )
+                return ResolveBoundCallCallbackEffects(raw, impCall.Arguments, visiting)
             }
             case impInst is BoundImportedInstanceCallExpression {
                 let recvType = impInst.ConstrainedInterfaceType ?? impInst.Receiver.Type
                 let argTypes = ExtractBoundArgumentTypes(impInst.Arguments)
-                return AnalyzeImportedMethodEffects(
+                let raw = AnalyzeImportedMethodEffects(
                     impInst.Method,
                     recvType,
                     argTypes,
@@ -5851,10 +5852,11 @@ internal partial class StatementBinder {
                     includeOverrides: !impInst.IsNonVirtualBaseCall,
                     visiting
                 )
+                return ResolveBoundCallCallbackEffects(raw, impInst.Arguments, visiting)
             }
             case clrStatic is BoundClrStaticCallExpression {
                 let argTypes = ExtractBoundArgumentTypes(clrStatic.Arguments)
-                return AnalyzeImportedMethodEffects(
+                let raw = AnalyzeImportedMethodEffects(
                     clrStatic.Method,
                     nil,
                     argTypes,
@@ -5862,6 +5864,7 @@ internal partial class StatementBinder {
                     includeOverrides: false,
                     visiting
                 )
+                return ResolveBoundCallCallbackEffects(raw, clrStatic.Arguments, visiting)
             }
             case binEq is BoundBinaryExpression {
                 let eqSummary = CallEffectSummary()
@@ -5874,6 +5877,46 @@ internal partial class StatementBinder {
                     eqSummary
                 )
                 return eqSummary
+            }
+            case interp is BoundInterpolatedStringExpression {
+                let interpSummary = CallEffectSummary()
+                if interp.Handler is {} handler {
+                    let handlerType = StripAllNullability(handler.HandlerType) ?? handler.HandlerType
+                    if handlerType is StructSymbol handlerStruct {
+                        for level in handlerStruct.GetHierarchy() {
+                            for m in level.Methods {
+                                if m.Name is "AppendLiteral" or "AppendFormatted" {
+                                    let raw = GetFunctionEffectSummaryCore(m, includeOverrides: false, visiting, out _)
+                                    interpSummary.MergeFrom(
+                                        ApplyReceiverAndMethodSubstitution(
+                                            raw,
+                                            handlerStruct,
+                                            m,
+                                            ImmutableArray[TypeSymbol].Empty
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    } else if handlerType?.ClrType is {} hClr && !IsModeledFrameworkType(hClr, hClr.FullName ?? "") {
+                        interpSummary.WritesAnyStorage = true
+                        return interpSummary
+                    }
+                }
+                for part in interp.Parts {
+                    if part.Value is {} hole && hole.Type != TypeSymbol.String && !TypeSymbol.IsLegalPointeeType(
+                        hole.Type
+                    ) {
+                        MergeToStringCallbackEffects(
+                            "ToString",
+                            hole.Type,
+                            List[TypeSymbol?]{hole.Type},
+                            visiting,
+                            interpSummary
+                        )
+                    }
+                }
+                return interpSummary
             }
             default {
                 let any = CallEffectSummary()
@@ -5913,6 +5956,12 @@ internal partial class StatementBinder {
             }
             sawCallableArg = true
             if arg is BoundFunctionLiteralExpression fnLit && fnLit.Syntax != nil {
+                let lambdaBody SyntaxNode? = (fnLit.Syntax as LambdaExpressionSyntax)?.Body ??
+                    (fnLit.Syntax as FunctionLiteralExpressionSyntax)?.Body
+                if lambdaBody == nil {
+                    resolved.WritesAnyStorage = true
+                    return resolved
+                }
                 let emptyParams = Dictionary[string, ParameterSymbol](StringComparer.Ordinal)
                 let emptyTypeParams = Dictionary[string, TypeParameterSymbol](StringComparer.Ordinal)
                 let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
@@ -5923,7 +5972,7 @@ internal partial class StatementBinder {
                 let dummyFn = FunctionSymbol("<lambda>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
                 var hitCycle = false
                 ScanCalleeSyntaxNode(
-                    fnLit.Syntax,
+                    lambdaBody,
                     nil,
                     false,
                     dummyFn,
@@ -5946,7 +5995,7 @@ internal partial class StatementBinder {
             }
         }
         if !sawCallableArg {
-            resolved.WritesAnyStorage = true
+            return resolved
         }
         return resolved
     }
@@ -6701,6 +6750,15 @@ internal partial class StatementBinder {
                 }
             }
         }
+        for ct in comparedTypes {
+            let s = StripAllNullability(ct) ?? ct
+            if s is ImportedTypeSymbol imp &&
+                imp.ClrType is {} clr &&
+                !IsModeledFrameworkType(clr, clr.FullName ?? "") {
+                summary.WritesAnyStorage = true
+                return
+            }
+        }
         let hasUnknownType = comparedTypes.Count == 0 || comparedTypes.Any((t TypeSymbol?) -> t == nil)
         let index = GetCompilationMethodsByName()
         let names = if isOrdered {
@@ -6787,6 +6845,15 @@ internal partial class StatementBinder {
                     GetElementOrIndexerTypeOf(arg) is {} elem {
                     formattedTypes.Add(elem)
                 }
+            }
+        }
+        for ft in formattedTypes {
+            let s = StripAllNullability(ft) ?? ft
+            if s is ImportedTypeSymbol imp &&
+                imp.ClrType is {} clr &&
+                !IsModeledFrameworkType(clr, clr.FullName ?? "") {
+                summary.WritesAnyStorage = true
+                return
             }
         }
         let hasUnknownType = formattedTypes.Count == 0 || formattedTypes.Any((t TypeSymbol?) -> t == nil)
@@ -7342,18 +7409,42 @@ internal partial class StatementBinder {
             MergeToStringCallbackEffects(methodName, receiverType, argumentTypes, visiting, summary)
         }
 
+        if methodName is "ForEach" or
+            "Find" or
+            "FindAll" or
+            "FindIndex" or
+            "FindLast" or
+            "FindLastIndex" or
+            "Exists" or
+            "TrueForAll" or
+            "RemoveAll" or
+            "ConvertAll" {
+            for p in method.GetParameters() {
+                if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
+                    summary.InvokesCallbackParameter = true
+                    break
+                }
+            }
+        }
+
         return summary
     }
 
     private func IsModeledFrameworkType(declType Type?, declFullName string) bool {
-        if declType == nil || declFullName.Length == 0 {
+        if declType == nil {
             return false
         }
-        if !declFullName.StartsWith("System.", StringComparison.Ordinal) && !declFullName.StartsWith(
+        var rootType = ReflectionType(declType) ?? declType
+        while rootType.DeclaringType != nil {
+            rootType = rootType.DeclaringType!!
+        }
+        let ns = rootType.Namespace ?? rootType.FullName ?? declFullName
+        if ns != "System" && !ns.StartsWith("System.", StringComparison.Ordinal) && ns != "Microsoft" && !ns.StartsWith(
             "Microsoft.",
             StringComparison.Ordinal
         ) &&
-            !declFullName.StartsWith("Gsharp.", StringComparison.Ordinal) && !declFullName.StartsWith(
+            ns != "Gsharp" &&
+            !ns.StartsWith("Gsharp.", StringComparison.Ordinal) && ns != "GSharp" && !ns.StartsWith(
             "GSharp.",
             StringComparison.Ordinal
         ) {
@@ -8356,7 +8447,9 @@ internal partial class StatementBinder {
             let savedTree = $scope.SetCurrentReferencingSyntaxTree(decl.SyntaxTree)
             try {
                 for fieldDecl in decl.Fields {
-                    if fieldDecl.Initializer != nil {
+                    if fieldDecl.Initializer != nil &&
+                        fieldDecl.Initializer is not LiteralExpressionSyntax &&
+                        fieldDecl.Initializer is not DefaultExpressionSyntax {
                         ScanCalleeSyntaxNode(
                             fieldDecl.Initializer,
                             nil,
@@ -8652,61 +8745,10 @@ internal partial class StatementBinder {
                 }
                 return
             }
-            case fnLit is FunctionLiteralExpressionSyntax {
-                for p in fnLit.Parameters {
-                    if p.Identifier is {} pId && pId.ValueText.Length > 0 {
-                        localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
-                        refLocalsFromParams.Add(pId.ValueText)
-                    }
-                }
-                ScanCalleeSyntaxNode(
-                    fnLit.Body,
-                    nil,
-                    false,
-                    origCallee,
-                    enclosingType,
-                    false,
-                    parameters,
-                    calleeTypeParams,
-                    localTypes,
-                    refLocalsFromParams,
-                    refLocalsExternal,
-                    localFunctions,
-                    visitingLocalFunctions,
-                    visiting,
-                    summary,
-                    ref hitCycle
-                )
-                return
-            }
-            case lambdaExpr is LambdaExpressionSyntax {
-                for p in lambdaExpr.Parameters {
-                    if p.Identifier is {} pId && pId.ValueText.Length > 0 {
-                        localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
-                        refLocalsFromParams.Add(pId.ValueText)
-                    }
-                }
-                ScanCalleeSyntaxNode(
-                    lambdaExpr.Body,
-                    nil,
-                    false,
-                    origCallee,
-                    enclosingType,
-                    false,
-                    parameters,
-                    calleeTypeParams,
-                    localTypes,
-                    refLocalsFromParams,
-                    refLocalsExternal,
-                    localFunctions,
-                    visitingLocalFunctions,
-                    visiting,
-                    summary,
-                    ref hitCycle
-                )
-                return
-            }
-            case AnonymousClassExpressionSyntax, NameOfExpressionSyntax {
+            case FunctionLiteralExpressionSyntax,
+            LambdaExpressionSyntax,
+            AnonymousClassExpressionSyntax,
+            NameOfExpressionSyntax {
                 return
             }
             case varDecl is VariableDeclarationSyntax {
@@ -10334,6 +10376,7 @@ internal partial class StatementBinder {
                     return
                 }
                 let recvIsFresh = IsCalleeFreshLocalExpression(receiverExpr, refLocalsFromParams)
+                let memberCallSummary = CallEffectSummary()
                 ScanCalleeMemberCall(
                     recvType,
                     memberName,
@@ -10342,10 +10385,26 @@ internal partial class StatementBinder {
                     argTypes,
                     calleeTypeParams,
                     visiting,
-                    summary,
+                    memberCallSummary,
                     ref hitCycle,
                     allowUnresolvedFallback: true,
                     receiverIsFreshLocal: recvIsFresh
+                )
+                ResolveCalleeSyntaxCallbackEffects(
+                    memberCallSummary,
+                    call,
+                    origCallee,
+                    enclosingType,
+                    parameters,
+                    calleeTypeParams,
+                    localTypes,
+                    refLocalsFromParams,
+                    refLocalsExternal,
+                    localFunctions,
+                    visitingLocalFunctions,
+                    visiting,
+                    summary,
+                    ref hitCycle
                 )
                 return
             }
@@ -10556,8 +10615,6 @@ internal partial class StatementBinder {
                             }
                         }
                     }
-                } else if createdType == nil {
-                    summary.WritesAnyStorage = true
                 }
                 return
             }
@@ -10612,7 +10669,14 @@ internal partial class StatementBinder {
                     ScanStructInstanceInitializers(s, visiting, summary, ref hitCycle)
                     let origStruct = s.Definition ?? s
                     for ctor in origStruct.EffectiveExplicitConstructors {
-                        if !ctor.IsSynthesizedFromPrimaryConstructor && ctor.Declaration?.Body != nil {
+                        if !ctor.IsSynthesizedFromPrimaryConstructor &&
+                            ctor
+                            .Declaration
+                            ?.Body != nil &&
+                            ctor
+                            .Function
+                            .Parameters
+                            .Length == 0 {
                             let ctorSummary = GetFunctionEffectSummaryCore(
                                 ctor.Function,
                                 includeOverrides: false,
@@ -10658,8 +10722,6 @@ internal partial class StatementBinder {
                             }
                         }
                     }
-                } else if constructed == nil {
-                    summary.WritesAnyStorage = true
                 }
                 return
             }
@@ -10699,6 +10761,31 @@ internal partial class StatementBinder {
                     }
                 } else if !localTypes.ContainsKey(name) && !parameters.ContainsKey(name) {
                     RecordCalleeBareReadEffects(name, enclosingType, visiting, summary, ref hitCycle)
+                }
+                return
+            }
+            case interpSyntax is InterpolatedStringExpressionSyntax {
+                for segment in interpSyntax.Segments {
+                    if segment.IsExpression && segment.Expression is {} holeExpr {
+                        ScanCalleeSyntaxNode(
+                            holeExpr,
+                            nil,
+                            false,
+                            origCallee,
+                            enclosingType,
+                            isConstructor,
+                            parameters,
+                            calleeTypeParams,
+                            localTypes,
+                            refLocalsFromParams,
+                            refLocalsExternal,
+                            localFunctions,
+                            visitingLocalFunctions,
+                            visiting,
+                            summary,
+                            ref hitCycle
+                        )
+                    }
                 }
                 return
             }
@@ -10763,6 +10850,166 @@ internal partial class StatementBinder {
                         summary,
                         ref hitCycle
                     )
+                }
+            }
+        }
+    }
+
+    private func ResolveCalleeSyntaxCallbackEffects(
+        callSummary CallEffectSummary,
+        call CallExpressionSyntax,
+        origCallee FunctionSymbol,
+        enclosingType TypeSymbol?,
+        parameters Dictionary[string, ParameterSymbol],
+        calleeTypeParams Dictionary[string, TypeParameterSymbol],
+        localTypes Dictionary[string, TypeSymbol?],
+        refLocalsFromParams HashSet[string],
+        refLocalsExternal Dictionary[string, TypeSymbol?],
+        localFunctions Dictionary[string, BlockStatementSyntax],
+        visitingLocalFunctions HashSet[string],
+        visiting HashSet[FunctionSymbol],
+        summary CallEffectSummary,
+        ref hitCycle bool
+    ) {
+        if !callSummary.InvokesCallbackParameter || callSummary.WritesAnyStorage {
+            summary.MergeFrom(callSummary)
+            return
+        }
+        let cleaned = CallEffectSummary()
+        cleaned.MergeFrom(callSummary)
+        cleaned.InvokesCallbackParameter = false
+        summary.MergeFrom(cleaned)
+        for arg in call.Arguments {
+            var cur = if arg is NamedArgumentExpressionSyntax namedArg {
+                namedArg.Expression
+            } else {
+                arg
+            }
+            while cur is ParenthesizedExpressionSyntax paren {
+                cur = paren.Expression
+            }
+            while cur is UnaryExpressionSyntax{OperatorToken: {Kind: SyntaxKind.BangBangToken}} bang {
+                cur = bang.Operand
+            }
+            if cur is LambdaExpressionSyntax lam {
+                for p in lam.Parameters {
+                    if p.Identifier is {} pId && pId.ValueText.Length > 0 {
+                        if p.Type != nil {
+                            localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        }
+                        refLocalsFromParams.Add(pId.ValueText)
+                    }
+                }
+                if lam.Body != nil {
+                    CollectCalleeFreshLocals(lam.Body, refLocalsFromParams)
+                }
+                let lamSummary = CallEffectSummary()
+                ScanCalleeSyntaxNode(
+                    lam.Body,
+                    nil,
+                    false,
+                    origCallee,
+                    enclosingType,
+                    false,
+                    parameters,
+                    calleeTypeParams,
+                    localTypes,
+                    refLocalsFromParams,
+                    refLocalsExternal,
+                    localFunctions,
+                    visitingLocalFunctions,
+                    visiting,
+                    lamSummary,
+                    ref hitCycle
+                )
+                for ft in lamSummary.WrittenFieldTypes {
+                    summary.AddFieldType(ft)
+                }
+                for et in lamSummary.WrittenElementTypes {
+                    summary.AddElementType(et)
+                }
+            } else if cur is FunctionLiteralExpressionSyntax fl {
+                for p in fl.Parameters {
+                    if p.Identifier is {} pId && pId.ValueText.Length > 0 {
+                        if p.Type != nil {
+                            localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        }
+                        refLocalsFromParams.Add(pId.ValueText)
+                    }
+                }
+                if fl.Body != nil {
+                    CollectCalleeFreshLocals(fl.Body, refLocalsFromParams)
+                }
+                let flSummary = CallEffectSummary()
+                ScanCalleeSyntaxNode(
+                    fl.Body,
+                    nil,
+                    false,
+                    origCallee,
+                    enclosingType,
+                    false,
+                    parameters,
+                    calleeTypeParams,
+                    localTypes,
+                    refLocalsFromParams,
+                    refLocalsExternal,
+                    localFunctions,
+                    visitingLocalFunctions,
+                    visiting,
+                    flSummary,
+                    ref hitCycle
+                )
+                for ft in flSummary.WrittenFieldTypes {
+                    summary.AddFieldType(ft)
+                }
+                for et in flSummary.WrittenElementTypes {
+                    summary.AddElementType(et)
+                }
+            } else if cur is NameExpressionSyntax nameArg {
+                let argName = nameArg.IdentifierToken.ValueText
+                if parameters.TryGetValue(argName, out var pSym) && IsCallableMemberType(pSym.Type) {
+                    summary.InvokesCallbackParameter = true
+                } else if localFunctions.TryGetValue(argName, out var lfBody) {
+                    if visitingLocalFunctions.Add(argName) {
+                        ScanCalleeSyntaxNode(
+                            lfBody,
+                            nil,
+                            false,
+                            origCallee,
+                            enclosingType,
+                            false,
+                            parameters,
+                            calleeTypeParams,
+                            localTypes,
+                            refLocalsFromParams,
+                            refLocalsExternal,
+                            localFunctions,
+                            visitingLocalFunctions,
+                            visiting,
+                            summary,
+                            ref hitCycle
+                        )
+                    }
+                } else if $scope.TryLookupSymbol(argName) is GlobalVariableSymbol gv && IsCallableMemberType(gv.Type) {
+                    summary.WritesAnyStorage = true
+                    return
+                } else if localTypes.TryGetValue(argName, out var lt) && IsCallableMemberType(lt) {
+                    summary.WritesAnyStorage = true
+                    return
+                }
+            } else if cur is AccessorExpressionSyntax {
+                let argType = InferCalleeExpressionType(
+                    cur,
+                    origCallee,
+                    enclosingType,
+                    parameters,
+                    calleeTypeParams,
+                    localTypes,
+                    out _
+                )
+                if IsCallableMemberType(argType) {
+                    summary.WritesAnyStorage = true
+                    return
                 }
             }
         }
@@ -12192,28 +12439,8 @@ internal partial class StatementBinder {
         if enclosingType is StructSymbol s {
             let canHaveSubclass = s.IsClass && (s.IsOpen || s.IsAbstract || s.IsSealedHierarchy)
             for level in s.GetHierarchy() {
-                for f in level.Fields {
-                    if f.Name == name {
-                        if IsCallableMemberType(f.Type) {
-                            summary.WritesAnyStorage = true
-                        }
-                        return
-                    }
-                }
-                for sf in level.StaticFields {
-                    if sf.Name == name {
-                        if IsCallableMemberType(sf.Type) {
-                            summary.WritesAnyStorage = true
-                        }
-                        return
-                    }
-                }
                 for p in level.Properties {
                     if p.Name == name {
-                        if IsCallableMemberType(p.Type) {
-                            summary.WritesAnyStorage = true
-                            return
-                        }
                         if p.GetterSymbol is {} getter {
                             let getterSummary = GetFunctionEffectSummaryCore(
                                 getter,
@@ -12256,10 +12483,6 @@ internal partial class StatementBinder {
                 }
                 for sp in level.StaticProperties {
                     if sp.Name == name {
-                        if IsCallableMemberType(sp.Type) {
-                            summary.WritesAnyStorage = true
-                            return
-                        }
                         if sp.GetterSymbol is {} getter {
                             let getterSummary = GetFunctionEffectSummaryCore(
                                 getter,
@@ -12275,41 +12498,6 @@ internal partial class StatementBinder {
                         return
                     }
                 }
-                for m in level.Methods {
-                    if m.Name == name {
-                        let mSummary = GetFunctionEffectSummaryCore(
-                            m,
-                            includeOverrides: canHaveSubclass || m.IsOpen || m.IsAbstract || m.IsOverride,
-                            visiting,
-                            out var c
-                        )
-                        if c {
-                            hitCycle = true
-                        }
-                        summary.MergeFrom(
-                            ApplyReceiverAndMethodSubstitution(mSummary, s, m, ImmutableArray[TypeSymbol].Empty)
-                        )
-                    }
-                }
-                for sm in level.StaticMethods {
-                    if sm.Name == name {
-                        let smSummary = GetFunctionEffectSummaryCore(sm, includeOverrides: false, visiting, out var c)
-                        if c {
-                            hitCycle = true
-                        }
-                        summary.MergeFrom(smSummary)
-                    }
-                }
-            }
-        }
-        let bareFns = $scope.TryLookupFunctions(name)
-        if !bareFns.IsDefaultOrEmpty {
-            for fn in bareFns {
-                let fnSummary = GetFunctionEffectSummaryCore(fn, includeOverrides: false, visiting, out var c)
-                if c {
-                    hitCycle = true
-                }
-                summary.MergeFrom(fnSummary)
             }
         }
         if $scope.TryLookupSymbol(name) is {} sym {

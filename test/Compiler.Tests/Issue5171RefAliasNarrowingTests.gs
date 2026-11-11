@@ -1035,6 +1035,8 @@ func Run(ref a C?, d Dictionary[Key, int32], k Key) int32 {
     return a.Value
 }
 let d = Dictionary[Key, int32]()
+d[Key{}] = 1
+globalC = C{}
 Console.WriteLine(Run(ref globalC, d, Key{}))
 `}
             yield []object{"issue-5326-class6-string-builder-append-tostring-callback", `
@@ -1156,8 +1158,52 @@ func Run(ref a C?, d Dictionary[OuterKey, int32], k OuterKey) int32 {
     let _ = ProbeOuter(d, k)
     return a.Value
 }
+let outer = OuterKey{}
+outer.Inner[InnerKey{}] = 1
 let d = Dictionary[OuterKey, int32]()
-Console.WriteLine(Run(ref globalC, d, OuterKey{}))
+d[outer] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d, outer))
+`}
+            yield []object{"issue-5326-interpolated-string-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+func Run(ref a C?, noisy Noisy) int32 {
+    if a == nil { return 0 }
+    let _ = "item=${noisy}"
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Noisy{}))
+`}
+            yield []object{"issue-5326-list-foreach-callback-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+var globalAction Action[int32] = (x int32) -> { globalC = nil }
+func RunAll(xs List[int32]) {
+    xs.ForEach(globalAction)
+}
+func Run(ref a C?, xs List[int32]) int32 {
+    if a == nil { return 0 }
+    RunAll(xs)
+    return a.Value
+}
+let xs = List[int32](){1}
+Console.WriteLine(Run(ref globalC, xs))
 `}
             yield []object{"issue-5326-parameter-callback-wrapper-clears-global", `
 import System
