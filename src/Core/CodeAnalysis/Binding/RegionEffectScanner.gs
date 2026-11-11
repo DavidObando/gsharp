@@ -957,6 +957,13 @@ internal sealed class RegionEffectScanner {
                     current.ContainsCall = true
                     for segment in interp.Segments {
                         if segment.IsExpression && segment.Expression is {} holeExpr {
+                            if IsPureStringForm(holeExpr) ||
+                                IsPureBooleanForm(holeExpr) ||
+                                IsStringForm(holeExpr) ||
+                                IsOperatorForm(holeExpr) ||
+                                IsNilLiteral(holeExpr) {
+                                continue
+                            }
                             current.Calls.Add(
                                 RegionCall(
                                     RegionCallKind.MemberInvocation,

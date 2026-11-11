@@ -4959,11 +4959,10 @@ internal partial class StatementBinder {
                 let chain = AliasChain(refRoot)
                 let targetRoot = chain[chain.Count - 1]
                 callWritesReferenceStorage = resolved.NilCompareRunsUserOperator ||
-                    OperatorsRunUserCode(effects, true) ||
-                    RegionCallsMayOverwriteRoot(effects, refRoot.Type) ||
+                    RegionCallsMayOverwriteRoot(effects, resolved.PatternTestsCallEquals, refRoot.Type) ||
                     (
                     !object.ReferenceEquals(targetRoot, refRoot) &&
-                        RegionCallsMayOverwriteRoot(effects, targetRoot.Type)
+                        RegionCallsMayOverwriteRoot(effects, resolved.PatternTestsCallEquals, targetRoot.Type)
                 )
             }
         }
@@ -5967,7 +5966,7 @@ internal partial class StatementBinder {
                 let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
                 let refLocals = HashSet[string](StringComparer.Ordinal)
                 let refExt = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
-                let localFns = Dictionary[string, BlockStatementSyntax](StringComparer.Ordinal)
+                let localFns = Dictionary[string, SyntaxNode](StringComparer.Ordinal)
                 let visitingLocalFns = HashSet[string](StringComparer.Ordinal)
                 let dummyFn = FunctionSymbol("<lambda>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
                 var hitCycle = false
@@ -6000,11 +5999,64 @@ internal partial class StatementBinder {
         return resolved
     }
 
-    private func RegionCallsMayOverwriteRoot(effects RegionEffects, rootType TypeSymbol) bool {
-        if effects.Calls.Count == 0 {
+    private func RegionCallsMayOverwriteRoot(
+        effects RegionEffects,
+        patternTestsCallEquals bool,
+        rootType TypeSymbol
+    ) bool {
+        if effects.Calls.Count == 0 && effects.Operators.Count == 0 && !patternTestsCallEquals {
             return false
         }
         let visiting = HashSet[FunctionSymbol](ReferenceEqualityComparer.Instance)
+        if patternTestsCallEquals {
+            let patSummary = CallEffectSummary()
+            MergeEqualityOrComparerCallbackEffects("", "Equals", TypeSymbol.Object, nil, visiting, patSummary)
+            if SummaryMayOverwriteRoot(patSummary, rootType) {
+                return true
+            }
+        }
+        for op in effects.Operators {
+            if op.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken {
+                let opTypes = List[TypeSymbol?]()
+                for operand in op.Operands {
+                    if operand != nil &&
+                        ResolveReceiverPath(operand, effects) is {} resolvedTypes &&
+                        resolvedTypes.Count > 0 {
+                        for rt in resolvedTypes {
+                            opTypes.Add(rt.Symbol)
+                        }
+                    } else {
+                        opTypes.Add(nil)
+                    }
+                }
+                let opSummary = CallEffectSummary()
+                let firstType = if opTypes.Count > 0 {
+                    opTypes[0]
+                } else {
+                    default(TypeSymbol?)
+                }
+                MergeEqualityOrComparerCallbackEffects("", "Equals", firstType, opTypes, visiting, opSummary)
+                for ot in opTypes {
+                    if (StripAllNullability(ot) ?? ot) is StructSymbol opStruct {
+                        let opMethodName = if op.Kind == SyntaxKind.EqualsEqualsToken {
+                            "op_Equality"
+                        } else {
+                            "op_Inequality"
+                        }
+                        for sm in opStruct.StaticMethods {
+                            if sm.Name == opMethodName {
+                                opSummary.MergeFrom(
+                                    GetFunctionEffectSummaryCore(sm, includeOverrides: false, visiting, out _)
+                                )
+                            }
+                        }
+                    }
+                }
+                if SummaryMayOverwriteRoot(opSummary, rootType) {
+                    return true
+                }
+            }
+        }
         for call in effects.Calls {
             if RegionSingleCallMayOverwriteRoot(call, effects, rootType, visiting) {
                 return true
@@ -6090,6 +6142,12 @@ internal partial class StatementBinder {
                 if !foundAnyCandidate {
                     let importedExts = MemberLookup(binderCtx).CollectImportedExtensionMethods(member)
                     for impExt in importedExts {
+                        let extParams = impExt.GetParameters()
+                        if extParams.Length != call.Arguments.Count + 1 && !extParams.Any(
+                            (p ParameterInfo) -> p.IsOptional || ClrOverloadResolution.IsParamsArrayParameter(p)
+                        ) {
+                            continue
+                        }
                         foundAnyCandidate = true
                         let summary = AnalyzeImportedMethodEffects(
                             impExt,
@@ -6562,6 +6620,30 @@ internal partial class StatementBinder {
         return false
     }
 
+    private func SameInterfacesSnapshot(
+        cached ImmutableArray[InterfaceSymbol],
+        current ImmutableArray[InterfaceSymbol]
+    ) bool {
+        if cached.IsDefault != current.IsDefault {
+            return false
+        }
+        if cached.IsDefault {
+            return true
+        }
+        if cached.Equals(current) {
+            return true
+        }
+        if cached.Length != current.Length {
+            return false
+        }
+        for var i = 0; i < cached.Length; i++ {
+            if !object.ReferenceEquals(cached[i], current[i]) {
+                return false
+            }
+        }
+        return true
+    }
+
     private func GetCompilationMethodsByName() Dictionary[string, ImmutableArray[FunctionSymbol]] {
         let structs = binderCtx.RootScope.GetDeclaredStructs()
         let interfaces = binderCtx.RootScope.GetDeclaredInterfaces()
@@ -6570,7 +6652,7 @@ internal partial class StatementBinder {
             services.CachedMethodsByName != nil &&
             services
             .CachedMethodsByNameStructs
-            .Equals(structs) && services.CachedMethodsByNameInterfaces.Equals(interfaces) {
+            .Equals(structs) && SameInterfacesSnapshot(services.CachedMethodsByNameInterfaces, interfaces) {
             return services.CachedMethodsByName!!
         }
         let builders = Dictionary[string, ImmutableArray[FunctionSymbol].Builder](StringComparer.Ordinal)
@@ -6623,8 +6705,6 @@ internal partial class StatementBinder {
         services.CachedMethodsByNameStructs = structs
         services.CachedMethodsByNameInterfaces = interfaces
         services.HasCachedMethodsByName = true
-        services.CachedEqualityCallbackEffects = nil
-        services.CachedToStringCallbackEffects = nil
         return result
     }
 
@@ -7418,7 +7498,23 @@ internal partial class StatementBinder {
             "Exists" or
             "TrueForAll" or
             "RemoveAll" or
-            "ConvertAll" {
+            "ConvertAll" or
+            "Any" or
+            "All" or
+            "Count" or
+            "LongCount" or
+            "First" or
+            "FirstOrDefault" or
+            "Last" or
+            "LastOrDefault" or
+            "Single" or
+            "SingleOrDefault" or
+            "Min" or
+            "Max" or
+            "Sum" or
+            "Average" or
+            "Aggregate" or
+            "Sort" {
             for p in method.GetParameters() {
                 if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
                     summary.InvokesCallbackParameter = true
@@ -7430,6 +7526,19 @@ internal partial class StatementBinder {
         return summary
     }
 
+    private func IsModeledByRefReturningContainerType(
+        declFullName string
+    ) bool -> declFullName is "System.Runtime.CompilerServices.Unsafe" or
+        "System.Runtime.InteropServices.CollectionsMarshal" or
+        "System.Runtime.InteropServices.MemoryMarshal" or
+        "System.Collections.Generic.LinkedListNode`1" or
+        "System.Array" or
+        "System.Span`1" or
+        "System.ReadOnlySpan`1" or
+        "System.Collections.Immutable.ImmutableInterlocked" or
+        "System.Threading.Interlocked" or
+        "System.Threading.Volatile"
+
     private func IsModeledFrameworkType(declType Type?, declFullName string) bool {
         if declType == nil {
             return false
@@ -7437,6 +7546,18 @@ internal partial class StatementBinder {
         var rootType = ReflectionType(declType) ?? declType
         while rootType.DeclaringType != nil {
             rootType = rootType.DeclaringType!!
+        }
+        let asmName = rootType.Assembly.GetName()
+        let pkt = asmName.GetPublicKeyToken()
+        let hasTrustedToken = pkt != nil && pkt.Length > 0
+        let simpleAsmName = asmName.Name ?? ""
+        let isGSharpAssembly = simpleAsmName == "GSharp.Core" ||
+            simpleAsmName == "Gsharp.Runtime.Values" ||
+            simpleAsmName == "Gsharp.Runtime.Channels" ||
+            simpleAsmName == "Gsharp.Extensions" ||
+            simpleAsmName == "GSharp.Formatting"
+        if !hasTrustedToken && !isGSharpAssembly {
+            return false
         }
         let ns = rootType.Namespace ?? rootType.FullName ?? declFullName
         if ns != "System" && !ns.StartsWith("System.", StringComparison.Ordinal) && ns != "Microsoft" && !ns.StartsWith(
@@ -7830,15 +7951,12 @@ internal partial class StatementBinder {
         "System.Collections.ObjectModel.Collection`1" or
         "System.Collections.Generic.Queue`1" or
         "System.Collections.Generic.Stack`1" or
-        "System.Collections.Generic.HashSet`1" or
-        "System.Collections.Generic.ISet`1" or
         "System.Collections.Generic.LinkedList`1" or
         "System.Collections.Generic.LinkedListNode`1" or
         "System.Collections.Generic.Dictionary`2" or
         "System.Collections.Generic.IDictionary`2" or
         "System.Collections.Generic.SortedDictionary`2" or
         "System.Collections.Generic.SortedList`2" or
-        "System.Collections.Generic.SortedSet`1" or
         "System.Collections.Generic.PriorityQueue`2" or
         "System.Span`1" or
         "System.Memory`1" or
@@ -8365,7 +8483,7 @@ internal partial class StatementBinder {
         let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
         let refLocalsFromParams = HashSet[string](StringComparer.Ordinal)
         let refLocalsExternal = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
-        let localFunctions = Dictionary[string, BlockStatementSyntax](StringComparer.Ordinal)
+        let localFunctions = Dictionary[string, SyntaxNode](StringComparer.Ordinal)
         let visitingLocalFunctions = HashSet[string](StringComparer.Ordinal)
 
         var localCycle = false
@@ -8438,7 +8556,7 @@ internal partial class StatementBinder {
             let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
             let refLocals = HashSet[string](StringComparer.Ordinal)
             let refExt = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
-            let localFns = Dictionary[string, BlockStatementSyntax](StringComparer.Ordinal)
+            let localFns = Dictionary[string, SyntaxNode](StringComparer.Ordinal)
             let visitingLocalFns = HashSet[string](StringComparer.Ordinal)
             let initSummary = CallEffectSummary()
             let dummyFn = def.StaticInitializerFunction ??
@@ -8493,7 +8611,7 @@ internal partial class StatementBinder {
         localTypes Dictionary[string, TypeSymbol?],
         refLocalsFromParams HashSet[string],
         refLocalsExternal Dictionary[string, TypeSymbol?],
-        localFunctions Dictionary[string, BlockStatementSyntax],
+        localFunctions Dictionary[string, SyntaxNode],
         visitingLocalFunctions HashSet[string],
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
@@ -8760,6 +8878,16 @@ internal partial class StatementBinder {
                         }
                     }
                     localFunctions[varDecl.Identifier.ValueText] = litBody
+                    return
+                }
+                if varDecl.Initializer is LambdaExpressionSyntax lamInit && lamInit.Body is {} lamBody {
+                    for p in lamInit.Parameters {
+                        if p.Identifier is {} pId && pId.ValueText.Length > 0 {
+                            localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                            refLocalsFromParams.Add(pId.ValueText)
+                        }
+                    }
+                    localFunctions[varDecl.Identifier.ValueText] = lamBody
                     return
                 }
                 ScanCalleeSyntaxNode(
@@ -10303,8 +10431,30 @@ internal partial class StatementBinder {
                         return
                     }
                     if enclosingType is StructSymbol encCallableOwner &&
-                        IsPrivateFieldOfStruct(encCallableOwner, fnName) {
-                        summary.WritesAnyStorage = true
+                        IsCallableFieldOfStruct(encCallableOwner, fnName) {
+                        if TryGetUnmodifiedCallableFieldBody(encCallableOwner, fnName, out var privFieldBody) &&
+                            privFieldBody != nil {
+                            ScanCalleeSyntaxNode(
+                                privFieldBody,
+                                nil,
+                                false,
+                                origCallee,
+                                enclosingType,
+                                false,
+                                parameters,
+                                calleeTypeParams,
+                                localTypes,
+                                refLocalsFromParams,
+                                refLocalsExternal,
+                                localFunctions,
+                                visitingLocalFunctions,
+                                visiting,
+                                summary,
+                                ref hitCycle
+                            )
+                        } else {
+                            summary.WritesAnyStorage = true
+                        }
                         return
                     }
                     if localTypes.ContainsKey(fnName) {
@@ -10320,6 +10470,7 @@ internal partial class StatementBinder {
                         localTypes,
                         refLocalsFromParams
                     )
+                    let namedCallSummary = CallEffectSummary()
                     ScanCalleeNamedCall(
                         fnName,
                         call.TypeArgumentList,
@@ -10327,6 +10478,23 @@ internal partial class StatementBinder {
                         origCallee,
                         enclosingType,
                         calleeTypeParams,
+                        visiting,
+                        namedCallSummary,
+                        ref hitCycle
+                    )
+                    ResolveCalleeSyntaxCallbackEffects(
+                        namedCallSummary,
+                        call,
+                        nil,
+                        origCallee,
+                        enclosingType,
+                        parameters,
+                        calleeTypeParams,
+                        localTypes,
+                        refLocalsFromParams,
+                        refLocalsExternal,
+                        localFunctions,
+                        visitingLocalFunctions,
                         visiting,
                         summary,
                         ref hitCycle
@@ -10393,6 +10561,7 @@ internal partial class StatementBinder {
                 ResolveCalleeSyntaxCallbackEffects(
                     memberCallSummary,
                     call,
+                    GetElementOrIndexerTypeOf(recvType),
                     origCallee,
                     enclosingType,
                     parameters,
@@ -10785,6 +10954,31 @@ internal partial class StatementBinder {
                             summary,
                             ref hitCycle
                         )
+                        let holeType = InferCalleeExpressionType(
+                            holeExpr,
+                            origCallee,
+                            enclosingType,
+                            parameters,
+                            calleeTypeParams,
+                            localTypes,
+                            out _
+                        )
+                        if holeType != nil && !object.Equals(holeType, TypeSymbol.String) &&
+                            !TypeSymbol
+                            .IsLegalPointeeType(holeType) {
+                            MergeToStringCallbackEffects(
+                                "ToString",
+                                holeType,
+                                List[TypeSymbol?]{holeType},
+                                visiting,
+                                summary
+                            )
+                            if holeType is ImportedTypeSymbol impHole &&
+                                impHole.ClrType is {} hClr &&
+                                !IsModeledFrameworkType(hClr, hClr.FullName ?? "") {
+                                summary.WritesAnyStorage = true
+                            }
+                        }
                     }
                 }
                 return
@@ -10858,6 +11052,7 @@ internal partial class StatementBinder {
     private func ResolveCalleeSyntaxCallbackEffects(
         callSummary CallEffectSummary,
         call CallExpressionSyntax,
+        defaultLambdaParamType TypeSymbol?,
         origCallee FunctionSymbol,
         enclosingType TypeSymbol?,
         parameters Dictionary[string, ParameterSymbol],
@@ -10865,7 +11060,7 @@ internal partial class StatementBinder {
         localTypes Dictionary[string, TypeSymbol?],
         refLocalsFromParams HashSet[string],
         refLocalsExternal Dictionary[string, TypeSymbol?],
-        localFunctions Dictionary[string, BlockStatementSyntax],
+        localFunctions Dictionary[string, SyntaxNode],
         visitingLocalFunctions HashSet[string],
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
@@ -10894,8 +11089,10 @@ internal partial class StatementBinder {
             if cur is LambdaExpressionSyntax lam {
                 for p in lam.Parameters {
                     if p.Identifier is {} pId && pId.ValueText.Length > 0 {
-                        if p.Type != nil {
-                            localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        localTypes[pId.ValueText] = if p.Type != nil {
+                            ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        } else {
+                            defaultLambdaParamType
                         }
                         refLocalsFromParams.Add(pId.ValueText)
                     }
@@ -10922,17 +11119,14 @@ internal partial class StatementBinder {
                     lamSummary,
                     ref hitCycle
                 )
-                for ft in lamSummary.WrittenFieldTypes {
-                    summary.AddFieldType(ft)
-                }
-                for et in lamSummary.WrittenElementTypes {
-                    summary.AddElementType(et)
-                }
+                summary.MergeFrom(lamSummary)
             } else if cur is FunctionLiteralExpressionSyntax fl {
                 for p in fl.Parameters {
                     if p.Identifier is {} pId && pId.ValueText.Length > 0 {
-                        if p.Type != nil {
-                            localTypes[pId.ValueText] = ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        localTypes[pId.ValueText] = if p.Type != nil {
+                            ResolveCalleeTypeClause(p.Type, calleeTypeParams)
+                        } else {
+                            defaultLambdaParamType
                         }
                         refLocalsFromParams.Add(pId.ValueText)
                     }
@@ -10959,15 +11153,11 @@ internal partial class StatementBinder {
                     flSummary,
                     ref hitCycle
                 )
-                for ft in flSummary.WrittenFieldTypes {
-                    summary.AddFieldType(ft)
-                }
-                for et in flSummary.WrittenElementTypes {
-                    summary.AddElementType(et)
-                }
+                summary.MergeFrom(flSummary)
             } else if cur is NameExpressionSyntax nameArg {
                 let argName = nameArg.IdentifierToken.ValueText
-                if parameters.TryGetValue(argName, out var pSym) && IsCallableMemberType(pSym.Type) {
+                if (parameters.TryGetValue(argName, out var pSym) && IsCallableMemberType(pSym.Type)) ||
+                    refLocalsFromParams.Contains(argName) {
                     summary.InvokesCallbackParameter = true
                 } else if localFunctions.TryGetValue(argName, out var lfBody) {
                     if visitingLocalFunctions.Add(argName) {
@@ -11070,6 +11260,134 @@ internal partial class StatementBinder {
                 if sf.Name == name && sf.Accessibility == Accessibility.Private {
                     return true
                 }
+            }
+        }
+        return false
+    }
+
+    private func IsCallableFieldOfStruct(owner StructSymbol, name string) bool {
+        for level in owner.GetHierarchy() {
+            for f in level.Fields {
+                if f.Name == name && IsCallableMemberType(f.Type) {
+                    return true
+                }
+            }
+            for sf in level.StaticFields {
+                if sf.Name == name && IsCallableMemberType(sf.Type) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func TryGetUnmodifiedCallableFieldBody(owner StructSymbol, name string, out body SyntaxNode?) bool {
+        body = nil
+        var initExpr ExpressionSyntax? = nil
+        for level in owner.GetHierarchy() {
+            let def = level.Definition ?? level
+            if def.Declaration is {} decl {
+                for fDecl in decl.Fields {
+                    if fDecl.Identifier.ValueText == name {
+                        initExpr = fDecl.Initializer
+                        break
+                    }
+                }
+            }
+            if initExpr != nil {
+                break
+            }
+        }
+        if initExpr == nil {
+            return false
+        }
+        var unwrapped = initExpr
+        while unwrapped is ParenthesizedExpressionSyntax paren {
+            unwrapped = paren.Expression
+        }
+        if unwrapped is FunctionLiteralExpressionSyntax fl {
+            body = fl.Body
+        } else if unwrapped is LambdaExpressionSyntax lam {
+            body = lam.Body
+        } else {
+            return false
+        }
+        if body == nil || CompilationWritesFieldName(name) {
+            body = nil
+            return false
+        }
+        return true
+    }
+
+    private func CompilationWritesFieldName(fieldName string) bool {
+        let seenTrees = HashSet[SyntaxTree](ReferenceEqualityComparer.Instance)
+        for s in binderCtx.RootScope.GetDeclaredStructs() {
+            let def = s.Definition ?? s
+            if def.Declaration is {} decl && seenTrees.Add(decl.SyntaxTree) {
+                if SyntaxTreeWritesFieldName(decl.SyntaxTree.Root, fieldName) {
+                    return true
+                }
+            }
+        }
+        for fn in binderCtx.RootScope.GetDeclaredFunctions() {
+            if fn.Declaration is {} decl && seenTrees.Add(decl.SyntaxTree) {
+                if SyntaxTreeWritesFieldName(decl.SyntaxTree.Root, fieldName) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func SyntaxTreeWritesFieldName(node SyntaxNode?, fieldName string) bool {
+        if node == nil {
+            return false
+        }
+        switch node {
+            case fieldAssign is FieldAssignmentExpressionSyntax {
+                if fieldAssign.FieldIdentifier.ValueText == fieldName {
+                    return true
+                }
+            }
+            case memberFieldAssign is MemberFieldAssignmentExpressionSyntax {
+                if memberFieldAssign.FieldIdentifier.ValueText == fieldName {
+                    return true
+                }
+            }
+            case assign is AssignmentExpressionSyntax {
+                if assign.IdentifierToken.ValueText == fieldName {
+                    return true
+                }
+            }
+            case structLit is StructLiteralExpressionSyntax {
+                for initSyntax in structLit.Initializers {
+                    if initSyntax.FieldIdentifier.ValueText == fieldName {
+                        return true
+                    }
+                }
+            }
+            case objCreate is ObjectCreationExpressionSyntax {
+                for initSyntax in objCreate.Initializers {
+                    if initSyntax.PropertyIdentifier.ValueText == fieldName {
+                        return true
+                    }
+                }
+            }
+            case refArg is RefArgumentExpressionSyntax {
+                if !refArg.IsInlineDeclaration && SyntaxContainsIdentifierName(refArg.Expression, fieldName) {
+                    return true
+                }
+            }
+            case unary is UnaryExpressionSyntax when unary.OperatorToken.Kind == SyntaxKind.AmpersandToken {
+                if SyntaxContainsIdentifierName(unary.Operand, fieldName) {
+                    return true
+                }
+            }
+            default { }
+        }
+        for child in node.GetChildren() {
+            if SyntaxTreeWritesFieldName(child, fieldName) {
+                return true
             }
         }
         return false
@@ -11938,7 +12256,7 @@ internal partial class StatementBinder {
         localTypes Dictionary[string, TypeSymbol?],
         refLocalsFromParams HashSet[string],
         refLocalsExternal Dictionary[string, TypeSymbol?],
-        localFunctions Dictionary[string, BlockStatementSyntax],
+        localFunctions Dictionary[string, SyntaxNode],
         visitingLocalFunctions HashSet[string],
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
@@ -12984,9 +13302,7 @@ internal partial class StatementBinder {
                         .TryLookupFunctions(fnName).IsDefaultOrEmpty {
                         return true
                     }
-                    if LookupCompilationTypeByName(fnName, call.TypeArgumentList?.Arguments.Count ?? 0) != nil &&
-                        $scope
-                        .TryLookupFunctions(fnName).IsDefaultOrEmpty {
+                    if LookupCompilationTypeByName(fnName, call.TypeArgumentList?.Arguments.Count ?? 0) != nil {
                         return true
                     }
                 }
@@ -13243,6 +13559,23 @@ internal partial class StatementBinder {
             } else if !matched {
                 let impExts = MemberLookup(binderCtx).CollectImportedExtensionMethods(memberName)
                 for impExt in impExts {
+                    let extParams = impExt.GetParameters()
+                    var minExtParams = 0
+                    for ep in extParams {
+                        if !ep.IsOptional && !ClrOverloadResolution.IsParamsArrayParameter(ep) {
+                            minExtParams++
+                        }
+                    }
+                    let hasExtParams = extParams.Length > 0 &&
+                        (
+                        extParams[extParams.Length - 1]
+                            .ParameterType
+                            .IsArray ||
+                            ClrOverloadResolution.IsParamsArrayParameter(extParams[extParams.Length - 1])
+                    )
+                    if argTypes.Count + 1 < minExtParams || (!hasExtParams && argTypes.Count + 1 > extParams.Length) {
+                        continue
+                    }
                     matched = true
                     summary.MergeFrom(
                         AnalyzeImportedMethodEffects(

@@ -70,12 +70,6 @@ internal class BindingServices {
     var HasCachedMethodsByName bool
     var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
     var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
-
-    /// Issue #5326: cached union of call-effect summaries for source equality/hash/comparer callbacks.
-    var CachedEqualityCallbackEffects CallEffectSummary?
-
-    /// Issue #5326: cached union of call-effect summaries for source formatting/ToString callbacks.
-    var CachedToStringCallbackEffects CallEffectSummary?
 }
 
 /// Issue #5326: summarizes the storage locations (fields/globals and elements) that a callee may transitively write.

@@ -6626,11 +6626,25 @@ internal partial class StatementBinder {
 
         protected open override func VisitConstantPattern(node BoundConstantPattern) {
             base.VisitConstantPattern(node)
-            // ADR-0208 R19 (#5593): the test can call the input's `Equals`, which can be user code. It is a plain
-            // method call, so it does not write by-reference storage (R12, amendment A3).
+            // ADR-0208 R19 (#5593, #5326): the test can call the input's `Equals`, which can be user code.
             if StatementBinder.ConstantPatternRunsUserCode(node) {
                 MarkMayMutateGlobalRoots(writesReferenceStorage: false)
                 InvalidateCallableStateForUnknownClosure()
+                if BoundBinaryOperator.Bind(
+                    SyntaxKind.EqualsEqualsToken,
+                    TypeSymbol.Object,
+                    TypeSymbol.Object
+                ) is {} eqOp {
+                    callExpressions.Add(
+                        BoundBinaryExpression(
+                            node.Syntax,
+                            BoundDefaultExpression(node.Syntax, node.Type),
+                            eqOp,
+                            node.Value,
+                            isChecked: false
+                        )
+                    )
+                }
             }
         }
 

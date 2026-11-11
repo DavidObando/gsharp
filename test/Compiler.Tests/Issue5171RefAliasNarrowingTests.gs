@@ -1268,6 +1268,120 @@ func Run(ref a C?, h BufferHolder) int32 {
 let h = BufferHolder{}
 Console.WriteLine(Run(ref h.Items[0], h))
 `}
+            yield []object{"issue-5326-nested-named-callback-wrapper-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func InvokeCallback(cb () -> void) {
+    cb()
+}
+func WrapCallback() {
+    InvokeCallback(() -> { globalC = nil })
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    WrapCallback()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-enumerable-any-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func CheckAny(xs List[int32]) bool {
+    return xs.Any((x int32) -> {
+        globalC = nil
+        return x > 0
+    })
+}
+func Run(ref a C?, xs List[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = CheckAny(xs)
+    return a.Value
+}
+let xs = List[int32](){1}
+Console.WriteLine(Run(ref globalC, xs))
+`}
+            yield []object{"issue-5326-callee-interpolation-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+func FormatNoisy(noisy Noisy) string {
+    return "item=${noisy}"
+}
+func Run(ref a C?, noisy Noisy) int32 {
+    if a == nil { return 0 }
+    let _ = FormatNoisy(noisy)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Noisy{}))
+`}
+            yield []object{"issue-5326-constant-pattern-equals-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class E {
+    override func Equals(o object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 1
+}
+func Run(ref a C?, o object) int32 {
+    if a == nil { return 0 }
+    let matched = o is 1
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, E{}))
+`}
+            yield []object{"issue-5326-loop-structural-equality-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Trigger {
+    override func Equals(obj object?) bool {
+        globalC = nil
+        return true
+    }
+    override func GetHashCode() int32 -> 0
+}
+data struct Pair(Item Trigger)
+func Run(ref a C?, x Pair, y Pair) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = x == y
+    }
+    return total
+}
+let t = Pair(Trigger{})
+Console.WriteLine(Run(ref globalC, t, t))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -1651,6 +1765,26 @@ func Main() {
     Console.WriteLine(w.Run(ref x))
 }
 `, []string{"5"}}
+            yield []object{"issue-5326-safe-loop-primitive-interpolation-preserves-narrowing", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = "${i + 1}"
+    }
+    return total
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"2"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {
