@@ -7520,6 +7520,26 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             yield break
         }
+        if current is MemberAccessExpressionSyntax nullableValue && model.GetSymbolInfo(nullableValue)
+            .Symbol is IPropertySymbol{
+            Name: "Value",
+            ContainingType: {OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}}
+        } {
+            let receiver = if unwrapSuppressions {
+                Unwrap(nullableValue.Expression, unwrapSuppressions: true)
+            } else {
+                nullableValue.Expression
+            }
+            for parent in EnumerateTupleContainerSources(receiver, model, unwrapSuppressions, visited) {
+                if parent.StorageType is INamedTypeSymbol{
+                    OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                    TypeArguments: {Length: 1}
+                } nullableParent {
+                    yield (parent.Symbol, nullableParent.TypeArguments[0], AppendTuplePath(parent.Prefix, 0))
+                }
+            }
+            yield break
+        }
         if current is MemberAccessExpressionSyntax member && model.GetSymbolInfo(member).Symbol is IFieldSymbol field {
             let receiver = if unwrapSuppressions {
                 Unwrap(member.Expression, unwrapSuppressions: true)
@@ -9195,7 +9215,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for var i = 0; i < firstSlots.Count; i++ {
             let secondPath = secondSlots[i].Path
-            let isContainerSlot = firstSlots[i].Path != firstPrefix
+            let isContainerSlot = SlotCrossesSharedContainer(firstType, firstPrefix, firstSlots[i].Path)
             let slotEdges = if isContainerSlot && tupleContractEdges != nil {
                 tupleContractEdges
             } else {
@@ -9228,6 +9248,49 @@ internal shared class ObliviousNullabilityAnalyzer {
                 isContractBoundary: isContractBoundary
             )
         }
+    }
+
+    // Inline tuple elements and Nullable<T> value wrappers live in caller storage (#5905).
+    // Only array elements and other constructed generic type arguments share a container object.
+    private func SlotCrossesSharedContainer(rootType ITypeSymbol?, rootPrefix string, slotPath string) bool {
+        if slotPath == rootPrefix {
+            return false
+        }
+        let relativePath = if rootPrefix.Length == 0 {
+            slotPath
+        } else if slotPath.StartsWith(rootPrefix + ".", StringComparison.Ordinal) {
+            slotPath.Substring(rootPrefix.Length + 1)
+        } else {
+            return false
+        }
+        var current = rootType
+        for component in relativePath.Split('.') {
+            if current is IArrayTypeSymbol {
+                return true
+            }
+            if current is not INamedTypeSymbol named || !int32.TryParse(component, out var index) || index < 0 {
+                return false
+            }
+            if named.IsTupleType {
+                if index >= named.TupleElements.Length {
+                    return false
+                }
+                current = named.TupleElements[index].Type
+                continue
+            }
+            if named
+                .OriginalDefinition
+                .SpecialType == SpecialType.System_Nullable_T &&
+                index == 0 &&
+                named
+                .TypeArguments
+                .Length == 1 {
+                current = named.TypeArguments[0]
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     private func TupleContractComparisonType(first ISymbol, firstType ITypeSymbol?, second ISymbol?) ITypeSymbol? {

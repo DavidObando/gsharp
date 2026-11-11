@@ -231,6 +231,10 @@ public static class Obj {
     @InlineData("whole-tuple")
     @InlineData("whole-tuple-preserve")
     @InlineData("projected-tuple")
+    @InlineData("nullable-tuple")
+    @InlineData("nullable-tuple-write")
+    @InlineData("nested-nullable-tuple")
+    @InlineData("projected-nullable-tuple")
     @InlineData("oblivious-producer")
     @InlineData("container-and-leaf")
     func TupleOutArgument_DoesNotFreezeTheCallersLeaf(shape string) {
@@ -271,6 +275,57 @@ public static class Obj {
         ref (string? Text, int Code) alias = ref row.Inner;
         alias = (null, 1);
         return row.Inner.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref (string? Text, int Code)? alias = ref row;
+        alias = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple-write": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        row = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nested-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out ((string Text, int Code)? Inner, int Flag) value) { value = (("p", 1), 3); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref ((string? Text, int Code)? Inner, int Flag) alias = ref row;
+        alias = ((null, 1), 2);
+        return row.Inner.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "projected-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Inner);
+        ref (string? Text, int Code)? alias = ref row.Inner;
+        alias = (null, 1);
+        return row.Inner.Value.Text;
     }
     public static string Run() => Read() ?? "null";
 }`

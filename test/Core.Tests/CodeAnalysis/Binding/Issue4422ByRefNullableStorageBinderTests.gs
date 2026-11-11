@@ -160,6 +160,12 @@ Console.WriteLine("${row.Inner.Text ?? "null"}:${row.Flag}")`, "p:3")
     @InlineData(`var row (Inner (Text string?, Code int32), Flag int32) = (("x", 1), 2)
 OutRow(&row.Inner)
 Console.WriteLine("${row.Inner.Text ?? "null"}:${row.Flag}")`, "p:2")
+    @InlineData(`var row (Text string?, Code int32)? = ("x", 1)
+OutOptionalRow(out row)
+Console.WriteLine(row!!.Text ?? "null")`, "p")
+    @InlineData(`var row (Inner (Text string?, Code int32)?, Flag int32) = (("x", 1), 2)
+OutNestedOptionalRow(out row)
+Console.WriteLine("${row.Inner!!.Text ?? "null"}:${row.Flag}")`, "p:3")
     @InlineData(`var row (Text string, Code int32) = ("abc", 1)
 Console.WriteLine(InNullableRow(in row))`, "3")
     func SafeDirection_IsAcceptedWithoutWarning(body string, expected string) {
@@ -845,6 +851,8 @@ func RefNullableRow(ref value (Text string?, Code int32)) { value = (nil, 1) }
 func OutRow(out value (Text string, Code int32)) { value = ("p", 1) }
 func OutNullableRow(out value (Text string?, Code int32)) { value = (nil, 1) }
 func OutNestedRow(out value (Inner (Text string, Code int32), Flag int32)) { value = (("p", 1), 3) }
+func OutOptionalRow(out value (Text string, Code int32)?) { value = ("p", 1) }
+func OutNestedOptionalRow(out value (Inner (Text string, Code int32)?, Flag int32)) { value = (("p", 1), 3) }
 func OutMixedRow(out value (A string, B string?)) { value = ("a", nil) }
 func OutSliceRow(out value (Values []string, Code int32)) { value = ([]string{"p"}, 1) }
 func InRow(in value (Text string, Code int32)) int32 -> value.Text.Length
