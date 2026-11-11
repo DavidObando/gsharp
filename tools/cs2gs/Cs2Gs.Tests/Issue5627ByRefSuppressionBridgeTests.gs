@@ -719,6 +719,7 @@ namespace Demo
         static void GetInferredOutBox<T>(T seed, out Box<T> value) { value = new Box<T>(seed); }
         static void GetOutWithOther<T, U>(T seed, U other, out Box<T> value) { value = new Box<T>(seed); }
         static void GetOutFromTuple<T, U>((T, U) seed, out Box<T> value) { value = new Box<T>(seed.Item1); }
+        static void GetOutFromParamsTuple<T, U>(out Box<T> value, params (T, U)[] seeds) { value = new Box<T>(seeds[0].Item1); }
         static int VarReassign() { var d = new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
         static int VarReassignArm(bool flag) { var d = new Dictionary<string, int>(); d = flag ? Volatile.Read(ref full!) : new Dictionary<string, int>(); return d.Count; }
         static int VarReassignAlias() { var a = new Dictionary<string, int>(); var d = a; d = Volatile.Read(ref full!); return d.Count; }
@@ -752,7 +753,7 @@ namespace Demo
         static int HeterogeneousNestedArrays() { var rows = new[] { (object)new[] { "ok" }, new[] { 1 } }; return rows[0].GetType() == typeof(string[]) && rows[1].GetType() == typeof(int[]) ? 1 : 0; }
         static int OutVarTypedBox() { GetOutBox(out var b); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
         static int OutVarPartiallyInferredBox() { GetOutWithOther("ok", Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref fullString!); return b.Value.Length; }
-        static int OutVarTuplePartiallyInferredBox() { GetOutFromTuple(("ok", Volatile.Read(ref cache!)), out var b); b.Value = Volatile.Read(ref fullString!); return b.Value.Length; }
+        static int OutVarTuplePartiallyInferredBox() { GetOutFromTuple(("ok", Volatile.Read(ref cache!)), out var b); b.Value = Volatile.Read(ref fullString!); GetOutFromParamsTuple(out var b2, ("ok", Volatile.Read(ref cache!))); b2.Value = Volatile.Read(ref fullString!); return (b.Value.Length + b2.Value.Length) / 2; }
         static int OutVarExplicitTupleSeedBox() { (object, int) seed = (Volatile.Read(ref fullString!), 0); GetOutFromTuple(seed, out var b); b.Value = Volatile.Read(ref fullString!); return b.Value.ToString()!.Length; }
         static int PatternTypedBox(object o) { if (o is Box<Dictionary<string, int>> b) { b.Value = Volatile.Read(ref full!); return b.Value.Count; } return 0; }
         static int TypedBox() { Box<Dictionary<string, int>> b = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
@@ -766,7 +767,7 @@ namespace Demo
         static bool VarWidenedByNull(bool flag) { var d = new Dictionary<string, int>(); if (flag) d = null; d = Volatile.Read(ref cache!); return d == null; }
         static bool NullableArrayElement() { Dictionary<string, int>?[] arr = new Dictionary<string, int>?[1]; arr[0] = Volatile.Read(ref cache!); return arr[0] == null; }
         static int InferredArrayElement() { var arr = MakeArray(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref cache!); return 1; }
-        static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); return 1; }
+        static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); var xs = new[] { "ok", Volatile.Read(ref stringCache!) }; return xs[0] == "ok" && xs[1] == null ? 1 : 0; }
         static int ConditionalImplicitArrays(bool flag) { var a = flag ? new[] { "ok" } : new[] { Volatile.Read(ref stringCache!) }; var b = flag ? new[] { "ok" }! : new[] { Volatile.Read(ref stringCache!) }; return a[0] == "ok" && b[0] == "ok" ? 1 : 0; }
         static int AliasedConditionalImplicitArrays(bool flag) { var row = new[] { "ok" }; var a = flag ? row : new[] { Volatile.Read(ref stringCache!) }; var sameRow = new[] { "ok" }; var alias = flag ? sameRow : sameRow; var rows = new[] { alias, new[] { Volatile.Read(ref stringCache!) } }; return a[0] == "ok" && rows[0][0] == "ok" && rows[1][0] == null ? 1 : 0; }
         static int CoalescedNestedImplicitArrays() { var rows = new[] { new[] { Volatile.Read(ref stringCache!) } ?? new[] { "ok" } }; return rows[0][0] == null ? 1 : 0; }
@@ -784,7 +785,10 @@ namespace Demo
         static int InferredBoxItemsElement() { var b = Wrap(Volatile.Read(ref cache!)); b.Items[0] = Volatile.Read(ref cache!); return 1; }
         static bool NullableTypedBox() { var b = new Box<Dictionary<string, int>?>(Volatile.Read(ref cache!)); b.Value = Volatile.Read(ref cache!); b.Prop = Volatile.Read(ref cache!); return b.Value == null && b.Prop == null; }
         static int DeconstructedBox() { (Box<Dictionary<string, int>> b, int n) = (Wrap(Volatile.Read(ref cache!)), 0); b.Value = Volatile.Read(ref cache!); return 1; }
-        static int OutVarInferredBox() { GetInferredOutBox(Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref cache!); return 1; }
+#nullable disable
+        static int OutVarWidenedTupleSeedBox() { var seed = ("ok", 0); seed = (null!, 0); GetOutFromTuple(seed, out var b2); b2.Value = Volatile.Read(ref stringCache!); return b2.Value == null ? 1 : 0; }
+#nullable enable
+        static int OutVarInferredBox() { GetInferredOutBox(Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref cache!); return OutVarWidenedTupleSeedBox(); }
         static int ForEachInferredBox() { foreach (var item in MakeArray(Wrap(Volatile.Read(ref cache!)))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         static int ForEachInferredBoxList() { foreach (var item in Boxes(Volatile.Read(ref cache!))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         static int ForEachInferredArrayList() { foreach (var row in MakeArrayList(Volatile.Read(ref stringCache!))) { row[0] = Volatile.Read(ref stringCache!); return row[0] == null ? 1 : 0; } return 0; }
@@ -852,6 +856,9 @@ namespace Demo
             "GetOutFromTuple((\"ok\", Volatile.Read(&cache)), out var b)\n        b!!.Value = Volatile.Read(&fullString)!!\n",
             printed
         )
+        Assert.Contains("b2!!.Value = Volatile.Read(&fullString)!!\n", printed)
+        Assert.Contains("[]string?{\"ok\", Volatile.Read(&stringCache)}", printed)
+        Assert.Contains("b2.Value = Volatile.Read(&stringCache)\n", printed)
         Assert.Contains("GetOutFromTuple(seed, out var b)\n        b!!.Value = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("b.Value = Volatile.Read(&full)!!\n", printed)
         Assert.Contains("b.Prop = Volatile.Read(&full)!!\n", printed)

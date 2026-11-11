@@ -5103,6 +5103,7 @@ partial class CSharpToGSharpTranslator {
             let originalMethod = receiverMethod.ReducedFrom?.OriginalDefinition ?? receiverMethod.OriginalDefinition
             let argumentExpressions = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
             var sawVerifiedDeclaredInput = false
+            var sawRejectedNilableInput = false
             if receiverMethod.ReducedFrom != nil &&
                 invocation.Expression is MemberAccessExpressionSyntax{Expression: {} extensionReceiver} {
                 if !filterOrdinals {
@@ -5116,7 +5117,8 @@ partial class CSharpToGSharpTranslator {
                         originalMethod.Parameters[0].Type,
                         relevantOrdinals,
                         argumentExpressions,
-                        ref sawVerifiedDeclaredInput
+                        ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput
                     )
                 }
             }
@@ -5130,19 +5132,34 @@ partial class CSharpToGSharpTranslator {
                 }
                 if filterOrdinals && this.GetArgumentParameter(argument) is {} boundParam {
                     let paramDef = boundParam.OriginalDefinition
-                    if !this.TypeMentionsAnyMethodTypeParameterOrdinal(paramDef.Type, relevantOrdinals) {
+                    let expandedParams = boundParam.IsParams && this.TryGetExpandedParamsElementTarget(
+                        argument,
+                        boundParam,
+                        out _,
+                        out _
+                    )
+                    let effectiveParamType = if expandedParams {
+                        GetParamsElementType(paramDef) ?? paramDef.Type
+                    } else {
+                        paramDef.Type
+                    }
+                    if !this.TypeMentionsAnyMethodTypeParameterOrdinal(effectiveParamType, relevantOrdinals) {
                         continue
                     }
                     this.CollectRelevantInferenceSubexpressions(
                         argument.Expression,
-                        paramDef.Type,
+                        effectiveParamType,
                         relevantOrdinals,
                         argumentExpressions,
-                        ref sawVerifiedDeclaredInput
+                        ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput
                     )
                     continue
                 }
                 argumentExpressions.Add(argument.Expression)
+            }
+            if sawRejectedNilableInput {
+                return false
             }
             if argumentExpressions.Count == 0 {
                 return sawVerifiedDeclaredInput
@@ -5173,6 +5190,7 @@ partial class CSharpToGSharpTranslator {
             relevantOrdinals HashSet[int32],
             results List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax],
             ref sawVerifiedDeclaredInput bool,
+            ref sawRejectedNilableInput bool,
             visitedLocals HashSet[ILocalSymbol]? = nil
         ) {
             var unwrapped = Unparenthesize(expression)
@@ -5190,10 +5208,38 @@ partial class CSharpToGSharpTranslator {
                         relevantOrdinals,
                         results,
                         ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
                         visitedLocals
                     )
                 }
                 return
+            }
+            if parameterType is IArrayTypeSymbol arrayParamType {
+                let arrayInit = switch unwrapped {
+                    case implicitArr is ImplicitArrayCreationExpressionSyntax: implicitArr.Initializer
+                    case explicitArr is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ArrayCreationExpressionSyntax: explicitArr.Initializer
+                    default: default(InitializerExpressionSyntax?)
+                }
+                if arrayInit != nil {
+                    let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
+                    this.CollectArrayInitializerLeaves(arrayInit, leaves)
+                    for leaf in leaves {
+                        this.CollectRelevantInferenceSubexpressions(
+                            leaf,
+                            arrayParamType.ElementType,
+                            relevantOrdinals,
+                            results,
+                            ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
+                            visitedLocals
+                        )
+                    }
+                    return
+                }
             }
             if this.UnwrapNullableValueTupleType(parameterType) is INamedTypeSymbol{IsTupleType: true} paramTuple {
                 if unwrapped is TupleExpressionSyntax tupleExpr &&
@@ -5211,6 +5257,7 @@ partial class CSharpToGSharpTranslator {
                                 relevantOrdinals,
                                 results,
                                 ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
                                 visitedLocals
                             )
                         }
@@ -5240,6 +5287,7 @@ partial class CSharpToGSharpTranslator {
                         relevantOrdinals,
                         results,
                         ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
                         visitedLocals
                     )
                     return
@@ -5258,6 +5306,7 @@ partial class CSharpToGSharpTranslator {
             relevantOrdinals HashSet[int32],
             results List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax],
             ref sawVerifiedDeclaredInput bool,
+            ref sawRejectedNilableInput bool,
             visitedLocals HashSet[ILocalSymbol]?
         ) {
             if this.UnwrapNullableValueTupleType(parameterType) is INamedTypeSymbol{IsTupleType: true} paramTuple &&
@@ -5301,6 +5350,7 @@ partial class CSharpToGSharpTranslator {
                             relevantOrdinals,
                             results,
                             ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
                             visitedLocals
                         )
                         continue
@@ -5322,7 +5372,7 @@ partial class CSharpToGSharpTranslator {
                         this.context.SiblingCompilations
                     )
                     if leafAcceptsNil {
-                        results.Add(elemInit ?? localRef)
+                        sawRejectedNilableInput = true
                         continue
                     }
                     let leafHasFixedContract = !IsImplicitlyTypedLocal(tupleLocal) &&
@@ -5349,6 +5399,7 @@ partial class CSharpToGSharpTranslator {
                             relevantOrdinals,
                             results,
                             ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
                             activeVisited
                         )
                     } else if initializerExpr != nil {
@@ -5360,6 +5411,7 @@ partial class CSharpToGSharpTranslator {
                                 relevantOrdinals,
                                 results,
                                 ref sawVerifiedDeclaredInput,
+                                ref sawRejectedNilableInput,
                                 activeVisited
                             )
                         }
@@ -5378,6 +5430,7 @@ partial class CSharpToGSharpTranslator {
                         relevantOrdinals,
                         results,
                         ref sawVerifiedDeclaredInput,
+                        ref sawRejectedNilableInput,
                         activeVisited
                     )
                     return
@@ -5914,6 +5967,13 @@ partial class CSharpToGSharpTranslator {
             if leaves.Count == 0 {
                 return true
             }
+            var innermostElement = (this.context.GetTypeInfo(implicitArray).Type as IArrayTypeSymbol)?.ElementType
+            while innermostElement is IArrayTypeSymbol innerArr {
+                innermostElement = innerArr.ElementType
+            }
+            let isDelegateElement = UnwrapExpressionTreeDelegateType(innermostElement) is INamedTypeSymbol{
+                DelegateInvokeMethod: {}
+            }
             var sawNilableReturn = false
             for leaf in leaves {
                 let leafNilable = if tuplePath != nil && tuplePath.Count > 0 {
@@ -5922,8 +5982,11 @@ partial class CSharpToGSharpTranslator {
                     this.InitializerLambdaReturnsNilableBeyondItsCSharpType(leaf, memo)
                 }
                 if leafNilable {
+                    if !isDelegateElement {
+                        return false
+                    }
                     sawNilableReturn = true
-                } else if !this.IsUncastAnonymousFunctionOperand(leaf) {
+                } else if isDelegateElement && !this.IsUncastAnonymousFunctionOperand(leaf) {
                     return true
                 }
             }
