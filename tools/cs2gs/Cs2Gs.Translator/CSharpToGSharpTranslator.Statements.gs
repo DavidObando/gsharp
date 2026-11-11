@@ -292,9 +292,35 @@ partial class CSharpToGSharpTranslator {
                     // documents — structurally equivalent delegates are not
                     // interchangeable — and falls through to Map unchanged for
                     // every non-delegate type, so only this shape moves.
-                    type = MakeNullable(
-                        this.typeMapper.MapEventType(inferredLocal.Type, this.context, declaration!!.Type.GetLocation())
+                    var mappedInferredType = this.typeMapper.MapEventType(
+                        inferredLocal.Type,
+                        this.context,
+                        declaration!!.Type.GetLocation()
                     )
+                    if inferredLocal.Type is IArrayTypeSymbol inferredArraySymbol &&
+                        mappedInferredType is ArrayTypeReference mappedInferredArray &&
+                        declarator
+                        .Initializer
+                        ?.Value is {} inferredInitValue {
+                        let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                        this.CollectUnderlyingImplicitArrays(inferredInitValue, initArrays)
+                        if initArrays.Count > 0 {
+                            let promotedInferredElem = this.PromoteInferredDelegateArrayElementType(
+                                mappedInferredArray.ElementType,
+                                inferredArraySymbol.ElementType,
+                                initArrays[0]
+                            )
+                            if promotedInferredElem != nil && !object.ReferenceEquals(
+                                promotedInferredElem,
+                                mappedInferredArray.ElementType
+                            ) {
+                                mappedInferredType = ArrayTypeReference(promotedInferredElem, mappedInferredArray.Rank){
+                                    IsNullable = mappedInferredArray.IsNullable
+                                }
+                            }
+                        }
+                    }
+                    type = MakeNullable(mappedInferredType)
                 } else if initializer != nil &&
                     (
                     declarator.Initializer!!.Value is BaseObjectCreationExpressionSyntax and

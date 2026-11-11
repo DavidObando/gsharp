@@ -2022,10 +2022,15 @@ partial class CSharpToGSharpTranslator {
                 widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
             ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)
-                return this.ReportStoreBridge(
+                return this.BridgeWidenedImplicitArrayConsumer(
                     argument.Expression,
-                    unbridged,
-                    EnsureNonNullAssertion(unbridged),
+                    this.ReportStoreBridge(
+                        argument.Expression,
+                        unbridged,
+                        EnsureNonNullAssertion(unbridged),
+                        targetParameter
+                    ),
+                    targetType,
                     targetParameter
                 )
             }
@@ -2099,6 +2104,16 @@ partial class CSharpToGSharpTranslator {
                         includePromotedValue: true
                     )
                 }
+            } else if !IsNameOfArgument(argument) &&
+                !isXunitNullAssertion &&
+                targetParameter is {} nullableTargetParam &&
+                targetType != nil {
+                translated = this.BridgeWidenedImplicitArrayConsumer(
+                    argument.Expression,
+                    translated,
+                    targetType,
+                    nullableTargetParam
+                )
             }
             return translated
         }

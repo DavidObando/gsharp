@@ -658,6 +658,11 @@ namespace Demo
         public Array Data = Array.Empty<object>();
         public static implicit operator ArrayEnvelope<T>(Array a) => new ArrayEnvelope<T> { Data = a };
     }
+    public class StringArrayEnvelope
+    {
+        public string[] Data = Array.Empty<string>();
+        public static implicit operator StringArrayEnvelope(string[] a) => new StringArrayEnvelope { Data = a };
+    }
     public class Holder
     {
         public Holder() { }
@@ -721,6 +726,7 @@ namespace Demo
         static System.Threading.Tasks.Task<string> KeepFixedStringAsync(object? ignored) => System.Threading.Tasks.Task.FromResult("ok");
         static T FirstOfTwo<T, U>(T value, U ignored) => value;
         static void TakeStringArray(string[] x) { }
+        static void TakeNullableStringArray(string[]? x) { }
         static void GetOutBox(out Box<Dictionary<string, int>> value) { value = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); }
         static void GetInferredOutBox<T>(T seed, out Box<T> value) { value = new Box<T>(seed); }
         static void GetRefOutBox<T>(ref T seed, out Box<T> value) { value = new Box<T>(seed); }
@@ -733,7 +739,7 @@ namespace Demo
         static int VarReassignAlias() { var a = new Dictionary<string, int>(); var d = a; d = Volatile.Read(ref full!); var c0 = "ok"; var c1 = true ? c0 : c0; var c2 = true ? c1 : c1; var c3 = true ? c2 : c2; c3 = Volatile.Read(ref fullString!); return d.Count + (c3 == "ok" ? 0 : 1); }
         static int VarCoalesceReassign() { var d = Volatile.Read(ref cache!) ?? new Dictionary<string, int>(); d = Volatile.Read(ref full!); return d.Count; }
         static int VarCoalesceAliasReassign() { var a = Volatile.Read(ref stringCache!) ?? "ok"; var d = a; d = Volatile.Read(ref fullString!); return d.Length; }
-        static int VarCastReassign() { var d = (string)Volatile.Read(ref fullString!); d = Volatile.Read(ref fullString!); return d.Length; }
+        static int VarCastReassign() { var d = (string)Volatile.Read(ref fullString!); d = Volatile.Read(ref fullString!); var dSuppressed = Volatile.Read(ref fullString!)!; dSuppressed = Volatile.Read(ref fullString!); return (d.Length + dSuppressed.Length) / 2; }
         static int VarConcatAndInterpolationReassign() { var d1 = Volatile.Read(ref fullString!) + ""; d1 = Volatile.Read(ref fullString!); var d2 = $"{Volatile.Read(ref fullString!)}"; d2 = Volatile.Read(ref fullString!); return d1.Length + d2.Length; }
         static int VarFixedReturnHelperReassign() { var d = KeepFixedString(Volatile.Read(ref cache!)); d = Volatile.Read(ref fullString!); var d2 = FirstOfTwo("ok", Volatile.Read(ref cache!)); d2 = Volatile.Read(ref fullString!); var d3 = new Holder(Volatile.Read(ref cache!)).Text; d3 = Volatile.Read(ref fullString!); return (d.Length + d2.Length + d3.Length) / 3; }
         static int ExplicitBridgedAliasReassign() { object a = Volatile.Read(ref fullString!); var d = a; d = Volatile.Read(ref fullString!); return d.ToString()!.Length; }
@@ -755,7 +761,7 @@ namespace Demo
         static int AwaitedFactoryJaggedArrayRowStore() => AwaitedFactoryJaggedArrayRowStoreAsync().Result;
         static ConvBox<T>[] MakeConvBoxes<T>(T seed) => new ConvBox<T>[1];
         static int InferredBoxArrayConversionElement() { var arr = MakeConvBoxes(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref fullString!); return 1; }
-        static int ExplicitAndImplicitSiblingNestedArrays() { var rows = new[] { new string[] { "ok" }, new[] { Volatile.Read(ref fullString!) } }; var nullableRows = new[] { new string?[] { null }, new[] { "ok" } }; var consumedRow = new[] { "ok" }; TakeStringArray(consumedRow); Holder? nullHolder = null; nullHolder?.Take(consumedRow); var consumedRows = new[] { consumedRow, new[] { Volatile.Read(ref stringCache!) } }; var guardedRow = new[] { Volatile.Read(ref stringCache!) }; if (false) { TakeStringArray(guardedRow); TakeStringArray(guardedRow!); var h = new Holder { Names = guardedRow }; var list = new List<string[]> { guardedRow }; var parentRows = new[] { new string[] { "ok" }, guardedRow }; } return rows[0][0].Length + rows[1][0].Length + (nullableRows[0][0] == null && nullableRows[1][0] == "ok" && consumedRows[0][0] == "ok" && consumedRows[1][0] == null && guardedRow[0] == null ? 0 : 1); }
+        static int ExplicitAndImplicitSiblingNestedArrays() { var rows = new[] { new string[] { "ok" }, new[] { Volatile.Read(ref fullString!) } }; var nullableRows = new[] { new string?[] { null }, new[] { "ok" } }; var consumedRow = new[] { "ok" }; TakeStringArray(consumedRow); Holder? nullHolder = null; nullHolder?.Take(consumedRow); var consumedRows = new[] { consumedRow, new[] { Volatile.Read(ref stringCache!) } }; var guardedRow = new[] { Volatile.Read(ref stringCache!) }; var coalesceRow = new[] { Volatile.Read(ref stringCache!) }; TakeNullableStringArray(guardedRow); if (false) { TakeStringArray(guardedRow); TakeStringArray(guardedRow!); TakeStringArray(coalesceRow ?? coalesceRow); TakeStringArray(guardedRow[..]); StringArrayEnvelope env = guardedRow; var h = new Holder { Names = guardedRow }; var list = new List<string[]> { guardedRow }; var parentRows = new[] { new string[] { "ok" }, guardedRow }; } return rows[0][0].Length + rows[1][0].Length + (nullableRows[0][0] == null && nullableRows[1][0] == "ok" && consumedRows[0][0] == "ok" && consumedRows[1][0] == null && guardedRow[0] == null && coalesceRow[0] == null ? 0 : 1); }
         static int InlineNestedArrayForEach() { var sum = 0; foreach (var row in new[] { new[] { 1 } }) { sum += row[0]; } return sum; }
         static int DeepBinaryNestedArray() { var cube = new[] { new[] { new[] { new[] { new[] { new[] { 1 }, new[] { 2 } }, new[] { new[] { 3 }, new[] { 4 } } }, new[] { new[] { new[] { 5 }, new[] { 6 } }, new[] { new[] { 7 }, new[] { 8 } } } }, new[] { new[] { new[] { new[] { 9 }, new[] { 10 } }, new[] { new[] { 11 }, new[] { 12 } } }, new[] { new[] { new[] { 13 }, new[] { 14 } }, new[] { new[] { 15 }, new[] { 16 } } } } }, new[] { new[] { new[] { new[] { new[] { 17 }, new[] { 18 } }, new[] { new[] { 19 }, new[] { 20 } } }, new[] { new[] { new[] { 21 }, new[] { 22 } }, new[] { new[] { 23 }, new[] { 24 } } } }, new[] { new[] { new[] { new[] { 25 }, new[] { 26 } }, new[] { new[] { 27 }, new[] { 28 } } }, new[] { new[] { new[] { 29 }, new[] { 30 } }, new[] { new[] { 31 }, new[] { 32 } } } } } }; return cube[0][0][0][0][0][0]; }
         static int HeterogeneousNestedArrays() { var rows = new[] { (object)new[] { "ok" }, new[] { 1 } }; return rows[0].GetType() == typeof(string[]) && rows[1].GetType() == typeof(int[]) ? 1 : 0; }
@@ -786,8 +792,8 @@ namespace Demo
         static int DelegateArrayConsumedAsObject() { var row = new[] { () => Volatile.Read(ref cache!) }; object[] objects = new[] { row, new object() }; return row[0]() == null && objects.Length == 2 ? 1 : 0; }
         static int ObjectTargetImplicitArray() { object value = new[] { Volatile.Read(ref stringCache!) }; Array arrValue = new[] { Volatile.Read(ref stringCache!) }; ArrayEnvelope<string> envValue = new[] { Volatile.Read(ref stringCache!) }; return ((string?[])value)[0] == null && arrValue.GetValue(0) == null && envValue.Data.GetValue(0) == null ? 1 : 0; }
         static int MixedSiblingNestedArrays() { var rows = new[] { new[] { "ok" }, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "ok" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
-        static int MixedAliasedAndInlineNestedArrays() { var row = new[] { "ok" }; var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "ok" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
-        static int ReassignedAliasedNestedArray() { var row = new[] { "ok" }; row = new[] { "next" }; var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "next" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
+        static int MixedAliasedAndInlineNestedArrays() { var row = new[] { "ok" }; var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (row[0].Length / 2) + (rows[1][0] == null ? 1 : 0); }
+        static int ReassignedAliasedNestedArray() { var row = new[] { "ok" }; row = new string[] { "next" }; row = MakeArray("final"); var rows = new[] { row, new[] { Volatile.Read(ref stringCache!) } }; return (rows[0][0] == "final" ? 1 : 0) + (rows[1][0] == null ? 1 : 0); }
         static int ReassignedJaggedImplicitArray() { var row = new[] { Volatile.Read(ref stringCache!) }; var rows = new[] { row }; rows = new[] { new[] { "next" } }; var selfRow = new[] { Volatile.Read(ref stringCache!) }; var selfRows = new[] { selfRow }; selfRows[0] = selfRow; return rows[0][0] == "next" && selfRows[0][0] == null ? 1 : 0; }
         static int SharedAliasedArrayRow() { var row = new[] { "ok" }; var first = new[] { row }; var second = new[] { new[] { Volatile.Read(ref stringCache!) }, row }; return (first[0][0] == "ok" ? 1 : 0) + (second[0][0] == null ? 1 : 0) + (second[1][0] == "ok" ? 1 : 0); }
         static int InferredBoxItemsElement() { var b = Wrap(Volatile.Read(ref cache!)); b.Items[0] = Volatile.Read(ref cache!); return 1; }
@@ -824,6 +830,13 @@ namespace Demo
             "var d = cast[string](Volatile.Read(&fullString))\n        d = Volatile.Read(&fullString)!!\n",
             printed
         )
+        Assert.Contains("dSuppressed = Volatile.Read(&fullString)!!\n", printed)
+        Assert.Contains("TakeNullableStringArray(cast[[]string](guardedRow))", printed)
+        Assert.Contains("TakeStringArray(cast[[]string]((coalesceRow ?? coalesceRow)!!))", printed)
+        Assert.Contains("TakeStringArray(cast[[]string](guardedRow[..]))", printed)
+        Assert.Contains("let env StringArrayEnvelope = cast[[]string](guardedRow)", printed)
+        Assert.Contains("(row[0]!!.Length / 2)", printed)
+        Assert.Contains("row = cast[[]string?](MakeArray(\"final\"))", printed)
         Assert.Contains("d1 = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("d2 = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains(
@@ -921,7 +934,7 @@ namespace Demo
             printed
         )
         Assert.Contains(
-            "var row = []string?{\"ok\"}\n        row = []string?{\"next\"}\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
+            "var row = []string?{\"ok\"}\n        row = []string?{\"next\"}\n        row = cast[[]string?](MakeArray(\"final\"))\n        let rows = [][]string?{row!!, []string?{Volatile.Read(&stringCache)}}",
             printed
         )
         Assert.Contains(

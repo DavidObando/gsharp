@@ -1160,6 +1160,16 @@ partial class CSharpToGSharpTranslator {
                     elementTypeSymbol,
                     implicitArray
                 )
+            } else if literal is ArrayCreationExpressionSyntax explicitArray &&
+                this.TryGetAssignedInferredArrayInitializer(explicitArray) is {} assignedInitArray {
+                let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
+                elementType = this.PromoteImplicitArrayLevel(
+                    elementType,
+                    elementTypeSymbol,
+                    assignedInitArray,
+                    initComponent.Levels,
+                    initComponent.Depth
+                )
             }
             if elementType == nil ||
                 elementType.IsNullable ||

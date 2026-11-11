@@ -4027,6 +4027,16 @@ partial class CSharpToGSharpTranslator {
             // Issue #5537: an array stored in oblivious container storage has its
             // element type, nested positions included (#5541).
             elementType = this.PromoteObliviousArrayElement(elementType, elementTypeSymbol, creation)
+            if this.TryGetAssignedInferredArrayInitializer(creation) is {} assignedInitArray {
+                let initComponent = this.GetImplicitArrayComponent(assignedInitArray)
+                elementType = this.PromoteImplicitArrayLevel(
+                    elementType,
+                    elementTypeSymbol,
+                    assignedInitArray,
+                    initComponent.Levels,
+                    initComponent.Depth
+                )
+            }
             return ArrayAllocationExpression(elementType, length)
         }
 
@@ -4084,7 +4094,9 @@ partial class CSharpToGSharpTranslator {
         private func IsNullableArrayElementAccess(expression ExpressionSyntax?) bool {
             var expression = expression
             expression = Unparenthesize(expression)
-            if expression is not ElementAccessExpressionSyntax elementAccess {
+            if expression is not ElementAccessExpressionSyntax elementAccess || this.IsRangeElementAccess(
+                elementAccess
+            ) {
                 return false
             }
             if this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression) {
@@ -4196,6 +4208,14 @@ partial class CSharpToGSharpTranslator {
                     .ManagedReferenceArrayNullable
                     .MappedArrayElementByElementType
                     .Add(array.ElementType, mappedElement)
+            }
+            if mappedElement != nil &&
+                !mappedElement.IsNullable &&
+                array
+                .ElementType
+                .IsReferenceType &&
+                this.ImplicitArrayExpressionHasPromotedNullableElement(expression) {
+                return MakeNullable(mappedElement)
             }
             return mappedElement
         }
