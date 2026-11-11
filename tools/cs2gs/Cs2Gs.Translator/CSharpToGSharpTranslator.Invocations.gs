@@ -2813,6 +2813,19 @@ partial class CSharpToGSharpTranslator {
                 !method!!.IsStatic &&
                 !this
                 .TryGetStaticExtensionHelper(method, out _, out _) {
+                if member.Expression is BaseExpressionSyntax {
+                    if method!!.Name == "Deconstruct" && this.TryGetImportedBaseDeconstructHelperName(
+                        member,
+                        method!!,
+                        out var baseHelperName
+                    ) {
+                        return MemberAccessExpression(ThisExpression(), baseHelperName)
+                    }
+                    return MemberAccessExpression(
+                        IdentifierExpression("base"),
+                        this.EmittedName(method, member.Name.Identifier.ValueText)
+                    )
+                }
                 let receiver GExpression? = this.CaptureMethodGroupReceiver(
                     this.TranslateReceiverWithNullForgiveness(member.Expression),
                     member.Expression

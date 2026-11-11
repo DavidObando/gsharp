@@ -50,6 +50,10 @@ partial class CSharpToGSharpTranslator {
             IMethodSymbol,
             string
         ](SymbolEqualityComparer.Default)
+        private let valueTypeExplicitDeconstructHelperNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
         private let pendingNestedBridges Dictionary[SyntaxNode, GMember] = Dictionary[SyntaxNode, GMember]()
 
         private func RecordDeconstructionAdapterName(method IMethodSymbol) string {
@@ -357,19 +361,11 @@ partial class CSharpToGSharpTranslator {
             if declarations == nil {
                 return false
             }
-            let narrowedType = if recursive.Type != nil {
-                this.context.GetTypeInfo(recursive.Type).Type
-            } else {
-                default(ITypeSymbol?)
-            }
-            let requiresConversion = recursive.Type != nil &&
-                narrowedType != nil &&
-                (
-                receiverType == nil || !SymbolEqualityComparer.Default.Equals(
-                    UnwrapNullablePatternType(receiverType),
-                    UnwrapNullablePatternType(narrowedType)
-                )
-            )
+            let requiresConversion = receiverType == nil ||
+                IsNullableValueType(receiverType) ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(UnwrapNullablePatternType(receiverType), matchedType)
             let (guardFlag, guardValue) = this.GetOrCreateRecordPatternTypeGuard(
                 owner,
                 path,
@@ -380,18 +376,20 @@ partial class CSharpToGSharpTranslator {
             )
             let flagExpr = IdentifierExpression(guardFlag)
             let assignStatements = List[GStatement]()
-            if guardValue != nil && receiver != nil && recursive.Type != nil {
-                assignStatements.Add(
-                    AssignmentStatement(
-                        IdentifierExpression(guardValue),
-                        this.BuildPatternNarrowingReplacement(
-                            receiver,
-                            receiverSyntax: nil,
-                            recursive.Type,
-                            receiverType
-                        )
+            if guardValue != nil && receiver != nil {
+                let capturedValue = if recursive.Type != nil &&
+                    !IsNullableValueType(receiverType) &&
+                    (
+                    receiverType == nil || !SymbolEqualityComparer.Default.Equals(
+                        UnwrapNullablePatternType(receiverType),
+                        matchedType
                     )
-                )
+                ) {
+                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type, receiverType)
+                } else {
+                    EnsureNonNullAssertion(receiver)
+                }
+                assignStatements.Add(AssignmentStatement(IdentifierExpression(guardValue), capturedValue))
             }
             assignStatements.Add(AssignmentStatement(flagExpr, LiteralExpression.Bool(true)))
             guardedTest = ParenthesizedExpression(
@@ -570,13 +568,15 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             }
+            let targetMethodName = if !forceConcreteImplementation && this.NeedsValueTypeExplicitDeconstructHelper(
+                method
+            ) {
+                this.ValueTypeExplicitDeconstructHelperName(method)
+            } else {
+                this.EmittedName(method, method.Name)
+            }
             statements.Add(
-                ExpressionStatement(
-                    InvocationExpression(
-                        MemberAccessExpression(receiver, this.EmittedName(method, method.Name)),
-                        arguments
-                    )
-                )
+                ExpressionStatement(InvocationExpression(MemberAccessExpression(receiver, targetMethodName), arguments))
             )
             statements.Add(
                 ReturnStatement(
@@ -1111,6 +1111,101 @@ partial class CSharpToGSharpTranslator {
 
         private func HasImportedDeconstructContractBridge(symbol INamedTypeSymbol) bool ->
         this.GetImportedDeconstructContractMethods(symbol).Count > 0
+
+        private func NeedsValueTypeExplicitDeconstructHelper(method IMethodSymbol?) bool {
+            if method == nil ||
+                method.IsStatic ||
+                method.IsPartialDefinition ||
+                !method
+                .ContainingType
+                .IsValueType ||
+                method
+                .ExplicitInterfaceImplementations
+                .IsDefaultOrEmpty {
+                return false
+            }
+            let explicitSlot = method.ExplicitInterfaceImplementations[0]
+            return this.nameAllocator.HasRenamedDeconstructContract(method) ||
+                this
+                .nameAllocator
+                .HasRenamedDeconstructContract(explicitSlot) || this.TryResolveMigratedProducerDeconstruct(
+                explicitSlot,
+                out _,
+                out _
+            )
+        }
+
+        private func ValueTypeExplicitDeconstructHelperName(method IMethodSymbol) string {
+            let original = method.OriginalDefinition
+            if this.valueTypeExplicitDeconstructHelperNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
+            let occupied = HashSet[string](
+                ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
+                    (member ISymbol) -> this.EmittedName(member, member.Name)!!
+                ),
+                StringComparer.Ordinal
+            )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
+            let ordinal = owner
+                .GetMembers()
+                .OfType[IMethodSymbol]()
+                .Where((candidate IMethodSymbol) -> !candidate.ExplicitInterfaceImplementations.IsDefaultOrEmpty)
+                .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
+                .Count()
+            const stem = "deconstructExplicit"
+            var candidateName = stem
+            var remaining = ordinal
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+                if !occupied.Contains(candidateName) {
+                    remaining--
+                }
+                candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName,
+                role: "explicit-helper"
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.valueTypeExplicitDeconstructHelperNames[original] = assignedName
+            return assignedName
+        }
+
+        private func BuildValueTypeExplicitDeconstructForwarder(method IMethodSymbol) MethodDeclaration? {
+            if !this.NeedsValueTypeExplicitDeconstructHelper(method) {
+                return nil
+            }
+            let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let explicitInterfaceType = this.typeMapper.Map(
+                method.ExplicitInterfaceImplementations[0].ContainingType,
+                this.context,
+                syntaxNode?.GetLocation()
+            )
+            if explicitInterfaceType == nil {
+                return nil
+            }
+            return this.BuildDeconstructContractForwardingMethod(
+                method,
+                this.EmittedName(method, method.Name)!!,
+                ThisExpression(),
+                this.ValueTypeExplicitDeconstructHelperName(method),
+                isOpen: false,
+                isOverride: false,
+                visibility: Visibility.Default,
+                explicitInterfaceType: explicitInterfaceType
+            )
+        }
 
         private func NeedsProtectedImportedDeconstructHook(method IMethodSymbol?) bool -> method != nil &&
             !method.IsStatic &&

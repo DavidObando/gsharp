@@ -83,6 +83,10 @@ partial class CSharpToGSharpTranslator {
                         yield (methodMember, methodIsStatic)
                     }
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
+                        let explicitStructForwarder = this.BuildValueTypeExplicitDeconstructForwarder(deconstruct)
+                        if explicitStructForwarder != nil {
+                            yield (explicitStructForwarder, false)
+                        }
                         let forwarder = this.BuildImportedDeconstructForwarder(deconstruct, ownerKind)
                         if forwarder != nil {
                             yield (forwarder, false)
@@ -1232,11 +1236,13 @@ partial class CSharpToGSharpTranslator {
                 .ContainingType
                 .IsRecord &&
                 this.DirectlyImplementsImportedDeconstructContract(symbol)
+            let helperExplicitValueTypeDeconstruct = this.NeedsValueTypeExplicitDeconstructHelper(symbol)
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a clause-compatible explicit implementation, or null for an
             // ordinary method / safe fallback.
             let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl &&
-                !bridgedExplicitRecordDeconstruct {
+                !bridgedExplicitRecordDeconstruct &&
+                !helperExplicitValueTypeDeconstruct {
                 this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
                     this.context,
@@ -1507,8 +1513,13 @@ partial class CSharpToGSharpTranslator {
             // C# definition for the declaring part (the pre-ADR-0192
             // implementation-only translation silently dropped its
             // attributes).
+            let emittedMethodName = if helperExplicitValueTypeDeconstruct {
+                this.ValueTypeExplicitDeconstructHelperName(symbol!!)
+            } else {
+                this.EmittedName(symbol, node.Identifier.ValueText)
+            }
             let method = MethodDeclaration(
-                this.EmittedName(symbol, node.Identifier.ValueText),
+                emittedMethodName,
                 parameters: parameters,
                 returnType: returnType,
                 body: body,

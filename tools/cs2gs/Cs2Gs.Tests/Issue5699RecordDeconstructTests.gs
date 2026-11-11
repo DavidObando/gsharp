@@ -607,6 +607,11 @@ namespace RecordDeconstruction {
     public record Sub : R {
         public int Extra = 9;
     }
+    public record struct RS {
+        public int Value;
+        public RS() { Value = 3; }
+        public void Deconstruct(out int x, out int y) { x = 1; y = 2; R.Hook?.Invoke(); }
+    }
     public class Holder {
         public R Child = new R();
         public int Value = 3;
@@ -633,6 +638,20 @@ namespace RecordDeconstruction {
             string propFirstOutcome;
             try { propFirstOutcome = (propFirst is R { DynamicValue: 0 } or R(1, _)).ToString(); }
             catch (System.NullReferenceException) { propFirstOutcome = "threw"; }
+            Sub? subCleared = new Sub();
+            R.Hook = () => subCleared = null;
+            string subClearedOutcome;
+            try { subClearedOutcome = (subCleared is R(1, _) { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { subClearedOutcome = "threw"; }
+            RS? nullableStructSingle = new RS();
+            R.Hook = () => nullableStructSingle = null;
+            var nullableStructSingleMatch = nullableStructSingle is RS(1, _) { Value: 3 };
+            RS? nullableStructMulti = new RS();
+            R.Hook = () => nullableStructMulti = null;
+            var nullableStructMultiMatch = nullableStructMulti is RS(0, _) or RS(1, _) { Value: 3 };
+            RS? nullableStructUntyped = new RS();
+            R.Hook = () => nullableStructUntyped = null;
+            var nullableStructUntypedMatch = nullableStructUntyped is { Value: 0 } or RS(1, _) { Value: 3 };
             object? boxedCleared = new R();
             R.Hook = () => boxedCleared = null;
             var boxedClearedMatch = boxedCleared is PATTERN;
@@ -640,12 +659,14 @@ namespace RecordDeconstruction {
             R.Hook = () => boxedSingleCleared = null;
             var boxedSingleClearedMatch = boxedSingleCleared is R(1, _) { Value: 3 };
             R.Hook = null;
+            Sub? liveSub = new Sub();
+            var liveSubMatch = liveSub is R(1, _) { Value: 3 };
             R plain = new R();
             var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
             var inheritedSubtypeMiss = plain is R(0, _) or Sub(1, _) { Extra: 9 };
             object boxed = new R();
             var boxedMatch = boxed is PATTERN;
-            return $"{first},{singleOutcome},{nestedHolderOutcome},{propFirstOutcome},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
+            return $"{first},{singleOutcome},{nestedHolderOutcome},{propFirstOutcome},{subClearedOutcome},{nullableStructSingleMatch},{nullableStructMultiMatch},{nullableStructUntypedMatch},{liveSubMatch},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
         }
     }
 }`).Replace(
@@ -1783,6 +1804,14 @@ namespace RecordDeconstruction {
             y = Count * 10;
         }
     }
+    public record struct ExplicitBoxedCounter : IBoxedParts {
+        public int Count;
+        void IBoxedParts.Deconstruct(out int x, out int y) {
+            Count++;
+            x = Count;
+            y = Count * 10;
+        }
+    }
     public unsafe record OverloadedPtr {
         public static int[] IntCells = new[] { 11 };
         public static long[] LongCells = new[] { 22L };
@@ -1884,6 +1913,10 @@ namespace RecordDeconstruction {
                 IBoxedParts bp = new BoxedCounter { Count = 1 };
                 var (bp1, _) = bp;
                 var (bp2, _) = bp;
+                IBoxedParts ebp = new ExplicitBoxedCounter { Count = 1 };
+                var (ebp1, _) = ebp;
+                var (ebp2, _) = ebp;
+                ebp.Deconstruct(out var ebp3, out _);
                 R?[] listItems = new R?[] { new R { X = 2, Y = 1 } };
                 R.ClearFirst = () => listItems[0] = null;
                 var listMatched = listItems is [R(0, _)] or [R(10, 2)];
@@ -1893,7 +1926,7 @@ namespace RecordDeconstruction {
                 Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
                 var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
                 var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
-                return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{listMatched},{hiddenListMatch},{matched},{untypedCovariant}";
+                return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{ebp1},{ebp2},{ebp3},{listMatched},{hiddenListMatch},{matched},{untypedCovariant}";
             }
         }
     }
@@ -2101,7 +2134,7 @@ namespace Producer {
     public record R {
         public int X = 2;
         public int Y = 3;
-        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public virtual void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
 }`
         let consumerSource = `
@@ -2111,6 +2144,8 @@ namespace RecordDeconstruction {
         int deconstruct();
     }
     public record D : Producer.R, I {
+        public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
+        public Read SaveBase() => base.Deconstruct;
         public int deconstruct() => 7;
     }
     public static class Probe {
@@ -2124,9 +2159,11 @@ namespace RecordDeconstruction {
             var d = new D { X = 4, Y = 5 };
             I i = d;
             var (x, y) = d;
+            var baseRead = d.SaveBase();
+            baseRead(out var bx, out var by);
             Read saved = Accept(Make().Deconstruct).Deconstruct;
             saved(out var mx, out var my);
-            return $"{x},{y},{d.deconstruct()},{i.deconstruct()},{mx},{my},{Makes}";
+            return $"{x},{y},{bx},{by},{d.deconstruct()},{i.deconstruct()},{mx},{my},{Makes}";
         }
     }
 }`
