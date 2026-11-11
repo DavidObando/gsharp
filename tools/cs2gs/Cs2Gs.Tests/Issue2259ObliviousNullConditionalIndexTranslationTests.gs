@@ -112,7 +112,8 @@ namespace Demo
         // Nullable-enabled C# also permits this warning-level conversion.
         // Preserve that boundary with an assertion rather than widening the
         // destination array's element contract.
-        let printed = TranslateEnabled(`
+        // Infix has nullable elements, not a nullable container; preserve its guard without generating GS0300.
+        let source = `
 namespace Demo
 {
     public class Punctuation
@@ -127,8 +128,17 @@ namespace Demo
             parts[i] = punct.Infix?[x];
         }
     }
-}`)
-        Assert.Contains("parts[i] = (punct.Infix?[x])!!", printed)
+}`
+        let printed = TranslateEnabled(source)
+        Assert.Contains("parts[i] = ({", printed)
+        Assert.Contains("let receiver = punct.Infix", printed)
+        Assert.Contains("if !object.ReferenceEquals(receiver, nil) { receiver[x] } else { default(string?) }", printed)
+        Assert.Contains("})!!", printed)
+        Assert.DoesNotContain("punct.Infix?[x]", printed)
+        let nullablePrinted = TranslateEnabled(
+            source.Replace("public string?[] Infix", "public string?[]? Infix", StringComparison.Ordinal)
+        )
+        Assert.Contains("parts[i] = (punct.Infix?[x])!!", nullablePrinted)
     }
 
     shared {
