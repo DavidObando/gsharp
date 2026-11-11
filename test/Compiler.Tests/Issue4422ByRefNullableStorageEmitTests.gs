@@ -326,6 +326,57 @@ Console.WriteLine(a)
         }
     }
 
+    @Fact
+    func ValueTupleOutStorage_WithWiderNullableLeaves_CompilesUnderWarnAsErrorAndVerifies() {
+        let workDir = Path.Combine(AppContext.BaseDirectory, "issue5905", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(workDir)
+        try {
+            const source = `
+package OutStorageControl
+import System
+func Produce(out value (Text string, Code int32)) {
+    value = ("p", 1)
+}
+func Main() {
+    var row (Text string?, Code int32) = ("x", 1)
+    Produce(out row)
+    Console.WriteLine(row.Text ?? "null")
+}
+`
+            let outPath = Path.Combine(workDir, "out-tuple.dll")
+            let (exit, log) = Compile(workDir, source, outPath, extraOption: "/warnaserror")
+            Assert.True(exit == 0, log)
+            Assert.DoesNotContain("GS0612", log, StringComparison.Ordinal)
+            IlVerifier.Verify(outPath)
+            let (runExit, output) = RunDotnet(outPath)
+            Assert.True(runExit == 0, output)
+            Assert.Equal("p", output.Trim())
+
+            const unsafeDirection = `
+package OutStorageControl
+import System
+func ProduceNullable(out value (Text string?, Code int32)) {
+    value = (nil, 1)
+}
+func Main() {
+    var row (Text string, Code int32) = ("x", 1)
+    ProduceNullable(out row)
+    Console.WriteLine(row.Text)
+}
+`
+            let (failExit, failLog) = Compile(
+                workDir,
+                unsafeDirection,
+                Path.Combine(workDir, "unsafe-tuple.dll"),
+                extraOption: "/warnaserror"
+            )
+            Assert.True(failExit != 0, failLog)
+            Assert.Contains("error GS0612", failLog, StringComparison.Ordinal)
+        } finally {
+            Directory.Delete(workDir, recursive: true)
+        }
+    }
+
     shared {
         private const FixtureSource string = `#nullable enable
 namespace Issue4422.Metadata

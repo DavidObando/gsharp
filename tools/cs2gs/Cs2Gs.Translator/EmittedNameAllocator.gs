@@ -70,6 +70,44 @@ internal class EmittedNameAllocator {
         }
     }
 
+    func HasRenamedDeconstructContract(method IMethodSymbol?) bool {
+        if method == nil ||
+            SourceName(method) != "Deconstruct" ||
+            method.IsImplicitlyDeclared ||
+            method
+            .DeclaringSyntaxReferences
+            .IsDefaultOrEmpty {
+            return false
+        }
+        lock this.gate {
+            return this.GetContractGroup(Canonical(method)).Any(
+                (member ISymbol) -> member is IMethodSymbol candidate && IsUserRecordDeconstruct(candidate)
+            )
+        }
+    }
+
+    func GetDeconstructContractMembers(method IMethodSymbol) IReadOnlyCollection[IMethodSymbol] {
+        lock this.gate {
+            return this
+                .GetContractGroup(Canonical(method))
+                .OfType[IMethodSymbol]()
+                .Where((member IMethodSymbol) -> !member.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                .ToArray()
+        }
+    }
+
+    func GetAllDeconstructContractMembers(method IMethodSymbol) IReadOnlyCollection[IMethodSymbol] {
+        lock this.gate {
+            return this.GetContractGroup(Canonical(method)).OfType[IMethodSymbol]().ToArray()
+        }
+    }
+
+    func GetSymbolContractMembers(symbol ISymbol) IReadOnlyCollection[ISymbol] {
+        lock this.gate {
+            return this.GetContractGroup(Canonical(symbol))
+        }
+    }
+
     private init(compilation Compilation) {
         this.compilation = compilation
         this.CollectContractGroups()
@@ -92,7 +130,9 @@ internal class EmittedNameAllocator {
             .DeclaringSyntaxReferences
             .FirstOrDefault() is {} declaration && !this.compilation.ContainsSyntaxTree(declaration.SyntaxTree) &&
             FindDeclaringCompilation(this.compilation, declaration.SyntaxTree, HashSet[Compilation]()) is {} owner {
-            let declared = owner.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration.GetSyntax())
+            let declared = TranslationContext.GetSemanticModel(owner, declaration.SyntaxTree).GetDeclaredSymbol(
+                declaration.GetSyntax()
+            )
             return For(owner).GetName(declared ?? symbol, additionalContext)
         }
         lock this.gate {
@@ -132,27 +172,87 @@ internal class EmittedNameAllocator {
                 }
                 return renamed
             }
-            // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699).
-            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) &&
-                !contract
-                .OfType[IMethodSymbol]().Any(
-                (member IMethodSymbol) ->
-                member.Name == "Deconstruct" && member.DeclaringSyntaxReferences.IsDefaultOrEmpty
-            ) {
-                let taken = HashSet[string](contract.SelectMany(this.GetScopeNames), StringComparer.Ordinal)
+            // Data types reserve Deconstruct. Keep declarations, calls, and method groups on the same renamed contract (#5699, #5844).
+            if contract.Any((member ISymbol) -> member is IMethodSymbol method && IsUserRecordDeconstruct(method)) {
+                let taken = HashSet[string](
+                    contract.Where((member ISymbol) -> !member.DeclaringSyntaxReferences.IsDefaultOrEmpty).SelectMany(
+                        this.GetScopeNames
+                    ),
+                    StringComparer.Ordinal
+                )
+                var explicitOrdinal = 0
                 for member in contract {
-                    if member is IMethodSymbol method && IsUserRecordDeconstruct(method) {
-                        taken.UnionWith(this.GetDeconstructionReservedNames(method))
+                    if member is IMethodSymbol method {
+                        if IsUserRecordDeconstruct(method) {
+                            taken.UnionWith(this.GetDeconstructionReservedNames(method))
+                        }
+                        if !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                            if method
+                                .ContainingType
+                                .GetMembers("Deconstruct")
+                                .OfType[IMethodSymbol]()
+                                .Any((candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared) {
+                                taken.Add("deconstruct")
+                            }
+                            let priorExplicit = method
+                                .ContainingType
+                                .GetMembers()
+                                .OfType[IMethodSymbol]()
+                                .Where(
+                                (candidate IMethodSymbol) -> !candidate.IsImplicitlyDeclared &&
+                                    !candidate
+                                    .ExplicitInterfaceImplementations
+                                    .IsDefaultOrEmpty &&
+                                    SourceName(candidate) == "Deconstruct" &&
+                                    !contract.Contains(Canonical(candidate)!!)
+                            )
+                                .OrderBy(
+                                (candidate IMethodSymbol) -> candidate.ToDisplayString(),
+                                StringComparer.Ordinal
+                            )
+                                .TakeWhile(
+                                (candidate IMethodSymbol) -> string.CompareOrdinal(
+                                    candidate.ToDisplayString(),
+                                    method.ToDisplayString()
+                                ) < 0
+                            )
+                                .Count()
+                            if priorExplicit > explicitOrdinal {
+                                explicitOrdinal = priorExplicit
+                            }
+                        }
                     }
                 }
                 var renamed = "deconstruct"
-                for var suffix = 2; taken.Contains(renamed); suffix++ {
+                for var suffix = 2; taken.Contains(renamed) || explicitOrdinal > 0; suffix++ {
+                    if !taken.Contains(renamed) {
+                        explicitOrdinal--
+                    }
                     renamed = "deconstruct" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }
                 for member in contract {
-                    this.emittedNames[member] = renamed
+                    let keepOriginalName = member
+                        .DeclaringSyntaxReferences
+                        .IsDefaultOrEmpty ||
+                        (
+                        member is IMethodSymbol explicitMethod &&
+                            !explicitMethod
+                            .ContainingType
+                            .IsRecord &&
+                            !explicitMethod
+                            .ExplicitInterfaceImplementations
+                            .IsDefaultOrEmpty &&
+                            explicitMethod
+                            .ExplicitInterfaceImplementations
+                            .All((slot IMethodSymbol) -> slot.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+                    )
+                    this.emittedNames[member] = if keepOriginalName {
+                        SourceName(member)
+                    } else {
+                        renamed
+                    }
                 }
-                return renamed
+                return this.emittedNames[symbol!!]
             }
             if contract.Any(IsMetadataVisible) &&
                 (
@@ -207,7 +307,7 @@ internal class EmittedNameAllocator {
             let declaration = reference.GetSyntax()
             if !this.referencedBindingNames.TryGetValue(declaration, out var bindings) {
                 bindings = Dictionary[ISymbol, HashSet[string]](SymbolEqualityComparer.Default)
-                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
                 for identifier in declaration.DescendantNodes().OfType[IdentifierNameSyntax]() {
                     if identifier.Identifier.ValueText != "_" {
                         continue
@@ -409,7 +509,7 @@ internal class EmittedNameAllocator {
     private func GetLexicallyVisibleTypeNames(typeParameter ITypeParameterSymbol) IEnumerable[string] {
         let names = HashSet[string](StringComparer.Ordinal)
         for reference in typeParameter.DeclaringSyntaxReferences {
-            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
             for symbol in model.LookupNamespacesAndTypes(reference.Span.Start) {
                 switch symbol {
                     case type is INamedTypeSymbol {
@@ -467,7 +567,7 @@ internal class EmittedNameAllocator {
         )
         for reference in references {
             let root = reference.GetSyntax()
-            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
             for node in root.DescendantNodesAndSelf() {
                 let declared ISymbol? = model.GetDeclaredSymbol(node)
                 if declared is ILocalSymbol ||
@@ -547,7 +647,7 @@ internal class EmittedNameAllocator {
             }
             for reference in references {
                 let root = reference.GetSyntax()
-                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
                 for token in root.DescendantTokens() {
                     if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) &&
                         token.ValueText != "_" {
@@ -588,7 +688,7 @@ internal class EmittedNameAllocator {
             if tree.GetRoot() is not Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root {
                 continue
             }
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             let usings = root.Usings.Concat(
                 root
                     .DescendantNodes()
@@ -657,10 +757,10 @@ internal class EmittedNameAllocator {
                             .CSharp
                             .Syntax
                             .ParameterSyntax parameterSyntax &&
-                            this
-                            .compilation
-                            .GetSemanticModel(reference.SyntaxTree)
-                            .GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameter {
+                            TranslationContext
+                            .GetSemanticModel(this.compilation, reference.SyntaxTree).GetDeclaredSymbol(
+                            parameterSyntax
+                        ) is IParameterSymbol parameter {
                             Union(propertyMember, parameter)
                         }
                     }
@@ -712,7 +812,7 @@ internal class EmittedNameAllocator {
 
     private func CollectPrimaryParameterContexts() {
         for tree in this.compilation.SyntaxTrees {
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             for record in tree.GetRoot().DescendantNodes().OfType[RecordDeclarationSyntax]() {
                 if record.ParameterList != nil {
                     continue
@@ -862,7 +962,7 @@ internal class EmittedNameAllocator {
 
     private func CollectInvocationSensitiveSymbols() {
         for tree in this.compilation.SyntaxTrees {
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             let root = tree.GetRoot()
             for invocation in root.DescendantNodes().OfType[InvocationExpressionSyntax]() {
                 if invocation.Expression is not SimpleNameSyntax simple || model.GetSymbolInfo(simple)
@@ -933,7 +1033,7 @@ internal class EmittedNameAllocator {
 
     shared {
         func IsUserRecordDeconstruct(method IMethodSymbol?) bool -> method != nil &&
-            method.Name == "Deconstruct" &&
+            SourceName(method) == "Deconstruct" &&
             method
             .ContainingType
             .IsRecord &&

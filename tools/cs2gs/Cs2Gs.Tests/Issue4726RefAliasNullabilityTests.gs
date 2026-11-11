@@ -226,9 +226,144 @@ public static class Obj {
         AssertParity(source, printed, "null")
     }
 
-    @Fact
-    func TupleOutArgument_DoesNotFreezeTheCallersLeaf() {
-        const source = `public static class Obj {
+    @Theory
+    @InlineData("leaf")
+    @InlineData("whole-tuple")
+    @InlineData("whole-tuple-preserve")
+    @InlineData("projected-tuple")
+    @InlineData("nullable-tuple")
+    @InlineData("nullable-tuple-write")
+    @InlineData("nested-nullable-tuple")
+    @InlineData("projected-nullable-tuple")
+    @InlineData("oblivious-producer")
+    @InlineData("container-and-leaf")
+    func TupleOutArgument_DoesNotFreezeTheCallersLeaf(shape string) {
+        let source = switch shape {
+            case "whole-tuple": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "whole-tuple-preserve": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        Produce(out row);
+        return alias.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "projected-tuple": `public static class Obj {
+    private static ((string Text, int Code) Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Inner);
+        ref (string? Text, int Code) alias = ref row.Inner;
+        alias = (null, 1);
+        return row.Inner.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref (string? Text, int Code)? alias = ref row;
+        alias = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple-write": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        row = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nested-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out ((string Text, int Code)? Inner, int Flag) value) { value = (("p", 1), 3); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref ((string? Text, int Code)? Inner, int Flag) alias = ref row;
+        alias = ((null, 1), 2);
+        return row.Inner.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "projected-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Inner);
+        ref (string? Text, int Code)? alias = ref row.Inner;
+        alias = (null, 1);
+        return row.Inner.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "oblivious-producer": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+    private static string Read() {
+        Produce(out row);
+#nullable enable
+        (string Text, int Code) fixedRow = ("f", 2);
+#nullable disable
+        Produce(out fixedRow);
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        return (row.Text ?? "null") + ":" + fixedRow.Text;
+    }
+    public static string Run() => Read();
+}`
+            case "container-and-leaf": `public static class Obj {
+    private static ((string Text, int Code)[] Rows, string Label) state = (new[] { ("x", 1) }, "a");
+    private static void Produce(out ((string Text, int Code)[] Rows, string Label) value) {
+        value = (new[] { ("p", 1) }, "b");
+    }
+    private static string Read() {
+        Produce(out state);
+#nullable enable
+        ((string? Text, int Code)[] Rows, string Label) fixedLabel = (new (string? Text, int Code)[] { ("f", 2) }, "k");
+#nullable disable
+        Produce(out fixedLabel);
+        ref string rowAlias = ref state.Rows[0].Text;
+        rowAlias = null;
+        ref string labelAlias = ref state.Label;
+        labelAlias = null;
+        return (state.Rows[0].Text ?? "null") + ":" + (state.Label ?? "null") + ":" + (fixedLabel.Rows[0].Text ?? "null") + ":" + fixedLabel.Label;
+    }
+    public static string Run() => Read();
+}`
+            default: `public static class Obj {
     private static (string Text, int Code) row = ("x", 1);
 #nullable enable
     private static void Produce(out string value) { value = "p"; }
@@ -241,9 +376,16 @@ public static class Obj {
     }
     public static string Run() => Read() ?? "null";
 }`
+        }
         let printed = Translate(source)
         Assert.Contains("Text string?", printed)
-        AssertParity(source, printed, "null")
+        let expected = switch shape {
+            case "whole-tuple-preserve": "p"
+            case "oblivious-producer": "null:p"
+            case "container-and-leaf": "null:null:p:b"
+            default: "null"
+        }
+        AssertParity(source, printed, expected)
     }
 
     @Theory
@@ -2504,6 +2646,90 @@ public static class Constraint {
         Assert.NotNull(constraintShared)
         Assert.Equal(appShared, constraintShared)
         AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "x")
+    }
+
+    @Fact
+    func LinkedDeclarations_PropagateTaintAndFixedContractsTransitivelyAcrossBridgeCompilation() {
+        const sharedSource = `public static class Shared {
+    public static string Scalar = "x";
+    public static (string Text, int Code) Tuple = ("x", 1);
+    public static string Fixed = "x";
+}`
+        const appSource = `public static class Obj {
+    public static string Run() {
+        ref string fixedAlias = ref Shared.Fixed;
+        return (Shared.Scalar ?? "null") + ":" + (Shared.Tuple.Text ?? "null") + ":" + (fixedAlias ?? "fallback");
+    }
+}`
+        const consumerSource = `public static class Consumer {
+    public static void Mutate() {
+        Shared.Scalar = null;
+        Shared.Tuple = (null, 1);
+    }
+#nullable enable
+    public static ref string KeepFixed() => ref Shared.Fixed;
+}`
+        let app = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource), ("App.cs", appSource)},
+            assemblyName: "ProjectA"
+        )
+        let bridge = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Shared.cs", sharedSource)},
+            assemblyName: "ProjectB"
+        )
+        using let bridgeStream = MemoryStream()
+        let bridgeEmit = bridge.Compilation.Emit(bridgeStream)
+        Assert.True(bridgeEmit.Success, string.Join(Environment.NewLine, bridgeEmit.Diagnostics))
+        bridgeStream.Position = 0
+        let consumerReferences = CSharpProjectLoader
+            .RuntimeReferences()
+            .Append(MetadataReference.CreateFromStream(bridgeStream))
+            .ToArray()
+        let consumer = CSharpProjectLoader.LoadInMemory(
+            [](string, string){("Consumer.cs", consumerSource)},
+            references: consumerReferences,
+            assemblyName: "ProjectC"
+        )
+        let projects = []LoadedCSharpProject{app, bridge, consumer}
+        let repository = projects.Select((project LoadedCSharpProject) -> project.Compilation).ToArray()
+        let translator = CSharpToGSharpTranslator()
+        var appShared string? = nil
+        var bridgeShared string? = nil
+        var appPrinted = ""
+        for project in projects {
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
+            for document in project.Documents {
+                let context = TranslationContext(
+                    project.Compilation,
+                    document.SemanticModel,
+                    document.FilePath,
+                    siblingCompilations: repository,
+                    repositoryCompilations: repository
+                )
+                let printed = GSharpPrinter.Print(translator.TranslateDocument(document, context))
+                Assert.DoesNotContain(
+                    context.Diagnostics,
+                    (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                )
+                if document.FilePath.EndsWith("Shared.cs", StringComparison.Ordinal) {
+                    if project == app {
+                        appShared = printed
+                    } else if project == bridge {
+                        bridgeShared = printed
+                    }
+                }
+                if project == app {
+                    appPrinted += printed + Environment.NewLine
+                }
+            }
+        }
+        Assert.NotNull(appShared)
+        Assert.NotNull(bridgeShared)
+        Assert.Equal(appShared, bridgeShared)
+        Assert.Contains("var Scalar string? = \"x\"", appShared!!)
+        Assert.Contains("var Tuple (Text string?, Code int32) = (\"x\", 1)", appShared!!)
+        Assert.Contains("var Fixed string = \"x\"", appShared!!)
+        AssertParity(sharedSource + Environment.NewLine + appSource, appPrinted, "x:x:x")
     }
 
     shared {

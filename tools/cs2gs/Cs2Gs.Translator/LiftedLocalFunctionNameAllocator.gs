@@ -13,6 +13,8 @@ import SystemObject = System.Object
 internal class LiftedLocalFunctionNameAllocator {
     private let gate object = SystemObject()
     private let assigned Dictionary[ISymbol, string] = Dictionary[ISymbol, string](SymbolEqualityComparer.Default)
+    private let assignedSynthesizedMembers Dictionary[(Symbol IMethodSymbol, Role string), string] =
+    Dictionary[(Symbol IMethodSymbol, Role string), string]()
     private let scopedLocalNames Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string] =
     Dictionary[(Site SyntaxNode, Ordinal int32, Stem string), string]()
     private let usedByType Dictionary[ISymbol, HashSet[string]] = Dictionary[ISymbol, HashSet[string]](
@@ -295,44 +297,95 @@ internal class LiftedLocalFunctionNameAllocator {
         }
     }
 
-    func TryReserveMemberName(member IMethodSymbol, name string, out assignedName string) bool {
+    func TryReserveContractMemberNames(
+        members IReadOnlyCollection[IMethodSymbol],
+        name string,
+        out assignedName string,
+        role string = "adapter"
+    ) bool {
         lock this.gate {
-            let key = (member.PartialDefinitionPart ?? member).OriginalDefinition
-            if this.assigned.TryGetValue(key, out assignedName) {
+            assignedName = name
+            let keys = List[IMethodSymbol]()
+            let seenKeys = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+            for member in members {
+                let key = (member.PartialDefinitionPart ?? member).OriginalDefinition
+                if seenKeys.Add(key) {
+                    keys.Add(key)
+                }
+            }
+            if keys.Count == 0 {
                 return true
             }
-            assignedName = name
-            let owner = key.ContainingType.OriginalDefinition
-            if !this.usedByType.TryGetValue(owner, out var used) {
-                used = HashSet[string](StringComparer.Ordinal)
-                this.usedByType.Add(owner, used)
+            var existingName string? = nil
+            var allAssigned = true
+            for key in keys {
+                if this.assignedSynthesizedMembers.TryGetValue((key, role), out var keyAssigned) {
+                    if existingName == nil {
+                        existingName = keyAssigned
+                    } else if existingName != keyAssigned {
+                        return false
+                    }
+                } else {
+                    allAssigned = false
+                }
             }
-            if used.Contains(name) || this.RelatedAssignedNameExists(owner, name, recordAdaptersOnly: false) ||
-                this
-                .aliasNames
-                .Contains(name) || (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(name)) {
-                return false
+            if allAssigned && existingName != nil {
+                assignedName = existingName
+                return true
             }
-            used.Add(name)
-            this.helperNames.Add(name)
-            this.assigned.Add(key, name)
+            let candidateName = existingName ?? name
+            assignedName = candidateName
+            for key in keys {
+                if this.assignedSynthesizedMembers.TryGetValue((key, role), out var alreadyAssigned) &&
+                    alreadyAssigned == candidateName {
+                    continue
+                }
+                let owner = key.ContainingType.OriginalDefinition
+                if !this.usedByType.TryGetValue(owner, out var used) {
+                    used = HashSet[string](StringComparer.Ordinal)
+                    this.usedByType.Add(owner, used)
+                }
+                if used.Contains(candidateName) || this.RelatedAssignedNameExists(
+                    owner,
+                    candidateName,
+                    recordAdaptersOnly: false
+                ) ||
+                    this
+                    .aliasNames
+                    .Contains(candidateName) ||
+                    (this.localNamesByType.TryGetValue(owner, out var locals) && locals.Contains(candidateName)) {
+                    return false
+                }
+            }
+            this.helperNames.Add(candidateName)
+            for key in keys {
+                let owner = key.ContainingType.OriginalDefinition
+                this.usedByType[owner].Add(candidateName)
+                this.assignedSynthesizedMembers[(key, role)] = candidateName
+            }
             return true
         }
     }
+
+    func TryReserveMemberName(member IMethodSymbol, name string, out assignedName string) bool ->
+    this.TryReserveContractMemberNames([]IMethodSymbol{member}, name, out assignedName)
 
     private func RelatedAssignedNameExists(owner ISymbol, name string, recordAdaptersOnly bool) bool {
         if owner is not INamedTypeSymbol type || !this.helperNames.Contains(name) {
             return false
         }
-        for pair in this.assigned {
-            if pair.Value != name || pair.Key.ContainingType is not INamedTypeSymbol other {
-                continue
+        if !recordAdaptersOnly {
+            for pair in this.assigned {
+                if pair.Value != name || pair.Key.ContainingType is not INamedTypeSymbol other {
+                    continue
+                }
+                if this.IsTypeOrBase(type, other) || this.IsTypeOrBase(other, type) {
+                    return true
+                }
             }
-            if recordAdaptersOnly &&
-                !(
-                pair.Key is IMethodSymbol{MethodKind: MethodKind.Ordinary} method &&
-                    EmittedNameAllocator.IsUserRecordDeconstruct(method)
-            ) {
+        }
+        for pair in this.assignedSynthesizedMembers {
+            if pair.Value != name || pair.Key.Symbol.ContainingType is not INamedTypeSymbol other {
                 continue
             }
             if this.IsTypeOrBase(type, other) || this.IsTypeOrBase(other, type) {
@@ -349,6 +402,11 @@ internal class LiftedLocalFunctionNameAllocator {
                 return true
             }
             current = current.BaseType
+        }
+        for iface in type.AllInterfaces {
+            if SymbolEqualityComparer.Default.Equals(iface.OriginalDefinition, expected.OriginalDefinition) {
+                return true
+            }
         }
         return false
     }

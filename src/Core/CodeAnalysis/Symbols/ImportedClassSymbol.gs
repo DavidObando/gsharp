@@ -707,6 +707,20 @@ class ImportedClassSymbol : Symbol {
         @NotNullWhen(true) out function ImportedFunctionSymbol?
     ) bool -> TryLookupFunction(text, callExpression, arguments, out function, out _)
 
+    /// Gets the visible static candidate methods from the nearest declaration
+    /// level that contains [`text`](paramref), including generic definitions.
+    /// @param text The method-group name.
+    /// @returns The visible static candidate methods at the winning level.
+    internal func GetVisibleStaticCandidateMethods(text string) List[MethodInfo] {
+        let methods = List[MethodInfo]()
+        for method in FindNearestNamedMemberLevel(text).Methods {
+            if method.IsStatic && IsVisibleToCurrentCompilation(method) {
+                methods.Add(method)
+            }
+        }
+        return methods
+    }
+
     /// Gets the visible static methods from the nearest declaration level that
     /// contains [`text`](paramref). A declaration on a derived type hides
     /// every same-named base member when it is accessible, including when it is
@@ -912,25 +926,10 @@ class ImportedClassSymbol : Symbol {
         /// `null` when no argument qualifies (the common path).
         private func ComputeInterpolatedStringArgFlags(callExpression CallExpressionSyntax?, count int32) IReadOnlyList[
             bool
-        ]? {
-            if callExpression == nil {
-                return nil
-            }
-            var flags[]?bool = nil
-            let argumentSyntax = callExpression.Arguments
-            let limit = Math.Min(count, argumentSyntax.Count)
-            for var i = 0; i < limit; i++ {
-                // Issue #377 sub-item 5: an interpolated string passed as a named
-                // argument (`M(arg: $"…")`) is wrapped by NamedArgumentExpressionSyntax.
-                // Unwrap before classifying so Tier-4 target typing flows through
-                // named arguments as well as positional ones.
-                let argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i])
-                if argSyntax is InterpolatedStringExpressionSyntax {
-                    flags ??= [count]bool
-                    flags!![i] = true
-                }
-            }
-            return flags
+        ]? -> if callExpression == nil {
+            default(IReadOnlyList[bool]?)
+        } else {
+            ExpressionBinder.ComputeInterpolatedStringArgFlags(callExpression.Arguments, count)
         }
 
         private func GetBaseTypeSafe(type Type) Type? {

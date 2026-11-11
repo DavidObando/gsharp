@@ -54,6 +54,7 @@ instead of making them (used by build/test-cs2gs-apps-gate-issues.py).
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -200,6 +201,90 @@ def load_results(results_dir: Path) -> list[dict]:
     return results
 
 
+def timeout_minutes_for_job(name: str) -> int:
+    if name == "gsharp-csharp (translate)" or name.startswith("gsharp-csharp (validate") or name == "app (gsharp-csharp)":
+        return 240
+    if name == "gsharp-csharp (aggregate)":
+        return 30
+    return 180
+
+
+def job_leg_app(name: str, explicit_map: dict[str, str]) -> str | None:
+    if name in explicit_map:
+        return explicit_map[name]
+    if name.startswith("app (") and name.endswith(")"):
+        return name[len("app ("):-1]
+    if " (" in name and name.endswith(")"):
+        return name.split(" (", 1)[0]
+    return None
+
+
+def job_timed_out(job: dict) -> tuple[bool, int]:
+    name = str(job.get("name") or "")
+    limit_minutes = timeout_minutes_for_job(name)
+    conclusion = job.get("conclusion") or job.get("status")
+    if conclusion == "timed_out":
+        return True, limit_minutes
+    steps = job.get("steps")
+    if isinstance(steps, list) and any(isinstance(s, dict) and s.get("conclusion") == "timed_out" for s in steps):
+        return True, limit_minutes
+    if conclusion != "cancelled":
+        return False, 0
+    started_at, completed_at = job.get("started_at"), job.get("completed_at")
+    if not (isinstance(started_at, str) and isinstance(completed_at, str) and started_at and completed_at):
+        return False, 0
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        completed = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False, 0
+    elapsed_seconds = (completed - started).total_seconds()
+    if elapsed_seconds >= max(1, limit_minutes - 5) * 60:
+        return True, max(limit_minutes, int(round(elapsed_seconds / 60)))
+    return False, 0
+
+
+def timed_out_legs(jobs_path: Path | None, leg_jobs: list[str]) -> dict[str, tuple[str, str]]:
+    """The apps whose job (or upstream translate/validate job) timed out.
+
+    GitHub Actions reports a job that hits `timeout-minutes` with conclusion
+    `cancelled`. Unlike a manual workflow cancellation (which stops jobs well
+    before their timeout window), a job that ran for its full timeout window
+    (or finished `timed_out`) is a real migration/performance failure that must
+    be reported red and filed (#5931).
+    """
+    if jobs_path is None:
+        return {}
+    try:
+        jobs = json.loads(jobs_path.read_text(encoding="utf-8")).get("jobs", [])
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {}
+    explicit_map = {}
+    for pair in leg_jobs:
+        app, sep, job_name = pair.partition("=")
+        if sep and app and job_name:
+            explicit_map[job_name] = app
+    timed_out: dict[str, tuple[str, str]] = {}
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
+            continue
+        name = job["name"]
+        app = job_leg_app(name, explicit_map)
+        if not app or app in timed_out:
+            continue
+        is_timeout, minutes = job_timed_out(job)
+        if not is_timeout:
+            continue
+        lower = name.lower()
+        if "translate" in lower:
+            timed_out[app] = (f"the translate job ({name}) timed out after {minutes}m", "translate-timeout")
+        elif "validate" in lower:
+            timed_out[app] = (f"the validate job ({name}) timed out after {minutes}m", "validate-timeout")
+        else:
+            timed_out[app] = (f"the leg job ({name}) timed out after {minutes}m", "leg-timeout")
+    return timed_out
+
+
 def cancelled_legs(jobs_path: Path | None, leg_jobs: list[str]) -> set[str]:
     """The apps whose OWN job was cancelled or skipped, decided per leg.
 
@@ -207,7 +292,8 @@ def cancelled_legs(jobs_path: Path | None, leg_jobs: list[str]) -> set[str]:
     children, so a failed Oahu leg and a cancelled Code Exploder leg cannot be
     told apart from it. The Actions jobs API names each child ("app (oahu)").
     Fail-closed: when the jobs cannot be read, no leg is excused, and a
-    missing result stays a red, filed crash.
+    missing result stays a red, filed crash. A job that timed out is never
+    excused as cancelled (#5931).
     """
     if jobs_path is None or not leg_jobs:
         return set()
@@ -217,10 +303,11 @@ def cancelled_legs(jobs_path: Path | None, leg_jobs: list[str]) -> set[str]:
     except (OSError, ValueError, AttributeError, KeyError, TypeError) as exc:
         print(f"could not read the run's jobs ({exc.__class__.__name__}): no leg is treated as cancelled", file=sys.stderr)
         return set()
+    timed_out = timed_out_legs(jobs_path, leg_jobs)
     legs = set()
     for pair in leg_jobs:
         app, _, job = pair.partition("=")
-        if conclusions.get(job) in ("cancelled", "skipped"):
+        if app not in timed_out and conclusions.get(job) in ("cancelled", "skipped"):
             legs.add(app)
     return legs
 
@@ -273,10 +360,24 @@ def main(argv: list[str]) -> int:
     for r in results:
         if r.get("run_url") in (None, "", "(see the workflow run)"):
             r["run_url"] = a.run_url
-    incomplete = set(filter(None, a.incomplete.split(","))) | cancelled_legs(a.jobs, a.leg_job)
+    timed_out = timed_out_legs(a.jobs, a.leg_job)
+    for r in results:
+        if r.get("app") in timed_out:
+            timeout_summary, timeout_fp = timed_out[r["app"]]
+            r["status"] = "red"
+            existing_summary = r.get("summary", "")
+            if timeout_summary not in existing_summary:
+                r["summary"] = f"{timeout_summary}; {existing_summary}" if existing_summary else timeout_summary
+            if not r.get("fingerprint"):
+                r["fingerprint"] = timeout_fp
+    incomplete = (set(filter(None, a.incomplete.split(","))) | cancelled_legs(a.jobs, a.leg_job)) - set(timed_out)
     for app in filter(None, a.expect.split(",")):
         if not any(r["app"] == app for r in results):
-            if app in incomplete:
+            if app in timed_out:
+                timeout_summary, timeout_fp = timed_out[app]
+                results.append({"app": app, "status": "red", "summary": f"no result file: {timeout_summary}",
+                                "fingerprint": timeout_fp, "log_tail": "", "run_url": a.run_url})
+            elif app in incomplete:
                 results.append({"app": app, "status": "incomplete", "log_tail": "", "run_url": a.run_url,
                                 "summary": "no result file: the leg's job was cancelled or skipped before reporting"})
             else:

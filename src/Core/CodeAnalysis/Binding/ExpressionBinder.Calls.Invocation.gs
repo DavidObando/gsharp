@@ -4209,7 +4209,8 @@ internal partial class ExpressionBinder {
             return false
         }
         let diagnosticMark = Diagnostics.Count
-        let convertedArgument = conversions.BindConversion(ce.Arguments[0].Location, arguments[0], underlying)
+        let conversionTarget = RelaxLenientPlatformTarget(arguments[0].Type, underlying)
+        let convertedArgument = conversions.BindConversion(ce.Arguments[0].Location, arguments[0], conversionTarget)
         if Diagnostics.Count != diagnosticMark {
             Diagnostics.TruncateTo(diagnosticMark)
             return false
@@ -4222,6 +4223,49 @@ internal partial class ExpressionBinder {
             ImmutableArray.Create(convertedArgument)
         )
         return true
+    }
+
+    private func RelaxLenientPlatformTarget(source TypeSymbol, target TypeSymbol) TypeSymbol {
+        if source == target || Conversion.Classify(source, target).IsImplicit {
+            return target
+        }
+        if source is TupleTypeSymbol sourceTuple &&
+            target is TupleTypeSymbol targetTuple &&
+            sourceTuple.Arity == targetTuple
+            .Arity {
+            let elements = ImmutableArray.CreateBuilder[TypeSymbol](targetTuple.Arity)
+            var changed = false
+            for var i = 0; i < targetTuple.Arity; i++ {
+                let relaxed = RelaxLenientPlatformTarget(sourceTuple.ElementTypes[i], targetTuple.ElementTypes[i])
+                changed |= !object.ReferenceEquals(relaxed, targetTuple.ElementTypes[i])
+                elements.Add(relaxed)
+            }
+            return if !changed {
+                target
+            } else if targetTuple.HasNames {
+                TupleTypeSymbol.Get(elements.MoveToImmutable(), targetTuple.ElementNames)
+            } else {
+                TupleTypeSymbol.Get(elements.MoveToImmutable())
+            }
+        }
+        if !(source is NullableTypeSymbol && !(target is NullableTypeSymbol) && !(target is PlatformTypeSymbol)) &&
+            Conversion.TryRelatePlatformContainer(
+            source,
+            target,
+            out var isImplicit,
+            out var rejectsImportedParameter
+        ) &&
+            !isImplicit &&
+            !rejectsImportedParameter {
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target) {
+                return source
+            }
+            let strippedTarget = target.StripToBareShape()
+            if Conversion.Classify(source, strippedTarget).IsImplicit {
+                return strippedTarget
+            }
+        }
+        return target
     }
 
     shared {

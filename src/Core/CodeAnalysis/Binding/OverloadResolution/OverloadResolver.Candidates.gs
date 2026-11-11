@@ -264,6 +264,206 @@ internal partial class OverloadResolver {
             IsConvertibilityApplicable(candidate, argumentCount, default(ImmutableArray[string]), builder)
     }
 
+    internal func TryResolveLoopCallParameters(
+        candidates ImmutableArray[FunctionSymbol],
+        boundArguments ImmutableArray[BoundExpression],
+        callSyntax CallExpressionSyntax?,
+        receiverType TypeSymbol?,
+        explicitTypeArguments ImmutableArray[TypeSymbol],
+        out parameterTypes List[TypeSymbol]
+    ) bool {
+        parameterTypes = List[TypeSymbol]()
+        if candidates.IsDefaultOrEmpty {
+            return false
+        }
+        let argumentNames = default(ImmutableArray[string])
+        let argumentCount = boundArguments.Length
+        let explicitTypeArgCount = if explicitTypeArguments.IsDefault {
+            0
+        } else {
+            explicitTypeArguments.Length
+        }
+        let substitutionCache = Dictionary[
+            FunctionSymbol,
+            (Ok bool, Substitution Dictionary[TypeParameterSymbol, TypeSymbol])
+        ]()
+        let receiverSubstitution Dictionary[TypeParameterSymbol, TypeSymbol]? = if receiverType != nil {
+            TryBuildReceiverSubstitution(receiverType)
+        } else {
+            default(Dictionary[TypeParameterSymbol, TypeSymbol]?)
+        }
+        let builder = ImmutableArray.CreateBuilder[BoundExpression](boundArguments.Length)
+        builder.AddRange(boundArguments)
+        let GetCandidateSubstitution = func (candidate FunctionSymbol) Dictionary[TypeParameterSymbol, TypeSymbol]? {
+            var methodSubstitution Dictionary[TypeParameterSymbol, TypeSymbol]? = nil
+            if !explicitTypeArguments.IsDefaultOrEmpty &&
+                candidate
+                .TypeParameters
+                .Length == explicitTypeArguments
+                .Length {
+                methodSubstitution = Dictionary[TypeParameterSymbol, TypeSymbol](explicitTypeArguments.Length)
+                for var i = 0; i < candidate.TypeParameters.Length; i++ {
+                    methodSubstitution[candidate.TypeParameters[i]] = explicitTypeArguments[i]
+                }
+            } else if candidate.IsGeneric {
+                if !GetCachedCandidateSubstitution(
+                    candidate,
+                    builder,
+                    argumentCount,
+                    substitutionCache,
+                    out var inferred
+                ) {
+                    return nil
+                }
+                for tp in candidate.TypeParameters {
+                    if !inferred.TryGetValue(tp, out var bound) || MemberLookup.IsSymbolicInferenceConflict(bound) {
+                        return nil
+                    }
+                }
+                methodSubstitution = inferred
+            }
+            if receiverSubstitution == nil {
+                return methodSubstitution
+            }
+            let combined = if methodSubstitution != nil {
+                Dictionary[TypeParameterSymbol, TypeSymbol](methodSubstitution)
+            } else {
+                Dictionary[TypeParameterSymbol, TypeSymbol]()
+            }
+            for pair in receiverSubstitution {
+                combined[pair.Key] = pair.Value
+            }
+            return combined
+        }
+        let applicable = ImmutableArray.CreateBuilder[FunctionSymbol]()
+        for cand in candidates {
+            if !IsApplicableUserCallable(cand, argumentCount, argumentNames) {
+                continue
+            }
+            if !IsRefKindApplicable(cand, argumentCount, argumentNames, builder, callSyntax) {
+                continue
+            }
+            if explicitTypeArgCount > 0 {
+                if !cand.IsGeneric || cand.TypeParameters.Length != explicitTypeArgCount {
+                    continue
+                }
+            } else if cand.IsGeneric {
+                if GetCandidateSubstitution(cand) == nil {
+                    continue
+                }
+            }
+            let subst = GetCandidateSubstitution(cand)
+            if cand.IsGeneric &&
+                (
+                subst == nil || !cand.TypeParameters.All(
+                    (tp TypeParameterSymbol) -> satisfiesConstraint(subst[tp], tp, subst)
+                )
+            ) {
+                continue
+            }
+            if !IsConvertibilityApplicable(cand, argumentCount, argumentNames, builder, subst, callSyntax) {
+                continue
+            }
+            applicable.Add(cand)
+        }
+        if applicable.Count == 0 {
+            return false
+        }
+        let selected FunctionSymbol? = if applicable.Count == 1 {
+            applicable[0]
+        } else {
+            SelectBestUserOverloadCore(
+                applicable.ToImmutable(),
+                argumentCount,
+                argumentNames,
+                builder,
+                callSyntax,
+                out _,
+                out _,
+                explicitTypeArgCount,
+                explicitTypeArguments,
+                receiverType
+            )
+        }
+        if selected == nil {
+            return false
+        }
+        let finalSubstitution = GetCandidateSubstitution(selected)
+        let parameterOffset = if selected.ExplicitReceiverParameter == nil {
+            0
+        } else {
+            1
+        }
+        let paramLen = selected.Parameters.Length - parameterOffset
+        let isVariadic = paramLen > 0 && selected.Parameters[selected.Parameters.Length - 1].IsVariadic
+        let fixedParamCount = if isVariadic {
+            paramLen - 1
+        } else {
+            paramLen
+        }
+        var variadicCarrierType TypeSymbol? = if isVariadic {
+            selected.Parameters[selected.Parameters.Length - 1].Type
+        } else {
+            default(TypeSymbol?)
+        }
+        if variadicCarrierType != nil && finalSubstitution != nil {
+            variadicCarrierType = GSharp
+                .Core
+                .CodeAnalysis
+                .Binding
+                .Binder
+                .SubstituteType(variadicCarrierType, finalSubstitution)
+        }
+        if receiverType is InterfaceSymbol ifaceReceiver && variadicCarrierType != nil {
+            variadicCarrierType = ifaceReceiver.SubstituteMemberType(variadicCarrierType)
+        }
+        let bindsCarrierInNormalForm = isVariadic &&
+            argumentCount - fixedParamCount == 1 &&
+            fixedParamCount < boundArguments.Length &&
+            boundArguments[fixedParamCount]?.Type is {} passThroughType &&
+            variadicCarrierType != nil &&
+            IsVariadicCarrierPassThrough(passThroughType, variadicCarrierType)
+        let variadicElementType TypeSymbol? = if isVariadic &&
+            variadicCarrierType != nil &&
+            VariadicCarriers.GetElementType(variadicCarrierType) is {} elem && elem != TypeSymbol.Error {
+            elem
+        } else {
+            default(TypeSymbol?)
+        }
+        for var i = 0; i < argumentCount; i++ {
+            if isVariadic && i >= fixedParamCount {
+                if bindsCarrierInNormalForm && variadicCarrierType != nil {
+                    parameterTypes.Add(variadicCarrierType)
+                } else if variadicElementType != nil {
+                    parameterTypes.Add(variadicElementType)
+                } else {
+                    return false
+                }
+                continue
+            }
+            if i >= paramLen {
+                return false
+            }
+            let param = selected.Parameters[i + parameterOffset]
+            var paramType = if finalSubstitution != nil {
+                GSharp.Core.CodeAnalysis.Binding.Binder.SubstituteType(param.Type, finalSubstitution)
+            } else {
+                param.Type
+            }
+            if receiverType is InterfaceSymbol ifaceRecv {
+                paramType = ifaceRecv.SubstituteMemberType(paramType)
+            }
+            parameterTypes.Add(
+                if param.RefKind == RefKind.Ref || param.RefKind == RefKind.Out {
+                    ByRefTypeSymbol.Get(paramType)
+                } else {
+                    paramType
+                }
+            )
+        }
+        return true
+    }
+
     private func SelectBestUserOverloadCore(
         candidates ImmutableArray[FunctionSymbol],
         argumentCount int32,
@@ -1915,6 +2115,30 @@ internal partial class OverloadResolver {
             if numericTarget != 0 {
                 return numericTarget
             }
+            if ka == ClrOverloadResolution
+                .ImplicitConversionKind
+                .UserDefinedImplicit &&
+                kb == ClrOverloadResolution
+                .ImplicitConversionKind
+                .Reference &&
+                paramA != nil &&
+                paramB != nil &&
+                IsNullTolerantObjectTarget(paramB) &&
+                !IsNullTolerantObjectTarget(paramA) {
+                return -1
+            }
+            if kb == ClrOverloadResolution
+                .ImplicitConversionKind
+                .UserDefinedImplicit &&
+                ka == ClrOverloadResolution
+                .ImplicitConversionKind
+                .Reference &&
+                paramA != nil &&
+                paramB != nil &&
+                IsNullTolerantObjectTarget(paramA) &&
+                !IsNullTolerantObjectTarget(paramB) {
+                return 1
+            }
             if ka != kb {
                 return (int32(ka)).CompareTo(int32(kb))
             }
@@ -2048,6 +2272,18 @@ internal partial class OverloadResolver {
             ?.ClrType
             ?.FullName is string fullName &&
             NumericWideningLattice.IsNumericPrimitive(fullName)
+
+        private func IsNullTolerantObjectTarget(type TypeSymbol) bool {
+            var current = type
+            while current is NullableTypeSymbol or PlatformTypeSymbol {
+                if current is NullableTypeSymbol nullable {
+                    current = nullable.UnderlyingType
+                } else if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                }
+            }
+            return object.Equals(current, TypeSymbol.Object) || current.ClrType?.IsSameAs(typeof(object)) == true
+        }
 
         /// Issue #1154: returns `true` when [`argumentNames`](paramref)
         /// carries any non-null positional name. When named arguments are present the

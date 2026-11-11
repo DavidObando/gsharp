@@ -1319,6 +1319,20 @@ internal shared class ClrOverloadResolution {
         return true
     }
 
+    internal func GetEffectiveExtensionReceiverClrType(receiver TypeSymbol) Type? {
+        if receiver.ClrType is {} clrType {
+            return clrType
+        }
+        if TypeSymbol.ContainsTypeParameter(receiver) || TypeSymbol.ContainsSameCompilationUserType(receiver) {
+            return nil
+        }
+        return if MemberLookup.TryProjectErasedClrType(receiver, out var projected) {
+            projected
+        } else {
+            default(Type?)
+        }
+    }
+
     /// Tests only an extension receiver, without binding its arguments.
     /// Shares final resolution's inference, constraints and CLR conversions;
     /// unknown symbolic receivers or argument-dependent bounds stay possible.
@@ -1328,7 +1342,7 @@ internal shared class ClrOverloadResolution {
         argumentCount int32?,
         argumentNames IReadOnlyList[string?]?
     ) bool {
-        let receiverClr = receiver.ClrType
+        let receiverClr = GetEffectiveExtensionReceiverClrType(receiver)
         if receiverClr == nil || receiverClr.ContainsGenericParameters || TypeSymbol.ContainsSameCompilationUserType(
             receiver
         ) {
@@ -1637,7 +1651,7 @@ internal shared class ClrOverloadResolution {
         argumentDependent HashSet[string],
         conversionInputType Type? = nil
     ) bool {
-        let receiverClr = receiver.ClrType
+        let receiverClr = GetEffectiveExtensionReceiverClrType(receiver)
         if receiverClr == nil {
             return true
         }
@@ -1730,7 +1744,7 @@ internal shared class ClrOverloadResolution {
         }
         let candidateBounds = Dictionary[string, Type](bounds, StringComparer.Ordinal)
         let receiverTerms = List[(Type, Type)](){(carrier, parameterType)}
-        if conversionInputType != nil && receiver.ClrType is {} source {
+        if conversionInputType != nil && GetEffectiveExtensionReceiverClrType(receiver) is {} source {
             receiverTerms.Add((source, conversionInputType))
         }
         if UnifyForInference(parameterType, carrier, candidateBounds) {
@@ -1782,7 +1796,7 @@ internal shared class ClrOverloadResolution {
         freeBounds IReadOnlyDictionary[string, Type]? = nil,
         receiverTerms IReadOnlyList[(Type, Type)]? = nil
     ) bool {
-        let receiverClr = receiver.ClrType
+        let receiverClr = GetEffectiveExtensionReceiverClrType(receiver)
         if receiverClr == nil {
             return true
         }
@@ -4005,11 +4019,12 @@ internal shared class ClrOverloadResolution {
         } else {
             parameterType
         }
+        let receiverClr = GetEffectiveExtensionReceiverClrType(receiver)
         return if closedReceiver.ContainsGenericParameters {
-            receiver.ClrType is {} source && OpenExtensionReceiverStandardShapeMayApply(source, closedReceiver)
+            receiverClr is {} source && OpenExtensionReceiverStandardShapeMayApply(source, closedReceiver)
         } else {
             (
-                ClassifyImplicit(closedReceiver, receiver.ClrType) != ImplicitConversionKind.None ||
+                ClassifyImplicit(closedReceiver, receiverClr) != ImplicitConversionKind.None ||
                     Conversion
                     .ClassifyNonStructural(receiver, ClrNullability.GetParameterTypeSymbol(parameter)).IsImplicit
             )

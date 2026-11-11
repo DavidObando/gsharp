@@ -1314,7 +1314,7 @@ partial class CSharpToGSharpTranslator {
                 if delegates.Count == 0 {
                     continue
                 }
-                let model = compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 for declaration in delegates {
                     if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol delegateSymbol ||
                         !CSharpTypeMapper.IsLiftedNestedDelegate(delegateSymbol) {
@@ -1618,7 +1618,7 @@ partial class CSharpToGSharpTranslator {
                 if typeOfExpressions.Count == 0 {
                     continue
                 }
-                let model = compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 for typeOf in typeOfExpressions {
                     if model.GetSymbolInfo(typeOf.Type).Symbol is not INamedTypeSymbol referenced {
                         continue
@@ -1641,7 +1641,7 @@ partial class CSharpToGSharpTranslator {
                 (tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath,
                 StringComparer.Ordinal
             ) {
-                let model = compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 for methodDeclaration in tree.GetRoot().DescendantNodes().OfType[MethodDeclarationSyntax]() {
                     if model.GetDeclaredSymbol(methodDeclaration) is not IMethodSymbol method ||
                         !method.IsExtensionMethod {
@@ -2223,7 +2223,7 @@ partial class CSharpToGSharpTranslator {
         ) HashSet[Microsoft.CodeAnalysis.SyntaxTree] {
             let trees = HashSet[Microsoft.CodeAnalysis.SyntaxTree]{root.SyntaxTree}
             let pending = Queue[TypeDeclarationSyntax]()
-            let rootModel = context.Compilation.GetSemanticModel(root.SyntaxTree)
+            let rootModel = TranslationContext.GetSemanticModel(context.Compilation, root.SyntaxTree)
             for declaration in EnumerateTopLevelDeclarations(root).OfType[TypeDeclarationSyntax]() {
                 let type INamedTypeSymbol? = rootModel.GetDeclaredSymbol(declaration)
                 if packageFilter != nil &&
@@ -2243,7 +2243,7 @@ partial class CSharpToGSharpTranslator {
                     continue
                 }
                 trees.Add(declaration.SyntaxTree)
-                let model = context.Compilation.GetSemanticModel(declaration.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(context.Compilation, declaration.SyntaxTree)
                 let type INamedTypeSymbol? = model.GetDeclaredSymbol(declaration)
                 let isFlattenedEntry = type != nil && SymbolEqualityComparer.Default.Equals(
                     type.OriginalDefinition,
@@ -2357,7 +2357,7 @@ partial class CSharpToGSharpTranslator {
                     if tree.GetRoot() is not Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root {
                         continue
                     }
-                    let model = current.GetSemanticModel(tree)
+                    let model = TranslationContext.GetSemanticModel(current, tree)
                     let usings = root.Usings.Concat(
                         root
                             .DescendantNodes()

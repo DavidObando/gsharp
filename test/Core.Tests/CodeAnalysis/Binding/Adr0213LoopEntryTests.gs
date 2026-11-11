@@ -1276,7 +1276,7 @@ func Run(ref text string?, pair (Cb Action, N int32)) int32 {
     return n
 }
 func Main() { }`, "GS0158@6:16")
-            Add("static-method-member-call-is-rejected-by-the-one-rule (A3, stricter than main)", `package T
+            Add("static-method-member-call-keeps-a-by-reference-fact (A3, #5662)", `package T
 import System
 func Run(ref text string?, values []int32) int32 {
     if text == nil { return 0 }
@@ -1286,7 +1286,7 @@ func Run(ref text string?, values []int32) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158@6:16")
+func Main() { }`, "")
             Add("interface-method-member-call-keeps-a-by-reference-fact (A3)", `package T
 import System
 interface IWork {
@@ -1839,7 +1839,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     return n
 }
 func Main() { }`, "")
-            Add("call-inside-a-chain-with-a-same-name-extension-counts (A3, stricter than main)", `package T
+            Add("call-inside-a-chain-with-a-same-name-extension-keeps-a-by-reference-fact (A3, #5662)", `package T
 import System
 import System.Collections.Generic
 class Holder {
@@ -1869,7 +1869,7 @@ func Run(ref text string?, holder Holder, arr []Holder, list List[Holder], dict 
     }
     return n
 }
-func Main() { }`, "GS0158@24:16")
+func Main() { }`, "")
             Add("property-subpattern-type-tests-a-member-not-the-subject (A3)", `package T
 import System
 import System.Collections.Generic
@@ -2232,7 +2232,7 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@7:16")
-            Add("argument-without-conversion-is-rejected-by-the-one-rule (A3, stricter than main)", `package T
+            Add("argument-without-conversion-keeps-a-by-reference-fact (A3, #5662)", `package T
 import System
 func Run(ref text string?) int32 {
     if text == nil { return 0 }
@@ -2244,7 +2244,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158@6:16")
+func Main() { }`, "")
             Add("return-conversion-in-a-resumed-loop-removes-a-by-reference-fact (A3)", `package T
 import System
 func Run(ref text string?) ReadOnlySpan[char] {
@@ -2428,7 +2428,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     return n
 }
 func Main() { }`, "GS0158@15:16")
-            Add("inferred-and-substituted-type-arguments-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
+            Add("inferred-and-substituted-type-arguments-keep-a-by-reference-fact (A3, #5662)", `package T
 import System
 import System.Collections.Generic
 struct Token { var Raw int32 }
@@ -2443,7 +2443,7 @@ func Run(ref text string?, dt DateTime, tok Token, dict Dictionary[Token, DateTi
     }
     return n
 }
-func Main() { }`, "GS0158@9:16")
+func Main() { }`, "")
             Add("from-end-index-constructs-a-system-index (A3)", `package T
 import System
 import System.Text
@@ -2617,7 +2617,7 @@ func Run(ref text string?) int32 {
     return n
 }
 func Main() { }`, "GS0158@10:16")
-            Add("nested-arrays-and-exact-overloads-are-rejected-by-the-one-rule (A3, stricter than main)", `package T
+            Add("nested-arrays-and-exact-overloads-keep-a-by-reference-fact (A3, #5662)", `package T
 import System
 func Consume(n int32) { }
 func Consume(s ReadOnlySpan[char]) { }
@@ -2633,7 +2633,7 @@ func Run(ref text string?) int32 {
     }
     return n
 }
-func Main() { }`, "GS0158@8:16")
+func Main() { }`, "")
             Add("pattern-member-getter-removes-a-by-reference-fact (R14)", `package T
 import System
 class Holder {
@@ -2742,9 +2742,7 @@ func Run(ref text string?, flag bool, dt DateTime, dto DateTimeOffset, payload P
     return n
 }
 func Main() { }`, "GS0158@11:16")
-            Add(
-                "arms-of-one-type-and-inferred-compound-parameters-are-rejected-by-the-one-rule (A3, stricter than main)",
-                `package T
+            Add("arms-of-one-type-and-inferred-compound-parameters-keep-a-by-reference-fact (A3, #5662)", `package T
 import System
 import System.Collections.Generic
 func Use[T](xs List[T], item T) { }
@@ -2759,9 +2757,7 @@ func Run(ref text string?, flag bool, dto DateTimeOffset, ys List[int32], n0 int
     }
     return n
 }
-func Main() { }`,
-                "GS0158@8:16"
-            )
+func Main() { }`, "")
             Add("base-call-is-not-a-call-of-a-function-of-its-name (A3)", `package T
 import System
 open class Parent {
@@ -4034,6 +4030,173 @@ func RunEntryNarrowedMemberNil(holder Holder) int32 {
     return total
 }
 func Main() { }`, "GS0158@46:27 GS0158@54:27 GS0158@62:27 GS0158@70:27 GS0158@78:27 GS0158@87:27 GS0158@96:27 GS0158@107:27")
+            Add("instance-call-with-same-name-extension-keeps-a-by-reference-fact (A3, #5662)", `package T
+import System
+class Holder {
+    func Use(n int32) { }
+}
+func (h Holder) Use(d DateTimeOffset) { }
+func Run(ref text string?, holder Holder) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        holder.Use(n)
+        let s = "abc".Trim('a')
+        n = n + s.Length * 0
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("narrowed-nullable-value-in-argument-keeps-storage-type (A3, #5662)", `package T
+import System
+func Read(in v int32, d DateTime) { }
+func Read(in v int32?, d DateTimeOffset) { }
+func Run(ref text string?, x0 int32?, dt DateTime) int32 {
+    var x int32? = x0
+    if text == nil || x == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n = n + x * 0 + 1
+        Read(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("nullable-reference-argument-selects-conversion-overload (A3, #5662)", `package T
+import System
+struct Token { var Raw int32 }
+func operator implicit (value string?) Token { return Token{Raw: 1} }
+func Use(s string) { }
+func Use(t Token) { }
+func Run(ref text string?, maybe string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(maybe)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("named-constant-narrowing-selects-conversion-overload (A3, #5662)", `package T
+import System
+func Use(b uint8, d DateTimeOffset) { }
+func Use(n int64, o object) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    const k int32 = 1
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(k, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("address-of-and-typed-inline-out-keep-a-by-reference-fact (A3, #5662)", `package T
+import System
+func Bump(ref v int32) { v++ }
+func Fill(out arr []int32, v int32) { arr = []int32{v} }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        Bump(&n)
+        Fill(out var items []int32, n)
+    }
+    return n
+}
+func Main() { }`, "")
+            Add("parenthesized-address-of-argument-selects-ref-overload (A3, #5662)", `package T
+import System
+func Use(ref s string, d DateTimeOffset) { }
+func Use(s string, o object) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var other = "a"
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use((&other), dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@9:16")
+            Add("narrowed-nullable-reference-in-argument-uses-effective-nullability (A3, #5662)", `package T
+import System
+func Use(in s string, d DateTimeOffset) { }
+func Use(in s string?, d DateTime, pad int32 = 0) { }
+func Run(ref text string?, in x string?, dt DateTime) int32 {
+    if text == nil || x == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("async-call-argument-uses-observable-task-result (A3, #5662)", `package T
+import System
+import System.Threading.Tasks
+async func Make() int32 { return 1 }
+func Use(v int32, o object) { }
+func Use(t Task[int32], d DateTimeOffset) { }
+func Run(ref text string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(Make(), dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
+            Add("unboxed-object-in-argument-uses-value-storage-type (A3, #5662)", `package T
+import System
+func Read(in v int32, d DateTimeOffset) { }
+func Read(in o object, d object) { }
+func Run(ref text string?, in x object, dt DateTime) int32 {
+    if text == nil || x !is int32 { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Read(in x, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("null-asserted-argument-strips-nullability-for-overload-selection (A3, #5662)", `package T
+import System
+func Use(s string, d DateTimeOffset) { }
+func Use(s string?, o object) { }
+func Run(ref text string?, maybe string?, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(maybe!!, dt)
+    }
+    return n
+}
+func Main() { }`, "GS0158@8:16")
+            Add("nil-argument-selects-reference-conversion-overload (A3, #5662)", `package T
+import System
+class Token { var Raw int32 }
+func operator implicit (value string?) Token { return Token{Raw: 1} }
+func Use(t Token) { }
+func Use(n int32) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(nil)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
             return rows
         }
     }

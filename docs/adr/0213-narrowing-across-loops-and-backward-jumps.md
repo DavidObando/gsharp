@@ -1386,23 +1386,27 @@ callable alias in force runs `ApplyLoopEntryLowerBound`; the decisions are those
   an imported operator runs user code; a conversion site (an assigned or typed value, a non-`bool` condition, a
   returned value, a by-value argument against the parameter at its position) runs a conversion operator when the
   conversion classifier finds one between the types of its value and its target (`HasUserDefinedImplicitConversion`).
-  *Call and index arguments: one conservative rule (coordinator decision 2026-11-02, after review rounds 30 to 36).*
-  The walker does not model overload resolution. A call or an index access keeps a `ref` or `out` fact only when, for
+  *Call and index arguments: one conservative rule (coordinator decision 2026-11-02, after review rounds 30 to 36;
+  relaxed for resolved call arguments in [#5662](https://github.com/DavidObando/gsharp/issues/5662)).*
+  In #5459, the walker did not model overload resolution. A call or an index access kept a `ref` or `out` fact only when, for
   every candidate of the name with as many parameters as arguments, on every type the receiver can have (with the
   receiver's type arguments substituted), every by-value argument reaches the parameter at its position without a
-  conversion operator; which candidate the binder selects does not matter. An argument passed by reference and an
+  conversion operator; which candidate the binder selects did not matter. An argument passed by reference and an
   inline declaration (typed or not) convert nothing, a function literal converts nothing only into a delegate or
   function type (any other parameter type can take it through a conversion operator, #5663), and a value does not bind
-  a `ref` or `out` parameter. A parameter that names a type parameter counts, since the walker does not infer type arguments. A callee
+  a `ref` or `out` parameter. Under that rule, a parameter that names a type parameter counted, since the walker did not infer type arguments. A callee
   whose candidates the walker cannot list (a receiver that it does not resolve, an imported base interface with a
   method of the name, a method that only an extension can supply), a variadic or `params` candidate (its expanded
   form converts each argument to the element type, at any arity), a candidate with an optional parameter at another
-  arity, and a call that no candidate takes, all count. This is stricter than
-  main where the binder selects a candidate that converts nothing while another candidate of the name could convert:
-  `Console.WriteLine("ab")` (a `ReadOnlySpan[char]` candidate and `params` overloads), `Math.Max(n, 1)` and
-  `Keep(dt)` for a generic `Keep[T]`. The PR lists those rows. It replaced a model of candidate selection (identity
-  candidates, passing modes, type inference, lookup precedence) whose differences from the binder review found
-  again and again. A concatenation of string literals or an
+  arity, and a call that no candidate takes, all counted. Follow-up [#5662](https://github.com/DavidObando/gsharp/issues/5662)
+  routes calls whose arguments resolve to types, `out var` or `nil` through the binder's own overload resolution
+  (`OverloadResolver.TryResolveLoopCallParameters` for source functions and methods, and `ClrOverloadResolution.Resolve`
+  with `MemberLookup.BuildSymbolicMethodTypeArgs` and `GetClrMethodParameterConversionTargetTypeSymbol` for imported CLR
+  methods) on each receiver alternative and checks whether an instance method of the receiver applies to a chained call
+  step (`InstanceMethodAppliesToCallStep`) before treating a same-name extension method as a candidate. Calls such as
+  `Console.WriteLine("ab")`, `Console.WriteLine(n)`, `Math.Max(n, 1)`, `Keep(dt)`, `Use(ys, 1)`, `s.Trim().Length`,
+  and instance calls with a same-name extension when an instance method applies now keep `ref`/`out` facts, while calls
+  whose selected overload converts an argument or falls back to an extension method stay rejected. A concatenation of string literals or an
   interpolated string has the type `string`; a concatenation with another operand has it only when the operators
   of the region are predefined (`token + "x"` can call a user `+`). The arms of a conditional, `if` or switch expression meet in
   one type, so each arm is a conversion site against each other arm that is not an operator (`flag ? dt : dto`,

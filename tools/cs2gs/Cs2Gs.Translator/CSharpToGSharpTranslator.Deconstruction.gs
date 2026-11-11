@@ -26,11 +26,79 @@ partial class CSharpToGSharpTranslator {
         Dictionary[(Site SyntaxNode, Stem string), int32]()
         private let recordPatternCaches Dictionary[
             SyntaxNode,
-            List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
-        ] = Dictionary[SyntaxNode, List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]]()
+            List[(Path string, Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
+        ] = Dictionary[
+            SyntaxNode,
+            List[(Path string, Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]
+        ]()
+        private let recordPatternReceiverCaches Dictionary[
+            SyntaxNode,
+            List[(Path string, Flag string, Value string, Type GTypeReference)]
+        ] = Dictionary[SyntaxNode, List[(Path string, Flag string, Value string, Type GTypeReference)]]()
+        private let recordPatternTypeGuards Dictionary[
+            SyntaxNode,
+            List[(Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)]
+        ] = Dictionary[
+            SyntaxNode,
+            List[(Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)]
+        ]()
+        private let importedProtectedDeconstructHookNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
+        private let importedBaseDeconstructHelperNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
+        private let valueTypeExplicitDeconstructHelperNames Dictionary[IMethodSymbol, string] = Dictionary[
+            IMethodSymbol,
+            string
+        ](SymbolEqualityComparer.Default)
+        private let pendingNestedBridges Dictionary[SyntaxNode, GMember] = Dictionary[SyntaxNode, GMember]()
 
         private func RecordDeconstructionAdapterName(method IMethodSymbol) string {
-            let original = (method.PartialDefinitionPart ?? method).OriginalDefinition
+            if this.TryResolveMigratedProducerDeconstruct(method, out var sourceMethod, out var producerCompilation) {
+                return this.RecordDeconstructionAdapterName(sourceMethod!!, producerCompilation!!)
+            }
+            return this.RecordDeconstructionAdapterName(method, this.context.Compilation)
+        }
+
+        private func IsSecondarySameTypeContractOverload(
+            method IMethodSymbol,
+            contractMembers IReadOnlyCollection[IMethodSymbol]
+        ) bool {
+            let original = method.OriginalDefinition
+            return original.ExplicitInterfaceImplementations.IsDefaultOrEmpty && contractMembers.Any(
+                (candidate IMethodSymbol) -> candidate
+                    .ExplicitInterfaceImplementations
+                    .IsDefaultOrEmpty &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(candidate.ContainingType, original.ContainingType) && string.CompareOrdinal(
+                    candidate.ToDisplayString(),
+                    original.ToDisplayString()
+                ) < 0
+            )
+        }
+
+        private func RecordDeconstructionAdapterName(method IMethodSymbol, compilation Compilation) string {
+            var original = (
+                (method.ReducedFrom ?? method).PartialDefinitionPart ?? (method.ReducedFrom ?? method)
+            ).OriginalDefinition
+            let allocator = EmittedNameAllocator.For(compilation)
+            let contractMembers = allocator.GetDeconstructContractMembers(original)
+            let isSecondaryOverload = this.IsSecondarySameTypeContractOverload(original, contractMembers)
+            let primaryContractMembers = contractMembers.Where(
+                (candidate IMethodSymbol) -> !this.IsSecondarySameTypeContractOverload(candidate, contractMembers)
+            )
+                .ToArray()
+            if primaryContractMembers.Length > 1 && !isSecondaryOverload {
+                original = primaryContractMembers.OrderBy(
+                    (candidate IMethodSymbol) -> candidate.ToDisplayString(),
+                    StringComparer.Ordinal
+                )
+                    .First()
+            }
             if this.recordDeconstructionAdapterNames.TryGetValue(original, out var existing) {
                 return existing
             }
@@ -41,22 +109,42 @@ partial class CSharpToGSharpTranslator {
                 .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
                 .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
                 .Count()
+            let allContractMembers = allocator.GetAllDeconstructContractMembers(original)
+            let owners = if allContractMembers.Count > 1 {
+                allContractMembers
+                    .SelectMany((member IMethodSymbol) -> ReceiverTypeHierarchy(member.ContainingType))
+                    .Distinct[INamedTypeSymbol](SymbolEqualityComparer.Default)
+                    .ToList()
+            } else {
+                ReceiverTypeHierarchy(original.ContainingType).ToList()
+            }
             let hierarchy = ReceiverTypeHierarchy(original.ContainingType).ToList()
             let taken = HashSet[string](
-                hierarchy.SelectMany((owner INamedTypeSymbol) -> owner.GetMembers()).Select(
-                    (member ISymbol) -> this.nameAllocator.GetName(member)!!
+                owners.SelectMany((owner INamedTypeSymbol) -> owner.GetMembers()).Select(
+                    (member ISymbol) -> allocator.GetName(member)!!
                 ),
                 StringComparer.Ordinal
             )
-            taken.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
+            taken.UnionWith(allocator.GetDeconstructionReservedNames(original))
             for ancestor in hierarchy.Skip(1) {
                 for inherited in ancestor.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
-                    if EmittedNameAllocator.IsUserRecordDeconstruct(inherited) {
-                        taken.Add(this.RecordDeconstructionAdapterName(inherited))
+                    if SymbolEqualityComparer.Default.Equals(inherited.OriginalDefinition, original) ||
+                        contractMembers.Contains(inherited.OriginalDefinition) {
+                        continue
+                    }
+                    if EmittedNameAllocator.IsUserRecordDeconstruct(inherited) ||
+                        allocator
+                        .HasRenamedDeconstructContract(inherited) {
+                        taken.Add(this.RecordDeconstructionAdapterName(inherited, compilation))
                     }
                 }
             }
-            let stem = if original.Parameters.Length == 1 {
+            let outputCount = if original.IsExtensionMethod {
+                original.Parameters.Length - 1
+            } else {
+                original.Parameters.Length
+            }
+            let stem = if outputCount == 1 {
                 "deconstructValue"
             } else {
                 "deconstructTuple"
@@ -70,8 +158,13 @@ partial class CSharpToGSharpTranslator {
             }
             var helperSuffix = 2
             var assignedName = name
-            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveMemberName(
-                original,
+            let membersToReserve = if !isSecondaryOverload && primaryContractMembers.Length > 0 {
+                cast[IReadOnlyCollection[IMethodSymbol]](primaryContractMembers)
+            } else {
+                cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            }
+            while !LiftedLocalFunctionNameAllocator.For(compilation).TryReserveContractMemberNames(
+                membersToReserve,
                 name,
                 out assignedName
             ) {
@@ -80,7 +173,10 @@ partial class CSharpToGSharpTranslator {
                     helperSuffix++
                 } while taken.Contains(name)
             }
-            this.recordDeconstructionAdapterNames.Add(original, assignedName)
+            for member in membersToReserve {
+                this.recordDeconstructionAdapterNames[member] = assignedName
+            }
+            this.recordDeconstructionAdapterNames[original] = assignedName
             return assignedName
         }
 
@@ -103,24 +199,12 @@ partial class CSharpToGSharpTranslator {
 
         private func BeginRecordPatternDecision(owner SyntaxNode) {
             this.recordPatternCaches.Remove(owner)
-            for pattern in owner.DescendantNodes().OfType[RecursivePatternSyntax]() {
-                let decision = pattern.Ancestors().FirstOrDefault(
-                    (ancestor SyntaxNode) -> ancestor is IsPatternExpressionSyntax or
-                        SwitchExpressionSyntax or
-                        SwitchStatementSyntax
-                )
-                if object.ReferenceEquals(decision, owner) &&
-                    pattern.PositionalPatternClause != nil &&
-                    this.RecordPatternNeedsDeconstruction(pattern) &&
-                    this
-                    .context
-                    .SemanticModel
-                    .GetOperation(pattern) is IRecursivePatternOperation operation &&
-                    operation.DeconstructSymbol is IMethodSymbol method {
-                    this.ReportMetadataRecordDeconstruction(method, pattern, operation.MatchedType)
-                }
-            }
-            let patterns = owner
+            this.recordPatternReceiverCaches.Remove(owner)
+            this.recordPatternTypeGuards.Remove(owner)
+        }
+
+        private func OwnerHasMixedRecordPositionalAndPropertyPatterns(owner SyntaxNode) bool {
+            let allPatterns = owner
                 .DescendantNodes()
                 .OfType[RecursivePatternSyntax]()
                 .Where(
@@ -130,24 +214,259 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .ToArray()
-            if patterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) && patterns.Any(
+            let rootPatterns = allPatterns.Where(
+                (pattern RecursivePatternSyntax) -> this.RecordPatternDecisionPath(pattern, owner).Length == 0
+            )
+                .ToArray()
+            return rootPatterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) &&
+                allPatterns
+                .Any(
                 (pattern RecursivePatternSyntax) ->
                 this.UserRecordPatternDeconstruct(pattern) != nil && this.RecordPatternNeedsDeconstruction(pattern)
-            ) {
-                this.context.ReportUnsupported(
-                    owner,
-                    "user-record positional and property decisions need Roslyn-compatible receiver and output state."
-                )
-            }
+            )
         }
 
-        private func BuildRecordDeconstructionAdapter(method IMethodSymbol) MethodDeclaration? {
+        private func EffectiveRootRecursivePatternType(
+            pattern RecursivePatternSyntax,
+            receiverType ITypeSymbol?
+        ) ITypeSymbol? {
+            let explicitType = if pattern.Type != nil {
+                this.context.GetTypeInfo(pattern.Type).Type
+            } else {
+                default(ITypeSymbol?)
+            }
+            let rawType = explicitType ?? receiverType ?? this.UserRecordPatternDeconstruct(pattern)?.ContainingType
+            if rawType == nil {
+                return nil
+            }
+            let unwrappedRaw = UnwrapNullablePatternType(rawType)
+            if receiverType != nil {
+                let unwrappedReceiver = UnwrapNullablePatternType(receiverType)
+                if unwrappedReceiver is INamedTypeSymbol receiverNamed &&
+                    unwrappedRaw is INamedTypeSymbol rawNamed &&
+                    ReceiverTypeHierarchy(receiverNamed).Contains(rawNamed, SymbolEqualityComparer.Default) {
+                    return unwrappedReceiver
+                }
+            }
+            return unwrappedRaw
+        }
+
+        private func GetOrCreateRecordPatternTypeGuard(
+            owner SyntaxNode,
+            path string,
+            matchedType ITypeSymbol,
+            requiresConversion bool,
+            site RecursivePatternSyntax,
+            declarations List[GStatement]?
+        )(Flag string, Value string?) {
+            let unwrapped = UnwrapNullablePatternType(matchedType)
+            if !this.recordPatternTypeGuards.TryGetValue(owner, out var guards) {
+                guards = List[
+                    (Path string, Type ITypeSymbol, Flag string, Value string?, StorageType GTypeReference?)
+                ]()
+                this.recordPatternTypeGuards.Add(owner, guards)
+            }
+            for var i = 0; i < guards.Count; i++ {
+                let entry = guards[i]
+                if entry.Path == path && SymbolEqualityComparer.Default.Equals(entry.Type, unwrapped) {
+                    if requiresConversion && entry.Value == nil {
+                        let value = this.AllocateRecordScopedLocalName("matchedValue", site)
+                        var storageType = this.typeMapper.Map(unwrapped, this.context, site.GetLocation())
+                        if unwrapped.IsReferenceType {
+                            storageType = MakeNullable(storageType)
+                        }
+                        guards[i] = (entry.Path, entry.Type, entry.Flag, value, storageType)
+                        if owner is IsPatternExpressionSyntax && declarations != nil {
+                            declarations.Add(LocalDeclarationStatement(BindingKind.Var, value, storageType))
+                        }
+                        return (entry.Flag, value)
+                    }
+                    return (entry.Flag, entry.Value)
+                }
+            }
+            let flag = this.AllocateRecordScopedLocalName("matchedType", site)
+            var value string? = nil
+            var storageType GTypeReference? = nil
+            if requiresConversion {
+                value = this.AllocateRecordScopedLocalName("matchedValue", site)
+                storageType = this.typeMapper.Map(unwrapped, this.context, site.GetLocation())
+                if unwrapped.IsReferenceType {
+                    storageType = MakeNullable(storageType)
+                }
+            }
+            guards.Add((path, unwrapped, flag, value, storageType))
+            if owner is IsPatternExpressionSyntax && declarations != nil {
+                declarations.Add(
+                    LocalDeclarationStatement(
+                        BindingKind.Var,
+                        flag,
+                        NamedTypeReference("bool"),
+                        LiteralExpression.Bool(false)
+                    )
+                )
+                if value != nil {
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, value, storageType))
+                }
+            }
+            return (flag, value)
+        }
+
+        private func TryGetSharedRecordPatternTypeGuard(
+            recursive RecursivePatternSyntax,
+            receiver GExpression?,
+            receiverType ITypeSymbol?,
+            currentTest GExpression?,
+            out guardedTest GExpression?,
+            out guardedMemberReceiver GExpression?
+        ) bool {
+            guardedTest = currentTest
+            guardedMemberReceiver = receiver
+            let owner = this.RecordPatternDecisionOwner(recursive)
+            if owner is not IsPatternExpressionSyntax ||
+                currentTest == nil ||
+                !this.OwnerHasMixedRecordPositionalAndPropertyPatterns(owner) {
+                return false
+            }
+            let path = this.RecordPatternDecisionPath(recursive, owner)
+            if path.Length != 0 {
+                return false
+            }
+            let matchedType = this.EffectiveRootRecursivePatternType(recursive, receiverType)
+            if matchedType == nil {
+                return false
+            }
+            let rootCandidates = owner
+                .DescendantNodes()
+                .OfType[RecursivePatternSyntax]()
+                .Where(
+                (candidate RecursivePatternSyntax) -> object.ReferenceEquals(
+                    this.RecordPatternDecisionOwner(candidate),
+                    owner
+                ) &&
+                    this.RecordPatternDecisionPath(candidate, owner) == path && SymbolEqualityComparer.Default.Equals(
+                    this.EffectiveRootRecursivePatternType(candidate, receiverType),
+                    matchedType
+                )
+            )
+                .OrderBy((candidate RecursivePatternSyntax) -> candidate.SpanStart)
+                .ToArray()
+            if rootCandidates.Length == 0 ||
+                (
+                rootCandidates.Length == 1 &&
+                    (recursive.PositionalPatternClause == nil || recursive.PropertyPatternClause == nil)
+            ) {
+                return false
+            }
+            let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+            if declarations == nil {
+                return false
+            }
+            let requiresConversion = receiverType == nil ||
+                IsNullableValueType(receiverType) ||
+                !SymbolEqualityComparer
+                .Default
+                .Equals(UnwrapNullablePatternType(receiverType), matchedType)
+            let (guardFlag, guardValue) = this.GetOrCreateRecordPatternTypeGuard(
+                owner,
+                path,
+                matchedType,
+                requiresConversion,
+                rootCandidates[0],
+                declarations
+            )
+            let flagExpr = IdentifierExpression(guardFlag)
+            let assignStatements = List[GStatement]()
+            if guardValue != nil && receiver != nil {
+                let capturedValue = if recursive.Type != nil &&
+                    !IsNullableValueType(receiverType) &&
+                    (
+                    receiverType == nil || !SymbolEqualityComparer.Default.Equals(
+                        UnwrapNullablePatternType(receiverType),
+                        matchedType
+                    )
+                ) {
+                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: nil, recursive.Type, receiverType)
+                } else {
+                    EnsureNonNullAssertion(receiver)
+                }
+                assignStatements.Add(AssignmentStatement(IdentifierExpression(guardValue), capturedValue))
+            }
+            assignStatements.Add(AssignmentStatement(flagExpr, LiteralExpression.Bool(true)))
+            guardedTest = ParenthesizedExpression(
+                BinaryExpression(
+                    flagExpr,
+                    "||",
+                    BlockExpression([]GStatement{IfStatement(currentTest, BlockStatement(assignStatements))}, flagExpr)
+                )
+            )
+            if receiver != nil {
+                if guardValue != nil {
+                    let valueExpr = IdentifierExpression(guardValue)
+                    guardedMemberReceiver = if matchedType.IsReferenceType {
+                        EnsureNonNullAssertion(valueExpr)
+                    } else {
+                        valueExpr
+                    }
+                    if recursive.Designation is SingleVariableDesignationSyntax recVar &&
+                        this
+                        .context
+                        .GetDeclaredSymbol(recVar) is {} recBound {
+                        this.state.PatternBindings[recBound] = guardedMemberReceiver!!
+                    }
+                } else if this.IsGSharpNullablePatternReceiver(receiver) ||
+                    receiverType?.NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    IsNullableValueType(receiverType) {
+                    guardedMemberReceiver = EnsureNonNullAssertion(receiver)
+                }
+            }
+            return true
+        }
+
+        private func UnwrapNullablePatternType(type ITypeSymbol) ITypeSymbol {
+            if type is INamedTypeSymbol{
+                OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                TypeArguments: {Length: 1}
+            } nullableValue {
+                return nullableValue.TypeArguments[0]
+            }
+            return type.WithNullableAnnotation(Microsoft.CodeAnalysis.NullableAnnotation.NotAnnotated)
+        }
+
+        private func BuildRecordDeconstructionAdapter(
+            method IMethodSymbol,
+            forceConcreteImplementation bool = false,
+            ownerIsUnsafe bool = false,
+            explicitInterfaceOverride GTypeReference? = nil
+        ) MethodDeclaration? {
+            if method.IsExtensionMethod {
+                return this.BuildExtensionRecordDeconstructionAdapter(method)
+            }
             // A method adapter adds no equality storage or printable property to the data type.
-            if !EmittedNameAllocator.IsUserRecordDeconstruct(method) ||
+            if (
+                !this.nameAllocator.HasRenamedDeconstructContract(method) &&
+                    !this.TryResolveMigratedProducerDeconstruct(method, out _, out _)
+            ) ||
                 method.IsStatic ||
                 !method.ReturnsVoid ||
                 method.Arity != 0 ||
                 method.IsPartialDefinition ||
+                (
+                method.IsOverride &&
+                    method.OverriddenMethod != nil &&
+                    (
+                    this.nameAllocator.HasRenamedDeconstructContract(method.OverriddenMethod) ||
+                        this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
+                ) &&
+                    (
+                    !method.OverriddenMethod!!
+                        .DeclaringSyntaxReferences
+                        .IsDefaultOrEmpty ||
+                        this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
+                )
+            ) ||
                 method
                 .Parameters
                 .Length < 1 ||
@@ -156,44 +475,344 @@ partial class CSharpToGSharpTranslator {
                 .Any((parameter IParameterSymbol) -> parameter.RefKind != RefKind.Out) {
                 return nil
             }
+            if !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                let explicitSlot = method.ExplicitInterfaceImplementations[0]
+                if explicitSlot
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _) {
+                    return nil
+                }
+            }
+            for var i = 0; i < method.Parameters.Length; i++ {
+                if method.Parameters[i].Type.IsRefLikeType {
+                    if !method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                        this.context.ReportUnsupported(
+                            method.DeclaringSyntaxReferences[0].GetSyntax(),
+                            "record Deconstruct outputs with ref-like types cannot use a tuple adapter."
+                        )
+                    }
+                    return nil
+                }
+            }
+            let types = this.MapRecordDeconstructionParameterTypes(method)
+            let resultType = this.RecordDeconstructionResultType(method, types)
+            if !forceConcreteImplementation &&
+                method
+                .ContainingType
+                .TypeKind == TypeKind.Interface &&
+                method
+                .IsAbstract {
+                return MethodDeclaration(
+                    this.RecordDeconstructionAdapterName(method),
+                    Array.Empty[Parameter](),
+                    resultType,
+                    body: nil,
+                    visibility: Visibility.Default
+                )
+            }
+            let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let explicitInterfaceType GTypeReference? = if explicitInterfaceOverride != nil {
+                explicitInterfaceOverride
+            } else if !forceConcreteImplementation && !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                this.typeMapper.Map(
+                    method.ExplicitInterfaceImplementations[0].ContainingType,
+                    this.context,
+                    syntaxNode?.GetLocation()
+                )
+            } else {
+                default(GTypeReference?)
+            }
+            let occupied = HashSet[string](StringComparer.Ordinal)
+            for typeParameter in method.ContainingType.TypeParameters {
+                occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
+            }
             let statements = List[GStatement]()
             let arguments = List[GExpression]()
             let elements = List[GExpression]()
-            let types = this.MapRecordDeconstructionParameterTypes(method)
             var receiver GExpression = ThisExpression()
-            if method.ContainingType.IsValueType {
+            if method.ContainingType.IsValueType && explicitInterfaceType == nil {
                 // C# deconstruction calls a struct receiver copy; an explicit Deconstruct call can mutate the original.
-                statements.Add(LocalDeclarationStatement(BindingKind.Var, "receiver", initializer: receiver))
-                receiver = IdentifierExpression("receiver")
+                var receiverName = "receiver"
+                for var suffix = 2; occupied.Contains(receiverName); suffix++ {
+                    receiverName = "receiver_" + suffix.ToString(CultureInfo.InvariantCulture)
+                }
+                occupied.Add(receiverName)
+                statements.Add(LocalDeclarationStatement(BindingKind.Var, receiverName, initializer: receiver))
+                receiver = IdentifierExpression(receiverName)
+            }
+            if !forceConcreteImplementation && explicitInterfaceType != nil && !method.ContainingType.IsValueType {
+                receiver = ParenthesizedExpression(
+                    ConversionExpression(explicitInterfaceType, receiver, isCheckedReferenceCast: true)
+                )
             }
             for var i = 0; i < method.Parameters.Length; i++ {
                 let parameter = method.Parameters[i]
-                if parameter.Type.TypeKind == TypeKind.Pointer || parameter.Type.TypeKind == TypeKind.FunctionPointer {
-                    this.context.ReportUnsupported(
-                        method.DeclaringSyntaxReferences[0].GetSyntax(),
-                        "record Deconstruct pointer outputs need pointer-compatible call lowering."
-                    )
-                    return nil
-                }
-                if parameter.Type.IsRefLikeType {
-                    this.context.ReportUnsupported(
-                        method.DeclaringSyntaxReferences[0].GetSyntax(),
-                        "record Deconstruct outputs with ref-like types cannot use a tuple adapter."
-                    )
-                    return nil
-                }
                 let type = types[i]
-                let name = "component" + i.ToString(CultureInfo.InvariantCulture)
-                statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
+                var name = stem
+                for var suffix = 2; occupied.Contains(name); suffix++ {
+                    name = stem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                }
+                occupied.Add(name)
                 let element = IdentifierExpression(name)
-                arguments.Add(UnaryExpression("&", element))
-                elements.Add(element)
+                statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                arguments.Add(OutArgumentExpression("out", name))
+                elements.Add(
+                    if method.Parameters.Length > 1 && IsPointerOrFunctionPointerType(parameter.Type) {
+                        cast[GExpression](
+                            ConversionExpression(NamedTypeReference("nuint"), element, isCheckedReferenceCast: true)
+                        )
+                    } else {
+                        cast[GExpression](element)
+                    }
+                )
             }
+            let targetMethodName = if !forceConcreteImplementation && this.NeedsValueTypeExplicitDeconstructHelper(
+                method
+            ) {
+                this.ValueTypeExplicitDeconstructHelperName(method)
+            } else {
+                this.EmittedName(method, method.Name)
+            }
+            statements.Add(
+                ExpressionStatement(InvocationExpression(MemberAccessExpression(receiver, targetMethodName), arguments))
+            )
+            statements.Add(
+                ReturnStatement(
+                    if elements.Count == 1 {
+                        elements[0]
+                    } else {
+                        TupleLiteralExpression(elements)
+                    }
+                )
+            )
+            return MethodDeclaration(
+                this.RecordDeconstructionAdapterName(method),
+                Array.Empty[Parameter](),
+                resultType,
+                BlockStatement(statements),
+                visibility: if explicitInterfaceType != nil || method.ContainingType.TypeKind == TypeKind.Interface {
+                    Visibility.Default
+                } else if forceConcreteImplementation {
+                    Visibility.Public
+                } else {
+                    MapVisibility(method, this.context, syntaxNode)
+                },
+                explicitInterfaceType: explicitInterfaceType
+            )
+        }
+
+        private func BuildConstructedInterfaceDeconstructionAdapters(method IMethodSymbol) IEnumerable[
+            MethodDeclaration
+        ] {
+            let results = List[MethodDeclaration]()
+            if method.IsExtensionMethod ||
+                method.IsStatic ||
+                !method.ReturnsVoid ||
+                method.Arity != 0 ||
+                method.IsPartialDefinition ||
+                !method
+                .ExplicitInterfaceImplementations
+                .IsDefaultOrEmpty ||
+                method
+                .ContainingType
+                .TypeKind == TypeKind.Interface ||
+                this.BuildRecordDeconstructionAdapter(method) == nil {
+                return results
+            }
+            let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let types = this.MapRecordDeconstructionParameterTypes(method)
+            let resultType = this.RecordDeconstructionResultType(method, types)
+            let methodAdapterName = this.RecordDeconstructionAdapterName(method)
+            let seenKeys = HashSet[string](StringComparer.Ordinal)
+            for iface in method.ContainingType.AllInterfaces {
+                for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                    if !this.nameAllocator.HasRenamedDeconstructContract(slot) &&
+                        !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) {
+                        continue
+                    }
+                    if !SymbolEqualityComparer.Default.Equals(
+                        method.ContainingType.FindImplementationForInterfaceMember(slot),
+                        method
+                    ) {
+                        continue
+                    }
+                    let slotAdapterName = this.RecordDeconstructionAdapterName(slot)
+                    if slotAdapterName == methodAdapterName && !method.ContainingType.IsValueType {
+                        continue
+                    }
+                    let mappedIface = this.typeMapper.Map(iface, this.context, syntaxNode?.GetLocation())
+                    if mappedIface == nil {
+                        continue
+                    }
+                    let key = GSharpPrinter.RenderTypeReference(mappedIface) + ":" + slotAdapterName
+                    if !seenKeys.Add(key) {
+                        continue
+                    }
+                    let occupied = HashSet[string](StringComparer.Ordinal)
+                    for typeParameter in method.ContainingType.TypeParameters {
+                        occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
+                    }
+                    let statements = List[GStatement]()
+                    let arguments = List[GExpression]()
+                    let elements = List[GExpression]()
+                    for var i = 0; i < method.Parameters.Length; i++ {
+                        let parameter = method.Parameters[i]
+                        let type = types[i]
+                        let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
+                        var name = stem
+                        for var suffix = 2; occupied.Contains(name); suffix++ {
+                            name = stem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                        }
+                        occupied.Add(name)
+                        let element = IdentifierExpression(name)
+                        statements.Add(LocalDeclarationStatement(BindingKind.Var, name, type))
+                        arguments.Add(OutArgumentExpression("out", name))
+                        elements.Add(
+                            if method.Parameters.Length > 1 && IsPointerOrFunctionPointerType(parameter.Type) {
+                                cast[GExpression](
+                                    ConversionExpression(
+                                        NamedTypeReference("nuint"),
+                                        element,
+                                        isCheckedReferenceCast: true
+                                    )
+                                )
+                            } else {
+                                cast[GExpression](element)
+                            }
+                        )
+                    }
+                    statements.Add(
+                        ExpressionStatement(
+                            InvocationExpression(
+                                MemberAccessExpression(ThisExpression(), this.EmittedName(method, method.Name)),
+                                arguments
+                            )
+                        )
+                    )
+                    statements.Add(
+                        ReturnStatement(
+                            if elements.Count == 1 {
+                                elements[0]
+                            } else {
+                                TupleLiteralExpression(elements)
+                            }
+                        )
+                    )
+                    results.Add(
+                        MethodDeclaration(
+                            slotAdapterName,
+                            Array.Empty[Parameter](),
+                            resultType,
+                            BlockStatement(statements),
+                            visibility: Visibility.Default,
+                            explicitInterfaceType: mappedIface
+                        )
+                    )
+                }
+            }
+            return results
+        }
+
+        private func BuildExtensionRecordDeconstructionAdapter(method IMethodSymbol) MethodDeclaration? {
+            if !method.IsExtensionMethod ||
+                method.Name != "Deconstruct" ||
+                !method.ReturnsVoid ||
+                method.IsPartialDefinition ||
+                method
+                .Parameters
+                .Length < 2 ||
+                method
+                .Parameters
+                .Skip(1)
+                .Any(
+                (parameter IParameterSymbol) -> parameter.RefKind != RefKind.Out || parameter.Type.IsRefLikeType
+            ) ||
+                !this.ExtensionReceiverCanBeRecord(method.Parameters[0].Type) {
+                return nil
+            }
+            let signature = method.PartialImplementationPart ?? method
+            let syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            var parameters = this.MapParameters(signature, syntax?.ParameterList, skipFirst: false)
+            if signature.PartialDefinitionPart != nil {
+                parameters = this.ReconcilePartialMethodParameters(signature, parameters, isDeclaringPart: false)
+            }
+            let holderName = this.EmittedName(signature.ContainingType, signature.ContainingType.Name)!!
+            let targetMethodName = this.EmittedName(signature, signature.Name)!!
+            let adapterName = this.RecordDeconstructionAdapterName(method)
+            let occupied = HashSet[string](StringComparer.Ordinal){holderName, targetMethodName, adapterName}
+            for typeParameter in signature.TypeParameters {
+                occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
+            }
+            var receiverParameter = parameters[0]
+            if occupied.Contains(receiverParameter.Name) {
+                let receiverStem = receiverParameter.Name.TrimStart('$')
+                var renamedReceiver = receiverStem + "_2"
+                for var suffix = 3; occupied.Contains(renamedReceiver); suffix++ {
+                    renamedReceiver = receiverStem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                }
+                receiverParameter = Parameter(
+                    renamedReceiver,
+                    receiverParameter.Type,
+                    receiverParameter.IsVariadic,
+                    receiverParameter.RefKind,
+                    receiverParameter.DefaultValue,
+                    receiverParameter.Attributes
+                )
+            }
+            occupied.Add(receiverParameter.Name)
+            let outputTypes = parameters.Skip(1).Select((parameter Parameter) -> parameter.Type).ToList()
+            let outputParameters = signature.Parameters.Skip(1).ToList()
+            let statements = List[GStatement]()
+            let arguments = List[GExpression]{
+                PassStaticExtensionHelperReceiver(IdentifierExpression(receiverParameter.Name), signature)!!
+            }
+            let elements = List[GExpression]()
+            for var i = 0; i < outputParameters.Count; i++ {
+                let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
+                var name = stem
+                for var suffix = 2; occupied.Contains(name); suffix++ {
+                    name = stem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                }
+                occupied.Add(name)
+                let element = IdentifierExpression(name)
+                statements.Add(LocalDeclarationStatement(BindingKind.Var, name, outputTypes[i]))
+                arguments.Add(OutArgumentExpression("out", name))
+                elements.Add(
+                    if outputParameters.Count > 1 && IsPointerOrFunctionPointerType(outputParameters[i].Type) {
+                        cast[GExpression](
+                            ConversionExpression(NamedTypeReference("nuint"), element, isCheckedReferenceCast: true)
+                        )
+                    } else {
+                        cast[GExpression](element)
+                    }
+                )
+            }
+            let typeParameters = this.MapMethodTypeParameters(signature, signature.PartialDefinitionPart)
+            let typeArguments = signature
+                .TypeParameters
+                .Select(
+                (parameter ITypeParameterSymbol) -> cast[GTypeReference](
+                    NamedTypeReference(this.EmittedName(parameter, parameter.Name))
+                )
+            )
+                .ToList()
             statements.Add(
                 ExpressionStatement(
                     InvocationExpression(
-                        MemberAccessExpression(receiver, this.EmittedName(method, method.Name)),
-                        arguments
+                        MemberAccessExpression(
+                            IdentifierExpression(
+                                this.EmittedName(signature.ContainingType, signature.ContainingType.Name)
+                            ),
+                            this.EmittedName(signature, signature.Name)
+                        ),
+                        arguments,
+                        if typeArguments.Count == 0 {
+                            default(IReadOnlyList[GTypeReference]?)
+                        } else {
+                            typeArguments
+                        }
                     )
                 )
             )
@@ -208,12 +827,20 @@ partial class CSharpToGSharpTranslator {
             )
             return MethodDeclaration(
                 this.RecordDeconstructionAdapterName(method),
-                Array.Empty[Parameter](),
-                this.RecordDeconstructionResultType(types),
+                []Parameter{receiverParameter},
+                this.RecordDeconstructionResultType(method, outputTypes),
                 BlockStatement(statements),
+                typeParameters: typeParameters,
                 visibility: MapVisibility(method, this.context, method.DeclaringSyntaxReferences[0].GetSyntax())
             )
         }
+
+        private func ExtensionReceiverCanBeRecord(type ITypeSymbol) bool -> type.IsRecord ||
+            type.SpecialType == SpecialType.System_Object ||
+            type.SpecialType == SpecialType.System_ValueType ||
+            type.TypeKind == TypeKind.Interface ||
+            type.TypeKind == TypeKind.TypeParameter ||
+            (type is INamedTypeSymbol named && this.IsSourceOrMigratedRecordType(named))
 
         private func MapRecordDeconstructionParameterTypes(method IMethodSymbol) List[GTypeReference] {
             let signature = method.PartialImplementationPart ?? method
@@ -222,59 +849,1178 @@ partial class CSharpToGSharpTranslator {
             if signature.PartialDefinitionPart != nil {
                 parameters = this.ReconcilePartialMethodParameters(signature, parameters, isDeclaringPart: false)
             }
-            return parameters.Select((parameter Parameter) -> parameter.Type).ToList()
-        }
-
-        private func RecordDeconstructionResultType(types IReadOnlyList[GTypeReference]) GTypeReference ->
-        if types.Count == 1 {
-            types[0]
-        } else {
-            TupleTypeReference(types)
-        }
-
-        private func HasRenamedNonRecordDeconstructContract(method IMethodSymbol?) bool ->
-        method != nil && method.Name == "Deconstruct" && !EmittedNameAllocator.IsUserRecordDeconstruct(method) &&
-            this.EmittedName(method, method.Name) != method.Name
-
-        private func ReportUnsupportedRecordDeconstruction(
-            method IMethodSymbol?,
-            actualReceiverType ITypeSymbol? = nil
-        ) {
-            if this.HasRenamedNonRecordDeconstructContract(method) {
-                this.context.ReportUnsupported(
-                    method!!.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(),
-                    "deconstruction through a renamed interface or non-record contract needs dispatch-preserving lowering."
-                )
-                return
-            }
-            let extension = method?.ReducedFrom ?? method
-            if extension != nil && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
-                let receiverType = actualReceiverType as INamedTypeSymbol ??
-                    (
-                    if method?.ReducedFrom != nil {
-                        method?.ReceiverType
-                    } else {
-                        extension.Parameters[0].Type
-                    }
-                ) as INamedTypeSymbol ??
-                    extension
-                    .Parameters[0]
-                    .Type as INamedTypeSymbol
-                if receiverType?.IsRecord == true {
-                    let custom = ReceiverTypeHierarchy(receiverType).SelectMany(
-                        (owner INamedTypeSymbol) -> owner.GetMembers("Deconstruct").OfType[IMethodSymbol]()
-                    )
-                        .FirstOrDefault(EmittedNameAllocator.IsUserRecordDeconstruct)
-                    if custom != nil {
-                        // #5844: data synthesis can shadow the selected extension overload.
-                        this.context.ReportUnsupported(
-                            custom.DeclaringSyntaxReferences[0].GetSyntax(),
-                            "extension Deconstruct calls on records with user-declared Deconstruct methods need explicit call lowering."
-                        )
-                        return
+            let types = parameters.Select((parameter Parameter) -> parameter.Type).ToList()
+            if signature.DeclaringSyntaxReferences.IsDefaultOrEmpty && this.TryResolveMigratedProducerDeconstruct(
+                signature,
+                out var sourceMethod,
+                out _
+            ) &&
+                sourceMethod != nil {
+                let sourceSignature = sourceMethod.PartialImplementationPart ?? sourceMethod
+                for var i = 0; i < types.Count && i < sourceSignature.Parameters.Length; i++ {
+                    if this.IsTranslatorWidenedDeclaration(sourceSignature.Parameters[i]) {
+                        types[i] = MakeNullable(types[i])!!
                     }
                 }
             }
+            return types
+        }
+
+        private func MapRecordDeconstructionOutputParameterTypes(method IMethodSymbol) List[GTypeReference] {
+            let unreduced = method.ReducedFrom ?? method
+            let mapped = this.MapRecordDeconstructionParameterTypes(unreduced)
+            return if unreduced.IsExtensionMethod {
+                mapped.Skip(1).ToList()
+            } else {
+                mapped
+            }
+        }
+
+        private func GetDeconstructOutputParameters(method IMethodSymbol) IReadOnlyList[IParameterSymbol] {
+            let unreduced = method.ReducedFrom ?? method
+            return if unreduced.IsExtensionMethod {
+                unreduced.Parameters.Skip(1).ToList()
+            } else {
+                unreduced.Parameters
+            }
+        }
+
+        private func RecordDeconstructionResultType(
+            method IMethodSymbol,
+            types IReadOnlyList[GTypeReference]
+        ) GTypeReference {
+            if types.Count == 1 {
+                return types[0]
+            }
+            let outputParameters = this.GetDeconstructOutputParameters(method)
+            let carrierTypes = List[GTypeReference](types.Count)
+            for var i = 0; i < types.Count; i++ {
+                carrierTypes.Add(
+                    if i < outputParameters.Count && IsPointerOrFunctionPointerType(outputParameters[i].Type) {
+                        cast[GTypeReference](NamedTypeReference("nuint"))
+                    } else {
+                        types[i]
+                    }
+                )
+            }
+            return TupleTypeReference(carrierTypes)
+        }
+
+        private func IsPointerOrFunctionPointerType(type ITypeSymbol?) bool -> type != nil &&
+            (type.TypeKind == TypeKind.Pointer || type.TypeKind == TypeKind.FunctionPointer)
+
+        private func HasPointerDeconstructTupleCarrier(
+            method IMethodSymbol?,
+            actualReceiverType ITypeSymbol? = nil
+        ) bool {
+            if method == nil || !this.UsesRecordDeconstructionAdapter(method, actualReceiverType) {
+                return false
+            }
+            let outputs = this.GetDeconstructOutputParameters(method)
+            return outputs.Count > 1 && outputs.Any(
+                (parameter IParameterSymbol) -> this.IsPointerOrFunctionPointerType(parameter.Type)
+            )
+        }
+
+        private func IsPointerDeconstructTupleOutput(
+            method IMethodSymbol?,
+            index int32,
+            actualReceiverType ITypeSymbol? = nil
+        ) bool {
+            if method == nil || !this.HasPointerDeconstructTupleCarrier(method, actualReceiverType) {
+                return false
+            }
+            let outputs = this.GetDeconstructOutputParameters(method)
+            return index >= 0 && index < outputs.Count && this.IsPointerOrFunctionPointerType(outputs[index].Type)
+        }
+
+        private func TypeHasUnsafeSignatureMember(members IEnumerable[MemberDeclarationSyntax]) bool {
+            for member in members {
+                if member is not MethodDeclarationSyntax method || !method.Modifiers.Any(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword
+                ) {
+                    continue
+                }
+                using let modelScope = this.context.UseSemanticModelFor(method.SyntaxTree)
+                if this.context.GetDeclaredSymbol(method) is IMethodSymbol symbol &&
+                    (
+                    this.TypeContainsPointerOrFunctionPointer(symbol.ReturnType) || symbol.Parameters.Any(
+                        (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                    )
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func TypeContainsPointerOrFunctionPointer(type ITypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type.TypeKind == TypeKind.Pointer || type.TypeKind == TypeKind.FunctionPointer {
+                return true
+            }
+            return switch type {
+                case array is IArrayTypeSymbol: this.TypeContainsPointerOrFunctionPointer(array.ElementType)
+                case named is INamedTypeSymbol: named.TypeArguments.Any(this.TypeContainsPointerOrFunctionPointer)
+                default: false
+            }
+        }
+
+        private func DirectlyImplementsImportedDeconstructContract(method IMethodSymbol?) bool {
+            if method == nil ||
+                method.IsStatic ||
+                (method.Name != "Deconstruct" && !method.Name.EndsWith(".Deconstruct", StringComparison.Ordinal)) {
+                return false
+            }
+            if method.IsOverride {
+                return method.OverriddenMethod != nil &&
+                    method.OverriddenMethod!!
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !this.TryResolveMigratedProducerDeconstruct(method.OverriddenMethod, out _, out _)
+            }
+            for explicitSlot in method.ExplicitInterfaceImplementations {
+                if explicitSlot.Name == "Deconstruct" &&
+                    explicitSlot
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !this.TryResolveMigratedProducerDeconstruct(explicitSlot, out _, out _) {
+                    return true
+                }
+            }
+            let owner = method.ContainingType
+            if owner == nil {
+                return false
+            }
+            for iface in owner.AllInterfaces {
+                if !iface.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                    continue
+                }
+                for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                    if !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(owner.FindImplementationForInterfaceMember(slot), method) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func GetImportedDeconstructContractMethods(symbol INamedTypeSymbol) List[IMethodSymbol] {
+            let results = List[IMethodSymbol]()
+            let seen = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+            for method in symbol.GetMembers().OfType[IMethodSymbol]() {
+                if !method.IsPartialDefinition && EmittedNameAllocator.IsUserRecordDeconstruct(method) &&
+                    this.DirectlyImplementsImportedDeconstructContract(method) && seen.Add(method) {
+                    results.Add(method)
+                }
+            }
+            let baseInterfaces = if symbol.BaseType is {} baseType {
+                HashSet[INamedTypeSymbol](baseType.AllInterfaces, SymbolEqualityComparer.Default)
+            } else {
+                HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
+            }
+            for iface in symbol.AllInterfaces {
+                if !iface.DeclaringSyntaxReferences.IsDefaultOrEmpty || baseInterfaces.Contains(iface) {
+                    continue
+                }
+                for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                    if this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) {
+                        continue
+                    }
+                    if symbol.FindImplementationForInterfaceMember(slot) is IMethodSymbol impl &&
+                        !impl.IsStatic &&
+                        !impl.IsPartialDefinition &&
+                        (
+                        EmittedNameAllocator.IsUserRecordDeconstruct(impl) ||
+                            this
+                            .nameAllocator
+                            .HasRenamedDeconstructContract(impl) || this.TryResolveMigratedProducerDeconstruct(
+                            impl,
+                            out _,
+                            out _
+                        )
+                    ) &&
+                        seen.Add(impl) {
+                        results.Add(impl)
+                    }
+                }
+            }
+            return results
+        }
+
+        private func GetInheritedImportedDeconstructContractMethods(symbol INamedTypeSymbol) List[IMethodSymbol] ->
+        this
+            .GetImportedDeconstructContractMethods(symbol)
+            .Where((method IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(method.ContainingType, symbol))
+            .ToList()
+
+        private func GetInheritedRenamedDeconstructInterfaceContracts(symbol INamedTypeSymbol) List[
+            (Slot IMethodSymbol, Implementation IMethodSymbol)
+        ] {
+            let results = List[(Slot IMethodSymbol, Implementation IMethodSymbol)]()
+            let seenSlots = HashSet[IMethodSymbol](SymbolEqualityComparer.Default)
+            let baseInterfaces = if symbol.BaseType is {} baseType {
+                HashSet[INamedTypeSymbol](baseType.AllInterfaces, SymbolEqualityComparer.Default)
+            } else {
+                HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
+            }
+            for iface in symbol.AllInterfaces {
+                for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                    if !this.nameAllocator.HasRenamedDeconstructContract(slot) &&
+                        !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) {
+                        continue
+                    }
+                    let slotName = this.EmittedName(slot, slot.Name)
+                    if slotName == nil || slotName == "Deconstruct" {
+                        continue
+                    }
+                    if symbol.FindImplementationForInterfaceMember(slot) is IMethodSymbol impl &&
+                        !impl.IsStatic &&
+                        !impl.IsPartialDefinition &&
+                        (
+                        impl.IsImplicitlyDeclared ||
+                            (
+                            !SymbolEqualityComparer.Default.Equals(impl.ContainingType, symbol) && this.EmittedName(
+                                impl,
+                                impl.Name
+                            ) != slotName
+                        )
+                    ) {
+                        if symbol.BaseType is {} existingBase && baseInterfaces.Contains(iface) &&
+                            !existingBase
+                            .DeclaringSyntaxReferences
+                            .IsDefaultOrEmpty &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(existingBase.FindImplementationForInterfaceMember(slot), impl) {
+                            continue
+                        }
+                        if seenSlots.Add(slot) {
+                            results.Add((slot, impl))
+                        }
+                    }
+                }
+            }
+            return results
+        }
+
+        private func HasImportedDeconstructContractBridge(symbol INamedTypeSymbol) bool ->
+        this.GetImportedDeconstructContractMethods(symbol).Count > 0
+
+        private func NeedsValueTypeExplicitDeconstructHelper(method IMethodSymbol?) bool {
+            if method == nil ||
+                method.IsStatic ||
+                method.IsPartialDefinition ||
+                !method
+                .ContainingType
+                .IsValueType ||
+                method
+                .ExplicitInterfaceImplementations
+                .IsDefaultOrEmpty {
+                return false
+            }
+            let explicitSlot = method.ExplicitInterfaceImplementations[0]
+            return this.nameAllocator.HasRenamedDeconstructContract(method) ||
+                this
+                .nameAllocator
+                .HasRenamedDeconstructContract(explicitSlot) || this.TryResolveMigratedProducerDeconstruct(
+                explicitSlot,
+                out _,
+                out _
+            )
+        }
+
+        private func ValueTypeExplicitDeconstructHelperName(method IMethodSymbol) string {
+            let original = method.OriginalDefinition
+            if this.valueTypeExplicitDeconstructHelperNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
+            let occupied = HashSet[string](
+                ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
+                    (member ISymbol) -> this.EmittedName(member, member.Name)!!
+                ),
+                StringComparer.Ordinal
+            )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
+            let ordinal = owner
+                .GetMembers()
+                .OfType[IMethodSymbol]()
+                .Where((candidate IMethodSymbol) -> !candidate.ExplicitInterfaceImplementations.IsDefaultOrEmpty)
+                .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
+                .Count()
+            const stem = "deconstructExplicit"
+            var candidateName = stem
+            var remaining = ordinal
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+                if !occupied.Contains(candidateName) {
+                    remaining--
+                }
+                candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName,
+                role: "explicit-helper"
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.valueTypeExplicitDeconstructHelperNames[original] = assignedName
+            return assignedName
+        }
+
+        private func BuildValueTypeExplicitDeconstructForwarder(method IMethodSymbol) MethodDeclaration? {
+            if !this.NeedsValueTypeExplicitDeconstructHelper(method) {
+                return nil
+            }
+            let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let explicitInterfaceType = this.typeMapper.Map(
+                method.ExplicitInterfaceImplementations[0].ContainingType,
+                this.context,
+                syntaxNode?.GetLocation()
+            )
+            if explicitInterfaceType == nil {
+                return nil
+            }
+            return this.BuildDeconstructContractForwardingMethod(
+                method,
+                this.EmittedName(method, method.Name)!!,
+                ThisExpression(),
+                this.ValueTypeExplicitDeconstructHelperName(method),
+                isOpen: false,
+                isOverride: false,
+                visibility: Visibility.Default,
+                explicitInterfaceType: explicitInterfaceType
+            )
+        }
+
+        private func NeedsProtectedImportedDeconstructHook(method IMethodSymbol?) bool -> method != nil &&
+            !method.IsStatic &&
+            !method.IsPartialDefinition &&
+            (
+            method.DeclaredAccessibility == Accessibility.Protected ||
+                method.DeclaredAccessibility == Accessibility.ProtectedAndInternal
+        ) &&
+            EmittedNameAllocator.IsUserRecordDeconstruct(method) && this.DirectlyImplementsImportedDeconstructContract(
+            method
+        )
+
+        private func ImportedProtectedDeconstructHookName(method IMethodSymbol) string {
+            let original = method.OriginalDefinition
+            if this.importedProtectedDeconstructHookNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
+            let occupied = HashSet[string](
+                ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
+                    (member ISymbol) -> this.EmittedName(member, member.Name)!!
+                ),
+                StringComparer.Ordinal
+            )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
+            let ordinal = owner
+                .GetMembers("Deconstruct")
+                .OfType[IMethodSymbol]()
+                .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
+                .Count()
+            const stem = "deconstructBridge"
+            var candidateName = stem
+            var remaining = ordinal
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+                if !occupied.Contains(candidateName) {
+                    remaining--
+                }
+                candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName,
+                role: "protected-hook"
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.importedProtectedDeconstructHookNames[original] = assignedName
+            return assignedName
+        }
+
+        private func BuildImportedProtectedDeconstructHook(
+            method IMethodSymbol,
+            ownerKind TypeDeclarationKind
+        ) MethodDeclaration? {
+            if ownerKind != TypeDeclarationKind.DataClass || !this.NeedsProtectedImportedDeconstructHook(method) {
+                return nil
+            }
+            return this.BuildDeconstructContractForwardingMethod(
+                method,
+                this.ImportedProtectedDeconstructHookName(method),
+                ThisExpression(),
+                this.EmittedName(method, method.Name)!!,
+                isOpen: false,
+                isOverride: false,
+                visibility: Visibility.Internal
+            )
+        }
+
+        private func IsExplicitImportedDeconstructOnlyInterface(method IMethodSymbol) bool {
+            if method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
+                return false
+            }
+            let iface = method.ExplicitInterfaceImplementations[0].ContainingType
+            if iface == nil || !iface.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                return false
+            }
+            let owner = method.ContainingType
+            if owner == nil {
+                return false
+            }
+            for candidateIface in[]INamedTypeSymbol{iface}.Concat(iface.AllInterfaces) {
+                for member in candidateIface.GetMembers() {
+                    if member is not IMethodSymbol ifaceMethod || ifaceMethod.Name != "Deconstruct" {
+                        return false
+                    }
+                    if owner.FindImplementationForInterfaceMember(ifaceMethod) == nil {
+                        return false
+                    }
+                }
+            }
+            return true
+        }
+
+        private func HasConflictingImportedDeconstructSignature(method IMethodSymbol) bool {
+            let owner = method.ContainingType
+            if owner == nil {
+                return false
+            }
+            for other in this.GetImportedDeconstructContractMethods(owner) {
+                if SymbolEqualityComparer.Default.Equals(other, method) ||
+                    other
+                    .Parameters
+                    .Length != method
+                    .Parameters
+                    .Length ||
+                    other.Arity != method.Arity {
+                    continue
+                }
+                var sameParameters = true
+                for var i = 0; i < method.Parameters.Length; i++ {
+                    if other
+                        .Parameters[i]
+                        .RefKind != method
+                        .Parameters[i]
+                        .RefKind ||
+                        !SymbolEqualityComparer
+                        .Default
+                        .Equals(other.Parameters[i].Type, method.Parameters[i].Type) {
+                        sameParameters = false
+                        break
+                    }
+                }
+                if sameParameters {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func RemoveBridgedExplicitInterfaces(
+            symbol INamedTypeSymbol,
+            node TypeDeclarationSyntax,
+            interfaces List[GTypeReference]
+        ) {
+            let bridged = HashSet[string](StringComparer.Ordinal)
+            for method in this.GetImportedDeconstructContractMethods(symbol) {
+                if this.IsExplicitImportedDeconstructOnlyInterface(method) {
+                    let iface = method.ExplicitInterfaceImplementations[0].ContainingType
+                    if this.typeMapper.Map(iface, this.context, node.GetLocation()) is {} mapped {
+                        bridged.Add(GSharpPrinter.RenderTypeReference(mapped))
+                    }
+                }
+            }
+            if bridged.Count == 0 {
+                return
+            }
+            for var i = interfaces.Count - 1; i >= 0; i-- {
+                if bridged.Contains(GSharpPrinter.RenderTypeReference(interfaces[i])) {
+                    interfaces.RemoveAt(i)
+                }
+            }
+        }
+
+        private func BuildImplicitRecordDeconstructMethod(
+            slot IMethodSymbol,
+            impl IMethodSymbol,
+            emittedMethodName string,
+            isOpen bool
+        ) MethodDeclaration {
+            let syntax = slot.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            using let modelScope = if syntax != nil {
+                this.context.UseSemanticModelFor(syntax.SyntaxTree)
+            } else {
+                default(IDisposable?)
+            }
+            let parameters = this.MapParameters(slot, syntax?.ParameterList, skipFirst: false)
+            let statements = List[GStatement](parameters.Count)
+            for var i = 0; i < parameters.Count && i < impl.Parameters.Length; i++ {
+                let implParam = impl.Parameters[i]
+                let prop = ReceiverTypeHierarchy(impl.ContainingType).SelectMany(
+                    (owner INamedTypeSymbol) -> owner.GetMembers(implParam.Name).OfType[IPropertySymbol]()
+                )
+                    .FirstOrDefault()
+                let memberName = if prop != nil {
+                    this.EmittedName(prop, prop.Name)!!
+                } else {
+                    this.EmittedName(implParam, implParam.Name)!!
+                }
+                statements.Add(
+                    AssignmentStatement(
+                        IdentifierExpression(parameters[i].Name),
+                        MemberAccessExpression(ThisExpression(), memberName)
+                    )
+                )
+            }
+            return MethodDeclaration(
+                emittedMethodName,
+                parameters,
+                returnType: nil,
+                BlockStatement(statements),
+                visibility: Visibility.Public,
+                isOpen: isOpen
+            )
+        }
+
+        private func BuildDeconstructContractForwardingMethod(
+            method IMethodSymbol,
+            emittedMethodName string,
+            targetReceiver GExpression,
+            targetMethodName string,
+            isOpen bool,
+            isOverride bool,
+            visibility Visibility = Visibility.Public,
+            explicitInterfaceType GTypeReference? = nil
+        ) MethodDeclaration {
+            let signature = method.PartialImplementationPart ?? method
+            let syntax = signature.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            using let modelScope = if syntax != nil {
+                this.context.UseSemanticModelFor(syntax.SyntaxTree)
+            } else {
+                default(IDisposable?)
+            }
+            var parameters = this.MapParameters(signature, syntax?.ParameterList, skipFirst: false)
+            if signature.PartialDefinitionPart != nil {
+                parameters = this.ReconcilePartialMethodParameters(signature, parameters, isDeclaringPart: false)
+            }
+            let returnType = if signature.ReturnsVoid {
+                default(GTypeReference?)
+            } else if syntax != nil {
+                this.MapReturnType(signature, syntax, preserveEnvelope: true)
+            } else {
+                this.typeMapper.Map(signature.ReturnType, this.context, location: nil)
+            }
+            let typeParameters = this.MapMethodTypeParameters(signature, signature.PartialDefinitionPart)
+            let typeArguments = if signature.TypeParameters.Length == 0 {
+                default(IReadOnlyList[GTypeReference]?)
+            } else {
+                signature
+                    .TypeParameters
+                    .Select(
+                    (tp ITypeParameterSymbol) -> cast[GTypeReference](NamedTypeReference(this.EmittedName(tp, tp.Name)))
+                )
+                    .ToList()
+            }
+            let arguments = List[GExpression](parameters.Count)
+            for var i = 0; i < parameters.Count; i++ {
+                let refKind = if i < signature.Parameters.Length {
+                    signature.Parameters[i].RefKind
+                } else {
+                    RefKind.None
+                }
+                let argument = switch refKind {
+                    case RefKind.Out: cast[GExpression](OutArgumentExpression("out", parameters[i].Name))
+                    case RefKind.Ref: cast[GExpression](UnaryExpression("&", IdentifierExpression(parameters[i].Name)))
+                    case RefKind.In: cast[GExpression](OutArgumentExpression("in", parameters[i].Name))
+                    default: cast[GExpression](IdentifierExpression(parameters[i].Name))
+                }
+                arguments.Add(argument)
+            }
+            let call = InvocationExpression(
+                MemberAccessExpression(targetReceiver, targetMethodName),
+                arguments,
+                typeArguments
+            )
+            let isRefReturn = signature.ReturnsByRef || signature.ReturnsByRefReadonly
+            let bodyStatement GStatement = if signature.ReturnsVoid {
+                ExpressionStatement(call)
+            } else {
+                ReturnStatement(call, isRef: isRefReturn)
+            }
+            return MethodDeclaration(
+                emittedMethodName,
+                parameters,
+                returnType,
+                BlockStatement([]GStatement{bodyStatement}),
+                typeParameters: typeParameters,
+                visibility: visibility,
+                isOpen: isOpen,
+                isOverride: isOverride,
+                explicitInterfaceType: explicitInterfaceType,
+                isRefReturn: isRefReturn,
+                isReadOnlyRefReturn: signature.ReturnsByRefReadonly
+            )
+        }
+
+        private func ImportedBaseDeconstructHelperName(method IMethodSymbol) string {
+            let original = method.OriginalDefinition
+            if this.importedBaseDeconstructHelperNames.TryGetValue(original, out var existing) {
+                return existing
+            }
+            let owner = original.ContainingType
+            let occupied = HashSet[string](
+                ReceiverTypeHierarchy(owner).SelectMany((type INamedTypeSymbol) -> type.GetMembers()).Select(
+                    (member ISymbol) -> this.EmittedName(member, member.Name)!!
+                ),
+                StringComparer.Ordinal
+            )
+            occupied.UnionWith(this.nameAllocator.GetDeconstructionReservedNames(original))
+            let ordinal = this
+                .GetImportedDeconstructContractMethods(owner)
+                .Where((candidate IMethodSymbol) -> candidate.IsOverride)
+                .OrderBy((candidate IMethodSymbol) -> candidate.ToDisplayString(), StringComparer.Ordinal)
+                .TakeWhile((candidate IMethodSymbol) -> !SymbolEqualityComparer.Default.Equals(candidate, original))
+                .Count()
+            const stem = "baseDeconstruct"
+            var candidateName = stem
+            var remaining = ordinal
+            var suffix = 2
+            for ; occupied.Contains(candidateName) || remaining > 0; suffix++ {
+                if !occupied.Contains(candidateName) {
+                    remaining--
+                }
+                candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            var assignedName = candidateName
+            let membersToReserve = cast[IReadOnlyCollection[IMethodSymbol]]([]IMethodSymbol{original})
+            while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
+                membersToReserve,
+                candidateName,
+                out assignedName,
+                role: "base-helper"
+            ) {
+                do {
+                    candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
+                    suffix++
+                } while occupied.Contains(candidateName)
+            }
+            this.importedBaseDeconstructHelperNames[original] = assignedName
+            return assignedName
+        }
+
+        private func TryGetImportedBaseDeconstructHelperName(
+            site SyntaxNode,
+            baseMethod IMethodSymbol,
+            out helperName string?
+        ) bool {
+            helperName = nil
+            let enclosingType = this
+                .state
+                .CurrentEmittedAggregate ??
+                this
+                .context
+                .SemanticModel
+                .GetEnclosingSymbol(site.SpanStart)
+                ?.ContainingType
+            if enclosingType == nil || !enclosingType.IsRecord || enclosingType.IsValueType {
+                return false
+            }
+            for contractMethod in this.GetImportedDeconstructContractMethods(enclosingType) {
+                if contractMethod.IsOverride &&
+                    contractMethod.OverriddenMethod != nil &&
+                    !contractMethod.OverriddenMethod!!.IsAbstract &&
+                    SymbolEqualityComparer
+                    .Default
+                    .Equals(contractMethod.OverriddenMethod!!.OriginalDefinition, baseMethod.OriginalDefinition) {
+                    helperName = this.ImportedBaseDeconstructHelperName(contractMethod)
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func BuildImportedDeconstructForwarder(
+            method IMethodSymbol,
+            ownerKind TypeDeclarationKind
+        ) MethodDeclaration? {
+            if ownerKind != TypeDeclarationKind.Class && ownerKind != TypeDeclarationKind.Struct {
+                return nil
+            }
+            if method.IsStatic || method.IsPartialDefinition || this.EmittedName(method, method.Name) == method.Name ||
+                !this.DirectlyImplementsImportedDeconstructContract(method) {
+                return nil
+            }
+            let isOverride = method.IsOverride &&
+                method.OverriddenMethod != nil &&
+                method.OverriddenMethod!!
+                .DeclaringSyntaxReferences
+                .IsDefaultOrEmpty
+            let slotVisibility = if isOverride &&
+                (
+                method.DeclaredAccessibility == Accessibility.Protected ||
+                    method.DeclaredAccessibility == Accessibility.ProtectedAndInternal
+            ) {
+                Visibility.Protected
+            } else {
+                Visibility.Public
+            }
+            return this.BuildDeconstructContractForwardingMethod(
+                method,
+                "Deconstruct",
+                ThisExpression(),
+                this.EmittedName(method, method.Name)!!,
+                isOpen: ownerKind == TypeDeclarationKind.Class && !method.ContainingType.IsSealed && !isOverride,
+                isOverride: isOverride,
+                visibility: slotVisibility
+            )
+        }
+
+        private func SelectsBaseCopyConstructor(symbol INamedTypeSymbol, baseCopyCtor IMethodSymbol) bool {
+            for ctor in symbol.InstanceConstructors {
+                if ctor.IsImplicitlyDeclared {
+                    continue
+                }
+                for reference in ctor.DeclaringSyntaxReferences {
+                    if reference.GetSyntax() is ConstructorDeclarationSyntax{Initializer: {} initializer} &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(
+                        (
+                            this
+                                .context
+                                .Compilation
+                                .GetSemanticModel(reference.SyntaxTree)
+                                .GetSymbolInfo(initializer)
+                                .Symbol as IMethodSymbol
+                        )?.OriginalDefinition,
+                        baseCopyCtor.OriginalDefinition
+                    ) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        private func BuildImportedDeconstructContractBridge(
+            symbol INamedTypeSymbol,
+            node TypeDeclarationSyntax,
+            baseType GTypeReference?,
+            typeParameters IReadOnlyList[TypeParameter],
+            isUnsafe bool
+        ) TypeDeclaration? {
+            let contractMethods = this.GetImportedDeconstructContractMethods(symbol)
+            if contractMethods.Count == 0 {
+                return nil
+            }
+            let bridgeName = this.AllocateImportedDeconstructBridgeName(symbol)
+            let bridgeMembers = List[GMember]()
+            var bridgeIsUnsafe = isUnsafe
+            if symbol.BaseType is {} baseSymbol && baseSymbol.SpecialType != SpecialType.System_Object {
+                let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                let isSourceOrMigratedBase = !baseSymbol
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty ||
+                    (
+                    compilations != nil && ObliviousNullabilityAnalyzer.RunSourceDeclarations(
+                        baseSymbol.OriginalDefinition,
+                        compilations
+                    )
+                        .Any()
+                )
+                let accessibleConstructors = List[IMethodSymbol]()
+                for ctor in baseSymbol.InstanceConstructors {
+                    if !this.context.Compilation.IsSymbolAccessibleWithin(ctor, symbol) {
+                        continue
+                    }
+                    let isBaseCopyCtor = ctor
+                        .Parameters
+                        .Length == 1 &&
+                        ctor
+                        .Parameters[0]
+                        .RefKind == RefKind.None &&
+                        SymbolEqualityComparer
+                        .Default
+                        .Equals(ctor.Parameters[0].Type, baseSymbol)
+                    if isBaseCopyCtor {
+                        if !this.SelectsBaseCopyConstructor(symbol, ctor) {
+                            continue
+                        }
+                        if isSourceOrMigratedBase {
+                            this.context.ReportUnsupported(
+                                node,
+                                "record Deconstruct bridge cannot forward an explicit base copy-constructor call to a source record."
+                            )
+                            return nil
+                        }
+                    }
+                    accessibleConstructors.Add(ctor)
+                }
+                if accessibleConstructors.Any((ctor IMethodSymbol) -> ctor.Parameters.Length > 0) {
+                    for ctor in accessibleConstructors {
+                        if ctor.Parameters.Any(
+                            (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                        ) {
+                            bridgeIsUnsafe = true
+                        }
+                        let ctorSyntax = ctor
+                            .DeclaringSyntaxReferences
+                            .FirstOrDefault()
+                            ?.GetSyntax() as ConstructorDeclarationSyntax
+                        using let ctorModelScope = if ctorSyntax != nil {
+                            this.context.UseSemanticModelFor(ctorSyntax.SyntaxTree)
+                        } else {
+                            default(IDisposable?)
+                        }
+                        let ctorParameters = this.MapParameters(ctor, ctorSyntax?.ParameterList, skipFirst: false)
+                        let baseArguments = List[GExpression](ctorParameters.Count)
+                        for var i = 0; i < ctorParameters.Count; i++ {
+                            let refKind = if i < ctor.Parameters.Length {
+                                ctor.Parameters[i].RefKind
+                            } else {
+                                RefKind.None
+                            }
+                            let arg = switch refKind {
+                                case RefKind.Out: cast[GExpression](
+                                    OutArgumentExpression("out", ctorParameters[i].Name)
+                                )
+                                case RefKind.Ref: cast[GExpression](
+                                    UnaryExpression("&", IdentifierExpression(ctorParameters[i].Name))
+                                )
+                                case RefKind.In: cast[GExpression](OutArgumentExpression("in", ctorParameters[i].Name))
+                                default: cast[GExpression](IdentifierExpression(ctorParameters[i].Name))
+                            }
+                            baseArguments.Add(arg)
+                        }
+                        let ctorVisibility = switch ctor.DeclaredAccessibility {
+                            case Accessibility.Protected, Accessibility.ProtectedAndInternal: Visibility.Protected
+                            case Accessibility.Internal: Visibility.Internal
+                            default: Visibility.Public
+                        }
+                        bridgeMembers.Add(
+                            ConstructorDeclaration(
+                                ctorParameters,
+                                BlockStatement(Array.Empty[GStatement]()),
+                                baseArguments: baseArguments,
+                                visibility: ctorVisibility
+                            )
+                        )
+                    }
+                }
+            }
+            let selfType = NamedTypeReference(
+                this.EmittedName(symbol, symbol.Name),
+                typeParameters.Select(
+                    (parameter TypeParameter) -> cast[GTypeReference](NamedTypeReference(parameter.Name))
+                )
+                    .ToList()
+            )
+            let bridgeInterfaces = List[GTypeReference]()
+            let seenBridgeInterfaces = HashSet[string](StringComparer.Ordinal)
+            for method in contractMethods {
+                let signature = method.PartialImplementationPart ?? method
+                if this.TypeContainsPointerOrFunctionPointer(signature.ReturnType) || signature.Parameters.Any(
+                    (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                ) {
+                    bridgeIsUnsafe = true
+                }
+                let isDirectlyOnSymbol = SymbolEqualityComparer.Default.Equals(method.ContainingType, symbol)
+                let isOverride = isDirectlyOnSymbol && method.IsOverride
+                let useProtectedHook = isDirectlyOnSymbol && this.NeedsProtectedImportedDeconstructHook(method)
+                let targetMethodName = if useProtectedHook {
+                    this.ImportedProtectedDeconstructHookName(method)
+                } else {
+                    this.EmittedName(method, method.Name)!!
+                }
+                var explicitBridgeIface GTypeReference? = nil
+                if isDirectlyOnSymbol && this.IsExplicitImportedDeconstructOnlyInterface(method) {
+                    let explicitIface = method.ExplicitInterfaceImplementations[0].ContainingType
+                    explicitBridgeIface = this.typeMapper.Map(explicitIface, this.context, node.GetLocation())
+                    if explicitBridgeIface != nil && seenBridgeInterfaces.Add(
+                        GSharpPrinter.RenderTypeReference(explicitBridgeIface)
+                    ) {
+                        bridgeInterfaces.Add(explicitBridgeIface)
+                    }
+                }
+                let bridgeMethodVisibility = if explicitBridgeIface != nil {
+                    Visibility.Default
+                } else if isOverride &&
+                    (
+                    method.DeclaredAccessibility == Accessibility.Protected ||
+                        method.DeclaredAccessibility == Accessibility.ProtectedAndInternal
+                ) {
+                    Visibility.Protected
+                } else {
+                    Visibility.Public
+                }
+                bridgeMembers.Add(
+                    this.BuildDeconstructContractForwardingMethod(
+                        method,
+                        "Deconstruct",
+                        ParenthesizedExpression(
+                            ConversionExpression(selfType, ThisExpression(), isCheckedReferenceCast: true)
+                        ),
+                        targetMethodName,
+                        isOpen: explicitBridgeIface == nil,
+                        isOverride: isOverride,
+                        visibility: bridgeMethodVisibility,
+                        explicitInterfaceType: explicitBridgeIface
+                    )
+                )
+                if isOverride && method.OverriddenMethod != nil && !method.OverriddenMethod!!.IsAbstract {
+                    bridgeMembers.Add(
+                        this.BuildDeconstructContractForwardingMethod(
+                            method,
+                            this.ImportedBaseDeconstructHelperName(method),
+                            IdentifierExpression("base"),
+                            "Deconstruct",
+                            isOpen: false,
+                            isOverride: false,
+                            visibility: bridgeMethodVisibility
+                        )
+                    )
+                }
+            }
+            return TypeDeclaration(
+                TypeDeclarationKind.Class,
+                bridgeName,
+                typeParameters: typeParameters,
+                baseType: baseType,
+                interfaces: if bridgeInterfaces.Count == 0 {
+                    default(IReadOnlyList[GTypeReference]?)
+                } else {
+                    bridgeInterfaces
+                },
+                members: bridgeMembers,
+                visibility: MapVisibility(symbol, this.context, node),
+                isAbstract: true,
+                isUnsafe: bridgeIsUnsafe
+            )
+        }
+
+        private func AllocateImportedDeconstructBridgeName(symbol INamedTypeSymbol) string {
+            let occupied = HashSet[string](StringComparer.Ordinal)
+            for member in symbol.GetMembers() {
+                occupied.Add(member.Name)
+                if this.EmittedName(member, member.Name) is {} emittedSelfMember {
+                    occupied.Add(emittedSelfMember)
+                }
+            }
+            if symbol.ContainingType is {} containingType {
+                for member in containingType.GetMembers() {
+                    occupied.Add(member.Name)
+                    if this.EmittedName(member, member.Name) is {} emittedMember {
+                        occupied.Add(emittedMember)
+                    }
+                }
+            } else if symbol.ContainingNamespace is {} containingNamespace {
+                for member in containingNamespace.GetMembers() {
+                    occupied.Add(member.Name)
+                    if this.EmittedName(member, member.Name) is {} emittedMember {
+                        occupied.Add(emittedMember)
+                    }
+                }
+            }
+            let stem = symbol.Name.TrimStart('$') + "DeconstructBridge"
+            var candidate = stem
+            for var suffix = 2; occupied.Contains(candidate); suffix++ {
+                candidate = stem + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            return candidate
+        }
+
+        private func HasRenamedNonRecordDeconstructContract(method IMethodSymbol?) bool ->
+        method != nil &&
+            (method.Name == "Deconstruct" || method.Name.EndsWith(".Deconstruct", StringComparison.Ordinal)) &&
+            !this.IsEffectiveUserRecordDeconstruct(method) && this.EmittedName(method, "Deconstruct") != "Deconstruct"
+
+        private func IsEffectiveUserRecordDeconstruct(method IMethodSymbol?) bool {
+            if EmittedNameAllocator.IsUserRecordDeconstruct(method) {
+                return true
+            }
+            return this.TryResolveMigratedProducerDeconstruct(method, out var sourceMethod, out _) &&
+                EmittedNameAllocator.IsUserRecordDeconstruct(sourceMethod)
+        }
+
+        private func IsSourceOrMigratedRecordType(type INamedTypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type.IsRecord {
+                return true
+            }
+            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            if compilations != nil {
+                for source in ObliviousNullabilityAnalyzer.RunSourceDeclarations(type.OriginalDefinition, compilations)
+                    .OfType[INamedTypeSymbol]() {
+                    if source.IsRecord {
+                        return true
+                    }
+                }
+            }
+            return ReceiverTypeHierarchy(type).SelectMany(
+                (owner INamedTypeSymbol) -> owner.GetMembers("Deconstruct").OfType[IMethodSymbol]()
+            )
+                .Any(this.IsEffectiveUserRecordDeconstruct)
+        }
+
+        private func IsExtensionRecordDeconstruct(method IMethodSymbol?, actualReceiverType ITypeSymbol? = nil) bool {
+            let extension = method?.ReducedFrom ?? method
+            if extension == nil ||
+                !extension.IsExtensionMethod ||
+                extension.Name != "Deconstruct" ||
+                extension
+                .Parameters
+                .Length < 2 {
+                return false
+            }
+            let receiverType = actualReceiverType as INamedTypeSymbol ??
+                (
+                if method?.ReducedFrom != nil {
+                    method?.ReceiverType
+                } else {
+                    extension.Parameters[0].Type
+                }
+            ) as INamedTypeSymbol ??
+                extension
+                .Parameters[0]
+                .Type as INamedTypeSymbol
+            if !this.IsSourceOrMigratedRecordType(receiverType) {
+                return false
+            }
+            return ReceiverTypeHierarchy(receiverType!!).SelectMany(
+                (owner INamedTypeSymbol) -> owner.GetMembers("Deconstruct").OfType[IMethodSymbol]()
+            )
+                .Any(this.IsEffectiveUserRecordDeconstruct)
+        }
+
+        private func IsImportedRecordOrRecordStruct(type INamedTypeSymbol?) bool {
+            if type == nil {
+                return false
+            }
+            if type.IsRecord {
+                return true
+            }
+            if type.TypeKind != TypeKind.Struct {
+                return false
+            }
+            if type
+                .GetMembers("PrintMembers")
+                .OfType[IMethodSymbol]()
+                .Any(
+                (member IMethodSymbol) -> member
+                    .Parameters
+                    .Length == 1 &&
+                    member
+                    .Parameters[0]
+                    .Type
+                    .ToDisplayString() == "System.Text.StringBuilder"
+            ) {
+                return true
+            }
+            return type
+                .GetMembers("op_Equality")
+                .OfType[IMethodSymbol]()
+                .Any(
+                (member IMethodSymbol) -> member.GetAttributes().Any(
+                    (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
+                    "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
+                )
+            )
+        }
+
+        private func IsImportedRecordUserDeconstruct(method IMethodSymbol?) bool -> method != nil &&
+            method.Name == "Deconstruct" &&
+            method
+            .DeclaringSyntaxReferences
+            .IsDefaultOrEmpty &&
+            this.IsImportedRecordOrRecordStruct(method.ContainingType) && !this.TryResolveMigratedProducerDeconstruct(
+            method,
+            out _,
+            out _
+        ) &&
+            !method
+            .GetAttributes().Any(
+            (attribute AttributeData) -> attribute.AttributeClass?.ToDisplayString() ==
+            "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
+        )
+
+        private func UsesRecordDeconstructionAdapter(
+            method IMethodSymbol?,
+            actualReceiverType ITypeSymbol? = nil
+        ) bool -> this.IsEffectiveUserRecordDeconstruct(method) || this.HasRenamedNonRecordDeconstructContract(
+            method
+        ) ||
+            this.IsExtensionRecordDeconstruct(method, actualReceiverType) || this.IsImportedRecordUserDeconstruct(
+            method
+        )
+
+        private func BuildInlineOutDeconstructCall(
+            callee GExpression,
+            initialArguments List[GExpression],
+            method IMethodSymbol,
+            typeArguments IReadOnlyList[GTypeReference]? = nil,
+            prologue List[GStatement]? = nil
+        ) GExpression {
+            let outputTypes = this.MapRecordDeconstructionOutputParameterTypes(method)
+            let outputParameters = this.GetDeconstructOutputParameters(method)
+            let arguments = List[GExpression](initialArguments)
+            let tupleElements = List[GExpression](outputTypes.Count)
+            let statements = List[GStatement]()
+            if prologue != nil {
+                statements.AddRange(prologue)
+            }
+            for var i = 0; i < outputTypes.Count; i++ {
+                let temp = this.NewSpillName()
+                let local = IdentifierExpression(temp)
+                statements.Add(LocalDeclarationStatement(BindingKind.Var, temp, outputTypes[i]))
+                arguments.Add(OutArgumentExpression("out", temp))
+                tupleElements.Add(
+                    if outputTypes.Count > 1 && i < outputParameters.Count && this.IsPointerOrFunctionPointerType(
+                        outputParameters[i].Type
+                    ) {
+                        cast[GExpression](
+                            ConversionExpression(NamedTypeReference("nuint"), local, isCheckedReferenceCast: true)
+                        )
+                    } else {
+                        cast[GExpression](local)
+                    }
+                )
+            }
+            statements.Add(ExpressionStatement(InvocationExpression(callee, arguments, typeArguments)))
+            let result GExpression = if tupleElements.Count == 1 {
+                tupleElements[0]
+            } else {
+                TupleLiteralExpression(tupleElements)
+            }
+            return BlockExpression(statements, result)
         }
 
         private func RewriteRecordDeconstruction(
@@ -290,9 +2036,113 @@ partial class CSharpToGSharpTranslator {
             } else {
                 nil
             }
-            this.ReportMetadataRecordDeconstruction(method, diagnosticSite, receiverType)
-            this.ReportUnsupportedRecordDeconstruction(method, receiverType)
-            if !EmittedNameAllocator.IsUserRecordDeconstruct(method) {
+            if method != nil && this.UsesRecordDeconstructionAdapter(method, receiverType) &&
+                this
+                .GetDeconstructOutputParameters(method).Any(
+                (parameter IParameterSymbol) -> parameter.Type.IsRefLikeType
+            ) {
+                this.context.ReportUnsupported(
+                    diagnosticSite,
+                    "record Deconstruct outputs with ref-like types cannot use a tuple adapter."
+                )
+                return value
+            }
+            if this.IsImportedRecordUserDeconstruct(method) {
+                var receiver = if receiverSyntax != nil {
+                    this.TranslateReceiverWithNullForgiveness(receiverSyntax, value)
+                } else if emittedReceiverType?.IsNullable == true {
+                    EnsureNonNullAssertion(value)
+                } else {
+                    value
+                }
+                var receiverPrologue List[GStatement]? = nil
+                if method!!.ContainingType.IsValueType {
+                    let receiverCopy = this.NewSpillName()
+                    receiverPrologue = List[GStatement]{
+                        LocalDeclarationStatement(BindingKind.Var, receiverCopy, initializer: receiver)
+                    }
+                    receiver = IdentifierExpression(receiverCopy)
+                }
+                return this.BuildInlineOutDeconstructCall(
+                    MemberAccessExpression(receiver, "Deconstruct"),
+                    List[GExpression](),
+                    method!!,
+                    prologue: receiverPrologue
+                )
+            }
+            if this.IsExtensionRecordDeconstruct(method, receiverType) {
+                let constructedExtension = method!!.ReducedFrom ?? method!!
+                let extension = constructedExtension.OriginalDefinition
+                this.typeMapper.TrackExtensionMethodNamespace(extension)
+                let receiverParam = constructedExtension.Parameters[0]
+                let originalReceiverParam = extension.Parameters[0]
+                let receiverAcceptsNull = receiverParam
+                    .Type
+                    .NullableAnnotation == Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated ||
+                    this.IsTranslatorWidenedDeclaration(originalReceiverParam)
+                let receiver = if receiverSyntax != nil {
+                    this.ForgiveNullableReferenceValue(
+                        receiverSyntax,
+                        value ?? this.TranslateExpression(receiverSyntax),
+                        receiverParam.Type,
+                        originalReceiverParam,
+                        includePromotedValue: true
+                    )
+                } else if emittedReceiverType?.IsNullable == true && !receiverAcceptsNull {
+                    EnsureNonNullAssertion(value)
+                } else {
+                    value
+                }
+                var receiverPrologue List[GStatement]? = nil
+                var receiverArgument = receiver
+                if receiverParam.RefKind == RefKind.Ref ||
+                    receiverParam.RefKind == RefKind.Out ||
+                    receiverParam.RefKind == RefKind.In ||
+                    receiverParam.RefKind == RefKind
+                    .RefReadOnlyParameter {
+                    let receiverCopy = this.NewSpillName()
+                    receiverPrologue = List[GStatement]{
+                        LocalDeclarationStatement(BindingKind.Var, receiverCopy, initializer: receiver)
+                    }
+                    receiverArgument = PassStaticExtensionHelperReceiver(
+                        IdentifierExpression(receiverCopy),
+                        constructedExtension
+                    )
+                } else {
+                    receiverArgument = PassStaticExtensionHelperReceiver(receiver, constructedExtension)
+                }
+                if extension.DeclaringSyntaxReferences.IsDefaultOrEmpty && !this.TryResolveMigratedProducerDeconstruct(
+                    extension,
+                    out _,
+                    out _
+                ) {
+                    return this.BuildInlineOutDeconstructCall(
+                        MemberAccessExpression(
+                            this.StaticQualifierReceiver(extension.ContainingType, diagnosticSite.GetLocation()),
+                            this.EmittedName(extension, extension.Name)
+                        ),
+                        List[GExpression]{receiverArgument!!},
+                        constructedExtension,
+                        prologue: receiverPrologue
+                    )
+                }
+                let adapterCall GExpression = InvocationExpression(
+                    MemberAccessExpression(
+                        this.StaticQualifierReceiver(extension.ContainingType, diagnosticSite.GetLocation()),
+                        this.RecordDeconstructionAdapterName(extension)
+                    ),
+                    []GExpression{receiverArgument!!}
+                )
+                return if receiverPrologue != nil {
+                    BlockExpression(receiverPrologue, adapterCall)
+                } else {
+                    adapterCall
+                }
+            }
+            if !this.UsesRecordDeconstructionAdapter(method, receiverType) {
                 return value
             }
             let receiver = if receiverSyntax != nil {
@@ -308,58 +2158,208 @@ partial class CSharpToGSharpTranslator {
             )
         }
 
-        private func ReportMetadataRecordDeconstruction(
-            method IMethodSymbol?,
-            site SyntaxNode,
-            actualReceiverType ITypeSymbol? = nil
-        ) {
-            if method == nil || method.Name != "Deconstruct" {
-                return
+        private func DisambiguateAgainstMigratedProducerDeconstruct(symbol ISymbol?, allocated string?) string? {
+            if symbol == nil ||
+                allocated == nil ||
+                (
+                !allocated.StartsWith("deconstruct", StringComparison.OrdinalIgnoreCase) && !symbol.Name.Contains(
+                    "deconstruct",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ||
+                symbol.ContainingType is not{} initialOwner ||
+                !(
+                symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IMethodSymbol || symbol is IEventSymbol
+            ) {
+                return allocated
             }
-            var needsBridge = this.MetadataProducerRenamesMethod(method)
-            let extension = method.ReducedFrom ?? method
-            if !needsBridge && extension.IsExtensionMethod && extension.Parameters.Length > 0 {
-                let receiver = actualReceiverType as INamedTypeSymbol ??
+            let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+            if compilations == nil {
+                return allocated
+            }
+            var targetSymbol = symbol
+            var targetAllocated = allocated
+            var targetCompilation = this.context.Compilation
+            if targetSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                let sourceDeclaration = ObliviousNullabilityAnalyzer.RunSourceDeclarations(
+                    targetSymbol.OriginalDefinition,
+                    compilations
+                )
+                    .FirstOrDefault()
+                if sourceDeclaration == nil || sourceDeclaration.ContainingType == nil {
+                    return allocated
+                }
+                let declaringCompilation = compilations.FirstOrDefault(
+                    (compilation Compilation) -> compilation
+                        .Assembly
+                        .Identity
+                        .Equals(sourceDeclaration.ContainingAssembly.Identity)
+                )
+                if declaringCompilation == nil {
+                    return allocated
+                }
+                targetSymbol = sourceDeclaration
+                targetCompilation = declaringCompilation
+                targetAllocated = EmittedNameAllocator.For(declaringCompilation).GetName(sourceDeclaration) ?? allocated
+            }
+            if targetSymbol.ContainingType == nil {
+                return targetAllocated
+            }
+            let targetAllocator = EmittedNameAllocator.For(targetCompilation)
+            let contractMembers = targetAllocator.GetSymbolContractMembers(targetSymbol)
+            for contractMember in contractMembers {
+                if contractMember is IMethodSymbol method &&
                     (
-                    if method.ReducedFrom != nil {
-                        method.ReceiverType
-                    } else {
-                        extension.Parameters[0].Type
-                    }
-                ) as INamedTypeSymbol
-                if receiver != nil {
-                    needsBridge = ReceiverTypeHierarchy(receiver).SelectMany(
-                        (owner INamedTypeSymbol) -> owner.GetMembers("Deconstruct").OfType[IMethodSymbol]()
+                    EmittedNameAllocator.For(
+                        compilations.FirstOrDefault(
+                            (compilation Compilation) -> compilation
+                                .Assembly
+                                .Identity
+                                .Equals(method.ContainingAssembly.Identity)
+                        ) ??
+                            targetCompilation
                     )
-                        .Any(this.MetadataProducerRenamesMethod)
+                        .HasRenamedDeconstructContract(method) || this.TryResolveMigratedProducerDeconstruct(
+                        method,
+                        out _,
+                        out _
+                    )
+                ) {
+                    return targetAllocated
                 }
             }
-            if needsBridge {
-                this.context.ReportUnsupported(
-                    site,
-                    "metadata consumers of a migrated producer's record Deconstruct need an adapter bridge."
-                )
+            let contractOwners = HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
+            for contractMember in contractMembers {
+                if contractMember.ContainingType is {} memberOwner {
+                    contractOwners.Add(memberOwner)
+                }
+                if contractMember.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                    for sourceContractMember in ObliviousNullabilityAnalyzer.RunSourceDeclarations(
+                        contractMember.OriginalDefinition,
+                        compilations
+                    ) {
+                        if sourceContractMember.ContainingType is {} sourceOwner {
+                            contractOwners.Add(sourceOwner)
+                        }
+                    }
+                }
             }
+            let reserved = HashSet[string](StringComparer.Ordinal)
+            for contractOwner in contractOwners {
+                for candidateOwner in ReceiverTypeHierarchy(contractOwner).Concat(contractOwner.AllInterfaces) {
+                    for candidate in candidateOwner.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
+                        if this.TryResolveMigratedProducerDeconstruct(
+                            candidate,
+                            out var sourceMethod,
+                            out var producerCompilation
+                        ) {
+                            let producerName = EmittedNameAllocator.For(producerCompilation!!).GetName(sourceMethod)
+                            if producerName != nil {
+                                reserved.Add(producerName)
+                            }
+                            reserved.Add(this.RecordDeconstructionAdapterName(sourceMethod!!, producerCompilation!!))
+                        }
+                    }
+                }
+            }
+            if !reserved.Contains(targetAllocated) {
+                return targetAllocated
+            }
+            let taken = HashSet[string](reserved, StringComparer.Ordinal)
+            for contractOwner in contractOwners {
+                for candidateOwner in ReceiverTypeHierarchy(contractOwner).Concat(contractOwner.AllInterfaces) {
+                    for member in candidateOwner.GetMembers() {
+                        taken.Add(member.Name)
+                    }
+                }
+            }
+            var candidateName = targetAllocated
+            for var suffix = 2; taken.Contains(candidateName); suffix++ {
+                candidateName = targetAllocated + suffix.ToString(CultureInfo.InvariantCulture)
+            }
+            return candidateName
         }
 
-        private func MetadataProducerRenamesMethod(method IMethodSymbol) bool {
-            if !method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+        private func TryResolveMigratedProducerDeconstruct(
+            method IMethodSymbol?,
+            out sourceMethod IMethodSymbol?,
+            out producerCompilation Compilation?
+        ) bool -> this
+            .TryResolveMigratedProducerDeconstructCore(
+            method,
+            this.context.Compilation,
+            HashSet[IMethodSymbol](SymbolEqualityComparer.Default),
+            out sourceMethod,
+            out producerCompilation
+        )
+
+        private func TryResolveMigratedProducerDeconstructCore(
+            method IMethodSymbol?,
+            owningCompilation Compilation,
+            visited HashSet[IMethodSymbol],
+            out sourceMethod IMethodSymbol?,
+            out producerCompilation Compilation?
+        ) bool {
+            sourceMethod = nil
+            producerCompilation = nil
+            if method == nil ||
+                (method.Name != "Deconstruct" && !method.Name.EndsWith(".Deconstruct", StringComparison.Ordinal)) ||
+                !visited.Add(method.OriginalDefinition) {
                 return false
             }
             let compilations = this.context.RepositoryCompilations ?? this.context.SiblingCompilations
             if compilations == nil {
                 return false
             }
-            for source in ObliviousNullabilityAnalyzer.RunSourceDeclarations(method.OriginalDefinition, compilations)
-                .OfType[IMethodSymbol]() {
-                let producer = compilations.FirstOrDefault(
-                    (compilation Compilation) -> compilation
-                        .Assembly
-                        .Identity
-                        .Equals(source.ContainingAssembly.Identity)
+            let candidates = if method.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                cast[IEnumerable[IMethodSymbol]]([]IMethodSymbol{method})
+            } else {
+                EmittedNameAllocator
+                    .For(owningCompilation)
+                    .GetAllDeconstructContractMembers(method)
+                    .Where((member IMethodSymbol) -> member.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            }
+            for candidate in candidates {
+                for source in ObliviousNullabilityAnalyzer.RunSourceDeclarations(
+                    candidate.OriginalDefinition,
+                    compilations
                 )
-                if producer != nil && EmittedNameAllocator.For(producer).GetName(source) != method.Name {
-                    return true
+                    .OfType[IMethodSymbol]() {
+                    let producer = compilations.FirstOrDefault(
+                        (compilation Compilation) -> compilation
+                            .Assembly
+                            .Identity
+                            .Equals(source.ContainingAssembly.Identity)
+                    )
+                    if producer == nil {
+                        continue
+                    }
+                    if this.TryResolveMigratedProducerDeconstructCore(
+                        source,
+                        producer,
+                        visited,
+                        out var transitiveSource,
+                        out var transitiveProducer
+                    ) {
+                        sourceMethod = transitiveSource
+                        producerCompilation = transitiveProducer
+                        return true
+                    }
+                    if EmittedNameAllocator.IsUserRecordDeconstruct(source) || EmittedNameAllocator.For(producer)
+                        .HasRenamedDeconstructContract(source) ||
+                        (
+                        source.IsExtensionMethod &&
+                            source.Name == "Deconstruct" &&
+                            source.ReturnsVoid &&
+                            source
+                            .Parameters
+                            .Length >= 2 &&
+                            this.ExtensionReceiverCanBeRecord(source.Parameters[0].Type)
+                    ) {
+                        sourceMethod = source
+                        producerCompilation = producer
+                        return true
+                    }
                 }
             }
             return false
@@ -442,15 +2442,29 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .GetOperation(recursive) is IRecursivePatternOperation operation &&
                 operation.DeconstructSymbol is IMethodSymbol method &&
-                EmittedNameAllocator.IsUserRecordDeconstruct(method) {
+                this.UsesRecordDeconstructionAdapter(method, operation.MatchedType) {
                 return method
             }
             return nil
         }
 
-        private func RecordDeconstructionRunsUserCode(info DeconstructionInfo) bool ->
-        EmittedNameAllocator.IsUserRecordDeconstruct(info.Method) ||
-            (!info.Nested.IsDefaultOrEmpty && info.Nested.Any(this.RecordDeconstructionRunsUserCode))
+        private func RecordDeconstructionRunsUserCode(info DeconstructionInfo, receiverType ITypeSymbol? = nil) bool {
+            if this.UsesRecordDeconstructionAdapter(info.Method, receiverType) {
+                return true
+            }
+            if info.Nested.IsDefaultOrEmpty {
+                return false
+            }
+            for var i = 0; i < info.Nested.Length; i++ {
+                if this.RecordDeconstructionRunsUserCode(
+                    info.Nested[i],
+                    this.DeconstructionOutputType(info, i, receiverType)
+                ) {
+                    return true
+                }
+            }
+            return false
+        }
 
         private func RecordPatternRunsUserCode(pattern PatternSyntax) bool ->
         pattern
@@ -460,6 +2474,174 @@ partial class CSharpToGSharpTranslator {
             (recursive RecursivePatternSyntax) -> this.UserRecordPatternDeconstruct(recursive) != nil &&
                 this.RecordPatternNeedsDeconstruction(recursive)
         )
+
+        private func DecisionSubtreeRunsUserRecordDeconstruct(owner SyntaxNode, pattern PatternSyntax) bool {
+            if this.RecordPatternRunsUserCode(pattern) {
+                return true
+            }
+            let path = this.RecordPatternDecisionPath(pattern, owner)
+            if path.Length == 0 {
+                return false
+            }
+            return owner
+                .DescendantNodes()
+                .OfType[RecursivePatternSyntax]()
+                .Any(
+                (recursive RecursivePatternSyntax) -> object.ReferenceEquals(
+                    this.RecordPatternDecisionOwner(recursive),
+                    owner
+                ) &&
+                    this.UserRecordPatternDeconstruct(recursive) != nil && this.RecordPatternNeedsDeconstruction(
+                    recursive
+                ) &&
+                    this
+                    .RecordPatternDecisionPath(recursive, owner).StartsWith(path, StringComparison.Ordinal)
+            )
+        }
+
+        private func TryWrapRecordPatternReceiverCache(
+            owner SyntaxNode,
+            path string,
+            site SyntaxNode,
+            memberAccess GExpression,
+            memberType ITypeSymbol?,
+            buildInner(GExpression) -> GExpression,
+            out wrapped GExpression?,
+            memberSymbol ISymbol? = nil
+        ) bool {
+            wrapped = nil
+            if memberType == nil || IsTrivialOperand(memberAccess) {
+                return false
+            }
+            let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+            if owner is IsPatternExpressionSyntax && declarations == nil {
+                return false
+            }
+            let canonicalType = this.GetCanonicalPatternMemberStorageType(memberSymbol, memberType) ?? memberType
+            if !this.recordPatternReceiverCaches.TryGetValue(owner, out var receiverCaches) {
+                receiverCaches = List[(Path string, Flag string, Value string, Type GTypeReference)]()
+                this.recordPatternReceiverCaches.Add(owner, receiverCaches)
+            }
+            var cache = receiverCaches.FirstOrDefault(
+                (entry(Path string, Flag string, Value string, Type GTypeReference)) -> entry.Path == path
+            )
+            if string.IsNullOrEmpty(cache.Flag) {
+                let flag = this.AllocateRecordScopedLocalName("hasReceiver", site)
+                let value = this.AllocateRecordScopedLocalName("receiver", site)
+                var storageType = this.typeMapper.Map(canonicalType, this.context, location: nil)
+                if canonicalType.IsReferenceType || this.IsGSharpNullablePatternReceiver(memberAccess) {
+                    storageType = MakeNullable(storageType)
+                }
+                cache = (path, flag, value, storageType!!)
+                receiverCaches.Add(cache)
+                if owner is IsPatternExpressionSyntax {
+                    declarations!!.Add(
+                        LocalDeclarationStatement(
+                            BindingKind.Var,
+                            flag,
+                            NamedTypeReference("bool"),
+                            LiteralExpression.Bool(false)
+                        )
+                    )
+                    declarations!!.Add(LocalDeclarationStatement(BindingKind.Var, value, storageType))
+                }
+            }
+            let local = IdentifierExpression(cache.Value)
+            let flag = IdentifierExpression(cache.Flag)
+            if cache.Type.IsNullable {
+                this.state.StoredPatternCaptures.Add(local)
+            }
+            if this.IsGSharpNullablePatternReceiver(memberAccess) ||
+                canonicalType.NullableAnnotation == Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated {
+                this.state.GSharpNullablePatternReceivers.Add(local)
+            }
+            let innerTest = buildInner(local)
+            wrapped = BlockExpression(
+                []GStatement{
+                    IfStatement(
+                        UnaryExpression("!", flag),
+                        BlockStatement(
+                            []GStatement{
+                                AssignmentStatement(local, memberAccess),
+                                AssignmentStatement(flag, LiteralExpression.Bool(true))
+                            }
+                        )
+                    )
+                },
+                innerTest
+            )
+            return true
+        }
+
+        private func TranslateRecordPatternMemberSubpatternTest(
+            subPattern PatternSyntax,
+            memberAccess GExpression,
+            memberType ITypeSymbol?,
+            memberSymbol ISymbol? = nil
+        ) GExpression {
+            if memberType != nil && !IsTrivialOperand(memberAccess) && this.RecordPatternDecisionOwner(
+                subPattern
+            ) is {} owner &&
+                this
+                .DecisionSubtreeRunsUserRecordDeconstruct(owner, subPattern) {
+                let path = this.RecordPatternDecisionPath(subPattern, owner)
+                let canonicalType = this.GetCanonicalPatternMemberStorageType(memberSymbol, memberType) ?? memberType
+                let hasCovariantMemberType = !SymbolEqualityComparer.Default.Equals(
+                    UnwrapNullablePatternType(canonicalType),
+                    UnwrapNullablePatternType(memberType)
+                )
+                if this.TryWrapRecordPatternReceiverCache(
+                    owner,
+                    path,
+                    subPattern,
+                    memberAccess,
+                    memberType,
+                    (local GExpression) -> {
+                        if hasCovariantMemberType &&
+                            subPattern is not RecursivePatternSyntax{Type: not nil} &&
+                            subPattern is not DeclarationPatternSyntax {
+                            let narrowedLocal = ParenthesizedExpression(
+                                BinaryExpression(
+                                    local,
+                                    "as",
+                                    TypeExpression(
+                                        this.typeMapper.Map(
+                                            UnwrapNullablePatternType(memberType),
+                                            this.context,
+                                            location: nil
+                                        )
+                                    )
+                                )
+                            )
+                            return this.TranslatePatternTest(
+                                narrowedLocal,
+                                subPattern,
+                                memberType,
+                                isNestedPatternMember: true
+                            )
+                        }
+                        return this.TranslatePatternTest(
+                            local,
+                            subPattern,
+                            if hasCovariantMemberType {
+                                canonicalType
+                            } else {
+                                memberType
+                            },
+                            isNestedPatternMember: true
+                        )
+                    },
+                    out var wrapped,
+                    memberSymbol: memberSymbol
+                ) {
+                    return wrapped!!
+                }
+            }
+            return this.TranslatePatternTest(memberAccess, subPattern, memberType, isNestedPatternMember: true)
+        }
 
         private func RecordPatternOutputIsUnused(pattern PatternSyntax) bool -> switch pattern {
             case _ is DiscardPatternSyntax: true
@@ -475,6 +2657,42 @@ partial class CSharpToGSharpTranslator {
         recursive.PositionalPatternClause!!.Subpatterns.Any(
             (subpattern SubpatternSyntax) -> !this.RecordPatternOutputIsUnused(subpattern.Pattern)
         )
+
+        private func GetOrCreateRecordPatternCache(
+            owner SyntaxNode,
+            path string,
+            method IMethodSymbol,
+            site RecursivePatternSyntax,
+            resultType GTypeReference,
+            declarations List[GStatement]?
+        )(Path string, Method IMethodSymbol, Flag string, Values string, Type GTypeReference) {
+            if !this.recordPatternCaches.TryGetValue(owner, out var caches) {
+                caches = List[(Path string, Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]()
+                this.recordPatternCaches.Add(owner, caches)
+            }
+            var cache = caches.FirstOrDefault(
+                (entry(Path string, Method IMethodSymbol, Flag string, Values string, Type GTypeReference)) ->
+                entry.Path == path && SymbolEqualityComparer.Default.Equals(entry.Method, method)
+            )
+            if cache.Method == nil {
+                let flag = this.AllocateRecordScopedLocalName("deconstructed", site)
+                let values = this.AllocateRecordScopedLocalName("components", site)
+                cache = (path, method, flag, values, resultType)
+                caches.Add(cache)
+                if owner is IsPatternExpressionSyntax && declarations != nil {
+                    declarations.Add(
+                        LocalDeclarationStatement(
+                            BindingKind.Var,
+                            flag,
+                            NamedTypeReference("bool"),
+                            LiteralExpression.Bool(false)
+                        )
+                    )
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, values, resultType))
+                }
+            }
+            return cache
+        }
 
         private func TranslateRecordPositionalPatternTest(
             receiver GExpression?,
@@ -495,17 +2713,18 @@ partial class CSharpToGSharpTranslator {
                 return test
             }
             let owner = this.RecordPatternDecisionOwner(recursive)
-            if owner == nil {
-                // #5844: nested decisions need shared receiver captures as well as outputs.
-                this.context.ReportUnsupported(
-                    recursive,
-                    "nested user-declared record Deconstruct patterns need shared receiver and output state."
-                )
-                return LiteralExpression.Bool(false)
+            let matchedType = if this
+                .context
+                .SemanticModel
+                .GetOperation(recursive) is IRecursivePatternOperation operation {
+                operation.MatchedType
+            } else {
+                default(ITypeSymbol?)
             }
-            let call = this.RewriteRecordDeconstruction(receiver, method, recursive)
-            let outputTypes = this.MapRecordDeconstructionParameterTypes(method)
-            let resultType = this.RecordDeconstructionResultType(outputTypes)
+            let call = this.RewriteRecordDeconstruction(receiver, method, recursive, actualReceiverType: matchedType)
+            let outputTypes = this.MapRecordDeconstructionOutputParameterTypes(method)
+            let outputParameters = this.GetDeconstructOutputParameters(method)
+            let resultType = this.RecordDeconstructionResultType(method, outputTypes)
             let BuildTest = func (tuple GExpression) GExpression {
                 var test GExpression = LiteralExpression.Bool(true)
                 for var i = 0; i < subpatterns.Count; i++ {
@@ -513,10 +2732,13 @@ partial class CSharpToGSharpTranslator {
                         VarPatternSyntax{Designation: DiscardDesignationSyntax} {
                         continue
                     }
-                    let member GExpression = if subpatterns.Count == 1 {
+                    var member GExpression = if subpatterns.Count == 1 {
                         tuple
                     } else {
                         MemberAccessExpression(tuple, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture))
+                    }
+                    if subpatterns.Count > 1 && IsPointerOrFunctionPointerType(outputParameters[i].Type) {
+                        member = ConversionExpression(outputTypes[i], member, isCheckedReferenceCast: true)
                     }
                     if outputTypes[i].IsNullable {
                         this.state.GSharpNullablePatternReceivers.Add(member)
@@ -524,7 +2746,7 @@ partial class CSharpToGSharpTranslator {
                     let component = this.TranslatePatternTest(
                         member,
                         subpatterns[i].Pattern,
-                        method.Parameters[i].Type,
+                        outputParameters[i].Type,
                         isNestedPatternMember: true
                     )
                     test = BinaryExpression(test, "&&", component)
@@ -532,32 +2754,9 @@ partial class CSharpToGSharpTranslator {
                 return test
             }
             let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
-            if owner != nil && declarations != nil {
-                if !this.recordPatternCaches.TryGetValue(owner, out var caches) {
-                    caches = List[(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)]()
-                    this.recordPatternCaches.Add(owner, caches)
-                }
-                var cache = caches.FirstOrDefault(
-                    (entry(Method IMethodSymbol, Flag string, Values string, Type GTypeReference)) ->
-                    SymbolEqualityComparer.Default.Equals(entry.Method, method)
-                )
-                if cache.Method == nil {
-                    let flag = this.AllocateRecordScopedLocalName("deconstructed", recursive)
-                    let values = this.AllocateRecordScopedLocalName("components", recursive)
-                    cache = (method, flag, values, resultType)
-                    caches.Add(cache)
-                    if owner is IsPatternExpressionSyntax {
-                        declarations.Add(
-                            LocalDeclarationStatement(
-                                BindingKind.Var,
-                                flag,
-                                NamedTypeReference("bool"),
-                                LiteralExpression.Bool(false)
-                            )
-                        )
-                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, values, resultType))
-                    }
-                }
+            if owner != nil && (owner is not IsPatternExpressionSyntax || declarations != nil) {
+                let path = this.RecordPatternDecisionPath(recursive, owner)
+                let cache = this.GetOrCreateRecordPatternCache(owner, path, method, recursive, resultType, declarations)
                 let local = IdentifierExpression(cache.Values)
                 let flag = IdentifierExpression(cache.Flag)
                 return BlockExpression(
@@ -590,24 +2789,32 @@ partial class CSharpToGSharpTranslator {
                 return LiteralExpression.Bool(false)
             }
             // Store the outputs inside the guarded test so bindings read them without repeating the call.
-            let symbolType = if method.Parameters.Length == 1 {
-                method.Parameters[0].Type
+            let symbolType = if outputParameters.Count == 1 {
+                outputParameters[0].Type
             } else {
                 this
                     .context
                     .Compilation
                     .CreateTupleTypeSymbol(
-                    method.Parameters.Select((parameter IParameterSymbol) -> parameter.Type).ToImmutableArray()
+                    outputParameters.Select(
+                        (parameter IParameterSymbol) -> if this.IsPointerOrFunctionPointerType(parameter.Type) {
+                            cast[ITypeSymbol](this.context.Compilation.GetSpecialType(SpecialType.System_UIntPtr))
+                        } else {
+                            parameter.Type
+                        }
+                    )
+                        .ToImmutableArray()
                 )
             }
             return this.StorePatternMemberOnce(call, symbolType, false, declarations, BuildTest, resultType)
         }
 
-        private func RecordPatternDecisionOwner(recursive RecursivePatternSyntax) SyntaxNode? {
-            var pattern SyntaxNode = recursive
-            while pattern.Parent is ParenthesizedPatternSyntax ||
-                pattern.Parent is BinaryPatternSyntax ||
-                pattern.Parent is UnaryPatternSyntax {
+        private func RecordPatternDecisionOwner(node SyntaxNode) SyntaxNode? {
+            var pattern SyntaxNode = node
+            while pattern.Parent is PatternSyntax or
+                SubpatternSyntax or
+                PropertyPatternClauseSyntax or
+                PositionalPatternClauseSyntax {
                 pattern = pattern.Parent!!
             }
             return switch pattern.Parent {
@@ -616,6 +2823,169 @@ partial class CSharpToGSharpTranslator {
                 case expression is IsPatternExpressionSyntax when expression.Pattern == pattern: expression
                 default: nil
             }
+        }
+
+        private func GetCanonicalPatternMemberStorageType(symbol ISymbol?, fallbackType ITypeSymbol?) ITypeSymbol? {
+            if symbol == nil {
+                return fallbackType
+            }
+            var current ISymbol = symbol
+            while true {
+                switch current {
+                    case property is IPropertySymbol when property.OverriddenProperty != nil {
+                        current = property.OverriddenProperty!!
+                        continue
+                    }
+                    case method is IMethodSymbol when method.OverriddenMethod != nil {
+                        current = method.OverriddenMethod!!
+                        continue
+                    }
+                }
+                break
+            }
+            return switch current {
+                case property is IPropertySymbol: property.Type
+                case field is IFieldSymbol: field.Type
+                case method is IMethodSymbol: method.ReturnType
+                default: fallbackType
+            }
+        }
+
+        private func GetCanonicalPatternMemberSlotKey(symbol ISymbol?) string {
+            if symbol == nil {
+                return "?"
+            }
+            var current ISymbol = symbol
+            while true {
+                switch current {
+                    case property is IPropertySymbol when property.OverriddenProperty != nil {
+                        current = property.OverriddenProperty!!
+                        continue
+                    }
+                    case method is IMethodSymbol when method.OverriddenMethod != nil {
+                        current = method.OverriddenMethod!!
+                        continue
+                    }
+                }
+                break
+            }
+            return current.ToDisplayString()
+        }
+
+        private func SplitPatternMemberPathKeys(memberPath ExpressionSyntax) List[string] {
+            let keys = List[string]()
+            var current = memberPath
+            while current is MemberAccessExpressionSyntax memberAccess {
+                let symbol = this.GetPatternMemberSymbol(memberAccess)
+                keys.Insert(
+                    0,
+                    if symbol != nil {
+                        this.GetCanonicalPatternMemberSlotKey(symbol)
+                    } else {
+                        this.GetPatternMemberName(memberAccess.Name) ?? "?"
+                    }
+                )
+                current = memberAccess.Expression
+            }
+            let rootSymbol = this.GetPatternMemberSymbol(current)
+            keys.Insert(
+                0,
+                if rootSymbol != nil {
+                    this.GetCanonicalPatternMemberSlotKey(rootSymbol)
+                } else {
+                    current.ToString()
+                }
+            )
+            return keys
+        }
+
+        private func RecordPatternDecisionPath(node SyntaxNode, owner SyntaxNode) string {
+            let steps = List[string]()
+            var current SyntaxNode? = node
+            while current != nil && !object.ReferenceEquals(current, owner) {
+                switch current {
+                    case subpattern is SubpatternSyntax when subpattern.Parent is PropertyPatternClauseSyntax {
+                        let step = if subpattern.NameColon != nil {
+                            let memberSymbol = this.GetPatternMemberSymbol(subpattern.NameColon!!.Name)
+                            "prop:" + if memberSymbol != nil {
+                                this.GetCanonicalPatternMemberSlotKey(memberSymbol)
+                            } else {
+                                this.GetSubpatternMemberName(subpattern)
+                            }
+                        } else if subpattern.ExpressionColon != nil {
+                            "prop:" + string.Join(
+                                "/prop:",
+                                this.SplitPatternMemberPathKeys(subpattern.ExpressionColon!!.Expression)
+                            )
+                        } else {
+                            "prop:?"
+                        }
+                        steps.Insert(0, step)
+                    }
+                    case subpattern is SubpatternSyntax when subpattern.Parent is PositionalPatternClauseSyntax clause {
+                        let index = clause.Subpatterns.IndexOf(subpattern)
+                        var producerKey = ""
+                        if clause.Parent is RecursivePatternSyntax parentRecursive {
+                            if this
+                                .context
+                                .SemanticModel
+                                .GetOperation(parentRecursive) is IRecursivePatternOperation parentOperation {
+                                if parentOperation.DeconstructSymbol is IMethodSymbol deconstructMethod {
+                                    producerKey = this.GetCanonicalPatternMemberSlotKey(deconstructMethod)
+                                } else if parentOperation.MatchedType != nil {
+                                    producerKey = parentOperation.MatchedType.ToDisplayString()
+                                }
+                            } else if parentRecursive.Type != nil {
+                                producerKey = this
+                                    .context
+                                    .GetTypeInfo(parentRecursive.Type)
+                                    .Type
+                                    ?.ToDisplayString() ??
+                                    ""
+                            }
+                        }
+                        steps.Insert(0, "pos:" + producerKey + "#" + index.ToString(CultureInfo.InvariantCulture))
+                    }
+                    case slice is SlicePatternSyntax when slice.Parent is ListPatternSyntax list {
+                        let sliceIndex = list.Patterns.IndexOf(slice)
+                        let suffixCount = list.Patterns.Count - sliceIndex - 1
+                        let listOp = this.context.SemanticModel.GetOperation(list) as IListPatternOperation
+                        let sliceOp = this.context.SemanticModel.GetOperation(slice) as ISlicePatternOperation
+                        let sliceKey = this.GetCanonicalPatternMemberSlotKey(
+                            sliceOp?.SliceSymbol ?? listOp?.IndexerSymbol
+                        )
+                        let lengthKey = this.GetCanonicalPatternMemberSlotKey(listOp?.LengthSymbol)
+                        steps.Insert(
+                            0,
+                            "slice:" + sliceKey + ":" + lengthKey + ":" + sliceIndex.ToString(
+                                CultureInfo.InvariantCulture
+                            ) +
+                                ":^" +
+                                suffixCount.ToString(CultureInfo.InvariantCulture)
+                        )
+                    }
+                    case pattern is PatternSyntax when pattern.Parent is ListPatternSyntax list {
+                        let index = list.Patterns.IndexOf(pattern)
+                        let sliceIndex = FindSlicePatternIndex(list.Patterns)
+                        let listOp = this.context.SemanticModel.GetOperation(list) as IListPatternOperation
+                        let indexerKey = this.GetCanonicalPatternMemberSlotKey(listOp?.IndexerSymbol)
+                        if sliceIndex >= 0 && index > sliceIndex {
+                            let fromEnd = list.Patterns.Count - index
+                            let lengthKey = this.GetCanonicalPatternMemberSlotKey(listOp?.LengthSymbol)
+                            steps.Insert(
+                                0,
+                                "list:" + indexerKey + ":" + lengthKey + ":^" + fromEnd.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                            )
+                        } else {
+                            steps.Insert(0, "list:" + indexerKey + ":" + index.ToString(CultureInfo.InvariantCulture))
+                        }
+                    }
+                }
+                current = current.Parent
+            }
+            return string.Join("/", steps)
         }
 
         private func ResetRecordPatternCaches(owner SyntaxNode, subject GExpression?) GExpression? {
@@ -629,6 +2999,16 @@ partial class CSharpToGSharpTranslator {
 
         private func RecordPatternCacheResets(owner SyntaxNode) List[GStatement] {
             let resets = List[GStatement]()
+            if this.recordPatternTypeGuards.TryGetValue(owner, out var typeGuards) {
+                for guard_ in typeGuards {
+                    resets.Add(AssignmentStatement(IdentifierExpression(guard_.Flag), LiteralExpression.Bool(false)))
+                }
+            }
+            if this.recordPatternReceiverCaches.TryGetValue(owner, out var receiverCaches) {
+                for cache in receiverCaches {
+                    resets.Add(AssignmentStatement(IdentifierExpression(cache.Flag), LiteralExpression.Bool(false)))
+                }
+            }
             if this.recordPatternCaches.TryGetValue(owner, out var caches) {
                 for cache in caches {
                     resets.Add(AssignmentStatement(IdentifierExpression(cache.Flag), LiteralExpression.Bool(false)))
@@ -639,6 +3019,34 @@ partial class CSharpToGSharpTranslator {
 
         private func RecordPatternCacheDeclarations(owner SyntaxNode) List[GStatement] {
             let declarations = List[GStatement]()
+            if this.recordPatternTypeGuards.TryGetValue(owner, out var typeGuards) {
+                for guard_ in typeGuards {
+                    declarations.Add(
+                        LocalDeclarationStatement(
+                            BindingKind.Var,
+                            guard_.Flag,
+                            NamedTypeReference("bool"),
+                            LiteralExpression.Bool(false)
+                        )
+                    )
+                    if guard_.Value != nil {
+                        declarations.Add(LocalDeclarationStatement(BindingKind.Var, guard_.Value!!, guard_.StorageType))
+                    }
+                }
+            }
+            if this.recordPatternReceiverCaches.TryGetValue(owner, out var receiverCaches) {
+                for cache in receiverCaches {
+                    declarations.Add(
+                        LocalDeclarationStatement(
+                            BindingKind.Var,
+                            cache.Flag,
+                            NamedTypeReference("bool"),
+                            LiteralExpression.Bool(false)
+                        )
+                    )
+                    declarations.Add(LocalDeclarationStatement(BindingKind.Var, cache.Value, cache.Type))
+                }
+            }
             if this.recordPatternCaches.TryGetValue(owner, out var caches) {
                 for cache in caches {
                     declarations.Add(
@@ -1436,8 +3844,14 @@ partial class CSharpToGSharpTranslator {
         ) List[GExpression] {
             // Record adapters require every extraction and conversion before target writes.
             let ownsPhases = conversions == nil
+            let effectiveReceiverType = rhsTupleType ?? if receiverSyntax != nil {
+                this.context.GetTypeInfo(receiverSyntax).Type
+            } else {
+                default(ITypeSymbol?)
+            }
             let orderedConversions = orderedConversions || forceRealTemps || this.RecordDeconstructionRunsUserCode(
-                deconstruction
+                deconstruction,
+                effectiveReceiverType
             )
             let conversionStatements = conversions ?? List[GStatement]()
             let assignmentStatements = assignments ?? List[GStatement]()
@@ -1457,6 +3871,7 @@ partial class CSharpToGSharpTranslator {
                 if targetExpr is DeclarationExpressionSyntax{
                     Designation: SingleVariableDesignationSyntax directSingle
                 } directDecl &&
+                    !this.IsPointerDeconstructTupleOutput(deconstruction.Method, i, effectiveReceiverType) &&
                     this
                     .context
                     .GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal && !this.IsLocalReassigned(
@@ -1539,7 +3954,14 @@ partial class CSharpToGSharpTranslator {
                     values.Add(IdentifierExpression(temps[i]))
                     continue
                 }
-                let tempRead = cast[GExpression](IdentifierExpression(temps[i]))
+                var tempRead = cast[GExpression](IdentifierExpression(temps[i]))
+                if this.IsPointerDeconstructTupleOutput(deconstruction.Method, i, effectiveReceiverType) {
+                    tempRead = ConversionExpression(
+                        this.MapDeconstructionOutputType(deconstruction, i, rhsTupleType)!!,
+                        tempRead,
+                        isCheckedReferenceCast: true
+                    )
+                }
                 if targetExpr is TupleExpressionSyntax nestedTuple {
                     // Nested target (`((a, b), c) = ...`): the outer temp
                     // holds the nested element's value, itself a tuple — spill
@@ -1879,12 +4301,21 @@ partial class CSharpToGSharpTranslator {
                 )
                 return IdentifierExpression(name)
             }
+            let effectiveReceiverType = receiverType ?? if receiverSyntax != nil {
+                this.context.GetTypeInfo(receiverSyntax).Type
+            } else {
+                default(ITypeSymbol?)
+            }
             let parenthesized = cast[ParenthesizedVariableDesignationSyntax](designation)
             let temps = List[string](parenthesized.Variables.Count)
             let directNames = [parenthesized.Variables.Count]bool
             for var i = 0; i < parenthesized.Variables.Count; i++ {
                 let child = parenthesized.Variables[i]
-                if !preserveValue &&
+                if !preserveValue && !this.IsPointerDeconstructTupleOutput(
+                    deconstruction.Method,
+                    i,
+                    effectiveReceiverType
+                ) &&
                     child is SingleVariableDesignationSyntax childSingle &&
                     this
                     .context
@@ -1926,9 +4357,17 @@ partial class CSharpToGSharpTranslator {
                     values.Add(IdentifierExpression(temps[i]))
                     continue
                 }
+                var elementValue GExpression = IdentifierExpression(temps[i])
+                if this.IsPointerDeconstructTupleOutput(deconstruction.Method, i, effectiveReceiverType) {
+                    elementValue = ConversionExpression(
+                        this.MapDeconstructionOutputType(deconstruction, i, receiverType)!!,
+                        elementValue,
+                        isCheckedReferenceCast: true
+                    )
+                }
                 let declaredValue GExpression? = this.LowerDeconstructionDeclaration(
                     parenthesized.Variables[i],
-                    IdentifierExpression(temps[i]),
+                    elementValue,
                     preserveValue,
                     statements,
                     this.NestedDeconstructionInfo(deconstruction, i),

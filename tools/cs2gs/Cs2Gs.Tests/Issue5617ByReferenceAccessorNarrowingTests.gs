@@ -1960,6 +1960,13 @@ public class Demo
         }
         return s.Length + total + 4;
     }
+    public static int OverImportedByRefMemberStepCall(ref string? s, OtherNs.LibBox libBox, ChildB holder)
+    {
+        if (s == null) return 0;
+        var total = 0;
+        foreach (var part in libBox.LibParts(in holder.Child)) total += part.Length;
+        return s.Length + total + 23;
+    }
     public static string Run()
     {
         OtherNs.StaticHolder.Seed = new[] { "q" };
@@ -2004,7 +2011,8 @@ public class Demo
                 genericIntBox,
                 new OtherNs.LibBox()
             ) + "," +
-            OverPureStringConcatenation(ref text);
+            OverPureStringConcatenation(ref text) + "," +
+            OverImportedByRefMemberStepCall(ref text, new OtherNs.LibBox(), new ChildB());
     }
 }`, library: `
 namespace OtherNs
@@ -2012,17 +2020,22 @@ namespace OtherNs
     public class LibBox
     {
         public string[] LibParts() => new[] { "m" };
+        public string[] LibParts(in int n) => new[] { "m" };
         protected void LibParts(int n) { }
         protected void LibExtParts() { }
     }
+    public static class LibBoxExtensions
+    {
+        public static void LibParts(this LibBox box, string unused) { }
+    }
 }`)
-        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
-        Assert.Contains("total += s!!.Length", printed)
+        Assert.Contains("return s.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += s.Length", printed)
         Assert.Contains("return s!!.Length + total + 3", printed)
-        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s.Length + total + 5", printed)
         Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("return s!!.Length + total + 7", printed)
-        Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s.Length + total + 8", printed)
         Assert.Contains("return s!!.Length + total + 9", printed)
         Assert.Contains("return s!!.Length + 10", printed)
         Assert.Contains("return s!!.Length + 14", printed)
@@ -2031,7 +2044,7 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + total + 20", printed)
         Assert.Contains("return s.Length + total + 21", printed)
         Assert.Contains("return s.Length + 22", printed)
-        Assert.Contains("return s!!.Length + total + 13", printed)
+        Assert.Contains("return s.Length + total + 13", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s.Length + 19", printed)
@@ -2040,7 +2053,8 @@ namespace OtherNs
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(16, Regex.Matches(printed, `s!!`).Count)
+        Assert.Contains("return s!!.Length + total + 23", printed)
+        Assert.Equal(12, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null

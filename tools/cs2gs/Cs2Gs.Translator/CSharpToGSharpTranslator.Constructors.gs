@@ -19,6 +19,7 @@ import System.Collections.Generic
 import System.Collections.Immutable
 import System.Globalization
 import System.Linq
+import System.Runtime.CompilerServices
 
 partial class CSharpToGSharpTranslator {
     private partial class DeclarationVisitor : CSharpSyntaxVisitor[GMember] {
@@ -2224,23 +2225,33 @@ partial class CSharpToGSharpTranslator {
             INamedTypeSymbol,
             CSharpTypeMapper
         ](SymbolEqualityComparer.Default)
-        private let singleTreeScopeMappers Dictionary[Microsoft.CodeAnalysis.SyntaxTree, CSharpTypeMapper] = Dictionary[
-            Microsoft.CodeAnalysis.SyntaxTree,
-            CSharpTypeMapper
-        ]()
-        private let treeSetScopeMappers Dictionary[string, CSharpTypeMapper] = Dictionary[string, CSharpTypeMapper](
-            StringComparer.Ordinal
-        )
+
+        private class ScopeReservationMapperCache {
+            let SingleTree Dictionary[
+                (Tree Microsoft.CodeAnalysis.SyntaxTree, AnalyzerApiMode bool),
+                CSharpTypeMapper
+            ] = Dictionary[(Tree Microsoft.CodeAnalysis.SyntaxTree, AnalyzerApiMode bool), CSharpTypeMapper]()
+            let TreeSet Dictionary[(Key string, AnalyzerApiMode bool), CSharpTypeMapper] = Dictionary[
+                (Key string, AnalyzerApiMode bool),
+                CSharpTypeMapper
+            ]()
+        }
 
         private func GetOrBuildSingleTreeScopeMapper(tree Microsoft.CodeAnalysis.SyntaxTree) CSharpTypeMapper {
-            if this.singleTreeScopeMappers.TryGetValue(tree, out var cached) {
-                return cached
+            let cache = ScopeReservationMapperCaches.GetOrCreateValue(this.context.Compilation)
+            let key = (tree, this.typeMapper.AnalyzerApiMode)
+            lock cache {
+                if cache.SingleTree.TryGetValue(key, out var cached) {
+                    return cached
+                }
             }
             let built = this.typeMapper.BuildAggregateScopeReservationMapper(
                 []Microsoft.CodeAnalysis.SyntaxTree{tree},
                 this.context
             )
-            this.singleTreeScopeMappers[tree] = built
+            lock cache {
+                cache.SingleTree[key] = built
+            }
             return built
         }
 
@@ -2283,12 +2294,21 @@ partial class CSharpToGSharpTranslator {
                 "\u0000",
                 trees.Select((tree Microsoft.CodeAnalysis.SyntaxTree) -> tree.FilePath)
             )
-            if !this.treeSetScopeMappers.TryGetValue(treeSetKey, out var built) {
-                built = this.typeMapper.CreateEmptyScopeReservationMapper(this.context)
+            let cache = ScopeReservationMapperCaches.GetOrCreateValue(this.context.Compilation)
+            let setKey = (treeSetKey, this.typeMapper.AnalyzerApiMode)
+            var built CSharpTypeMapper? = nil
+            lock cache {
+                cache.TreeSet.TryGetValue(setKey, out built)
+            }
+            if built == nil {
+                let merged = this.typeMapper.CreateEmptyScopeReservationMapper(this.context)
                 for tree in trees {
-                    built.MergeScopeReservationsFrom(this.GetOrBuildSingleTreeScopeMapper(tree))
+                    merged.MergeScopeReservationsFrom(this.GetOrBuildSingleTreeScopeMapper(tree))
                 }
-                this.treeSetScopeMappers[treeSetKey] = built
+                lock cache {
+                    cache.TreeSet[setKey] = merged
+                }
+                built = merged
             }
             this.partialAggregateScopeMappers[owner] = built
             return built
@@ -2301,7 +2321,9 @@ partial class CSharpToGSharpTranslator {
             return ownedMethods
                 .Where(
                 (m MethodDeclarationSyntax) -> this.CanLowerOwnedExtension(m) && !this.IsPreservedOwnedExtension(
-                    this.context.Compilation.GetSemanticModel(m.SyntaxTree).GetDeclaredSymbol(m) as IMethodSymbol
+                    TranslationContext.GetSemanticModel(this.context.Compilation, m.SyntaxTree).GetDeclaredSymbol(
+                        m
+                    ) as IMethodSymbol
                 )
             )
                 .OrderBy((m MethodDeclarationSyntax) -> m.SyntaxTree.FilePath, StringComparer.Ordinal)
@@ -5522,6 +5544,11 @@ partial class CSharpToGSharpTranslator {
 
             // Identifier spelling -> matching tokens, built once per compilation
             // so lifted-helper candidates never rescan syntax trees.
+            private let ScopeReservationMapperCaches ConditionalWeakTable[
+                Compilation,
+                ScopeReservationMapperCache
+            ] = ConditionalWeakTable[Compilation, ScopeReservationMapperCache]()
+
             private func GetIdentifierTokens(compilation Compilation, name string) IReadOnlyList[
                 Microsoft.CodeAnalysis.SyntaxToken
             ] {
