@@ -4171,7 +4171,9 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if ce.TypeArgumentList != nil {
+        // Symbolic storage does not grant source value types the CLR Nullable member surface (#3034).
+        if ce.TypeArgumentList != nil ||
+            (methodName != "GetValueOrDefault" && nullableReceiver.UnderlyingType is not TupleTypeSymbol) {
             return false
         }
         if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
