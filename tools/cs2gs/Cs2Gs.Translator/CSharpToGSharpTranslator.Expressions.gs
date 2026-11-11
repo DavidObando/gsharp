@@ -2687,6 +2687,11 @@ partial class CSharpToGSharpTranslator {
             if translated is ConditionalReceiverExpression {
                 return translated
             }
+            // Issue #5935: Nullable<T> members and extensions consume the nullable value itself.
+            // A receiver assertion would unwrap it to T and change member binding or null behavior.
+            if this.context.GetTypeInfo(recv).Type?.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T {
+                return translated
+            }
             // ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata is `T!`
             // in G#, and gsc checks a `T!` receiver itself (§4).
             //
