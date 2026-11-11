@@ -332,19 +332,22 @@ source indexer setter, `box[0] = 1`) and a conversion operator (`op_Implicit` or
 converted function literal or on a relational pattern operand: #5663, #5665,
 corpus rows z19 to z29) keep the full storage invalidation.
 
-**Known limitations of the call rule.** Because a plain call does not kill
-the fact, the rule does not cover a callee that writes the storage by a path
-the call site does not show: (1) a mutable global or static that the
-by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns `g`);
-(2) an alias created elsewhere (the caller passed an element or member, and
-a callee reaches its container through an array, list, `StrongBox`, a
+**Call-effect summaries (#5326).** For a plain call, the compiler computes a
+transitive `CallEffectSummary` over the callee's syntax and imported metadata
+(written field/property types, written element/buffer slot types, virtual/interface
+overrides, generic substitutions, BCL equality/comparer/`ToString` callbacks,
+and `WritesAnyStorage` for reflection/unsafe/unknown callees) and drops a
+by-reference parameter's fact when `SummaryMayOverwriteRoot` reports that the
+call can write storage that may hold the root: (1) a mutable global or static
+that the by-reference parameter aliases (`Run(ref g)`, then `Clear()` assigns
+`g`); (2) an alias created elsewhere (the caller passed an element or member,
+and a callee reaches its container through an array, list, `StrongBox`, a
 cyclic object, a base class or a subclass, a generic holder, a
 `CollectionsMarshal` slot, `LinkedListNode<T>.ValueRef`, `Memory<T>.Span`);
 (3) a container reachable from an operand (`Clear(xs)` with the aliased
-element in `xs`). They are the same hole as in C# nullable analysis and are
-pinned as accepted programs by corpus rows h2 and h3 (they run and throw
-`NullReferenceException`). A sound call-effect model is tracked in the
-follow-up issue (effect summaries) tracked in #5326.
+element in `xs`). Corpus rows `h2` (`h2_limitation_call_with_container_operand`)
+and `h3` (`h3_limitation_call_writes_global`) are therefore rejected with
+`GS0158`.
 
 **The conservative default.** The lists above and the proof rules of
 section 8 are closed. A fact survives a program point only when one of the
@@ -858,7 +861,7 @@ compatibility note. "Probe" refers to section 4.
 | R9 | Invalidation is expression-granular: `s != nil ? consume((s = nil), s.Length) : 0` (ADR-0064 L576-581, #4985) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R10 | Every handler entry sees the writes of every `when` filter in the function: a later clause (probe cA), an intervening `finally` (probe d1), an inner `catch` reached through a replacement exception (probe f3), where the filter stores nil (bug [#5168](https://github.com/DavidObando/gsharp/issues/5168)) | accepted, dereferences nil at run time | GS0158 | less permissive (soundness) |
 | R11 | Any call, written or introduced by lowering, kills a fact on a mutable global: `text = "safe"; Clear(); text.Length` where `Clear` assigns the global (probes d3, d3b); `for item in items { }` over an iterator that assigns it (probe f5) (bug [#5170](https://github.com/DavidObando/gsharp/issues/5170)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
-| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write (a call alone does not kill a by-reference parameter's fact: amendment A3, #5292), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2) (bug [#5171](https://github.com/DavidObando/gsharp/issues/5171)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
+| R12 | A write to any member of an alias class kills the facts on the whole class, and so does any member, index or indirect write or a call whose `CallEffectSummary` can write storage that may hold the root (amendment A3, #5292, #5326), because a `ref` local or a by-reference parameter may alias the written element or member: `let ref a C? = x; ...; x = nil; a.Value` (probes d4, d4b); `let ref a C? = xs[0]; ...; xs[0] = nil; a.Value` (probe f2); `Run(ref xs[0], xs)` with `Run(ref a C?, xs []C?)` doing `xs[0] = nil; a.Value` (probe g2); `Clear(xs)` or `Clear()` writing an aliased element or global (probes h2, h3) (bugs [#5171](https://github.com/DavidObando/gsharp/issues/5171), [#5326](https://github.com/DavidObando/gsharp/issues/5326)) | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |
 | R13 | A suspension point (`await`, `yield`) kills facts on mutable globals and on closure-assigned locals, because the code that runs while the function is suspended may invoke a closure that escaped: iterator with `let clear = func() { s = nil }`, `if s != nil { yield 0; yield s.Length }` (probe g5) | accepted, prints `0` and `1` | GS0158 | less permissive (conservative default; the program is correct) |
 | R14 | A read of a property with user code (a non-auto getter) is a `call` in every position, a condition included, and removes every member-bearing path. So is a read or write of an auto property that can dispatch to an override (#5599): an `open` or `override` property (a property override can be overridden again) on a receiver whose type can have a subclass, or a property reached through an interface. A value type and a class that is neither `open` nor `sealed` cannot have a subclass, so their auto properties keep the facts, and so does the initializer of a construction, whose type is exact. Example: `if getResultCall.Receiver is not BoundImportedInstanceCallExpression getAwaiterCall { return }` after an earlier proof of a member path (`ExpressionBinder.Access.MemberLookup.gs:3991`, `BaseCallForwarderRewriter.gs:490`) | accepted (today's straight-line kill follows the statement's syntax: calls and member writes only) | GS0158 / GS0159 on the member-path read | less permissive |
 | R15 | Any call, written or introduced by lowering, kills a fact on a closure-assigned local or parameter, because the callee can run a closure that escaped and assigns it. A declared function with no captures and no callable argument is no exception. A call through a callable value keeps today's classification (`AnalyzeCallableVariable`): `h.Callback = func() { x = nil }; if x == nil { return 0 }; Wrapper(h); x.Value` with `Wrapper(h Holder) { h.Callback() }` (probe q3, straight-line form; bug [#5237](https://github.com/DavidObando/gsharp/issues/5237)). A by-reference parameter keeps its fact (amendment A3), and a local that no closure assigns keeps its fact | accepted, throws `NullReferenceException` at run time | GS0158 | less permissive (soundness) |

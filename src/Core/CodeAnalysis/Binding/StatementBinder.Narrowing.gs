@@ -415,7 +415,8 @@ internal partial class StatementBinder {
         externalFunctionValues,
         (first VariableSymbol, second VariableSymbol) -> MayShareStorage(first, second),
         (variable VariableSymbol) -> NamesClosureAssignedStorage(variable),
-        knownStatements
+        knownStatements,
+        (call BoundExpression, rootType TypeSymbol) -> CallEffectsMayOverwriteRoot(call, rootType)
     )
 
     /// ADR-0208 R12 (#5171): removes the callable aliases that [`collector`](paramref) assigns, and
@@ -671,7 +672,10 @@ internal partial class StatementBinder {
         }
         if !anyRootAssigned &&
             !dropAllMemberPaths &&
-            (statementCollector == nil || !statementCollector.MayMutateReferenceStorage) &&
+            (
+            statementCollector == nil ||
+                (!statementCollector.MayMutateReferenceStorage && !statementCollector.HasCallReferenceEffects)
+        ) &&
             !dropAllRoots &&
             !dropGlobalRoots &&
             !runsEscapedClosure &&
@@ -873,9 +877,9 @@ internal partial class StatementBinder {
             ) ||
                 (
                 (isValueType || IsExternalStorageAlias(variable) || IsByReferenceRoot(variable)) &&
-                    (dropAllMemberPaths || effects.MayMutateReferenceStorage || effects.MayMutateGlobalRoots)
+                    (dropAllMemberPaths || effects.MayWriteStorageOf(path) || effects.MayMutateGlobalRoots)
             ) ||
-                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayMutateReferenceStorage)
+                StatementKillsPath(effects, path, dropAllMemberPaths, effects.MayWriteStorageOf(path))
         }
     }
 
@@ -5749,6 +5753,8 @@ internal partial class StatementBinder {
         private let mayShareStorage((VariableSymbol, VariableSymbol) -> bool)?
         private let isClosureAssigned((VariableSymbol) -> bool)?
         private let knownStatements Dictionary[BoundStatement, StatementEffects]?
+        private let callEffectsMayOverwriteRoot((BoundExpression, TypeSymbol) -> bool)?
+        private let callExpressions List[BoundExpression] = List[BoundExpression]()
         private var hasAliasSensitiveOperations bool
         private var hasControlTransfer bool
 
@@ -5757,11 +5763,13 @@ internal partial class StatementBinder {
             externalFunctionValues IEnumerable[VariableSymbol]? = nil,
             mayShareStorage((VariableSymbol, VariableSymbol) -> bool)? = nil,
             isClosureAssigned((VariableSymbol) -> bool)? = nil,
-            knownStatements Dictionary[BoundStatement, StatementEffects]? = nil
+            knownStatements Dictionary[BoundStatement, StatementEffects]? = nil,
+            callEffectsMayOverwriteRoot((BoundExpression, TypeSymbol) -> bool)? = nil
         ) {
             this.knownStatements = knownStatements
             this.mayShareStorage = mayShareStorage
             this.isClosureAssigned = isClosureAssigned
+            this.callEffectsMayOverwriteRoot = callEffectsMayOverwriteRoot
             Roots = HashSet[VariableSymbol]()
             WritableReferenceRoots = HashSet[VariableSymbol]()
             VisitedCatchFilters = List[ExpressionSyntax]()
@@ -5822,26 +5830,47 @@ internal partial class StatementBinder {
         }
         private var untypedReferenceStorageWrite bool = false
 
-        /// ADR-0208 R12 and R20 (#5292, #5827): whether the statement can store into the storage that the root of
-        /// [`path`](paramref) names. A fact on the root itself dies on every reference-storage write. A fact on a member
-        /// path dies only on a write whose location can hold the root's storage
-        /// (cref:StatementBinder.StorageWriteMayOverwriteRoot), or on a write that the collector cannot type.
+        prop HasCallReferenceEffects bool -> callExpressions.Count > 0
+
+        /// ADR-0208 R12 and R20 (#5292, #5827, #5326): whether the statement can store into the storage that the root of
+        /// [`path`](paramref) names. A fact on the root itself dies on every reference-storage write or call whose effect
+        /// summary can overwrite the root's storage. A fact on a member path dies only on a write whose location can hold
+        /// the root's storage (cref:StatementBinder.StorageWriteMayOverwriteRoot), or on a write that the collector cannot type.
         /// @param path The path of the fact.
         /// @returns `true` when the statement can overwrite the storage of the root.
         func MayWriteStorageOf(path AccessPath) bool {
-            if !MayMutateReferenceStorage {
-                return false
-            }
-            if !StatementBinder.HasMemberLinks(path) || untypedReferenceStorageWrite {
-                return true
-            }
-            let root = StatementBinder.EffectiveMemberRoot(path)
-            if root == nil {
-                return true
-            }
-            for write in referenceStorageWrites {
-                if StatementBinder.StorageWriteMayOverwriteRoot(write, root.Type) {
+            if MayMutateReferenceStorage {
+                if !StatementBinder.HasMemberLinks(path) || untypedReferenceStorageWrite {
                     return true
+                }
+                let root = StatementBinder.EffectiveMemberRoot(path)
+                if root == nil {
+                    return true
+                }
+                for write in referenceStorageWrites {
+                    if StatementBinder.StorageWriteMayOverwriteRoot(write, root.Type) {
+                        return true
+                    }
+                }
+            }
+            if callExpressions.Count > 0 && !StatementBinder.HasMemberLinks(path) &&
+                callEffectsMayOverwriteRoot != nil {
+                let root = StatementBinder.EffectiveMemberRoot(path)
+                if root == nil {
+                    return true
+                }
+                if !StatementBinder.IsExternalStorageAlias(root) {
+                    return false
+                }
+                if StatementBinder.CallsMayWriteAliasedStorage(root) {
+                    return true
+                }
+                let chain = StatementBinder.AliasChain(root)
+                let targetRoot = chain[chain.Count - 1]
+                for call in callExpressions {
+                    if callEffectsMayOverwriteRoot!!(call, targetRoot.Type) {
+                        return true
+                    }
                 }
             }
             return false
@@ -5878,6 +5907,7 @@ internal partial class StatementBinder {
             !ContainsTry &&
             !MayMutateMemberPaths &&
             !MayMutateReferenceStorage &&
+            !HasCallReferenceEffects &&
             !MayMutateAnyRoot &&
             !MayMutateGlobalRoots &&
             !MayRunEscapedClosure &&
@@ -6161,6 +6191,11 @@ internal partial class StatementBinder {
             if !isStableSystemIndexOp && node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
+                callExpressions.Add(node)
+            }
+            if node is BoundBaseClassCallExpression baseClassCall &&
+                (baseClassCall.Method != nil || baseClassCall.IsSetterAccessor) {
+                callExpressions.Add(node)
             }
             if node is BoundCallOperationExpression{CalledFunction: FunctionSymbol function} {
                 // ADR-0208 R12 (#5292, #5663, #5665, amendment A3): a plain function call does not write by-reference storage.

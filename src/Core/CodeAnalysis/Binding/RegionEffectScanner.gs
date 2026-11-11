@@ -1347,7 +1347,14 @@ internal sealed class RegionEffectScanner {
                 SetOrigin(name, nil)
                 current.TypeTests.RemoveAt(i)
             } else if !test.DeclaredInRegion && CandidateUnlessDeclared(test) == nil {
-                current.TypeTests[i] = RegionTypeTest(test.Name, test.TypeName, test.Arity, test.MayBeConstant, true)
+                current.TypeTests[i] = RegionTypeTest(
+                    test.Name,
+                    test.TypeName,
+                    test.Arity,
+                    test.MayBeConstant,
+                    true,
+                    test.TypeClause
+                )
             }
         }
         // A nested named call whose callee the enclosing region declares calls a function value. A nested member
@@ -3053,14 +3060,14 @@ internal sealed class RegionEffectScanner {
         declaredInRegion bool = false
     ) RegionTypeTest {
         if type.Identifier == nil || type.IsArray || type.IsTuple || type.IsFunction || type.IsFunctionPointer {
-            return RegionTypeTest(name, nil, 0, mayBeConstant, declaredInRegion)
+            return RegionTypeTest(name, nil, 0, mayBeConstant, declaredInRegion, type)
         }
         let arity = if type.TypeArguments is {} arguments {
             arguments.Count
         } else {
             0
         }
-        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant, declaredInRegion)
+        return RegionTypeTest(name, type.DottedName, arity, mayBeConstant, declaredInRegion, type)
     }
 
     private func NameOf(expression ExpressionSyntax?) string? {

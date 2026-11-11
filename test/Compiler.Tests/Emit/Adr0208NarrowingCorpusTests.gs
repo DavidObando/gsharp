@@ -1615,7 +1615,7 @@ func Run(ref a C?, xs []C?) int32 {
 func Main() {
     var xs = []C?{C{}}
     Console.WriteLine(Run(ref xs[0], xs))
-}`, "", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+}`, "GS0158@8:14", "reject", "", "R12 (#5326)"}
             yield []object{"h3_limitation_call_writes_global", `class C {
     var Value int32 = 1
 }
@@ -1626,7 +1626,7 @@ func Run(ref a C?) int32 {
     Clear()
     return a.Value
 }
-Console.WriteLine(Run(ref g))`, "GS0286@11:1", "nre", "", "R12 amendment A3 (#5292): documented limitation, see the follow-up issue"}
+Console.WriteLine(Run(ref g))`, "GS0158@9:14 GS0286@11:1", "reject", "", "R12 (#5326)"}
             yield []object{"h4_same_variable_two_ref_arguments", `class C {
     var Value int32 = 1
 }

@@ -107,12 +107,20 @@ internal sealed class RegionWrite {
 /// A type test of a name that the region does not declare: the binder looks up the members of the name on the
 /// tested type where the test holds (ADR-0213, function values).
 internal sealed class RegionTypeTest {
-    init(name string, typeName string?, arity int32, mayBeConstant bool, declaredInRegion bool = false) {
+    init(
+        name string,
+        typeName string?,
+        arity int32,
+        mayBeConstant bool,
+        declaredInRegion bool = false,
+        typeClause TypeClauseSyntax? = nil
+    ) {
         Name = name
         TypeName = typeName
         Arity = arity
         MayBeConstant = mayBeConstant
         DeclaredInRegion = declaredInRegion
+        TypeClause = typeClause
     }
 
     /// Gets the tested name.
@@ -137,6 +145,11 @@ internal sealed class RegionTypeTest {
 
     /// Whether the region declares the first segment of the name, so a non-type name is a region constant.
     prop DeclaredInRegion bool {
+        get;
+    }
+
+    /// Gets the syntax clause of the tested type, when available.
+    prop TypeClause TypeClauseSyntax? {
         get;
     }
 }

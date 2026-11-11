@@ -813,6 +813,275 @@ func Run(ref a C?, box Box) int32 {
 let box = Box{}
 Console.WriteLine(Run(ref box.Field, box))
 `}
+            yield []object{"issue-5326-class1-call-writes-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var g C? = C{}
+func Clear() { g = nil }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+Console.WriteLine(Run(ref g))
+`}
+            yield []object{"issue-5326-class1-call-writes-static-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder {
+    shared {
+        var Shared C? = C{}
+        func Clear() { Shared = nil }
+    }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Holder.Clear()
+    return a.Value
+}
+Console.WriteLine(Run(ref Holder.Shared))
+`}
+            yield []object{"issue-5326-class2-call-clears-container-operand", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    Clear(xs)
+    return a.Value
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class2-cyclic-object-self-detach", `
+import System
+
+class C {
+    var Value int32 = 1
+    var Link C?
+    func Detach() { Link = nil }
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    a.Detach()
+    return a.Value
+}
+let c = C{}
+c.Link = c
+Console.WriteLine(Run(ref c.Link))
+`}
+            yield []object{"issue-5326-class2-loop-call-clears-container-operand", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+func Clear(xs []C?) { xs[0] = nil }
+func Run(ref a C?, xs []C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        Clear(xs)
+    }
+    return total
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class3-interface-dispose-clears-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder : IDisposable {
+    var Field C? = C{}
+    func Dispose() { Field = nil }
+}
+func Run(ref a C?, d IDisposable) int32 {
+    if a == nil { return 0 }
+    d.Dispose()
+    return a.Value
+}
+let h = Holder{}
+Console.WriteLine(Run(ref h.Field, h))
+`}
+            yield []object{"issue-5326-class3-open-base-override-clears-field", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+open class Base {
+    open func Step() { }
+}
+class Derived : Base {
+    var Field C? = C{}
+    override func Step() { Field = nil }
+}
+func Run(ref a C?, b Base) int32 {
+    if a == nil { return 0 }
+    b.Step()
+    return a.Value
+}
+let d = Derived{}
+Console.WriteLine(Run(ref d.Field, d))
+`}
+            yield []object{"issue-5326-class4-collections-marshal-as-span-clear", `
+import System
+import System.Collections.Generic
+import System.Runtime.InteropServices
+
+class C {
+    var Value int32 = 1
+}
+func ClearList(xs List[C?]) {
+    CollectionsMarshal.AsSpan(xs).Clear()
+}
+func Run(ref a C?, xs List[C?]) int32 {
+    if a == nil { return 0 }
+    ClearList(xs)
+    return a.Value
+}
+let xs = List[C?](){C{}}
+Console.WriteLine(Run(ref CollectionsMarshal.AsSpan(xs)[0], xs))
+`}
+            yield []object{"issue-5326-class4-queue-copy-to-array", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func OverwriteFromQueue(q Queue[C?], arr []C?) {
+    q.CopyTo(arr, 0)
+}
+func Run(ref a C?, q Queue[C?], arr []C?) int32 {
+    if a == nil { return 0 }
+    OverwriteFromQueue(q, arr)
+    return a.Value
+}
+let q = Queue[C?]()
+q.Enqueue(nil)
+let arr = []C?{C{}}
+Console.WriteLine(Run(ref arr[0], q, arr))
+`}
+            yield []object{"issue-5326-class5-constructed-generic-holder-clear", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder[T] {
+    var Item T
+    init(item T) { Item = item }
+    func Reset() { Item = default(T) }
+}
+func Run(ref a C?, h Holder[C?]) int32 {
+    if a == nil { return 0 }
+    h.Reset()
+    return a.Value
+}
+let h = Holder[C?](C{})
+Console.WriteLine(Run(ref h.Item, h))
+`}
+            yield []object{"issue-5326-class5-covariant-array-clear", `
+import System
+
+open class Base {
+    var Value int32 = 1
+}
+class C : Base { }
+func ClearBase(items []Base?) {
+    items[0] = nil
+}
+func Run(ref a C?, items []Base?) int32 {
+    if a == nil { return 0 }
+    ClearBase(items)
+    return a.Value
+}
+let xs = []C?{C{}}
+Console.WriteLine(Run(ref xs[0], xs))
+`}
+            yield []object{"issue-5326-class6-dictionary-contains-key-equality-callback", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(obj object?) bool -> true
+}
+func Probe(d Dictionary[Key, int32], k Key) bool -> d.ContainsKey(k)
+func Run(ref a C?, d Dictionary[Key, int32], k Key) int32 {
+    if a == nil { return 0 }
+    let _ = Probe(d, k)
+    return a.Value
+}
+let d = Dictionary[Key, int32]()
+Console.WriteLine(Run(ref globalC, d, Key{}))
+`}
+            yield []object{"issue-5326-class6-string-builder-append-tostring-callback", `
+import System
+import System.Text
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Evil {
+    override func ToString() string {
+        globalC = nil
+        return ""
+    }
+}
+func FormatItem(sb StringBuilder, item object) {
+    let _ = sb.Append(item)
+}
+func Run(ref a C?, sb StringBuilder, item object) int32 {
+    if a == nil { return 0 }
+    FormatItem(sb, item)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, StringBuilder(), Evil{}))
+`}
+            yield []object{"issue-5326-class7-interlocked-exchange-clears-field", `
+import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    func ClearAtomically() {
+        let _ = Interlocked.Exchange(&Field, nil)
+    }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box.ClearAtomically()
+    return a.Value
+}
+let box = Box{}
+Console.WriteLine(Run(ref box.Field, box))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -1107,6 +1376,72 @@ func Run() int32 {
     return a17.Value
 }
 func Main() { Console.WriteLine(Run()) }
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-call-writes-unrelated-field-type", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Box {
+    var Field C? = C{}
+    var Count int32 = 0
+    func BumpCount() { Count = Count + 1 }
+}
+func Run(ref a C?, box Box) int32 {
+    if a == nil { return 0 }
+    box.BumpCount()
+    return a.Value + box.Count
+}
+func Main() {
+    let box = Box{}
+    Console.WriteLine(Run(ref box.Field, box))
+}
+`, []string{"2"}}
+            yield []object{"issue-5326-safe-call-mutates-fresh-local-container", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+func BuildScratchCount(seed C) int32 {
+    let scratch = List[C?]()
+    scratch.Add(seed)
+    scratch.Add(nil)
+    return scratch.Count
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = BuildScratchCount(a)
+    return a.Value + n
+}
+func Main() {
+    var x C? = C{}
+    Console.WriteLine(Run(ref x))
+}
+`, []string{"3"}}
+            yield []object{"issue-5326-safe-generic-call-writes-unrelated-instantiation", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+class Holder[T] {
+    var Item T
+    init(item T) { Item = item }
+    func Reset() { Item = default(T) }
+}
+func Run(ref a C?, other Holder[string?]) int32 {
+    if a == nil { return 0 }
+    other.Reset()
+    return a.Value
+}
+func Main() {
+    var x C? = C{}
+    let other = Holder[string?]("hi")
+    Console.WriteLine(Run(ref x, other))
+}
 `, []string{"1"}}
         }
 
