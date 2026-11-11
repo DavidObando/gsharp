@@ -680,13 +680,20 @@ partial class CSharpToGSharpTranslator {
 
         private func ConditionalIndexNeedsRuntimeGuard(conditionalAccess ConditionalAccessExpressionSyntax) bool {
             let receiver = conditionalAccess.Expression
+            let memberReceiver = Unparenthesize(receiver) ?? receiver
             let detachedReceiver = FindLeadingElementBinding(receiver) is ElementBindingExpressionSyntax binding &&
                 this
                 .state
                 .ConditionalElementReceivers
                 .ContainsKey(binding)
+            // Nullable member storage keeps conditional indexing unless a guard capture made the emitted read non-null.
             return FindLeadingElementBinding(conditionalAccess.WhenNotNull) != nil &&
                 (!DependsOnEnclosingConditionalReceiver(receiver) || detachedReceiver) &&
+                (
+                this.IsGuardCapturedFieldRead(memberReceiver) || !this.ReceiverIsNullableReferenceFieldOrProperty(
+                    memberReceiver
+                )
+            ) &&
                 this.GSharpExpressionIsStaticallyNonNull(receiver) && !this.ConditionalIndexReceiverIsFlowNarrowed(
                 receiver
             )

@@ -343,6 +343,46 @@ namespace Demo
     }
 
     @Fact
+    func NullableAndPromotedMembers_KeepNativeConditionalIndices() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+using System.Diagnostics.CodeAnalysis;
+namespace Demo
+{
+    public class Punctuation
+    {
+        public string?[] Infix = Array.Empty<string?>();
+        public string?[]? NullableField;
+        [AllowNull] public string?[] PromotedField = Array.Empty<string?>();
+        [AllowNull] public string?[] PromotedProperty { get; set; } = Array.Empty<string?>();
+    }
+    public static class P
+    {
+        static int indices;
+        static int Index() { indices++; return 0; }
+        static string? ReadNonNull(Punctuation punct) => punct.Infix?[Index()];
+        static string? ReadNullable(Punctuation punct) => punct.NullableField?[Index()];
+        static string? ReadField(Punctuation punct) => punct.PromotedField?[Index()];
+        static string? ReadProperty(Punctuation punct) => punct.PromotedProperty?[Index()];
+        public static string Run()
+        {
+            var punct = new Punctuation { Infix = new string?[] { "a" }, PromotedField = null, PromotedProperty = null };
+            var before = ReadNonNull(punct) + "|" + ReadNullable(punct) + "|" + ReadField(punct) + "|" + ReadProperty(punct) + ":" + indices;
+            punct.NullableField = new string?[] { "b" };
+            punct.PromotedField = new string?[] { null };
+            punct.PromotedProperty = new string?[] { "c" };
+            return before + ";" + ReadNullable(punct) + "|" + ReadField(punct) + "|" + ReadProperty(punct) + ":" + indices;
+        }
+    }
+}`)
+        Assert.Contains("punct.NullableField?[", printed)
+        Assert.Contains("punct.PromotedField?[", printed)
+        Assert.Contains("punct.PromotedProperty?[", printed)
+        Assert.DoesNotContain("punct.Infix?[", printed)
+    }
+
+    @Fact
     func GuardedMembers_UseTheSharedStablePathNarrowing() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`
 #nullable enable
