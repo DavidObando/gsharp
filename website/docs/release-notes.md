@@ -638,7 +638,7 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 ### Bug Fixes
 
-- **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple elements and block values accept nullable destinations after a backward jump removes their narrowing, including nested tuples and `defer` or `using` cleanup values. Tuple conversions require implicit element conversions before treating matching CLR layouts as identity, so non-null destinations still reject nullable elements. Platform elements retain their required runtime checks.
+- **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple literals capture narrowed reads per element and resolve them for the consumer's target type, including nested tuples and `defer` or `using` block values. Nullable destinations accept the declared value; non-null destinations still check a retracted narrowing. Existing tuple conversion classification and ordinary call results remain unchanged.
 
 ## 0.5.212 (October 22, 2026)
 

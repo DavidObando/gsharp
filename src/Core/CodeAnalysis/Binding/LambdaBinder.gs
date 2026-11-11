@@ -3704,7 +3704,7 @@ internal class LambdaBinder {
             // Issue #5603 / #5631: the conversion runs outside the narrowing scope, so the access path of a narrowed
             // read comes from the read itself. The read takes its declared value when the result does not need the
             // narrowing, as an eager conversion does.
-            operand = conversions.DecideNarrowedConversion(
+            operand = conversions.ResolveNarrowedValue(
                 node.Syntax?.Location ?? syntax.Body.Location,
                 operand,
                 returnType

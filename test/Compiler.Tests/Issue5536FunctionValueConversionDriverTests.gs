@@ -2009,6 +2009,7 @@ namespace FunctionControl {
         public NilSink(string? value) { Value = value; }
         public string? Value { get; }
         public bool this[string? key] => key == null;
+        public static string? Maybe() => "x";
     }
 }
 `, assemblyName: "FunctionContract", deterministic: true)
@@ -2029,8 +2030,46 @@ namespace FunctionControl {
             ),
             ("Console.Write(NT((s, 1)))", "Console.Write(NT((s, 1)));", "True"),
             (
+                "Console.Write(NT(({ n = n + 0\n                (s, 1) })))",
+                "n = n + 0; Console.Write(NT((s, 1)));",
+                "True"
+            ),
+            (
+                "Console.Write(NT(({ defer Console.Write(\"D\")\n                (s, 1) })))",
+                "(string?, int) value; try { value = (s, 1); } finally { Console.Write(\"D\"); } Console.Write(NT(value));",
+                "DTrue"
+            ),
+            (
+                "Console.Write(NT(({ using let stream = System.IO.MemoryStream()\n                (s, 1) })))",
+                "(string?, int) value; using (var stream = new System.IO.MemoryStream()) { value = (s, 1); } " +
+                    "Console.Write(NT(value));",
+                "True"
+            ),
+            (
+                "var t = (\"x\", 0)\n            t = (NilSink.Maybe(), 1)\n            Console.Write(t.Item1 == \"x\")",
+                "var t = (\"x\", 0); t = (NilSink.Maybe(), 1); Console.Write(t.Item1 == \"x\");",
+                "True"
+            ),
+            (
+                "let t (string?, string, int32) = (s, NilSink.Maybe(), 1)\n" +
+                    "            Console.Write(t.Item1 == nil && t.Item2 == \"x\")",
+                "(string?, string, int) t = (s, NilSink.Maybe(), 1); Console.Write(t.Item1 == null && t.Item2 == \"x\");",
+                "True"
+            ),
+            (
                 "let get = func() (string?, int32) { return (s, 1) }\n            Console.Write(get().Item1 == nil)",
                 "Func<(string?, int)> get = () => (s, 1); Console.Write(get().Item1 == null);",
+                "True"
+            ),
+            (
+                "let get = () -> {\n                var r string? = \"a\"\n                var m = 0\n" +
+                    "                if r != nil {\n                    M: if m > 0 { return (r, 1) }\n" +
+                    "                    m++\n                    r = nil\n                    goto M\n                }\n" +
+                    "                return default((string?, int32))\n            }\n" +
+                    "            Console.Write(get().Item1 == nil)",
+                "Func<(string?, int)> get = () => { string? r = \"a\"; var m = 0; if (r != null) { " +
+                    "M: if (m > 0) { return (r, 1); } m++; r = null; goto M; } return default((string?, int)); }; " +
+                    "Console.Write(get().Item1 == null);",
                 "True"
             ),
             (
@@ -2133,21 +2172,31 @@ namespace FunctionControl {
     }
 
     @Theory
-    @InlineData("let t (string, int32) = @(s, 1)", "(s, 1)")
-    @InlineData("let t ((string, int32), int32) = (@(s, 1), 2)", "(s, 1)")
-    @InlineData("let t (string, int32) = @(({ s }), 1)", "(({ s }), 1)")
-    @InlineData("let t = (s, 1)\n            let u (string, int32) = @t", "t")
-    @InlineData("let t = ((s, 1), 2)\n            let u ((string, int32), int32) = @t", "t")
+    @InlineData("let t (string, int32) = (@s, 1)", "s")
+    @InlineData(
+        "let get = () -> {\n                var m = 0\n                M: m++\n" +
+            "                if m < 2 { goto M }\n                return m\n            }\n" +
+            "            let t (string, int32) = (@s, 1)",
+        "s"
+    )
+    @InlineData("let t (string, int32)? = (@s, 1)", "s")
+    @InlineData("let t ((string, int32), int32) = ((@s, 1), 2)", "s")
+    @InlineData("let t (string, int32) = (({ @s }), 1)", "s")
     @InlineData("let t = (s, 1)\n            let r string = @t.Item1", "t.Item1")
     @InlineData("Console.Write(F(({ n = n + 0\n                @s })))", "s")
     @InlineData("Console.Write(F(({ defer Console.Write(\"\")\n                @s })))", "s")
     @InlineData("Console.Write(F(({ using let stream = System.IO.MemoryStream()\n                @s })))", "s")
+    @InlineData("Console.Write(FT(({ n = n + 0\n                (@s, 1) })))", "s")
+    @InlineData("Console.Write(FT(({ defer Console.Write(\"\")\n                (@s, 1) })))", "s")
+    @InlineData("Console.Write(FT(({ using let stream = System.IO.MemoryStream()\n                (@s, 1) })))", "s")
     func Issue5653_NonNullTupleAndBlockConsumers_Reject(statement string, value string) {
         using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
         RejectMarked(
             fixture,
-            NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", statement).Replace("#", "s = nil") +
-                "\n}\n",
+            NoConversionPrelude +
+                "func FT(x (string, int32)) int32 -> x.Item1.Length\nfunc Main() {\n" +
+                BranchValueBody
+                .Replace("|", statement).Replace("#", "s = nil") + "\n}\n",
             value
         )
     }

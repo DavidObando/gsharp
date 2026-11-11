@@ -13,9 +13,15 @@ import System.Collections.Immutable
 /// time so the contained (cref:Elements) already match the tuple's
 /// element types.
 class BoundTupleLiteralExpression : BoundExpression {
-    init(syntax SyntaxNode?, tupleType TupleTypeSymbol, elements ImmutableArray[BoundExpression]) : base(syntax) {
+    init(
+        syntax SyntaxNode?,
+        tupleType TupleTypeSymbol,
+        elements ImmutableArray[BoundExpression],
+        narrowedElementReads ImmutableArray[BoundExpression?] = default(ImmutableArray[BoundExpression?])
+    ) : base(syntax) {
         TupleType = tupleType
         Elements = elements
+        NarrowedElementReads = narrowedElementReads
     }
 
     prop TupleType TupleTypeSymbol {
@@ -23,6 +29,11 @@ class BoundTupleLiteralExpression : BoundExpression {
     }
 
     prop Elements ImmutableArray[BoundExpression] {
+        get;
+    }
+
+    /// Holds each element's read before the consumer chooses its type.
+    internal prop NarrowedElementReads ImmutableArray[BoundExpression?] {
         get;
     }
 
