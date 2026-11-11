@@ -419,7 +419,15 @@ partial class CSharpToGSharpTranslator {
                 this.OutDeclarationRequiresPredeclaration(single, local) {
                 return this.GetPredeclaredOutLocalName(single, local, context)
             }
-            return this.nameAllocator.GetName(symbol, context)
+            if symbol is IMethodSymbol method && this.TryResolveMigratedProducerDeconstruct(
+                method,
+                out var sourceMethod,
+                out var producerCompilation
+            ) {
+                return EmittedNameAllocator.For(producerCompilation!!).GetName(sourceMethod, context)
+            }
+            let allocated = this.nameAllocator.GetName(symbol, context)
+            return this.DisambiguateAgainstMigratedProducerDeconstruct(symbol, allocated)
         }
 
         private func EmittedName(
@@ -1589,7 +1597,7 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            let (baseType, interfaces) = this.MapBaseClause(symbol, node, kind!!)
+            var (baseType, interfaces) = this.MapBaseClause(symbol, node, kind!!)
             let baseConstructorArguments List[GExpression]? = this.MapPrimaryConstructorBaseArguments(node, baseType)
             let typeParameters = this.MapTypeParameters(symbol)
             // A class with `protected` members must be an `open class` in G#
@@ -1650,12 +1658,160 @@ partial class CSharpToGSharpTranslator {
                     )
                 )
             }
-            let isUnsafe = node.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword) ||
+            var isUnsafe = node.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword) ||
                 (
                 otherParts != nil && otherParts.Any(
                     (p TypeDeclarationSyntax) -> p.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.UnsafeKeyword)
                 )
-            )
+            ) ||
+                this.TypeHasUnsafeSignatureMember(mergedMembers)
+            if (
+                kind == TypeDeclarationKind.Class ||
+                    kind == TypeDeclarationKind.DataClass ||
+                    kind == TypeDeclarationKind.Struct ||
+                    kind == TypeDeclarationKind.DataStruct
+            ) &&
+                symbol != nil &&
+                this
+                .ShouldAttachOwnedExtensions(node, symbol) {
+                if kind == TypeDeclarationKind.Class {
+                    for inheritedContract in this.GetInheritedImportedDeconstructContractMethods(symbol) {
+                        if this.TypeContainsPointerOrFunctionPointer(inheritedContract.ReturnType) ||
+                            inheritedContract
+                            .Parameters
+                            .Any((p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)) {
+                            isUnsafe = true
+                        }
+                        members.Add(
+                            this.BuildDeconstructContractForwardingMethod(
+                                inheritedContract,
+                                "Deconstruct",
+                                ThisExpression(),
+                                this.EmittedName(inheritedContract, inheritedContract.Name)!!,
+                                isOpen: !symbol.IsSealed,
+                                isOverride: false
+                            )
+                        )
+                    }
+                }
+                let emittedForwarderKeys = HashSet[string](StringComparer.Ordinal)
+                let emittedAdapterReturnTypes = Dictionary[string, string](StringComparer.Ordinal)
+                let emittedExplicitAdapterKeys = HashSet[string](StringComparer.Ordinal)
+                for existingMethod in members.OfType[MethodDeclaration]() {
+                    if existingMethod.ExplicitInterfaceType == nil &&
+                        existingMethod
+                        .Parameters
+                        .Count == 0 &&
+                        existingMethod
+                        .TypeParameters
+                        .Count == 0 {
+                        let existingReturn = if existingMethod.ReturnType != nil {
+                            GSharpPrinter.RenderTypeReference(existingMethod.ReturnType)
+                        } else {
+                            ""
+                        }
+                        emittedAdapterReturnTypes.TryAdd(existingMethod.Name, existingReturn)
+                    }
+                }
+                for (slot, impl) in this.GetInheritedRenamedDeconstructInterfaceContracts(symbol) {
+                    if this.TypeContainsPointerOrFunctionPointer(slot.ReturnType) || slot.Parameters.Any(
+                        (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
+                    ) ||
+                        this.TypeContainsPointerOrFunctionPointer(impl.ReturnType) || impl.Parameters.Any(
+                        (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
+                    ) {
+                        isUnsafe = true
+                    }
+                    let forwarder = if impl.IsImplicitlyDeclared && impl.ContainingType.IsRecord {
+                        this.BuildImplicitRecordDeconstructMethod(
+                            slot,
+                            impl,
+                            this.EmittedName(slot, slot.Name)!!,
+                            isOpen: isOpen
+                        )
+                    } else {
+                        this.BuildDeconstructContractForwardingMethod(
+                            slot,
+                            this.EmittedName(slot, slot.Name)!!,
+                            ThisExpression(),
+                            this.EmittedName(impl, impl.Name)!!,
+                            isOpen: isOpen,
+                            isOverride: false
+                        )
+                    }
+                    let forwarderKey = forwarder.Name + "(" + string.Join(
+                        ",",
+                        forwarder.Parameters.Select(
+                            (p Parameter) -> p.RefKind + ":" + GSharpPrinter.RenderTypeReference(p.Type)
+                        )
+                    ) +
+                        ")"
+                    if emittedForwarderKeys.Add(forwarderKey) {
+                        members.Add(forwarder)
+                    }
+                    let adapter = this.BuildRecordDeconstructionAdapter(
+                        slot,
+                        forceConcreteImplementation: true,
+                        ownerIsUnsafe: isUnsafe
+                    )
+                    if adapter != nil {
+                        let renderedReturnType = if adapter.ReturnType != nil {
+                            GSharpPrinter.RenderTypeReference(adapter.ReturnType)
+                        } else {
+                            ""
+                        }
+                        if !emittedAdapterReturnTypes.TryGetValue(adapter.Name, out var existingReturnType) {
+                            emittedAdapterReturnTypes.Add(adapter.Name, renderedReturnType)
+                            members.Add(adapter)
+                        } else if existingReturnType != renderedReturnType {
+                            let mappedIface = this.typeMapper.Map(slot.ContainingType, this.context, node.GetLocation())
+                            if mappedIface != nil {
+                                let explicitKey = GSharpPrinter.RenderTypeReference(mappedIface) + ":" + adapter.Name
+                                if emittedExplicitAdapterKeys.Add(explicitKey) {
+                                    let explicitAdapter = this.BuildRecordDeconstructionAdapter(
+                                        slot,
+                                        forceConcreteImplementation: true,
+                                        ownerIsUnsafe: isUnsafe,
+                                        explicitInterfaceOverride: mappedIface
+                                    )
+                                    if explicitAdapter != nil {
+                                        members.Add(explicitAdapter)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if kind == TypeDeclarationKind.DataClass && symbol != nil && this.HasImportedDeconstructContractBridge(
+                symbol
+            ) {
+                let bridgeName = this.AllocateImportedDeconstructBridgeName(symbol)
+                if this.ShouldAttachOwnedExtensions(node, symbol) {
+                    let bridge = this.BuildImportedDeconstructContractBridge(
+                        symbol,
+                        node,
+                        baseType,
+                        typeParameters,
+                        isUnsafe
+                    )
+                    if bridge != nil {
+                        if node.Parent is BaseNamespaceDeclarationSyntax or CompilationUnitSyntax {
+                            this.state.PendingTopLevelDeclarations.Add(bridge)
+                        } else {
+                            this.pendingNestedBridges[node] = bridge
+                        }
+                    }
+                }
+                this.RemoveBridgedExplicitInterfaces(symbol, node, interfaces)
+                baseType = NamedTypeReference(
+                    bridgeName,
+                    typeParameters.Select(
+                        (parameter TypeParameter) -> cast[GTypeReference](NamedTypeReference(parameter.Name))
+                    )
+                        .ToList()
+                )
+            }
             // ADR-0145 (§C/§D) / issue #3410: default preserve mode carries the
             // C# `partial` modifier onto each standalone G# part. Legacy merge
             // mode drops it from the single merged type (issue #1910), unless

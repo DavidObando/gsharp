@@ -6144,7 +6144,10 @@ partial class CSharpToGSharpTranslator {
         private func PatternReceiverCanBeDuplicated(expression ExpressionSyntax, translated GExpression? = nil) bool {
             if expression.Parent is IsPatternExpressionSyntax decision &&
                 (
-                this.RecordPatternRunsUserCode(decision.Pattern) ||
+                (
+                    this.RecordPatternRunsUserCode(decision.Pattern) &&
+                        !this.OwnerHasMixedRecordPositionalAndPropertyPatterns(decision)
+                ) ||
                     (
                     UnwrapParenthesesAndSuppressions(expression) is IdentifierNameSyntax identifier &&
                         this.IsByReferenceVariable(this.context.GetSymbolInfo(identifier).Symbol) &&
@@ -8030,7 +8033,12 @@ partial class CSharpToGSharpTranslator {
                         }
                     )
                 }
-                if this.TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
+                if !this.HasPointerDeconstructTupleCarrier(
+                    this.context.SemanticModel.GetDeconstructionInfo(assignment).Method,
+                    this.context.GetTypeInfo(assignment.Right).Type
+                ) &&
+                    this
+                    .TryGetDeconstructionTargets(assignment.Left, out var binding, out var names) {
                     this.RegisterProjectedDeconstructionBindings(assignment.Left, assignment.Right)
                     return []GStatement{
                         cast[GStatement](
