@@ -299,24 +299,34 @@ partial class CSharpToGSharpTranslator {
                     )
                     if inferredLocal.Type is IArrayTypeSymbol inferredArraySymbol &&
                         mappedInferredType is ArrayTypeReference mappedInferredArray &&
-                        declarator
-                        .Initializer
-                        ?.Value is {} inferredInitValue {
-                        let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
-                        this.CollectUnderlyingImplicitArrays(inferredInitValue, initArrays)
-                        if initArrays.Count > 0 {
-                            let promotedInferredElem = this.PromoteInferredDelegateArrayElementType(
+                        this
+                        .TryResolveLocalWidenedImplicitArrayInitializer(
+                        inferredLocal,
+                        out var localDepthOffset,
+                        HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                    ) is {} originInitArray {
+                        let promotedInferredElem = if localDepthOffset == 0 {
+                            this.PromoteInferredDelegateArrayElementType(
                                 mappedInferredArray.ElementType,
                                 inferredArraySymbol.ElementType,
-                                initArrays[0]
+                                originInitArray
                             )
-                            if promotedInferredElem != nil && !object.ReferenceEquals(
-                                promotedInferredElem,
-                                mappedInferredArray.ElementType
-                            ) {
-                                mappedInferredType = ArrayTypeReference(promotedInferredElem, mappedInferredArray.Rank){
-                                    IsNullable = mappedInferredArray.IsNullable
-                                }
+                        } else {
+                            let originComponent = this.GetImplicitArrayComponent(originInitArray)
+                            this.PromoteImplicitArrayLevel(
+                                mappedInferredArray.ElementType,
+                                inferredArraySymbol.ElementType,
+                                originInitArray,
+                                originComponent.Levels,
+                                originComponent.Depth + localDepthOffset
+                            )
+                        }
+                        if promotedInferredElem != nil && !object.ReferenceEquals(
+                            promotedInferredElem,
+                            mappedInferredArray.ElementType
+                        ) {
+                            mappedInferredType = ArrayTypeReference(promotedInferredElem, mappedInferredArray.Rank){
+                                IsNullable = mappedInferredArray.IsNullable
                             }
                         }
                     }

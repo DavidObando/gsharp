@@ -4854,6 +4854,19 @@ partial class CSharpToGSharpTranslator {
             expression ExpressionSyntax,
             elementType ITypeSymbol?,
             elementTypeAcceptsNil bool = false
+        ) GExpression? -> this
+            .BridgeWidenedImplicitArrayConsumer(
+            expression,
+            this.TranslateArrayInitializerElementCore(expression, elementType, elementTypeAcceptsNil),
+            elementType,
+            nil,
+            allowArrayInitializerElement: true
+        )
+
+        private func TranslateArrayInitializerElementCore(
+            expression ExpressionSyntax,
+            elementType ITypeSymbol?,
+            elementTypeAcceptsNil bool
         ) GExpression? {
             var translated GExpression? = this.TranslateExpression(expression)
             // Issues #3682 and #4525: the effective translated element type
@@ -4892,7 +4905,7 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
-            let bridgedElement GExpression? = if sourceType != nil &&
+            return if sourceType != nil &&
                 sourceType.IsReferenceType == true &&
                 (
                 sourceType.NullableAnnotation == Microsoft
@@ -4905,13 +4918,6 @@ partial class CSharpToGSharpTranslator {
             } else {
                 translated
             }
-            return this.BridgeWidenedImplicitArrayConsumer(
-                expression,
-                bridgedElement,
-                elementType,
-                nil,
-                allowArrayInitializerElement: true
-            )
         }
 
         private func TranslateImplicitArrayCreation(creation ImplicitArrayCreationExpressionSyntax) GExpression {

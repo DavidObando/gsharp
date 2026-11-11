@@ -7188,7 +7188,11 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
-        private func ArrayTypeHasAnyAnnotatedSlotLeafAtDepth(targetArrayType IArrayTypeSymbol, depth int32) bool {
+        private func TargetArrayNeedsWidenedElementCast(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            targetArrayType IArrayTypeSymbol,
+            depth int32
+        ) bool {
             var currentArrayType = targetArrayType
             for var d = 0; d < depth; d++ {
                 if currentArrayType.ElementType is not IArrayTypeSymbol nextArrayType {
@@ -7202,21 +7206,117 @@ partial class CSharpToGSharpTranslator {
             }
             if this.UnwrapNullableValueTupleType(slotElementType) is INamedTypeSymbol tupleType &&
                 tupleType.IsTupleType {
-                return this.DeclaredTupleHasAnyAnnotatedLeaf(tupleType)
+                return this.TargetTupleHasWidenedNonNullLeaf(value, tupleType, List[int32]())
             }
-            return slotElementType?.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated
+            return slotElementType != nil &&
+                slotElementType.IsReferenceType &&
+                slotElementType.NullableAnnotation != Microsoft
+                .CodeAnalysis
+                .NullableAnnotation
+                .Annotated
         }
 
-        private func DeclaredTupleHasAnyAnnotatedLeaf(tupleType INamedTypeSymbol) bool {
-            for elem in tupleType.TupleElements {
-                if this.UnwrapNullableValueTupleType(elem.Type) is INamedTypeSymbol nestedTuple &&
+        private func TargetTupleHasWidenedNonNullLeaf(
+            value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            tupleType INamedTypeSymbol,
+            path List[int32]
+        ) bool {
+            for var i = 0; i < tupleType.TupleElements.Length; i++ {
+                let elemType = tupleType.TupleElements[i].Type
+                let childPath = List[int32](path){i}
+                if this.UnwrapNullableValueTupleType(elemType) is INamedTypeSymbol nestedTuple &&
                     nestedTuple.IsTupleType {
-                    if this.DeclaredTupleHasAnyAnnotatedLeaf(nestedTuple) {
+                    if this.TargetTupleHasWidenedNonNullLeaf(value, nestedTuple, childPath) {
                         return true
                     }
-                } else if elem.Type.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                } else if elemType.IsReferenceType &&
+                    elemType.NullableAnnotation != Microsoft
+                    .CodeAnalysis
+                    .NullableAnnotation
+                    .Annotated &&
+                    this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(value, childPath) {
                     return true
                 }
+            }
+            return false
+        }
+
+        private func ExpressionYieldsWidenedImplicitArrayAtTuplePath(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            tuplePath List[int32],
+            visitedLocals HashSet[ILocalSymbol]? = nil
+        ) bool {
+            var unwrapped = Unparenthesize(expression)
+            while true {
+                if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrapped = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrapped is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedExpr {
+                    unwrapped = Unparenthesize(suppressedExpr.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrapped == nil || unwrapped is CastExpressionSyntax {
+                return false
+            }
+            if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax coalesce && coalesce.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceExpression
+            ) {
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(coalesce.Left, tuplePath, visitedLocals) ||
+                    this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(coalesce.Right, tuplePath, visitedLocals)
+            }
+            if this.ComposedValueOperands(unwrapped, includeConvertedNonNullCoalesceAssignment: true) is {} operands {
+                for operand in operands {
+                    if this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(operand, tuplePath, visitedLocals) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if unwrapped is ElementAccessExpressionSyntax elemAccess &&
+                this
+                .context
+                .GetSymbolInfo(elemAccess)
+                .Symbol == nil {
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(
+                    elemAccess.Expression,
+                    tuplePath,
+                    visitedLocals
+                )
+            }
+            if unwrapped is ImplicitArrayCreationExpressionSyntax implicitArr {
+                return !this.ImplicitArrayDelegateSlotIsDeclared(implicitArr, tuplePath: tuplePath)
+            }
+            if unwrapped is IdentifierNameSyntax idExpr &&
+                this
+                .context
+                .GetSymbolInfo(idExpr)
+                .Symbol is ILocalSymbol local &&
+                IsImplicitlyTypedLocal(local) &&
+                local
+                .DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}} {
+                let activeVisited = visitedLocals ?? HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
+                if !activeVisited.Add(local) {
+                    return false
+                }
+                let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+                this.CollectUnderlyingImplicitArrays(localInit, initArrays)
+                if initArrays.Count > 0 {
+                    return initArrays.Any(
+                        (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(
+                            arr,
+                            tuplePath: tuplePath
+                        )
+                    )
+                }
+                return this.ExpressionYieldsWidenedImplicitArrayAtTuplePath(localInit, tuplePath, activeVisited)
             }
             return false
         }
@@ -9873,8 +9973,7 @@ partial class CSharpToGSharpTranslator {
                 return translated
             }
             let arrayDepth = this.CountArrayDimensions(widenedArrayType) - 1
-            if arrayDepth < 0 || !this.ArrayTypeHasDeclaredNonNullSlotAtDepth(effectiveTargetArray, arrayDepth, nil) ||
-                this.ArrayTypeHasAnyAnnotatedSlotLeafAtDepth(effectiveTargetArray, arrayDepth) {
+            if arrayDepth < 0 || !this.TargetArrayNeedsWidenedElementCast(value, effectiveTargetArray, arrayDepth) {
                 return translated
             }
             let hasDeclaredTarget = if targetSymbol != nil {
