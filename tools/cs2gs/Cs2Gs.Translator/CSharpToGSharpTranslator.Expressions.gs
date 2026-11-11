@@ -5247,7 +5247,7 @@ partial class CSharpToGSharpTranslator {
                 ) {
                     continue
                 }
-                if filterOrdinals && this.GetArgumentParameter(argument) is {} boundParam {
+                if this.GetArgumentParameter(argument) is {} boundParam {
                     let paramDef = boundParam.OriginalDefinition
                     let expandedParams = boundParam.IsParams && this.TryGetExpandedParamsElementTarget(
                         argument,
@@ -5260,20 +5260,33 @@ partial class CSharpToGSharpTranslator {
                     } else {
                         paramDef.Type
                     }
-                    if !this.TypeMentionsAnyMethodTypeParameterOrdinal(effectiveParamType, relevantOrdinals) {
+                    if filterOrdinals && !this.TypeMentionsAnyMethodTypeParameterOrdinal(
+                        effectiveParamType,
+                        relevantOrdinals
+                    ) {
                         continue
                     }
-                    this.CollectRelevantInferenceSubexpressions(
-                        argument.Expression,
+                    if boundParam.RefKind != RefKind.None && this.ByRefArgumentSuppliesNilableAtDepth(
+                        argument,
+                        paramDef,
                         effectiveParamType,
-                        relevantOrdinals,
-                        argumentExpressions,
-                        ref sawVerifiedDeclaredInput,
-                        ref sawRejectedNilableInput,
-                        nil,
                         remainingArrayDepth
-                    )
-                    continue
+                    ) {
+                        return false
+                    }
+                    if filterOrdinals {
+                        this.CollectRelevantInferenceSubexpressions(
+                            argument.Expression,
+                            effectiveParamType,
+                            relevantOrdinals,
+                            argumentExpressions,
+                            ref sawVerifiedDeclaredInput,
+                            ref sawRejectedNilableInput,
+                            nil,
+                            remainingArrayDepth
+                        )
+                        continue
+                    }
                 }
                 argumentExpressions.Add(argument.Expression)
             }
@@ -5301,6 +5314,49 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return true
+        }
+
+        private func ByRefArgumentSuppliesNilableAtDepth(
+            argument ArgumentSyntax,
+            declaredParameter IParameterSymbol,
+            effectiveParamType ITypeSymbol?,
+            remainingArrayDepth int32
+        ) bool {
+            var unwrappedParam = effectiveParamType
+            var paramArrayLayers = 0
+            while unwrappedParam is IArrayTypeSymbol arrParam {
+                paramArrayLayers++
+                unwrappedParam = arrParam.ElementType
+            }
+            if unwrappedParam is not ITypeParameterSymbol {
+                return false
+            }
+            let totalArrayDepth = paramArrayLayers + remainingArrayDepth
+            if totalArrayDepth <= 0 {
+                return this.ByRefArgumentStorageIsNilableInGSharp(argument, declaredParameter)
+            }
+            if !this.PassesArgumentStorageUnasserted(argument) || this.IsTranslatorWidenedDeclaration(
+                declaredParameter
+            ) {
+                return false
+            }
+            var storage Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax? = Unparenthesize(argument.Expression)
+            if storage is PostfixUnaryExpressionSyntax suppressed && suppressed.IsKind(
+                Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+            ) {
+                storage = Unparenthesize(suppressed.Operand)
+            }
+            if storage == nil {
+                return false
+            }
+            var elemType ITypeSymbol? = this.GetDeclaredValueType(storage) ?? this.context.GetTypeInfo(storage).Type
+            for var d = 0; d < totalArrayDepth; d++ {
+                elemType = (elemType as IArrayTypeSymbol)?.ElementType
+            }
+            if elemType == nil || elemType.NullableAnnotation == Microsoft.CodeAnalysis.NullableAnnotation.Annotated {
+                return true
+            }
+            return !this.ReceiverTypeArgumentsAreDeclared(storage, nil, nil, nil, totalArrayDepth)
         }
 
         private func CollectRelevantInferenceSubexpressions(
@@ -5387,7 +5443,17 @@ partial class CSharpToGSharpTranslator {
                     }
                     return
                 }
-                var directElemAtDepth ITypeSymbol? = this.context.GetTypeInfo(unwrapped).Type
+                var unwrappedStorage = unwrapped
+                if unwrappedStorage is PostfixUnaryExpressionSyntax suppressedStorage && suppressedStorage.IsKind(
+                    Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression
+                ) {
+                    unwrappedStorage = Unparenthesize(suppressedStorage.Operand) ?? unwrappedStorage
+                }
+                var directElemAtDepth ITypeSymbol? = this.GetDeclaredValueType(unwrappedStorage) ??
+                    this
+                    .context
+                    .GetTypeInfo(unwrappedStorage)
+                    .Type
                 for var d = 0; d < remainingArrayDepth; d++ {
                     directElemAtDepth = (directElemAtDepth as IArrayTypeSymbol)?.ElementType
                 }
@@ -6378,7 +6444,7 @@ partial class CSharpToGSharpTranslator {
                 innermostDepth
             }
             for var d = depth; d <= targetDepth && d < innermostDepth; d++ {
-                if !this.ComponentLevelHasDeclaredNonNullSlot(levels, d, nil) {
+                if !this.ComponentLevelHasDeclaredNonNullSlot(levels, d, nil, implicitArray) {
                     for peer in levels[d] {
                         if this.ImplicitArrayLeavesYieldNilableArrayReference(peer) {
                             return false
@@ -6389,10 +6455,10 @@ partial class CSharpToGSharpTranslator {
             if stopAtIntermediateArrayRef && targetDepth < innermostDepth {
                 return true
             }
-            if this.ComponentLevelHasDeclaredNonNullSlot(levels, innermostDepth, tuplePath) {
+            if this.ComponentLevelHasDeclaredNonNullSlot(levels, innermostDepth, tuplePath, implicitArray) {
                 return true
             }
-            if this.ComponentLevelHasNilableFixedSibling(levels, innermostDepth, tuplePath) {
+            if this.ComponentLevelHasNilableFixedSibling(levels, innermostDepth, tuplePath, implicitArray) {
                 return false
             }
             let targetPeers = if levels.Count > 0 {
@@ -6453,7 +6519,7 @@ partial class CSharpToGSharpTranslator {
                     return false
                 }
             }
-            if depth < innermostDepth && !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil) {
+            if depth < innermostDepth && !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil, implicitArray) {
                 for peer in levels[depth] {
                     if this.ImplicitArrayLeavesYieldNilableArrayReference(peer) {
                         return false
@@ -6501,7 +6567,7 @@ partial class CSharpToGSharpTranslator {
 
         private func ImplicitArrayHasDeclaredTargetSlot(implicitArray ImplicitArrayCreationExpressionSyntax) bool {
             let component = this.GetImplicitArrayComponent(implicitArray)
-            return this.ComponentLevelHasDeclaredNonNullSlot(component.Levels, component.Depth, nil)
+            return this.ComponentLevelHasDeclaredNonNullSlot(component.Levels, component.Depth, nil, implicitArray)
         }
 
         private func GetComponentLevelContractCacheKey(depth int32, tuplePath List[int32]?) string {
@@ -6523,12 +6589,18 @@ partial class CSharpToGSharpTranslator {
         private func ComponentLevelHasDeclaredNonNullSlot(
             levels List[List[ImplicitArrayCreationExpressionSyntax]],
             depth int32,
-            tuplePath List[int32]?
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) bool {
             if levels.Count == 0 || levels[0].Count == 0 {
                 return false
             }
-            let componentRoot = levels[0][0]
+            let cacheNode = if originArray != nil &&
+                !(levels[0].Count == 1 && levels[0][0].Span.Contains(originArray.Span)) {
+                originArray
+            } else {
+                levels[0][0]
+            }
             let cacheKey = this.GetComponentLevelContractCacheKey(depth, tuplePath)
             if this.componentLevelDeclaredSlotCache == nil {
                 this.componentLevelDeclaredSlotCache = Dictionary[
@@ -6536,14 +6608,14 @@ partial class CSharpToGSharpTranslator {
                     Dictionary[string, bool]
                 ]()
             }
-            if !this.componentLevelDeclaredSlotCache!!.TryGetValue(componentRoot, out var rootCache) {
+            if !this.componentLevelDeclaredSlotCache!!.TryGetValue(cacheNode, out var rootCache) {
                 rootCache = Dictionary[string, bool]()
-                this.componentLevelDeclaredSlotCache!![componentRoot] = rootCache
+                this.componentLevelDeclaredSlotCache!![cacheNode] = rootCache
             } else if rootCache.TryGetValue(cacheKey, out var cached) {
                 return cached
             }
             rootCache[cacheKey] = false
-            let result = this.ComputeComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath)
+            let result = this.ComputeComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath, originArray)
             rootCache[cacheKey] = result
             return result
         }
@@ -6551,56 +6623,25 @@ partial class CSharpToGSharpTranslator {
         private func ComputeComponentLevelHasDeclaredNonNullSlot(
             levels List[List[ImplicitArrayCreationExpressionSyntax]],
             depth int32,
-            tuplePath List[int32]?
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) bool {
             if levels.Count == 0 {
                 return false
             }
             for root in levels[0] {
+                if originArray != nil && !root.Span.Contains(originArray.Span) {
+                    continue
+                }
                 if this.RootHasDeclaredNonNullSlotAtDepth(root, depth, tuplePath) {
                     return true
                 }
             }
-            for var peerDepth = 0; peerDepth <= depth && peerDepth < levels.Count; peerDepth++ {
-                for peer in levels[peerDepth] {
-                    if !this.PeerSubtreeHasDeclaredNonNullLeaves(peer, levels, peerDepth, depth, tuplePath) {
-                        continue
-                    }
-                    let aliasUses = List[IdentifierNameSyntax]()
-                    this.CollectImplicitArrayAliasUses(
-                        peer,
-                        aliasUses,
-                        HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
-                    )
-                    for aliasUse in aliasUses {
-                        if !this.AliasUseExecutesUnconditionallyWithDeclaration(peer, aliasUse) {
-                            continue
-                        }
-                        if this.TryGetEnclosingArrayElementSlotAtRelativeDepth(
-                            aliasUse,
-                            depth - peerDepth,
-                            tuplePath,
-                            out var elementSlotDeclared
-                        ) {
-                            if elementSlotDeclared {
-                                return true
-                            }
-                            continue
-                        }
-                        if this.DirectAliasUseHasDeclaredTargetSlot(aliasUse) &&
-                            this.TryGetExpressionDeclaredTargetArrayType(aliasUse) is {} useTargetArrayType &&
-                            this.ArrayTypeHasDeclaredNonNullSlotAtDepth(
-                            useTargetArrayType,
-                            depth - peerDepth,
-                            tuplePath
-                        ) {
-                            return true
-                        }
-                    }
-                }
-            }
             for var parentDepth = 0; parentDepth < depth && parentDepth < levels.Count; parentDepth++ {
                 for parentPeer in levels[parentDepth] {
+                    if originArray != nil && !parentPeer.Span.Contains(originArray.Span) {
+                        continue
+                    }
                     let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                     this.CollectArrayInitializerLeaves(parentPeer.Initializer, leaves)
                     for leaf in leaves {
@@ -6626,12 +6667,18 @@ partial class CSharpToGSharpTranslator {
         private func ComponentLevelHasNilableFixedSibling(
             levels List[List[ImplicitArrayCreationExpressionSyntax]],
             depth int32,
-            tuplePath List[int32]?
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) bool {
             if levels.Count == 0 || levels[0].Count == 0 {
                 return false
             }
-            let componentRoot = levels[0][0]
+            let cacheNode = if originArray != nil &&
+                !(levels[0].Count == 1 && levels[0][0].Span.Contains(originArray.Span)) {
+                originArray
+            } else {
+                levels[0][0]
+            }
             let cacheKey = this.GetComponentLevelContractCacheKey(depth, tuplePath)
             if this.componentLevelNilableSiblingCache == nil {
                 this.componentLevelNilableSiblingCache = Dictionary[
@@ -6639,14 +6686,14 @@ partial class CSharpToGSharpTranslator {
                     Dictionary[string, bool]
                 ]()
             }
-            if !this.componentLevelNilableSiblingCache!!.TryGetValue(componentRoot, out var rootCache) {
+            if !this.componentLevelNilableSiblingCache!!.TryGetValue(cacheNode, out var rootCache) {
                 rootCache = Dictionary[string, bool]()
-                this.componentLevelNilableSiblingCache!![componentRoot] = rootCache
+                this.componentLevelNilableSiblingCache!![cacheNode] = rootCache
             } else if rootCache.TryGetValue(cacheKey, out var cached) {
                 return cached
             }
             rootCache[cacheKey] = false
-            let result = this.ComputeComponentLevelHasNilableFixedSibling(levels, depth, tuplePath)
+            let result = this.ComputeComponentLevelHasNilableFixedSibling(levels, depth, tuplePath, originArray)
             rootCache[cacheKey] = result
             return result
         }
@@ -6654,13 +6701,17 @@ partial class CSharpToGSharpTranslator {
         private func ComputeComponentLevelHasNilableFixedSibling(
             levels List[List[ImplicitArrayCreationExpressionSyntax]],
             depth int32,
-            tuplePath List[int32]?
+            tuplePath List[int32]?,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) bool {
-            if levels.Count == 0 || this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath) {
+            if levels.Count == 0 || this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, tuplePath, originArray) {
                 return false
             }
             for var peerDepth = 0; peerDepth <= depth && peerDepth < levels.Count; peerDepth++ {
                 for peer in levels[peerDepth] {
+                    if originArray != nil && !peer.Span.Contains(originArray.Span) {
+                        continue
+                    }
                     let aliasUses = List[IdentifierNameSyntax]()
                     this.CollectImplicitArrayAliasUses(
                         peer,
@@ -6668,6 +6719,9 @@ partial class CSharpToGSharpTranslator {
                         HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
                     )
                     for aliasUse in aliasUses {
+                        if !this.AliasUseExecutesUnconditionallyWithDeclaration(peer, aliasUse) {
+                            continue
+                        }
                         if this.TryGetEnclosingArrayElementSlotAtRelativeDepth(
                             aliasUse,
                             depth - peerDepth,
@@ -6693,6 +6747,9 @@ partial class CSharpToGSharpTranslator {
             }
             for var parentDepth = 0; parentDepth < depth && parentDepth < levels.Count; parentDepth++ {
                 for parentPeer in levels[parentDepth] {
+                    if originArray != nil && !parentPeer.Span.Contains(originArray.Span) {
+                        continue
+                    }
                     let leaves = List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax]()
                     this.CollectArrayInitializerLeaves(parentPeer.Initializer, leaves)
                     for leaf in leaves {
@@ -6714,31 +6771,6 @@ partial class CSharpToGSharpTranslator {
                 }
             }
             return false
-        }
-
-        private func PeerSubtreeHasDeclaredNonNullLeaves(
-            peer ImplicitArrayCreationExpressionSyntax,
-            levels List[List[ImplicitArrayCreationExpressionSyntax]],
-            peerDepth int32,
-            targetDepth int32,
-            tuplePath List[int32]?
-        ) bool {
-            let innermostDepth = if levels.Count > 0 {
-                levels.Count - 1
-            } else {
-                0
-            }
-            if peerDepth == innermostDepth {
-                return this.SingleImplicitArrayDelegateSlotIsDeclared(peer, nil, tuplePath)
-            }
-            if targetDepth <= innermostDepth && targetDepth < levels.Count {
-                for targetPeer in levels[targetDepth] {
-                    if !this.SingleImplicitArrayDelegateSlotIsDeclared(targetPeer, nil, tuplePath) {
-                        return false
-                    }
-                }
-            }
-            return true
         }
 
         private func AliasUseExecutesUnconditionallyWithDeclaration(
@@ -6795,6 +6827,7 @@ partial class CSharpToGSharpTranslator {
                     .CSharp
                     .Syntax
                     .SwitchExpressionSyntax ||
+                    current is ConditionalAccessExpressionSyntax ||
                     current is Microsoft
                     .CodeAnalysis
                     .CSharp
@@ -8109,7 +8142,13 @@ partial class CSharpToGSharpTranslator {
                         List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]
                     ]()
                 }
-                let outerCacheKey = peers[0]
+                let outerCacheKey = if levels.Count > 0 && levels[0].Count == 1 && levels[0][0].Span.Contains(
+                    fallbackArray.Span
+                ) {
+                    peers[0]
+                } else {
+                    fallbackArray
+                }
                 if this.implicitArrayInnermostPromotedCache!!.TryGetValue(outerCacheKey, out var outerCachedEntries) {
                     for entry in outerCachedEntries {
                         if this.SameElementTypeAndTupleNames(entry.ElementType, elementTypeSymbol) &&
@@ -8141,7 +8180,7 @@ partial class CSharpToGSharpTranslator {
                         .NullableAnnotation
                         .Annotated &&
                         peers.Any(this.ImplicitArrayLeavesYieldNilableArrayReference) &&
-                        !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil)
+                        !this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, nil, fallbackArray)
                 )
                 let finalInner = promotedInner ?? nestedArrayRef.ElementType
                 let outerResult GTypeReference? = if !object.ReferenceEquals(finalInner, nestedArrayRef.ElementType) ||
@@ -8171,7 +8210,13 @@ partial class CSharpToGSharpTranslator {
                     List[(ElementType ITypeSymbol, InputType GTypeReference, Promoted GTypeReference?)]
                 ]()
             }
-            let cacheKey = compatiblePeers[0]
+            let cacheKey = if levels.Count > 0 && levels[0].Count == 1 && levels[0][0].Span.Contains(
+                fallbackArray.Span
+            ) {
+                compatiblePeers[0]
+            } else {
+                fallbackArray
+            }
             if this.implicitArrayInnermostPromotedCache!!.TryGetValue(cacheKey, out var cachedEntries) {
                 for entry in cachedEntries {
                     if this.SameElementTypeAndTupleNames(entry.ElementType, elementTypeSymbol) &&
@@ -8185,7 +8230,14 @@ partial class CSharpToGSharpTranslator {
             }
             var promoted GTypeReference? = elementType
             for peer in compatiblePeers {
-                promoted = this.PromoteSingleImplicitArrayElementType(promoted, elementTypeSymbol, peer, levels, depth)
+                promoted = this.PromoteSingleImplicitArrayElementType(
+                    promoted,
+                    elementTypeSymbol,
+                    peer,
+                    levels,
+                    depth,
+                    fallbackArray
+                )
             }
             cachedEntries.Add((elementTypeSymbol, elementType, promoted))
             return promoted
@@ -8196,15 +8248,17 @@ partial class CSharpToGSharpTranslator {
             elementTypeSymbol ITypeSymbol?,
             implicitArray ImplicitArrayCreationExpressionSyntax,
             levels List[List[ImplicitArrayCreationExpressionSyntax]]? = nil,
-            depth int32 = 0
+            depth int32 = 0,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) GTypeReference? {
             if elementType == nil || elementTypeSymbol == nil {
                 return elementType
             }
+            let effectiveOrigin = originArray ?? implicitArray
             let delegateType = UnwrapExpressionTreeDelegateType(elementTypeSymbol) as INamedTypeSymbol
             let invoke = delegateType?.DelegateInvokeMethod
             if this.SingleImplicitArrayDelegateSlotIsDeclared(implicitArray) &&
-                (levels == nil || !this.ComponentLevelHasNilableFixedSibling(levels, depth, nil)) {
+                (levels == nil || !this.ComponentLevelHasNilableFixedSibling(levels, depth, nil, effectiveOrigin)) {
                 return elementType
             }
             if invoke == nil {
@@ -8214,7 +8268,8 @@ partial class CSharpToGSharpTranslator {
                     implicitArray,
                     List[int32](),
                     levels,
-                    depth
+                    depth,
+                    effectiveOrigin
                 ) ??
                     elementType
             }
@@ -8229,7 +8284,8 @@ partial class CSharpToGSharpTranslator {
                         implicitArray,
                         List[int32](),
                         levels,
-                        depth
+                        depth,
+                        effectiveOrigin
                     )
                 } finally {
                     this.PopCheckingLambdaResult()
@@ -8255,7 +8311,8 @@ partial class CSharpToGSharpTranslator {
                         implicitArray,
                         List[int32](),
                         levels,
-                        depth
+                        depth,
+                        effectiveOrigin
                     )
                 } finally {
                     this.PopCheckingLambdaResult()
@@ -8280,7 +8337,8 @@ partial class CSharpToGSharpTranslator {
             implicitArray ImplicitArrayCreationExpressionSyntax,
             path List[int32],
             levels List[List[ImplicitArrayCreationExpressionSyntax]]? = nil,
-            depth int32 = 0
+            depth int32 = 0,
+            originArray ImplicitArrayCreationExpressionSyntax? = nil
         ) GTypeReference? {
             if returnTypeRef == nil || returnTypeSymbol == nil {
                 return returnTypeRef
@@ -8304,7 +8362,8 @@ partial class CSharpToGSharpTranslator {
                         implicitArray,
                         childPath,
                         levels,
-                        depth
+                        depth,
+                        originArray
                     ) ??
                         existing
                     if !object.ReferenceEquals(widenedElem, existing) {
@@ -8320,7 +8379,7 @@ partial class CSharpToGSharpTranslator {
                     returnTypeRef
                 }
             }
-            if levels != nil && this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, path) {
+            if levels != nil && this.ComponentLevelHasDeclaredNonNullSlot(levels, depth, path, originArray) {
                 return returnTypeRef
             }
             if !returnTypeRef.IsNullable &&
@@ -8331,7 +8390,7 @@ partial class CSharpToGSharpTranslator {
                 .Annotated &&
                 (
                 path.Count == 0 || this.ImplicitArrayLeavesYieldNilableAtTuplePath(implicitArray, path) ||
-                    (levels != nil && this.ComponentLevelHasNilableFixedSibling(levels, depth, path))
+                    (levels != nil && this.ComponentLevelHasNilableFixedSibling(levels, depth, path, originArray))
             ) {
                 return MakeNullable(returnTypeRef)
             }
@@ -9331,11 +9390,38 @@ partial class CSharpToGSharpTranslator {
             value Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             translated GExpression?,
             targetType ITypeSymbol?,
-            targetSymbol ISymbol?
+            targetSymbol ISymbol?,
+            allowArrayInitializerElement bool = false
         ) GExpression? {
             if translated == nil ||
                 translated is ConversionExpression ||
-                Unparenthesize(value) is not IdentifierNameSyntax idExpr ||
+                (
+                targetType != nil &&
+                    targetType is not IArrayTypeSymbol &&
+                    targetType is not INamedTypeSymbol{
+                    TypeKind: TypeKind.Interface,
+                    IsGenericType: true,
+                    TypeArguments: {Length: 1}
+                }
+            ) {
+                return translated
+            }
+            var unwrappedValue = Unparenthesize(value)
+            while true {
+                if unwrappedValue is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
+                    unwrappedValue = Unparenthesize(checkedExpr.Expression)
+                    continue
+                }
+                if unwrappedValue is PostfixUnaryExpressionSyntax and
+                    {
+                    RawKind: int32(Microsoft.CodeAnalysis.CSharp.SyntaxKind.SuppressNullableWarningExpression)
+                } suppressedExpr {
+                    unwrappedValue = Unparenthesize(suppressedExpr.Operand)
+                    continue
+                }
+                break
+            }
+            if unwrappedValue is not IdentifierNameSyntax idExpr ||
                 this
                 .context
                 .GetSymbolInfo(idExpr)
@@ -9351,6 +9437,26 @@ partial class CSharpToGSharpTranslator {
                     .DeclaringSyntaxReferences
                     .FirstOrDefault()
                     ?.GetSyntax() is VariableDeclaratorSyntax{Initializer: {Value: {} localInit}}
+            ) {
+                return translated
+            }
+            let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
+            this.CollectUnderlyingImplicitArrays(localInit, initArrays)
+            if initArrays.Count == 0 {
+                return translated
+            }
+            let outermost = OutermostTransparentNode(idExpr)
+            let enclosingArrayInitializer = if outermost?.Parent is InitializerExpressionSyntax outerInit &&
+                outerInit.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.ArrayInitializerExpression) {
+                outerInit
+            } else {
+                default(InitializerExpressionSyntax?)
+            }
+            if targetSymbol == nil && enclosingArrayInitializer != nil && !allowArrayInitializerElement {
+                return translated
+            }
+            if !initArrays.Any(
+                (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(arr)
             ) {
                 return translated
             }
@@ -9370,17 +9476,14 @@ partial class CSharpToGSharpTranslator {
             }
             let hasDeclaredTarget = if targetSymbol != nil {
                 this.SlotTypeIsDeclared(targetSymbol, value)
+            } else if enclosingArrayInitializer != nil {
+                this.DirectAliasUseHasDeclaredTargetSlot(idExpr) || this.ArrayInitializerSlotIsDeclared(
+                    enclosingArrayInitializer
+                )
             } else {
                 this.DirectAliasUseHasDeclaredTargetSlot(idExpr)
             }
             if !hasDeclaredTarget {
-                return translated
-            }
-            let initArrays = List[ImplicitArrayCreationExpressionSyntax]()
-            this.CollectUnderlyingImplicitArrays(localInit, initArrays)
-            if initArrays.Count == 0 || !initArrays.Any(
-                (arr ImplicitArrayCreationExpressionSyntax) -> !this.ImplicitArrayDelegateSlotIsDeclared(arr)
-            ) {
                 return translated
             }
             let mappedTarget = this.typeMapper.Map(effectiveTargetArray, this.context, idExpr.GetLocation())

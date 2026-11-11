@@ -4872,7 +4872,7 @@ partial class CSharpToGSharpTranslator {
                 case method is IMethodSymbol: method.ReturnType
                 default: default(ITypeSymbol?)
             }
-            return if sourceType != nil &&
+            let bridgedElement GExpression? = if sourceType != nil &&
                 sourceType.IsReferenceType == true &&
                 (
                 sourceType.NullableAnnotation == Microsoft
@@ -4885,6 +4885,13 @@ partial class CSharpToGSharpTranslator {
             } else {
                 translated
             }
+            return this.BridgeWidenedImplicitArrayConsumer(
+                expression,
+                bridgedElement,
+                elementType,
+                nil,
+                allowArrayInitializerElement: true
+            )
         }
 
         private func TranslateImplicitArrayCreation(creation ImplicitArrayCreationExpressionSyntax) GExpression {

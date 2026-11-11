@@ -660,8 +660,11 @@ namespace Demo
     }
     public class Holder
     {
+        public Holder() { }
         public Holder(object? ignored) { }
         public string Text => "ok";
+        public string[] Names = Array.Empty<string>();
+        public void Take(string[] x) { }
     }
     public class Outer<T>
     {
@@ -720,6 +723,7 @@ namespace Demo
         static void TakeStringArray(string[] x) { }
         static void GetOutBox(out Box<Dictionary<string, int>> value) { value = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); }
         static void GetInferredOutBox<T>(T seed, out Box<T> value) { value = new Box<T>(seed); }
+        static void GetRefOutBox<T>(ref T seed, out Box<T> value) { value = new Box<T>(seed); }
         static void GetOutWithOther<T, U>(T seed, U other, out Box<T> value) { value = new Box<T>(seed); }
         static void GetOutFromTuple<T, U>((T, U) seed, out Box<T> value) { value = new Box<T>(seed.Item1); }
         static void GetOutFromParamsTuple<T, U>(out Box<T> value, params (T, U)[] seeds) { value = new Box<T>(seeds[0].Item1); }
@@ -751,7 +755,7 @@ namespace Demo
         static int AwaitedFactoryJaggedArrayRowStore() => AwaitedFactoryJaggedArrayRowStoreAsync().Result;
         static ConvBox<T>[] MakeConvBoxes<T>(T seed) => new ConvBox<T>[1];
         static int InferredBoxArrayConversionElement() { var arr = MakeConvBoxes(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref fullString!); return 1; }
-        static int ExplicitAndImplicitSiblingNestedArrays() { var rows = new[] { new string[] { "ok" }, new[] { Volatile.Read(ref fullString!) } }; var nullableRows = new[] { new string?[] { null }, new[] { "ok" } }; var consumedRow = new[] { "ok" }; TakeStringArray(consumedRow); var consumedRows = new[] { consumedRow, new[] { Volatile.Read(ref fullString!) } }; var guardedRow = new[] { Volatile.Read(ref stringCache!) }; if (false) TakeStringArray(guardedRow); return rows[0][0].Length + rows[1][0].Length + (nullableRows[0][0] == null && nullableRows[1][0] == "ok" && consumedRows[1][0] == "ok" && guardedRow[0] == null ? 0 : 1); }
+        static int ExplicitAndImplicitSiblingNestedArrays() { var rows = new[] { new string[] { "ok" }, new[] { Volatile.Read(ref fullString!) } }; var nullableRows = new[] { new string?[] { null }, new[] { "ok" } }; var consumedRow = new[] { "ok" }; TakeStringArray(consumedRow); Holder? nullHolder = null; nullHolder?.Take(consumedRow); var consumedRows = new[] { consumedRow, new[] { Volatile.Read(ref stringCache!) } }; var guardedRow = new[] { Volatile.Read(ref stringCache!) }; if (false) { TakeStringArray(guardedRow); TakeStringArray(guardedRow!); var h = new Holder { Names = guardedRow }; var list = new List<string[]> { guardedRow }; var parentRows = new[] { new string[] { "ok" }, guardedRow }; } return rows[0][0].Length + rows[1][0].Length + (nullableRows[0][0] == null && nullableRows[1][0] == "ok" && consumedRows[0][0] == "ok" && consumedRows[1][0] == null && guardedRow[0] == null ? 0 : 1); }
         static int InlineNestedArrayForEach() { var sum = 0; foreach (var row in new[] { new[] { 1 } }) { sum += row[0]; } return sum; }
         static int DeepBinaryNestedArray() { var cube = new[] { new[] { new[] { new[] { new[] { new[] { 1 }, new[] { 2 } }, new[] { new[] { 3 }, new[] { 4 } } }, new[] { new[] { new[] { 5 }, new[] { 6 } }, new[] { new[] { 7 }, new[] { 8 } } } }, new[] { new[] { new[] { new[] { 9 }, new[] { 10 } }, new[] { new[] { 11 }, new[] { 12 } } }, new[] { new[] { new[] { 13 }, new[] { 14 } }, new[] { new[] { 15 }, new[] { 16 } } } } }, new[] { new[] { new[] { new[] { new[] { 17 }, new[] { 18 } }, new[] { new[] { 19 }, new[] { 20 } } }, new[] { new[] { new[] { 21 }, new[] { 22 } }, new[] { new[] { 23 }, new[] { 24 } } } }, new[] { new[] { new[] { new[] { 25 }, new[] { 26 } }, new[] { new[] { 27 }, new[] { 28 } } }, new[] { new[] { new[] { 29 }, new[] { 30 } }, new[] { new[] { 31 }, new[] { 32 } } } } } }; return cube[0][0][0][0][0][0]; }
         static int HeterogeneousNestedArrays() { var rows = new[] { (object)new[] { "ok" }, new[] { 1 } }; return rows[0].GetType() == typeof(string[]) && rows[1].GetType() == typeof(int[]) ? 1 : 0; }
@@ -792,7 +796,7 @@ namespace Demo
 #nullable disable
         static int OutVarWidenedTupleSeedBox() { var seed = ("ok", 0); seed = (null!, 0); GetOutFromTuple(seed, out var b2); b2.Value = Volatile.Read(ref stringCache!); return b2.Value == null ? 1 : 0; }
 #nullable enable
-        static int OutVarInferredBox() { GetInferredOutBox(Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref cache!); return OutVarWidenedTupleSeedBox(); }
+        static int OutVarInferredBox() { GetInferredOutBox(Volatile.Read(ref cache!), out var b); b.Value = Volatile.Read(ref cache!); GetRefOutBox(ref cache!, out var bRef); bRef.Value = Volatile.Read(ref cache!); return bRef.Value == null ? OutVarWidenedTupleSeedBox() : 0; }
         static int ForEachInferredBox() { foreach (var item in MakeArray(Wrap(Volatile.Read(ref cache!)))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         static int ForEachInferredBoxList() { foreach (var item in Boxes(Volatile.Read(ref cache!))) { item.Value = Volatile.Read(ref cache!); return 1; } return 0; }
         static int ForEachInferredArrayList() { foreach (var row in MakeArrayList(Volatile.Read(ref stringCache!))) { row[0] = Volatile.Read(ref stringCache!); return row[0] == null ? 1 : 0; } return 0; }
@@ -859,7 +863,13 @@ namespace Demo
             printed
         )
         Assert.Contains("[][]string{[]string{\"ok\"}, []string{Volatile.Read(&fullString)!!}}", printed)
-        Assert.Contains("let consumedRows = [][]string{consumedRow!!, []string{Volatile.Read(&fullString)!!}}", printed)
+        Assert.Contains(
+            "let consumedRows = [][]string?{consumedRow!!, []string?{Volatile.Read(&stringCache)}}",
+            printed
+        )
+        Assert.Contains("Names: cast[[]string](guardedRow)", printed)
+        Assert.Contains("List[[]string]{ cast[[]string](guardedRow) }", printed)
+        Assert.Contains("bRef!!.Value = Volatile.Read(&cache)\n", printed)
         Assert.Contains("[](string?, int32){(Volatile.Read(&stringCache), 0)}", printed)
         Assert.Contains("GetOutBox(out var b)\n        b!!.Value = Volatile.Read(&full)!!\n", printed)
         Assert.Contains(

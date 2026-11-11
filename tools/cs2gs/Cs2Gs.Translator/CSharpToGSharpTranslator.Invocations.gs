@@ -3419,6 +3419,24 @@ partial class CSharpToGSharpTranslator {
             translatedValue GExpression?,
             targetType ITypeSymbol?,
             targetSymbolForPromotionCheck ISymbol?
+        ) GExpression? -> this
+            .BridgeWidenedImplicitArrayConsumer(
+            valueExpression,
+            this.ForgiveInitializerElementValueCore(
+                valueExpression,
+                translatedValue,
+                targetType,
+                targetSymbolForPromotionCheck
+            ),
+            targetType,
+            targetSymbolForPromotionCheck
+        )
+
+        private func ForgiveInitializerElementValueCore(
+            valueExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedValue GExpression?,
+            targetType ITypeSymbol?,
+            targetSymbolForPromotionCheck ISymbol?
         ) GExpression? {
             var targetType = targetType
             var targetSymbolForPromotionCheck = targetSymbolForPromotionCheck
