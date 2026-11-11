@@ -7613,7 +7613,8 @@ partial class CSharpToGSharpTranslator {
                 ?.SpecialType == SpecialType.System_Void &&
                 (
                 this.RequiresLocalAssignmentSeam(voidConditionalAccess.WhenNotNull) ||
-                    this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull)
+                    this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull) ||
+                    this.ConditionalIndexNeedsRuntimeGuard(voidConditionalAccess)
             ) {
                 return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(voidConditionalAccess)
             }
@@ -7707,8 +7708,13 @@ partial class CSharpToGSharpTranslator {
         private func TranslateVoidConditionalAccessWithLocalAssignmentSeam(
             conditionalAccess ConditionalAccessExpressionSyntax
         ) GStatement {
+            let translatedReceiver = this.TranslateExpression(conditionalAccess.Expression)
+            let staticallyNonNull = this.GSharpExpressionIsStaticallyNonNull(
+                conditionalAccess.Expression,
+                translatedReceiver
+            )
             let receiver GExpression? = this.CaptureReceiverOnce(
-                this.TranslateExpression(conditionalAccess.Expression),
+                translatedReceiver,
                 conditionalAccess.Expression,
                 "a void conditional-access statement here has no enclosing evaluation seam to capture its receiver once."
             )
@@ -7716,7 +7722,12 @@ partial class CSharpToGSharpTranslator {
             let outerSpillPrologue List[GStatement]? = this.state.PendingSpillPrologue
             let statements = List[GStatement]()
             let replacements = List[ExpressionSyntax]()
-            this.state.ConditionalReceiverReplacement = NonNullAssertionExpression(receiver)
+            let guardedReceiver = if staticallyNonNull {
+                receiver
+            } else {
+                cast[GExpression](NonNullAssertionExpression(receiver))
+            }
+            this.state.ConditionalReceiverReplacement = guardedReceiver
             this.state.PendingSpillPrologue = statements
             let embedded = this.HoistAssignmentsInOrder(
                 conditionalAccess.WhenNotNull,
@@ -7726,14 +7737,24 @@ partial class CSharpToGSharpTranslator {
             )
             try {
                 statements.Add(
-                    ExpressionStatement(this.TranslateExpression(conditionalAccess.WhenNotNull), isVoid: true)
+                    ExpressionStatement(
+                        this.TranslateNonNullableConditionalIndex(
+                            conditionalAccess.WhenNotNull,
+                            FindLeadingElementBinding(conditionalAccess.WhenNotNull),
+                            guardedReceiver
+                        ),
+                        isVoid: true
+                    )
                 )
             } finally {
                 this.ReleaseHoistedAssignments(embedded, replacements)
                 this.state.PendingSpillPrologue = outerSpillPrologue
                 this.state.ConditionalReceiverReplacement = previousReceiver
             }
-            return IfStatement(BinaryExpression(receiver, "!=", LiteralExpression.Null()), BlockStatement(statements))
+            return IfStatement(
+                this.BuildConditionalReceiverGuard(receiver, staticallyNonNull),
+                BlockStatement(statements)
+            )
         }
 
         private func TranslateAssignmentValue(assignment AssignmentExpressionSyntax) GExpression? {
