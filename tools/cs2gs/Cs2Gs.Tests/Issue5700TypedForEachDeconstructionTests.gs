@@ -280,11 +280,16 @@ namespace TypedForEach {
     @InlineData("deconstructed direct body guard", "3")
     @InlineData("deconstructed query select", "4")
     @InlineData("primary constructor initializer capture", "3,")
+    @InlineData("promoted parameter closure argument", "123,")
+    @InlineData("hoisted local function after guard", "4,")
     @InlineData("single foreach capture", "3,")
     @InlineData("single foreach query select", "3")
+    @InlineData("single foreach query let", "3")
+    @InlineData("single foreach query select into", "3")
     @InlineData("primary constructor method capture", "3,")
     @InlineData("reassigned in loop body", "2,")
     @InlineData("reassigned in closure", "3,")
+    @InlineData("in-closure local reassignment", "3,")
     @InlineData("hoisted local function before guard", "3,")
     @InlineData("transitively hoisted local function", "3,")
     @InlineData("hoisted local function preserving index", "3,")
@@ -369,6 +374,16 @@ namespace TypedForEach {
              return total.ToString();`
             case "primary constructor initializer capture":
             `callbacks.Add(new PrimaryInitBox("abc").Callback);`
+            case "promoted parameter closure argument":
+            `_ = Make(null);
+             callbacks.Add(Make("123"));`
+            case "hoisted local function after guard":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 int offset = b;
+                 callbacks.Add(Read);
+                 int Read() => a.Length + offset;
+             }`
             case "single foreach capture":
             `var names = new string[] { null, "abc" };
              foreach (var a in names) {
@@ -381,6 +396,28 @@ namespace TypedForEach {
              foreach (var a in names) {
                  if (a is null) continue;
                  var q = from n in new[] { 0 } select a.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "single foreach query let":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } let text = a select text.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "single foreach query select into":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } select a into text select text.Length;
                  foreach (var v in q) total += v;
              }
              return total.ToString();`
@@ -405,6 +442,13 @@ namespace TypedForEach {
                      return len;
                  });
              }`
+            case "in-closure local reassignment":
+            `callbacks.Add(() => {
+                 string a = GetMaybe(true);
+                 if (a is null) return 0;
+                 a = GetMaybe(true);
+                 return a.Length;
+             });`
             case "transitively hoisted local function":
             `foreach (var (a, b) in items) {
                  _ = Wrapper(false);
@@ -443,6 +487,17 @@ namespace TypedForEach {
             default:
             string.Empty
         }
+        let extraMembers = switch shape {
+            case "promoted parameter closure argument":
+            `private static Func<int> Make(string a) {
+                 if (a is null) return () => 0;
+                 return () => int.Parse(a);
+             }`
+            case "in-closure local reassignment":
+            `private static string GetMaybe(bool present) => present ? "abc" : null;`
+            default:
+            string.Empty
+        }
         let source = (`
 using System;
 using System.Collections.Generic;
@@ -451,6 +506,7 @@ namespace TypedForEach {
     EXTRA_TYPES
     public static class Probe {
         public static bool Try(out string value) { value = null; return false; }
+        EXTRA_MEMBERS
         public static string Run() {
             var items = new List<(string, int)>();
             Try(out var missing);
@@ -463,14 +519,18 @@ namespace TypedForEach {
             return result;
         }
     }
-}`).Replace("EXTRA_TYPES", extraTypes).Replace("LOOP_BODY", loopBody)
+}`).Replace("EXTRA_TYPES", extraTypes).Replace("EXTRA_MEMBERS", extraMembers).Replace("LOOP_BODY", loopBody)
         let printed = Verify(source, expected)
-        if shape.StartsWith("reassigned", StringComparison.Ordinal) || shape.StartsWith(
+        if shape == "single foreach query let" || shape == "single foreach query select into" {
+            Assert.Contains("text!!.Length", printed)
+        } else if shape.StartsWith("reassigned", StringComparison.Ordinal) || shape.StartsWith(
             "single foreach",
             StringComparison.Ordinal
         ) ||
             shape == "primary constructor method capture" ||
-            shape.StartsWith("hoisted local function", StringComparison.Ordinal) ||
+            shape == "in-closure local reassignment" ||
+            shape == "hoisted local function before guard" ||
+            shape == "hoisted local function preserving index" ||
             shape == "transitively hoisted local function" {
             Assert.Contains("a!!.Length", printed)
         } else {
