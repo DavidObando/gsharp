@@ -21,10 +21,10 @@ import Xunit
 
 class Issue4833NullableTupleValueTranslationTests {
     @Fact
-    func NullableReturnStoredInDictionaryTupleValue_PromotesMatchingElement() {
+    func NullableReturnStoredInDictionaryTupleValue_PreservesNullAtRuntime() {
         const source = `using System.Collections.Generic;
 
-public static class Probe
+public static class Obj
 {
     private static string AttributeConstant(bool present)
     {
@@ -36,7 +36,7 @@ public static class Probe
         return null;
     }
 
-    public static void Run()
+    public static string Run()
     {
         var values = new Dictionary<int, (string Name, string Default)>();
         string fallback = AttributeConstant(false);
@@ -46,6 +46,8 @@ public static class Probe
         {
             value = ("missing", null);
         }
+
+        return (values[0].Default ?? "null") + ":" + value.Name + ":" + (value.Default ?? "null");
     }
 }`
         let project = CSharpProjectLoader.LoadInMemory([](string, source string){("Issue4833.cs", source)})
@@ -61,6 +63,7 @@ public static class Probe
 
 Printed:
 ` + printed)
+        AssertParity(source, printed, "null:missing:null")
     }
 
     @Theory

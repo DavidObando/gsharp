@@ -16,6 +16,7 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- Preserve nullable tuple leaves in generic indexer writes in `cs2gs`, instead of inserting runtime null assertions. (Part of #5948)
 - Reuse inferred generic call arguments during implicit static dispatch, so deeply nested calls bind in linear work. (Fixes #5652)
 - **Nullable conditional-index results on non-null receivers in `cs2gs`** (Fixes #5706). Guard-narrowed receivers use ordinary indexing with nullable result casts. Merely statically non-null receivers retain a single-evaluation runtime guard, including null-preserving reference casts and non-nullable contracts that still receive null. Nullable member containers retain native conditional indexing; nullable elements alone do not make a container nullable. Complete continuations retain nullable result types and inner null checks, and named constants do not imply type-test narrowing. Void callbacks and nested index continuations use guarded statement-only blocks without nullable results. Only captures that remain read-only in their declaring scope inherit guards across lambda boundaries. This avoids `GS0300` without changing overload selection or evaluating indices twice.
 - **Compile SDK packaging image checks without unreachable-code warnings** (Fixes #5938). The `GsharpAssertImages` inline task preserves failure results for missing or invalid images without emitting `CS0162`.
