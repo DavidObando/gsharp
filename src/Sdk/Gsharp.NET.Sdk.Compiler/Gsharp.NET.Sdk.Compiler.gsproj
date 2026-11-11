@@ -100,7 +100,7 @@
             if (forbidden.Contains(Path.GetFileName(item.ItemSpec), StringComparer.OrdinalIgnoreCase))
                 Log.LogError("The package must not contain " + Path.GetFileName(item.ItemSpec) + ". It is in the portable runtime set.");
         }
-        return !Log.HasLoggedErrors;
+        Success = !Log.HasLoggedErrors;
       ]]></Code>
     </Task>
   </UsingTask>

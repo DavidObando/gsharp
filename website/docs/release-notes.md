@@ -16,6 +16,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ### Bug Fixes
 
+- **Compile SDK packaging image checks without unreachable-code warnings** (Fixes #5938). The `GsharpAssertImages` inline task preserves failure results for missing or invalid images without emitting `CS0162`.
+
 - **Report deconstruction store bridges in `cs2gs`** (Fixes #5942). Deconstruction assertions use the generic-store reporting funnel, including array elements, collection indexers, generic members, locals, parameter assignments, and conversion inputs. Diagnostics identify the assigned target without changing emitted G#.
 
 - **Preserve nullable-value receivers in `cs2gs`** (Fixes #5935). Calls to `Nullable<T>` members and extensions keep the nullable receiver instead of unwrapping it with `!!`. Conditional-index locals can call `GetValueOrDefault`, and null receivers retain their `ToString`, `Equals`, and `GetHashCode` behavior.
