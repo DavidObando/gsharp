@@ -29,6 +29,9 @@ import os
 from pathlib import Path
 
 
+VALIDATION_STAGES = ("compile", "ilverify", "test-parity")
+
+
 def newest_mtime(directory: Path) -> float:
     """The last moment anything was written anywhere under ``directory``."""
     newest = directory.stat().st_mtime
@@ -39,6 +42,34 @@ def newest_mtime(directory: Path) -> float:
             except OSError:
                 continue
     return newest
+
+
+def completed_apps(runs_root: Path) -> set[str] | None:
+    """Apps that completed every validation stage in the shard's run.json."""
+    run_paths = sorted(runs_root.glob("*/run.json"))
+    if not run_paths:
+        return None
+    try:
+        run = json.loads(run_paths[-1].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    apps = run.get("apps") if isinstance(run, dict) else None
+    if not isinstance(apps, list):
+        return set()
+    completed: set[str] = set()
+    for app in apps:
+        if not isinstance(app, dict) or not isinstance(app.get("appId"), str):
+            continue
+        if app.get("succeeded") is not True or app.get("unverified") is True:
+            continue
+        stages = app.get("stages")
+        if not isinstance(stages, list):
+            continue
+        if [s.get("stage") if isinstance(s, dict) else None for s in stages] != list(VALIDATION_STAGES):
+            continue
+        if all(s.get("status") == "passed" for s in stages):
+            completed.add(app["appId"])
+    return completed
 
 
 def app_ids_by_directory(manifest_dir: Path) -> dict[str, str]:
@@ -76,14 +107,18 @@ def main() -> int:
         if app_id:
             finished.append((newest_mtime(app_dir), app_id))
 
+    completed = completed_apps(runs_root)
     durations: dict[str, float] = {}
     previous = args.started
     for moment, app_id in sorted(finished):
         # Clamp: a directory whose newest file predates the previous app's would
-        # otherwise book a negative cost. Ordering is normally exact, but the
-        # measurement is indirect and must degrade to "cheap", never to "wrong".
-        durations[app_id] = round(max(moment - previous, 0.0), 1)
+        # otherwise book a negative cost. Advance `previous` even for failed or
+        # dependency-blocked apps so later apps on the shard do not inherit their
+        # wall time, but record only positive complete-stage durations (#5884).
+        duration = round(max(moment - previous, 0.0), 1)
         previous = max(previous, moment)
+        if duration > 0.0 and (completed is None or app_id in completed):
+            durations[app_id] = duration
 
     print(json.dumps(durations, indent=2, sort_keys=True))
     return 0

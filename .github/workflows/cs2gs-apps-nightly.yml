@@ -282,20 +282,23 @@ jobs:
           tar -cf "$SELFMIG_GATE_ROOT/main-out.tar" out
           tar -cf "$SELFMIG_GATE_ROOT/corpus-out.tar" -C "$SELFMIG_SOURCE_ROOT" out
 
-      # Issue #3721: prefer the durations a recent run measured over the
-      # checked-in map, so the packing tracks the migration instead of aging
-      # out between refresh commits. Best-effort by construction: any failure
-      # here leaves the checked-in map in place.
+      # Issue #3721 / #5884: prefer the durations a recent complete-stage run
+      # measured over the checked-in map, so the packing tracks the migration
+      # without accepting 0-second dependency-blocked or failed-stage prices.
+      # Best-effort by construction: any failure here leaves the checked-in map
+      # in place.
       - name: Fetch a recent run's app duration map
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for previous in $(gh run list --workflow cs2gs-apps-nightly.yml --status completed \
-              --limit 10 --json databaseId --jq '.[].databaseId'); do
+          run_dir=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
+          for previous in $(gh run list --workflow cs2gs-apps-nightly.yml --status success \
+              --limit 20 --json databaseId --jq '.[].databaseId'); do
             dir="$RUNNER_TEMP/selfmig-previous-$previous"
             if gh run download "$previous" --name cs2gs-selfmig-run --dir "$dir" 2>/dev/null \
-                && jq -e '(.apps | length) > 0' "$dir/selfmig-shard-costs.json" >/dev/null 2>&1; then
+                && python3 build/generate-selfmig-shard-matrix.py \
+                  --run-dir "$run_dir" --costs "$dir/selfmig-shard-costs.json" --check-costs; then
               cp "$dir/selfmig-shard-costs.json" build/selfmig-shard-costs.json
               echo "using durations measured by run $previous."
               exit 0

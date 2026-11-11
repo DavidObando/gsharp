@@ -49,6 +49,7 @@ TEST_PROJECT_SURCHARGE = 400
 UNKNOWN_APP_PERCENTILE = 0.75
 
 DEFAULT_COSTS = Path(__file__).resolve().parent / "selfmig-shard-costs.json"
+FULL_STAGES = ("translate", "compile", "ilverify", "test-parity")
 
 
 def structural_weight(run_dir: Path, artifact_dir_name: str) -> float:
@@ -65,12 +66,77 @@ def structural_weight(run_dir: Path, artifact_dir_name: str) -> float:
     return max(weight, 1.0)
 
 
-def load_costs(path: Path) -> dict[str, float]:
-    """Reads a per-app duration map, or returns {} when there is not one.
+def companion_run_is_complete(directory: Path, costs: dict[str, float]) -> bool:
+    """Rejects duration maps whose companion run or stats show incomplete stages."""
+    stats_path = directory / "stats.json"
+    if stats_path.is_file():
+        try:
+            stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(stats, dict):
+            return False
+        green = stats.get("green")
+        total = stats.get("total")
+        if (
+            isinstance(green, bool)
+            or isinstance(total, bool)
+            or not isinstance(green, int)
+            or not isinstance(total, int)
+            or total <= 0
+            or green != total
+            or stats.get("runLevelFailure") is True
+            or len(costs) < total
+        ):
+            return False
+        for stage in FULL_STAGES:
+            for status in ("failed", "skipped", "not-applicable"):
+                if stats.get(f"{stage}_{status}", 0) != 0:
+                    return False
 
-    Tolerates every way the file can be absent or malformed — a stale artifact,
-    a truncated download, a hand-edit — because a scheduling hint must never be
-    able to fail the gate it schedules.
+    merged_path = directory / "run.merged.json"
+    if merged_path.is_file():
+        try:
+            merged = json.loads(merged_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if (
+            not isinstance(merged, dict)
+            or merged.get("succeeded") is not True
+            or merged.get("unverified") is True
+            or merged.get("runLevelFailure") is True
+        ):
+            return False
+        apps = merged.get("apps")
+        if not isinstance(apps, list) or not apps:
+            return False
+        for app in apps:
+            if (
+                not isinstance(app, dict)
+                or not isinstance(app.get("appId"), str)
+                or app["appId"] not in costs
+                or app.get("succeeded") is not True
+                or app.get("unverified") is True
+            ):
+                return False
+            stages = app.get("stages")
+            if not isinstance(stages, list):
+                return False
+            if [s.get("stage") if isinstance(s, dict) else None for s in stages] != list(FULL_STAGES):
+                return False
+            if any(s.get("status") != "passed" for s in stages):
+                return False
+
+    return True
+
+
+def load_costs(path: Path) -> dict[str, float]:
+    """Reads a complete per-app duration map, or returns {} when there is not one.
+
+    Tolerates every way the file can be absent, malformed, or incomplete-stage
+    — a stale artifact, a truncated download, a failed run with 0.0-second
+    dependency-blocked apps — because a scheduling hint must never be able to
+    fail or mis-pack the gate it schedules.
     """
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -78,14 +144,48 @@ def load_costs(path: Path) -> dict[str, float]:
         return {}
 
     apps = document.get("apps") if isinstance(document, dict) else None
-    if not isinstance(apps, dict):
+    if not isinstance(apps, dict) or not apps:
         return {}
 
     costs: dict[str, float] = {}
     for app_id, seconds in apps.items():
-        if isinstance(app_id, str) and isinstance(seconds, (int, float)) and seconds >= 0:
-            costs[app_id] = float(seconds)
+        if (
+            not isinstance(app_id, str)
+            or isinstance(seconds, bool)
+            or not isinstance(seconds, (int, float))
+            or seconds <= 0
+        ):
+            return {}
+        costs[app_id] = float(seconds)
+
+    if not companion_run_is_complete(path.parent, costs):
+        return {}
     return costs
+
+
+def select_costs(
+    app_ids: list[str],
+    costs_path: Path,
+    default_costs_path: Path = DEFAULT_COSTS,
+) -> tuple[dict[str, float], str | None, bool]:
+    """Selects a complete duration map for ``app_ids``, or falls back to the seed map."""
+    costs = load_costs(costs_path)
+    default_costs = (
+        costs
+        if costs_path.resolve() == default_costs_path.resolve()
+        else load_costs(default_costs_path)
+    )
+    app_set = set(app_ids)
+    baseline_apps = app_set & set(default_costs)
+    required_apps = baseline_apps or app_set
+
+    if costs and (app_set & set(costs)) and baseline_apps.issubset(costs):
+        return costs, str(costs_path), bool(required_apps) and required_apps.issubset(costs)
+
+    if baseline_apps and baseline_apps.issubset(default_costs):
+        return default_costs, str(default_costs_path), False
+
+    return {}, None, False
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -177,6 +277,11 @@ def main() -> int:
         action="store_true",
         help="print the human-readable packing instead of the matrix JSON",
     )
+    parser.add_argument(
+        "--check-costs",
+        action="store_true",
+        help="exit 0 only when --costs is a complete-stage duration map for --run-dir",
+    )
     args = parser.parse_args()
 
     if args.shards < 1:
@@ -187,7 +292,10 @@ def main() -> int:
     names = artifact_dir_names(run_dir)
 
     app_ids = translated_apps(run)
-    costs = load_costs(Path(args.costs))
+    costs, cost_source, accepted = select_costs(app_ids, Path(args.costs))
+    if args.check_costs:
+        return 0 if accepted else 1
+
     weighted = weigh(
         app_ids,
         costs,
@@ -200,7 +308,7 @@ def main() -> int:
 
     if args.plan:
         unit = "s" if costs else " file-equivalents"
-        source = args.costs if costs else "structural proxy (no duration map)"
+        source = cost_source if costs else "structural proxy (no duration map)"
         print(f"cost source: {source}")
         print(f"apps: {len(app_ids)} ({len(costs.keys() & set(app_ids))} priced from observation)")
         for index, apps in enumerate(buckets):
