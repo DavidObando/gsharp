@@ -13,6 +13,7 @@ import Xunit
 /// @remarks ADR-0154: disabling the non-null receiver rewrite makes the original five tests fail with GS0300.
 /// On 14f1e3aa2, cast receivers throw on nil, and named constant guards cause nullable indexing errors.
 /// On 39fcd66c7, void lambda and nested continuation tests fail with invalid nullable System.Void output.
+/// On a6ffd4673, mutable captures in nested lambdas fail to bind after an outer guard.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
@@ -299,6 +300,46 @@ namespace Demo
         Assert.Contains("object.ReferenceEquals", printed)
         Assert.DoesNotContain("System.Void", printed)
         Assert.DoesNotContain("default(void", printed)
+    }
+
+    @Fact
+    func NestedLambdas_CheckCaptureMutabilityInTheDeclaringScope() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static string Local()
+        {
+            string? s = "a";
+            Func<Func<char?>> make = () => { if (s != null) return () => s?[0]; return () => null; };
+            var read = make();
+            var before = read();
+            s = null;
+            return before + "->" + read();
+        }
+        static string Parameter(string? s)
+        {
+            Func<Func<char?>> make = () => { if (s != null) return () => s?[0]; return () => null; };
+            var read = make();
+            var before = read();
+            s = null;
+            return before + "->" + read();
+        }
+        static char? ReadOnly(string? seed)
+        {
+            string? s = seed;
+            Func<Func<char?>> make = () => { if (s != null) return () => s?[0]; return () => null; };
+            return make()();
+        }
+        public static string Run() =>
+            Local() + "|" + Parameter("b") + "|" + Parameter(null) + "|" + ReadOnly("r") + "|" + ReadOnly(null) + "|end";
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
     }
 
     @Fact

@@ -13921,8 +13921,10 @@ partial class CSharpToGSharpTranslator {
             if this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_) {
                 return true
             }
-            // A stable lambda capture keeps the enclosing narrowing; a reassigned or by-reference variable does not.
-            if bodyScope is AnonymousFunctionExpressionSyntax && !this.IsByReferenceVariable(symbol) {
+            // Guard inheritance requires a capture that is read-only throughout its declaring scope, including enclosing methods.
+            if bodyScope is AnonymousFunctionExpressionSyntax && !this.IsByReferenceVariable(symbol) &&
+                !this
+                .IsCaptureWrittenInDeclaringScope(symbol!!) {
                 let enclosingScope = bodyScope.Ancestors().FirstOrDefault(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
                         node is AccessorDeclarationSyntax ||
