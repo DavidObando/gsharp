@@ -9620,7 +9620,9 @@ partial class CSharpToGSharpTranslator {
                 expression = parenthesized.Expression
             }
             let symbol ISymbol? = this.context.GetSymbolInfo(expression).Symbol
-            if !(expression is IdentifierNameSyntax) || !((symbol is ILocalSymbol || symbol is IParameterSymbol)) {
+            if !(expression is IdentifierNameSyntax) ||
+                !((symbol is ILocalSymbol || symbol is IParameterSymbol)) ||
+                this.IsPrimaryConstructorFieldRead(symbol!!, expression) {
                 return false
             }
             let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
@@ -9640,17 +9642,10 @@ partial class CSharpToGSharpTranslator {
                 .CodeAnalysis
                 .NullableFlowState
                 .NotNull
-            let nearestCallable = expression.Ancestors().FirstOrDefault(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                    node is AccessorDeclarationSyntax ||
-                    node is BasePropertyDeclarationSyntax ||
-                    node is LocalFunctionStatementSyntax ||
-                    node is AnonymousFunctionExpressionSyntax
-            )
-            let scope_ Microsoft
-                .CodeAnalysis
-                .SyntaxNode? = if nearestCallable is LocalFunctionStatementSyntax ||
-                nearestCallable is AnonymousFunctionExpressionSyntax {
+            let nearestCallable = this.EnclosingFlowScope(expression)
+            let scope_ Microsoft.CodeAnalysis.SyntaxNode? = if nearestCallable != nil && this.IsClosureBoundary(
+                nearestCallable
+            ) {
                 nearestCallable
             } else {
                 this.state.CurrentBodyScope ?? nearestCallable ?? expression.SyntaxTree.GetRoot()
@@ -9661,7 +9656,7 @@ partial class CSharpToGSharpTranslator {
             if this.IsGSharpFlowNarrowedLocalInScope(expression, symbol, scope_, requireJumpFreeScope) {
                 return true
             }
-            if !(scope_ is LocalFunctionStatementSyntax || scope_ is AnonymousFunctionExpressionSyntax) {
+            if !this.IsClosureBoundary(scope_) {
                 return false
             }
             let declaration Microsoft
@@ -9673,16 +9668,7 @@ partial class CSharpToGSharpTranslator {
             let declaringScope Microsoft.CodeAnalysis.SyntaxNode? = if declaration == nil {
                 default(Microsoft.CodeAnalysis.SyntaxNode?)
             } else {
-                declaration.Ancestors().FirstOrDefault(
-                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                        node is AccessorDeclarationSyntax ||
-                        node is BasePropertyDeclarationSyntax ||
-                        node is LocalFunctionStatementSyntax ||
-                        node is AnonymousFunctionExpressionSyntax
-                ) ??
-                    declaration
-                    .SyntaxTree
-                    .GetRoot()
+                this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
             }
             if declaringScope == nil || object.ReferenceEquals(scope_, declaringScope) || !declaringScope.Span.Contains(
                 scope_.Span
@@ -9695,13 +9681,7 @@ partial class CSharpToGSharpTranslator {
                 if !this.ClosurePreservesEnclosingReadOnlyNarrowing(currentScope) {
                     return false
                 }
-                let parentScope Microsoft.CodeAnalysis.SyntaxNode? = currentScope.Ancestors().FirstOrDefault(
-                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
-                        node is AccessorDeclarationSyntax ||
-                        node is BasePropertyDeclarationSyntax ||
-                        node is LocalFunctionStatementSyntax ||
-                        node is AnonymousFunctionExpressionSyntax
-                ) ??
+                let parentScope Microsoft.CodeAnalysis.SyntaxNode? = this.EnclosingFlowScope(currentScope) ??
                     currentScope
                     .SyntaxTree
                     .GetRoot()
@@ -9716,22 +9696,87 @@ partial class CSharpToGSharpTranslator {
             return false
         }
 
+        private func IsSynthesizedQueryLambdaBody(node Microsoft.CodeAnalysis.SyntaxNode) bool -> switch node.Parent {
+            case fromClause is FromClauseSyntax when fromClause.Parent is QueryBodySyntax: fromClause.Expression == node
+            case letClause is LetClauseSyntax: letClause.Expression == node
+            case whereClause is WhereClauseSyntax: whereClause.Condition == node
+            case joinClause is JoinClauseSyntax: joinClause.LeftExpression == node || joinClause.RightExpression == node
+            case ordering is OrderingSyntax: ordering.Expression == node
+            case selectClause is SelectClauseSyntax: selectClause.Expression == node
+            case groupClause is GroupClauseSyntax: groupClause.GroupExpression == node ||
+                groupClause.ByExpression == node
+            default: false
+        }
+
+        private func IsClosureBoundary(
+            node Microsoft.CodeAnalysis.SyntaxNode
+        ) bool -> node is LocalFunctionStatementSyntax ||
+            node is AnonymousFunctionExpressionSyntax ||
+            this.IsSynthesizedQueryLambdaBody(node)
+
+        private func EnclosingFlowScope(node Microsoft.CodeAnalysis.SyntaxNode) Microsoft
+            .CodeAnalysis
+            .SyntaxNode? -> node
+            .Ancestors().FirstOrDefault(
+            (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
+                ancestor is AccessorDeclarationSyntax ||
+                ancestor is ArrowExpressionClauseSyntax{Parent: BasePropertyDeclarationSyntax} ||
+                ancestor is TypeDeclarationSyntax ||
+                this.IsClosureBoundary(ancestor)
+        )
+
+        private func IsPrimaryConstructorFieldRead(
+            symbol ISymbol,
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax
+        ) bool {
+            if symbol is not IParameterSymbol ||
+                !(
+                symbol
+                    .DeclaringSyntaxReferences
+                    .FirstOrDefault()
+                    ?.GetSyntax() is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .ParameterSyntax{
+                    Parent: Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ParameterListSyntax{Parent: TypeDeclarationSyntax typeDeclaration}
+                }
+            ) {
+                return false
+            }
+            for var current Microsoft.CodeAnalysis.SyntaxNode? = expression; current != nil && !object.ReferenceEquals(
+                current,
+                typeDeclaration
+            );
+                current = current!!
+                .Parent {
+                if current is BaseMethodDeclarationSyntax ||
+                    current is AccessorDeclarationSyntax ||
+                    current is ArrowExpressionClauseSyntax{Parent: BasePropertyDeclarationSyntax} {
+                    return true
+                }
+            }
+            return false
+        }
+
         private func IsGSharpFlowNarrowedLocalInScope(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
             symbol ISymbol?,
             $scope Microsoft.CodeAnalysis.SyntaxNode,
             requireJumpFreeScope bool
         ) bool {
+            let WithinScope = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
+                return object.ReferenceEquals(node, $scope) || !this.IsClosureBoundary(node)
+            }
             if requireJumpFreeScope &&
                 (
                 this.GetScopeGotoIndex($scope).Jumps.Count > 0 || this.ScopeSynthesizesLoopContinueLabel($scope) ||
                     $scope
-                    .DescendantNodes(
-                    (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
-                        node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax
-                    )
-                )
-                    .Any(
+                    .DescendantNodesAndSelf(WithinScope).Any(
                     (node Microsoft.CodeAnalysis.SyntaxNode) -> node is Microsoft
                         .CodeAnalysis
                         .CSharp
@@ -9741,12 +9786,7 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            for isPattern in $scope.DescendantNodes(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
-                    (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
-                )
-            )
-                .OfType[IsPatternExpressionSyntax]() {
+            for isPattern in $scope.DescendantNodesAndSelf(WithinScope).OfType[IsPatternExpressionSyntax]() {
                 if isPattern.SpanStart >= expression.SpanStart || !this.BindsToGuardSymbol(
                     isPattern.Expression,
                     symbol
@@ -9774,11 +9814,7 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
-            for nullCheck in $scope.DescendantNodes(
-                (node Microsoft.CodeAnalysis.SyntaxNode) -> !(
-                    (node is LocalFunctionStatementSyntax || node is AnonymousFunctionExpressionSyntax)
-                )
-            )
+            for nullCheck in $scope.DescendantNodesAndSelf(WithinScope)
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
                 if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetNullComparisonNonNullPolarity(
                     nullCheck,
@@ -9849,7 +9885,7 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ClosurePreservesEnclosingReadOnlyNarrowing(closure Microsoft.CodeAnalysis.SyntaxNode) bool {
-            if closure is AnonymousFunctionExpressionSyntax {
+            if closure is AnonymousFunctionExpressionSyntax || this.IsSynthesizedQueryLambdaBody(closure) {
                 return true
             }
             if closure is not LocalFunctionStatementSyntax localFunction || localFunction.Modifiers.Any(
@@ -9865,35 +9901,48 @@ partial class CSharpToGSharpTranslator {
                 this
                 .state
                 .LiftedStaticLocalFunctions
+                .ContainsKey(localMethod) ||
+                this
+                .state
+                .RecursiveLocalFunctionGroups
                 .ContainsKey(localMethod) {
                 return false
             }
-            let statements IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]? = switch localFunction
-                .Parent {
-                case block is BlockSyntax: block.Statements
-                case section is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax: section.Statements
-                default: default(IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]?)
+            var statements IReadOnlyList[Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax]? = nil
+            var enclosingSpan = default(Microsoft.CodeAnalysis.Text.TextSpan)
+            switch localFunction.Parent {
+                case block is BlockSyntax {
+                    statements = block.Statements
+                    enclosingSpan = block.Span
+                }
+                case section is Microsoft.CodeAnalysis.CSharp.Syntax.SwitchSectionSyntax {
+                    statements = section.Statements
+                    enclosingSpan = section.Span
+                }
+                case Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .GlobalStatementSyntax{Parent: Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax unit} {
+                    let globals = unit
+                        .Members
+                        .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.GlobalStatementSyntax]()
+                        .Select((g Microsoft.CodeAnalysis.CSharp.Syntax.GlobalStatementSyntax) -> g.Statement)
+                        .ToList()
+                    if globals.Count > 0 {
+                        statements = globals
+                        enclosingSpan = Microsoft
+                            .CodeAnalysis
+                            .Text
+                            .TextSpan
+                            .FromBounds(globals[0].SpanStart, globals[^1].Span.End)
+                    }
+                }
             }
             if statements != nil {
-                for statement in statements {
-                    if object.ReferenceEquals(statement, localFunction) {
-                        break
-                    }
-                    if statement
-                        .DescendantNodes()
-                        .OfType[SimpleNameSyntax]()
-                        .Any(
-                        (id SimpleNameSyntax) -> id
-                            .Identifier
-                            .ValueText == localFunction
-                            .Identifier
-                            .ValueText &&
-                            SymbolEqualityComparer
-                            .Default
-                            .Equals(this.context.GetSymbolInfo(id).Symbol?.OriginalDefinition, localMethod)
-                    ) {
-                        return false
-                    }
+                let reordered = this.HoistCallBeforeDeclLocalFunctions(statements, enclosingSpan)
+                if IndexOfReference(reordered, localFunction) != IndexOfReference(statements, localFunction) {
+                    return false
                 }
             }
             return true
@@ -15625,8 +15674,10 @@ partial class CSharpToGSharpTranslator {
             return node.Ancestors().FirstOrDefault(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
                     ancestor is AccessorDeclarationSyntax ||
+                    ancestor is ArrowExpressionClauseSyntax{Parent: BasePropertyDeclarationSyntax} ||
                     ancestor is LocalFunctionStatementSyntax ||
-                    ancestor is AnonymousFunctionExpressionSyntax
+                    ancestor is AnonymousFunctionExpressionSyntax ||
+                    ancestor is TypeDeclarationSyntax
             ) ??
                 node
                 .SyntaxTree

@@ -278,10 +278,15 @@ namespace TypedForEach {
     @InlineData("deconstructed nested tuple capture", "6,")
     @InlineData("deconstructed nested closure capture", "3,")
     @InlineData("deconstructed direct body guard", "3")
+    @InlineData("deconstructed query select", "4")
+    @InlineData("primary constructor initializer capture", "3,")
     @InlineData("single foreach capture", "3,")
+    @InlineData("single foreach query select", "3")
+    @InlineData("primary constructor method capture", "3,")
     @InlineData("reassigned in loop body", "2,")
     @InlineData("reassigned in closure", "3,")
     @InlineData("hoisted local function before guard", "3,")
+    @InlineData("transitively hoisted local function", "3,")
     func NullGuardedForEachCaptures_MatchNarrowingAndCSharpOutput(shape string, expected string) {
         let loopBody = switch shape {
             case "deconstructed inferred parenthesized lambda":
@@ -353,12 +358,35 @@ namespace TypedForEach {
                  total += a.Length;
              }
              return total.ToString();`
+            case "deconstructed query select":
+            `int total = 0;
+             foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 var q = from n in new[] { b } select a.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "primary constructor initializer capture":
+            `callbacks.Add(new PrimaryInitBox("abc").Callback);`
             case "single foreach capture":
             `var names = new string[] { null, "abc" };
              foreach (var a in names) {
                  if (a is null) continue;
                  callbacks.Add(() => a.Length);
              }`
+            case "single foreach query select":
+            `int total = 0;
+             var names = new string[] { null, "abc" };
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } select a.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "primary constructor method capture":
+            `var box = new PrimaryMethodBox("abc");
+             var fn = box.Read();
+             if (fn != null) callbacks.Add(fn);`
             case "reassigned in loop body":
             `foreach (var (item, b) in items) {
                  var a = item;
@@ -376,6 +404,14 @@ namespace TypedForEach {
                      return len;
                  });
              }`
+            case "transitively hoisted local function":
+            `foreach (var (a, b) in items) {
+                 _ = Wrapper(false);
+                 if (a is null) continue;
+                 int Read() => a.Length;
+                 int Wrapper(bool run) => run ? Read() : 0;
+                 callbacks.Add(() => Wrapper(true));
+             }`
             default:
             `foreach (var (a, b) in items) {
                  if (a is null) continue;
@@ -383,10 +419,27 @@ namespace TypedForEach {
                  int ReadBeforeDecl() => a.Length;
              }`
         }
+        let extraTypes = switch shape {
+            case "primary constructor method capture":
+            `public class PrimaryMethodBox(string? a) {
+                 public Func<int>? Read() {
+                     if (a is null) return null;
+                     return () => a.Length;
+                 }
+             }`
+            case "primary constructor initializer capture":
+            `public class PrimaryInitBox(string? a) {
+                 public Func<int> Callback = a is null ? (() => 0) : (() => a.Length);
+             }`
+            default:
+            string.Empty
+        }
         let source = (`
 using System;
 using System.Collections.Generic;
+using System.Linq;
 namespace TypedForEach {
+    EXTRA_TYPES
     public static class Probe {
         public static bool Try(out string value) { value = null; return false; }
         public static string Run() {
@@ -401,11 +454,15 @@ namespace TypedForEach {
             return result;
         }
     }
-}`).Replace("LOOP_BODY", loopBody)
+}`).Replace("EXTRA_TYPES", extraTypes).Replace("LOOP_BODY", loopBody)
         let printed = Verify(source, expected)
-        if shape.StartsWith("reassigned", StringComparison.Ordinal) ||
-            shape == "single foreach capture" ||
-            shape == "hoisted local function before guard" {
+        if shape.StartsWith("reassigned", StringComparison.Ordinal) || shape.StartsWith(
+            "single foreach",
+            StringComparison.Ordinal
+        ) ||
+            shape == "primary constructor method capture" ||
+            shape == "hoisted local function before guard" ||
+            shape == "transitively hoisted local function" {
             Assert.Contains("a!!.Length", printed)
         } else {
             Assert.DoesNotContain("a!!", printed)
