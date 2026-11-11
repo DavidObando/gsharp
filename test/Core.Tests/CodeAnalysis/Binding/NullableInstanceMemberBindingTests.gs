@@ -232,6 +232,28 @@ a.GetValueOrDefault(99)
         Assert.Equal(7, result.Value)
     }
 
+    @Fact
+    func SymbolicNullableTuple_Members_Bind_And_Evaluate_Guarded_And_Unguarded() {
+        let source = `
+import System.Collections.Generic
+func check(present bool) int32 {
+    let n ([]string?, int32)? = if present { ([]string?{"a"}, 7) } else { nil }
+    let m ([,]string?, int32)? = if present { ([1, 1]string?{"b"}, 11) } else { nil }
+    let list IList[string?] = []string?{"c"}
+    let iface (IList[string?], int32)? = if present { (list, 13) } else { nil }
+    let a = n.GetValueOrDefault(([]string?{"x"}, 1)).Item2
+    let b = n != nil ? n.GetValueOrDefault(([]string?{"x"}, 2)).Item2 + n.Value.Item2 + (n.HasValue ? 10 : 0) : n.GetValueOrDefault().Item2
+    let c = m != nil ? m.GetValueOrDefault(([1, 1]string?{"y"}, 3)).Item2 + m.Value.Item2 + (m.HasValue ? 20 : 0) : m.GetValueOrDefault(([1, 1]string?{"y"}, 4)).Item2
+    let d = iface != nil ? iface.GetValueOrDefault(([]string?{"z"}, 5)).Item2 : iface.GetValueOrDefault(([]string?{"z"}, 6)).Item2
+    return a + b + c + d
+}
+check(true) * 100 + check(false)
+`
+        let result = Evaluate(source)
+        Assert.Empty(result.Diagnostics)
+        Assert.Equal(8611, result.Value)
+    }
+
     shared {
         private func Evaluate(source string) EmittedOracleResult {
             return EmittedOracle.Evaluate(source)

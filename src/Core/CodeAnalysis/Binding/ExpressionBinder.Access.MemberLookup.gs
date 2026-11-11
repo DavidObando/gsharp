@@ -108,8 +108,9 @@ internal partial class ExpressionBinder {
             return true
         }
         switch type {
-            case tupleType is TupleTypeSymbol when TryGetTupleElementIndex(name, tupleType, out _) {
-                return true
+            case tupleType is TupleTypeSymbol {
+                return TryGetTupleElementIndex(name, tupleType, out _) ||
+                    ClrTypeMayHaveMember(TupleTypeSymbol.GetOpenClrType(Math.Min(tupleType.Arity, 8)), name)
             }
             case structType is StructSymbol {
                 return StructMayHaveMember(structType, name)
@@ -121,7 +122,7 @@ internal partial class ExpressionBinder {
                 return TypeParameterMayHaveMember(typeParameter, name)
             }
         }
-        let clrType = type.ClrType
+        let clrType = ClrOverloadResolution.GetEffectiveExtensionReceiverClrType(type)
         if clrType == nil {
             return true
         }
@@ -242,7 +243,8 @@ internal partial class ExpressionBinder {
             default(IReadOnlyList[string?]?)
         }
         let probes = GetImportedExtensionProbeReceivers(type)
-        let isSymbolicReceiver = type.ClrType == nil || TypeSymbol.ContainsSameCompilationUserType(type)
+        let isSymbolicReceiver = ClrOverloadResolution.GetEffectiveExtensionReceiverClrType(type) == nil ||
+            TypeSymbol.ContainsSameCompilationUserType(type)
         for candidate in this.memberLookup.CollectImportedExtensionMethods(name) {
             try {
                 if isSymbolicReceiver {
@@ -1528,12 +1530,11 @@ internal partial class ExpressionBinder {
             return true
         }
         let openTypeParameter = nullableType.UnderlyingType as TypeParameterSymbol
-        // Issue #4986: a user value-kind struct or enum has no ClrType while
-        // binding either. Admit only its properties here: open method groups
-        // do not yet emit a constructed `Nullable<T>` method reference.
+        // Issues #4986 / #5030: a symbolic value-type nullable has no ClrType during binding.
+        // Admit only its properties here because open method groups do not emit constructed `Nullable<T>` method references.
         if openTypeParameter?.HasValueTypeConstraint != true &&
             (
-            !NullableLifting.IsUserValueTypeNullable(nullableType) ||
+            !NullableLifting.RequiresSymbolicNullableGetValue(nullableType) ||
                 (memberName != "Value" && memberName != "HasValue")
         ) {
             return false

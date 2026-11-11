@@ -3799,7 +3799,8 @@ internal class MemberLookup {
                     }
                 }
             }
-            if t.ClrType != nil {
+            if t.ClrType != nil &&
+                !(t is NullableTypeSymbol nullableWithClr && NullableLifting.IsValueTypeNullable(nullableWithClr)) {
                 erased = t.ClrType
                 return true
             }
@@ -4009,10 +4010,12 @@ internal class MemberLookup {
                         return true
                     }
                     try {
-                        let nullableDefinition = if erasedUnderlying.Assembly == typeof(object).Assembly {
+                        let contextObject = TupleTypeSymbol.FindLoadContextObject(erasedUnderlying) ??
+                            ResolveErasedObjectInContext(erasedUnderlying)
+                        let nullableDefinition = if contextObject.Assembly == typeof(object).Assembly {
                             typeof(Nullable[_])
                         } else {
-                            erasedUnderlying.Assembly.GetType(
+                            contextObject.Assembly.GetType(
                                 typeof(Nullable[_]).FullName ?? "System.Nullable`1",
                                 throwOnError: false
                             )
@@ -4076,14 +4079,27 @@ internal class MemberLookup {
                     {
                         let elementTypes = tuple.ElementTypes
                         let erasedElements = [elementTypes.Length]Type
+                        let liftToNullable = [elementTypes.Length]bool
                         for var i = 0; i < elementTypes.Length; i++ {
+                            if elementTypes[i] is NullableTypeSymbol nullableElement &&
+                                NullableLifting
+                                .IsValueTypeNullable(nullableElement) {
+                                if !TryProjectErasedClrType(nullableElement.UnderlyingType, out var erasedUnderlying) ||
+                                    erasedUnderlying == nil {
+                                    return false
+                                }
+                                erasedElements[i] = erasedUnderlying
+                                liftToNullable[i] = erasedUnderlying.IsValueType &&
+                                    !NullableLifting.IsValueTypeNullableClr(erasedUnderlying)
+                                continue
+                            }
                             if !TryProjectErasedClrType(elementTypes[i], out var erasedElement) ||
                                 erasedElement == nil {
                                 return false
                             }
                             erasedElements[i] = erasedElement
                         }
-                        erased = TupleTypeSymbol.BuildClrType(erasedElements)
+                        erased = TupleTypeSymbol.BuildClrType(erasedElements, liftToNullable)
                         return erased != nil
                     }
                 }
@@ -7780,6 +7796,9 @@ internal class MemberLookup {
             let hostObject = typeof(object)
             if openDef == nil || openDef.Assembly == hostObject.Assembly {
                 return hostObject
+            }
+            if TupleTypeSymbol.FindLoadContextObject(openDef) is {} contextObject {
+                return contextObject
             }
             for p in openDef.GetGenericArguments() {
                 let baseType Type? = p.BaseType
