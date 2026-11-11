@@ -280,7 +280,15 @@ jobs:
       - name: Translate the corpus
         env:
           SELFMIG_CORPUS_RESTORED: ${{ steps.corpus-cache.outputs.cache-hit == 'true' && '1' || '0' }}
-        run: timeout --kill-after=1m 225m ./build/run-cs2gs-selfmig-migrate.sh
+        run: |
+          set +e
+          timeout --kill-after=1m 225m ./build/run-cs2gs-selfmig-migrate.sh
+          code=$?
+          if (( code == 124 || code == 137 )); then
+            mkdir -p "$SELFMIG_GATE_ROOT"
+            echo "the translate job (gsharp-csharp (translate)) timed out after 225m" > "$SELFMIG_GATE_ROOT/translate-timed-out.txt"
+          fi
+          exit "$code"
 
       - name: Archive built prerequisites for validation shards
         run: |
@@ -341,6 +349,7 @@ jobs:
             ${{ env.SELFMIG_GATE_ROOT }}/migrate.log
             ${{ env.SELFMIG_GATE_ROOT }}/metrics.json
             ${{ env.SELFMIG_GATE_ROOT }}/migrate-run-dir.txt
+            ${{ env.SELFMIG_GATE_ROOT }}/translate-timed-out.txt
             ${{ env.SELFMIG_GATE_ROOT }}/main-out.tar
             ${{ env.SELFMIG_GATE_ROOT }}/corpus-out.tar
 
@@ -399,8 +408,15 @@ jobs:
           SELFMIG_CORPUS_RESTORED: '1'
         # SHARD_APPS is a space-separated app-id list: one argument per app.
         run: |
+          set +e
           read -ra apps <<< "$SHARD_APPS"
           timeout --kill-after=1m 225m ./build/run-cs2gs-selfmig-validate.sh "$SHARD_NAME" "${apps[@]}"
+          code=$?
+          if (( code == 124 || code == 137 )); then
+            mkdir -p "$SELFMIG_GATE_ROOT/shard-$SHARD_NAME"
+            echo "the validate job (gsharp-csharp (validate $SHARD_NAME)) timed out after 225m" > "$SELFMIG_GATE_ROOT/shard-$SHARD_NAME/validate-timed-out.txt"
+          fi
+          exit "$code"
 
       - name: Upload shard result
         if: always()
@@ -411,6 +427,7 @@ jobs:
           path: |
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/shard-run.json
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/shard-costs.json
+            ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/validate-timed-out.txt
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/polished.tar.gz
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/validate.log
             ${{ env.SELFMIG_GATE_ROOT }}/shard-${{ matrix.name }}/capture-test-oracle.log
@@ -467,8 +484,17 @@ jobs:
           set +e
           mkdir -p "$RUNNER_TEMP/selfmig-shards"
           notes=()
+          timed_out=()
           [[ "$MIGRATE_RESULT" == success ]] || notes+=("the translate job finished '$MIGRATE_RESULT'")
           [[ "$VALIDATE_RESULT" == success ]] || notes+=("the validate shards finished '$VALIDATE_RESULT'")
+          if [[ -f "$SELFMIG_GATE_ROOT/translate-timed-out.txt" ]]; then
+            notes+=("$(cat "$SELFMIG_GATE_ROOT/translate-timed-out.txt")")
+            timed_out=(--timed-out)
+          fi
+          while IFS= read -r marker; do
+            notes+=("$(cat "$marker")")
+            timed_out=(--timed-out)
+          done < <(find "$RUNNER_TEMP/selfmig-shards" -name validate-timed-out.txt | sort)
           if [[ -f "$SELFMIG_GATE_ROOT/migrate-run-dir.txt" ]]; then
             # Writes $SELFMIG_GATE_ROOT/stats.json whatever its verdict.
             ./build/run-cs2gs-selfmig-gate.sh "$SELFMIG_GATE_ROOT" "$RUNNER_TEMP/selfmig-shards" \
@@ -493,7 +519,7 @@ jobs:
             incomplete=(--incomplete --jobs "$RUNNER_TEMP/jobs.json")
           fi
           python3 build/cs2gs-apps-leg.py result --app gsharp-csharp --exit-code "$code" \
-            "${incomplete[@]}" \
+            "${incomplete[@]}" "${timed_out[@]}" \
             --stats "$SELFMIG_GATE_ROOT/stats.json" --note "$note" \
             --log "$RUNNER_TEMP/leg.log" --run-url "$RUN_URL" \
             --out "$RUNNER_TEMP/results/result-gsharp-csharp.json"

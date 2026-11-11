@@ -125,13 +125,23 @@ def main():
         assert leg.leg_result("x", 0, d / "stats.json", "", "", "u", incomplete=True)["status"] == "incomplete"
         r = result(d, 1, None, note="the translate job finished 'cancelled'", incomplete="")
         assert r["status"] == "incomplete" and "cancelled" in r["summary"], r
-        # Issue #5931: a step timeout (exit code 124 or --timed-out) or a
+        # Issue #5931: a step timeout (exit codes 124/137 or --timed-out) or a
         # cancelled job that reached its timeout limit in jobs.json overrides
         # --incomplete and reports red with a stable timeout fingerprint.
         r = result(d, 124, full, incomplete="")
         assert r["status"] == "red" and r["fingerprint"] == "leg-timeout" and "timed out" in r["summary"], r
-        r = result(d, 137, None, note="the leg timed out after 170m", timed_out="", incomplete="")
-        assert r["status"] == "red" and r["fingerprint"] == "leg-timeout", r
+        r = result(d, 137, full, incomplete="")
+        assert r["status"] == "red" and r["fingerprint"] == "leg-timeout" and "timed out" in r["summary"], r
+        r = result(d, 1, None,
+                   note="the translate job finished 'success'; the validate shards finished 'failure'; "
+                        "the validate job (gsharp-csharp (validate compiler-a)) timed out after 225m",
+                   timed_out="", incomplete="")
+        assert r["status"] == "red" and r["fingerprint"] == "validate-timeout", r
+        r = result(d, 1, None,
+                   note="the translate job finished 'failure'; the validate shards finished 'skipped'; "
+                        "the translate job (gsharp-csharp (translate)) timed out after 225m; no migrated tree to validate",
+                   timed_out="")
+        assert r["status"] == "red" and r["fingerprint"] == "translate-timeout", r
         jobs_file = d / "jobs-timeout.json"
         jobs_file.write_text(json.dumps({"jobs": [
             {"name": "gsharp-csharp (translate)", "conclusion": "cancelled",

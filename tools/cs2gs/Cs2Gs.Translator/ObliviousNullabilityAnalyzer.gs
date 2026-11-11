@@ -1871,8 +1871,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
         scalarVisited HashSet[ScalarQuery],
-        tupleVisited HashSet[TupleElementQuery],
-        checkSiblings bool = true
+        tupleVisited HashSet[TupleElementQuery]
     ) bool {
         let query = ScalarQuery(compilation, Canonical(symbol))
         if !scalarVisited.Add(query) {
@@ -1939,7 +1938,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        if checkSiblings && siblingCompilations != nil {
+        if siblingCompilations != nil {
             for sibling in siblingCompilations {
                 if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
                     sibling
@@ -1953,14 +1952,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 // compilation's own cached graph.
                 let remapped ISymbol? = RemapToCompilation(sibling, query.Symbol)
                 if remapped != nil &&
-                    IsTaintedCore(
-                    sibling,
-                    Canonical(remapped),
-                    siblingCompilations,
-                    scalarVisited,
-                    tupleVisited,
-                    checkSiblings: false
-                ) {
+                    IsTaintedCore(sibling, Canonical(remapped), siblingCompilations, scalarVisited, tupleVisited) {
                     return true
                 }
             }
@@ -1974,8 +1966,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
         scalarVisited HashSet[ScalarQuery],
-        tupleVisited HashSet[TupleElementQuery],
-        checkSiblings bool = true
+        tupleVisited HashSet[TupleElementQuery]
     ) bool {
         var symbol = symbol
         symbol = OwningMember(symbol)
@@ -2027,7 +2018,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        if checkSiblings && siblingCompilations != nil {
+        if siblingCompilations != nil {
             for sibling in siblingCompilations {
                 if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
                     !CanRemapToCompilation(sibling, symbol) {
@@ -2041,8 +2032,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                     path,
                     siblingCompilations,
                     scalarVisited,
-                    tupleVisited,
-                    checkSiblings: false
+                    tupleVisited
                 ) {
                     return true
                 }
@@ -2074,8 +2064,7 @@ internal shared class ObliviousNullabilityAnalyzer {
         symbol ISymbol?,
         path string,
         siblingCompilations IReadOnlyList[CSharpCompilation]?,
-        visited HashSet[TupleElementQuery],
-        checkSiblings bool = true
+        visited HashSet[TupleElementQuery]
     ) bool {
         var symbol = symbol
         symbol = OwningMember(symbol)
@@ -2103,22 +2092,14 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
         }
-        if checkSiblings && siblingCompilations != nil {
+        if siblingCompilations != nil {
             for sibling in siblingCompilations {
                 if sibling == nil || object.ReferenceEquals(sibling, compilation) ||
                     !CanRemapToCompilation(sibling, symbol) {
                     continue
                 }
                 let remapped ISymbol? = RemapToCompilation(sibling, symbol)
-                if remapped != nil &&
-                    IsTupleContractFixedCore(
-                    sibling,
-                    remapped,
-                    path,
-                    siblingCompilations,
-                    visited,
-                    checkSiblings: false
-                ) {
+                if remapped != nil && IsTupleContractFixedCore(sibling, remapped, path, siblingCompilations, visited) {
                     return true
                 }
             }

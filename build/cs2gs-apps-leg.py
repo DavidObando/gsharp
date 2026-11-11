@@ -181,11 +181,15 @@ def load_stats(path: Path) -> tuple[dict | None, str]:
     return stats, ""
 
 
+EXIT_TIMED_OUT = (124, 137)
+
+
 def timeout_fingerprint(note: str) -> str:
-    lower = note.lower()
-    if "translate" in lower:
+    clauses = [c.strip().lower() for c in note.split(";") if "timed out" in c.lower()]
+    target = " ; ".join(clauses) if clauses else note.lower()
+    if "translate" in target:
         return "translate-timeout"
-    if "validate" in lower:
+    if "validate" in target:
         return "validate-timeout"
     return "leg-timeout"
 
@@ -246,7 +250,7 @@ def leg_result(app: str, code: int, stats_path: Path, log: str, note: str, run_u
                incomplete: bool = False, timed_out: bool = False, jobs_path: Path | None = None) -> dict:
     stats, problem = load_stats(stats_path)
     jobs_timeout = job_timed_out_note(app, jobs_path)
-    if code == 124 or jobs_timeout:
+    if code in EXIT_TIMED_OUT or jobs_timeout:
         timed_out = True
     notes = [note] if note else []
     if jobs_timeout and jobs_timeout not in notes:
