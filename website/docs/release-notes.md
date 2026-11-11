@@ -645,7 +645,7 @@ The entries below are newer than v0.5.212. Published features and migration note
 
 ### Bug Fixes
 
-- **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple literals capture narrowed reads per element and resolve them for the consumer's target type, including nested tuples and `defer` or `using` block values. Nullable destinations accept the declared value; non-null destinations still check a retracted narrowing. Existing tuple conversion classification and ordinary call results remain unchanged. Later conversions preserve committed element checks, and cleanup values keep the result saved before cleanup runs.
+- **Nullable tuple and block consumers after backward jumps** (Fixes #5653). Tuple literals capture narrowed reads per element and resolve them for the consumer's target type, including nested tuples and `defer` or `using` block values. Nullable destinations accept the declared value; non-null destinations still check a retracted narrowing. Existing tuple conversion classification and ordinary call results remain unchanged. Later conversions preserve committed element checks, and cleanup values keep the result saved before cleanup runs. Top-level statements in multiple files keep the same checks.
 
 ## 0.5.212 (October 22, 2026)
 

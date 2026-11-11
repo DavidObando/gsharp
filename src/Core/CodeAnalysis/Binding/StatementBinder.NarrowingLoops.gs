@@ -5392,25 +5392,9 @@ internal partial class StatementBinder {
         if span == nil || !spanEntryStates.TryGetValue(span, out var entry) {
             return false
         }
-        let last = if span.LastIndex < span.StatementList.Length {
-            cast[SyntaxNode](span.StatementList[span.LastIndex])
-        } else {
-            span.Owner
-        }
-        return syntax
-            .Span
-            .Start >= span
-            .FirstStatement
-            .Span
-            .Start &&
-            syntax
-            .Span
-            .End <= last
-            .Span
-            .End &&
-            entry
-            .Before
-            .NarrowedType(path) != nil && entry.Lowered.NarrowedType(path) == nil
+        return span.Contains(syntax) && entry.Before.NarrowedType(path) != nil && entry.Lowered.NarrowedType(
+            path
+        ) == nil
     }
 
     /// ADR-0213 section 11 (slice L2, #5318, #5671): binds a participant label of [`span`](paramref) under

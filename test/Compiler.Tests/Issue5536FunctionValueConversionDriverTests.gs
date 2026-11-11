@@ -2171,6 +2171,63 @@ namespace FunctionControl {
         Check(fixture, source.ToString(), oracle.ToString(), expected.ToString(), requireNoDiagnostics: true)
     }
 
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5653_CrossFileBackwardGoto_RejectsCapturedNonNullTupleRead(readInFirstFile bool) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        const prelude = "import System\nvar s string? = \"a\"\nvar n = 0\nif s == nil { return }\n"
+        let first = if readInFirstFile {
+            prelude +
+                "L: if n > 0 {\n    let t (string, int32) = (@s, 1)\n" +
+                "    Console.Write(t.Item1.Length)\n    return\n}\nn++\n"
+        } else {
+            prelude + "L: n++\n"
+        }
+        let second = if readInFirstFile {
+            "s = nil\ngoto L\n"
+        } else {
+            "if n > 1 {\n    let t (string, int32) = (@s, 1)\n" +
+                "    Console.Write(t.Item1.Length)\n    return\n}\ns = nil\ngoto L\n"
+        }
+        let marked = if readInFirstFile {
+            first
+        } else {
+            second
+        }
+        let index = marked.IndexOf("@s", StringComparison.Ordinal)
+        Assert.True(index >= 0)
+        let prefix = marked.Substring(0, index)
+        let result = Compile(fixture, first.Replace("@s", "s"), second.Replace("@s", "s"))
+        Assert.NotEqual(0, result.Code)
+        let log = Encoding.UTF8.GetString(result.Bytes) + result.Error
+        let diagnostic = Assert.Single(Regex.Matches(log, `\((\d+),(\d+),(\d+),(\d+)\): error (GS\d+):`))
+        let line = prefix.Count((value char) -> value == '\n') + 1
+        let column = index - prefix.LastIndexOf('\n')
+        Assert.Equal("GS0155", diagnostic.Groups[5].Value)
+        Assert.Equal(line.ToString(), diagnostic.Groups[1].Value)
+        Assert.Equal(column.ToString(), diagnostic.Groups[2].Value)
+        Assert.Equal(line.ToString(), diagnostic.Groups[3].Value)
+        Assert.Equal((column + 1).ToString(), diagnostic.Groups[4].Value)
+        Assert.Contains(
+            Path.Combine(
+                fixture.DirectoryPath,
+                if readInFirstFile {
+                    "Consumer.gs"
+                } else {
+                    "Consumer2.gs"
+                }
+            ) +
+                "(" +
+                line.ToString() + ",",
+            log,
+            StringComparison.Ordinal
+        )
+        for path in OutputPaths(fixture) {
+            Assert.False(File.Exists(path))
+        }
+    }
+
     @Fact
     func Issue5653_TwoStageTupleConversion_KeepsCommittedElementCheck() {
         using let fixture = CSharpFixture(Contract + `
@@ -3894,7 +3951,11 @@ class Program {
         }
     }
 
-    private func Compile(fixture CSharpFixture, source string)(Code int32, Bytes[]uint8, Error string) {
+    private func Compile(fixture CSharpFixture, source string, additionalSource string? = nil)(
+        Code int32,
+        Bytes[]uint8,
+        Error string
+    ) {
         let path = Path.Combine(fixture.DirectoryPath, "Consumer.gs")
         File.WriteAllText(path, source)
         output.WriteLine("G# source:\n" + source)
@@ -3902,19 +3963,24 @@ class Program {
         RecordArtifact(typeof(Issue5536FunctionValueConversionDriverTests).Assembly.Location)
         RecordArtifact(typeof(Program).Assembly.Location)
         RecordArtifact(Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!!, "GSharp.Core.dll"))
-        return Run(
-            []string{
-                typeof(Program).Assembly.Location,
-                path,
-                "/target:exe",
-                "/targetframework:net10.0",
-                "/deterministic+",
-                "/debug:portable",
-                "/out:" + Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
-                "/refout:" + Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
-                "/reference:" + fixture.AssemblyPath
-            }
-        )
+        let arguments = List[string]{
+            typeof(Program).Assembly.Location,
+            path,
+            "/target:exe",
+            "/targetframework:net10.0",
+            "/deterministic+",
+            "/debug:portable",
+            "/out:" + Path.Combine(fixture.DirectoryPath, "Consumer.dll"),
+            "/refout:" + Path.Combine(fixture.DirectoryPath, "Consumer.ref.dll"),
+            "/reference:" + fixture.AssemblyPath
+        }
+        if additionalSource != nil {
+            let additionalPath = Path.Combine(fixture.DirectoryPath, "Consumer2.gs")
+            File.WriteAllText(additionalPath, additionalSource)
+            output.WriteLine("Additional G# source:\n" + additionalSource)
+            arguments.Add(additionalPath)
+        }
+        return Run(arguments)
     }
 
     private func Verify(image string, contract string?) {
