@@ -10021,9 +10021,8 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.GetUserDefinedConversionInputOperator(value, targetType, out convertsValue)
             }
-            if !operatorInput &&
-                (conversionOperator != nil || this.FlowsThroughUserDefinedConversion(value)) &&
-                this.GetFixedElementDestinationType(value, targetSymbol) is {} projectedTarget &&
+            // Use the emitted tuple leaf contract even when no user-defined conversion consumes the value.
+            if !operatorInput && this.GetFixedElementDestinationType(value, targetSymbol) is {} projectedTarget &&
                 SymbolEqualityComparer
                 .Default
                 .Equals(projectedTarget, targetType) {
