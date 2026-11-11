@@ -1534,6 +1534,8 @@ proof machinery.
 - *Tuple read captures (#5653).* A tuple literal retains each narrowed element read until its consumer supplies a target type.
   Span-entry snapshots keep immutable pre- and post-lower-bound states only to identify retracted reads.
   These states never restore a narrowing. Non-literal tuple conversions and uncaptured values keep their existing classification.
+  Once a consumer commits a conversion, later conversions use its result, not the captured source.
+  Cleanup result locals remain authoritative when their initializer needs no rewrite.
 - *Ordering with #5301 (row R6).* Slice L2 landed before PR
   [#5732](https://github.com/DavidObando/gsharp/pull/5732) (issue
   [#5301](https://github.com/DavidObando/gsharp/issues/5301)), which then removed the function-wide

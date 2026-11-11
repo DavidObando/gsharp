@@ -2171,6 +2171,138 @@ namespace FunctionControl {
         Check(fixture, source.ToString(), oracle.ToString(), expected.ToString(), requireNoDiagnostics: true)
     }
 
+    @Fact
+    func Issue5653_TwoStageTupleConversion_KeepsCommittedElementCheck() {
+        using let fixture = CSharpFixture(Contract + `
+#nullable disable
+namespace FunctionControl {
+    public static class PlatformValues {
+        public static string Initial() => "a";
+    }
+}
+`, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+import FunctionControl
+func Main() {
+    var p = PlatformValues.Initial()
+    var n = 0
+    if p != nil {
+        L: if n > 0 {
+            try {
+                let t (string?, int32) = cast[(string, int32)]((p, 1))
+                Console.Write("unchecked")
+            } catch (NullReferenceException) {
+                Console.Write("checked")
+            }
+            return
+        }
+        n++
+        p = nil
+        goto L
+    }
+}
+`, `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        string? p = PlatformValues.Initial();
+        var n = 0;
+        if (p != null) {
+            L: if (n > 0) {
+                try {
+                    (string?, int) t = (p ?? throw new NullReferenceException(), 1);
+                    Console.Write("unchecked");
+                } catch (NullReferenceException) {
+                    Console.Write("checked");
+                }
+                return;
+            }
+            n++;
+            p = null;
+            goto L;
+        }
+    }
+}
+`, "checked", requireNoDiagnostics: true)
+    }
+
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func Issue5653_CleanupTupleValue_KeepsSavedResult(useUsing bool) {
+        using let fixture = CSharpFixture(Contract + `
+namespace FunctionControl {
+    public sealed class OnDispose : System.IDisposable {
+        private readonly System.Action action;
+        public OnDispose(System.Action action) { this.action = action; }
+        public void Dispose() => action();
+    }
+}
+`, assemblyName: "FunctionContract", deterministic: true)
+        let cleanup = if useUsing {
+            "using let cleanup = OnDispose(after)"
+        } else {
+            "defer after()"
+        }
+        let source = `import System
+import FunctionControl
+func Main() {
+    var s string? = "a"
+    let after = func() { s = "after" }
+    var n = 0
+    if s != nil {
+        L: if n > 0 {
+            let t (string?, int32) = (({
+                |
+                s
+            }), 1)
+            Console.Write(t.Item1 == nil)
+            Console.Write(s)
+            return
+        }
+        n++
+        s = nil
+        goto L
+    }
+}
+`
+        let oracleCleanup = if useUsing {
+            "using (var cleanup = new OnDispose(after)) { saved = s; }"
+        } else {
+            "try { saved = s; } finally { after(); }"
+        }
+        let oracle = `using System;
+using FunctionControl;
+class Program {
+    static void Main() {
+        string? s = "a";
+        Action after = () => { s = "after"; };
+        var n = 0;
+        if (s != null) {
+            L: if (n > 0) {
+                string? saved;
+                |
+                (string?, int) t = (saved, 1);
+                Console.Write(t.Item1 == null);
+                Console.Write(s);
+                return;
+            }
+            n++;
+            s = null;
+            goto L;
+        }
+    }
+}
+`
+        Check(
+            fixture,
+            source.Replace("|", cleanup),
+            oracle.Replace("|", oracleCleanup),
+            "Trueafter",
+            requireNoDiagnostics: true
+        )
+    }
+
     @Theory
     @InlineData("let t (string, int32) = (@s, 1)", "s")
     @InlineData(

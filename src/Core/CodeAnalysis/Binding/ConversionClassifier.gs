@@ -683,22 +683,25 @@ internal class ConversionClassifier {
             if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
                 resultVar
                 .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) &&
-                TryResolveCleanupBlockValue(
-                diagnosticLocation,
-                block.Statements,
-                resultVar,
-                target,
-                allowExplicit,
-                capturedRead,
-                out var rewrittenStatements,
-                out var newResultVar
-            ) {
-                return BoundBlockExpression(
-                    block.Syntax,
-                    rewrittenStatements,
-                    BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
-                )
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                if TryResolveCleanupBlockValue(
+                    diagnosticLocation,
+                    block.Statements,
+                    resultVar,
+                    target,
+                    allowExplicit,
+                    capturedRead,
+                    out var rewrittenStatements,
+                    out var newResultVar
+                ) {
+                    return BoundBlockExpression(
+                        block.Syntax,
+                        rewrittenStatements,
+                        BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                    )
+                }
+                // Cleanup already saved the value. Do not read its source again after cleanup.
+                return expression
             }
             let recoveredTail = ResolveNarrowedValue(
                 diagnosticLocation,
@@ -729,6 +732,7 @@ internal class ConversionClassifier {
             Conversion
             .Classify(literal.TupleType, targetTuple).IsIdentity {
             var rewritten ImmutableArray[BoundExpression].Builder? = nil
+            var consumedCaptures = false
             for var index = 0; index < literal.Elements.Length; index++ {
                 let original = literal.Elements[index]
                 let read = if literal.NarrowedElementReads.IsDefaultOrEmpty {
@@ -736,6 +740,7 @@ internal class ConversionClassifier {
                 } else {
                     literal.NarrowedElementReads[index]
                 }
+                consumedCaptures = consumedCaptures || read != nil
                 let resolved = ResolveNarrowedValue(
                     diagnosticLocation,
                     original,
@@ -754,13 +759,14 @@ internal class ConversionClassifier {
                 }
                 rewritten?.Add(resolved)
             }
-            if rewritten != nil {
-                let elements = rewritten.MoveToImmutable()
+            if rewritten != nil || consumedCaptures {
+                let elements = rewritten?.MoveToImmutable() ?? literal.Elements
                 let tupleType = TupleTypeSymbol.Get(
                     elements.Select((element BoundExpression) -> element.Type).ToImmutableArray(),
                     literal.TupleType.ElementNames
                 )
-                return BoundTupleLiteralExpression(literal.Syntax, tupleType, elements, literal.NarrowedElementReads)
+                // A committed conversion must not replay the element's captured source.
+                return BoundTupleLiteralExpression(literal.Syntax, tupleType, elements)
             }
             return expression
         }
