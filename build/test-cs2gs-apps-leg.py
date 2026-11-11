@@ -125,6 +125,39 @@ def main():
         assert leg.leg_result("x", 0, d / "stats.json", "", "", "u", incomplete=True)["status"] == "incomplete"
         r = result(d, 1, None, note="the translate job finished 'cancelled'", incomplete="")
         assert r["status"] == "incomplete" and "cancelled" in r["summary"], r
+        # Issue #5931: a step timeout (exit codes 124/137 or --timed-out) or a
+        # cancelled job that reached its timeout limit in jobs.json overrides
+        # --incomplete and reports red with a stable timeout fingerprint.
+        r = result(d, 124, full, incomplete="")
+        assert r["status"] == "red" and r["fingerprint"] == "leg-timeout" and "timed out" in r["summary"], r
+        r = result(d, 137, full, incomplete="")
+        assert r["status"] == "red" and r["fingerprint"] == "leg-timeout" and "timed out" in r["summary"], r
+        r = result(d, 1, None,
+                   note="the translate job finished 'success'; the validate shards finished 'failure'; "
+                        "the validate job (gsharp-csharp (validate compiler-a)) timed out after 225m",
+                   timed_out="", incomplete="")
+        assert r["status"] == "red" and r["fingerprint"] == "validate-timeout", r
+        r = result(d, 1, None,
+                   note="the translate job finished 'failure'; the validate shards finished 'skipped'; "
+                        "the translate job (gsharp-csharp (translate)) timed out after 225m; no migrated tree to validate",
+                   timed_out="")
+        assert r["status"] == "red" and r["fingerprint"] == "translate-timeout", r
+        jobs_file = d / "jobs-timeout.json"
+        jobs_file.write_text(json.dumps({"jobs": [
+            {"name": "gsharp-csharp (translate)", "conclusion": "cancelled",
+             "started_at": "2026-11-10T13:25:04Z", "completed_at": "2026-11-10T17:25:28Z"},
+        ]}))
+        r = leg.leg_result("gsharp-csharp", 1, d / "no-stats.json", "",
+                           "the translate job finished 'cancelled'", "u", incomplete=True, jobs_path=jobs_file)
+        assert r["status"] == "red" and r["fingerprint"] == "translate-timeout" and "timed out after 240m" in r["summary"], r
+        jobs_short_cancel = d / "jobs-cancel.json"
+        jobs_short_cancel.write_text(json.dumps({"jobs": [
+            {"name": "gsharp-csharp (translate)", "conclusion": "cancelled",
+             "started_at": "2026-10-16T13:32:12Z", "completed_at": "2026-10-16T14:00:02Z"},
+        ]}))
+        r = leg.leg_result("gsharp-csharp", 1, d / "no-stats.json", "",
+                           "the translate job finished 'cancelled'", "u", incomplete=True, jobs_path=jobs_short_cancel)
+        assert r["status"] == "incomplete", r
         # The log tail is the END of the log.
         (d / "leg.log").write_text("x" * 9000 + "THE END")
         assert result(d, 1, full, log=str(d / "leg.log"))["log_tail"].endswith("THE END")

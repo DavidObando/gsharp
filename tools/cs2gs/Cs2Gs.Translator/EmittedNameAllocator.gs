@@ -130,7 +130,9 @@ internal class EmittedNameAllocator {
             .DeclaringSyntaxReferences
             .FirstOrDefault() is {} declaration && !this.compilation.ContainsSyntaxTree(declaration.SyntaxTree) &&
             FindDeclaringCompilation(this.compilation, declaration.SyntaxTree, HashSet[Compilation]()) is {} owner {
-            let declared = owner.GetSemanticModel(declaration.SyntaxTree).GetDeclaredSymbol(declaration.GetSyntax())
+            let declared = TranslationContext.GetSemanticModel(owner, declaration.SyntaxTree).GetDeclaredSymbol(
+                declaration.GetSyntax()
+            )
             return For(owner).GetName(declared ?? symbol, additionalContext)
         }
         lock this.gate {
@@ -305,7 +307,7 @@ internal class EmittedNameAllocator {
             let declaration = reference.GetSyntax()
             if !this.referencedBindingNames.TryGetValue(declaration, out var bindings) {
                 bindings = Dictionary[ISymbol, HashSet[string]](SymbolEqualityComparer.Default)
-                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
                 for identifier in declaration.DescendantNodes().OfType[IdentifierNameSyntax]() {
                     if identifier.Identifier.ValueText != "_" {
                         continue
@@ -507,7 +509,7 @@ internal class EmittedNameAllocator {
     private func GetLexicallyVisibleTypeNames(typeParameter ITypeParameterSymbol) IEnumerable[string] {
         let names = HashSet[string](StringComparer.Ordinal)
         for reference in typeParameter.DeclaringSyntaxReferences {
-            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
             for symbol in model.LookupNamespacesAndTypes(reference.Span.Start) {
                 switch symbol {
                     case type is INamedTypeSymbol {
@@ -565,7 +567,7 @@ internal class EmittedNameAllocator {
         )
         for reference in references {
             let root = reference.GetSyntax()
-            let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
             for node in root.DescendantNodesAndSelf() {
                 let declared ISymbol? = model.GetDeclaredSymbol(node)
                 if declared is ILocalSymbol ||
@@ -645,7 +647,7 @@ internal class EmittedNameAllocator {
             }
             for reference in references {
                 let root = reference.GetSyntax()
-                let model = this.compilation.GetSemanticModel(reference.SyntaxTree)
+                let model = TranslationContext.GetSemanticModel(this.compilation, reference.SyntaxTree)
                 for token in root.DescendantTokens() {
                     if token.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IdentifierToken) &&
                         token.ValueText != "_" {
@@ -686,7 +688,7 @@ internal class EmittedNameAllocator {
             if tree.GetRoot() is not Microsoft.CodeAnalysis.CSharp.Syntax.CompilationUnitSyntax root {
                 continue
             }
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             let usings = root.Usings.Concat(
                 root
                     .DescendantNodes()
@@ -755,10 +757,10 @@ internal class EmittedNameAllocator {
                             .CSharp
                             .Syntax
                             .ParameterSyntax parameterSyntax &&
-                            this
-                            .compilation
-                            .GetSemanticModel(reference.SyntaxTree)
-                            .GetDeclaredSymbol(parameterSyntax) is IParameterSymbol parameter {
+                            TranslationContext
+                            .GetSemanticModel(this.compilation, reference.SyntaxTree).GetDeclaredSymbol(
+                            parameterSyntax
+                        ) is IParameterSymbol parameter {
                             Union(propertyMember, parameter)
                         }
                     }
@@ -810,7 +812,7 @@ internal class EmittedNameAllocator {
 
     private func CollectPrimaryParameterContexts() {
         for tree in this.compilation.SyntaxTrees {
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             for record in tree.GetRoot().DescendantNodes().OfType[RecordDeclarationSyntax]() {
                 if record.ParameterList != nil {
                     continue
@@ -960,7 +962,7 @@ internal class EmittedNameAllocator {
 
     private func CollectInvocationSensitiveSymbols() {
         for tree in this.compilation.SyntaxTrees {
-            let model = this.compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(this.compilation, tree)
             let root = tree.GetRoot()
             for invocation in root.DescendantNodes().OfType[InvocationExpressionSyntax]() {
                 if invocation.Expression is not SimpleNameSyntax simple || model.GetSymbolInfo(simple)

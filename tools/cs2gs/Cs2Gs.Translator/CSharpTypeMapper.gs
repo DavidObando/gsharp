@@ -758,7 +758,7 @@ class CSharpTypeMapper {
                 CompilationMeasurements.Count("translation.import_semantic_model_reuses")
                 context.SemanticModel
             } else {
-                compilation.GetSemanticModel(tree)
+                TranslationContext.GetSemanticModel(compilation, tree)
             }
             for node in tree.GetRoot().DescendantNodes() {
                 if node is Microsoft
@@ -905,7 +905,10 @@ class CSharpTypeMapper {
     /// @param context The active translation context.
     /// @returns `true` when the name is claimed at file scope.
     internal func ClaimsDocumentScopeName(name string?, context TranslationContext) bool {
-        this.sourceDeclaredTypeNames ??= BuildSourceDeclaredTypeNames(context.Compilation, this.Names(context))
+        this.sourceDeclaredTypeNames ??= SourceDeclaredTypeNamesByCompilation.GetValue(
+            context.Compilation,
+            (c Compilation) -> BuildSourceDeclaredTypeNames(c, EmittedNameAllocator.For(c))
+        )
         return this.reservedTypeAliases.ContainsKey(name!!) || this.reservedImportedTypeNames.Contains(name!!) ||
             this
             .synthesizedTypeAliases
@@ -931,7 +934,7 @@ class CSharpTypeMapper {
                 .IgnoresAccessibility {
                 context.SemanticModel
             } else {
-                context.Compilation.GetSemanticModel(tree)
+                TranslationContext.GetSemanticModel(context.Compilation, tree)
             }
             let root = tree.GetRoot()
             let usings = root
@@ -1021,7 +1024,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel
             .LookupNamespacesAndTypes(position, name: name)
@@ -1042,7 +1045,7 @@ class CSharpTypeMapper {
         let semanticModel = if object.ReferenceEquals(context.SemanticModel.SyntaxTree, location!!.SourceTree) {
             context.SemanticModel
         } else {
-            context.Compilation.GetSemanticModel(location!!.SourceTree!!)
+            TranslationContext.GetSemanticModel(context.Compilation, location!!.SourceTree!!)
         }
         return semanticModel.LookupSymbols(position).Any(
             (symbol ISymbol) -> (
@@ -2394,7 +2397,16 @@ class CSharpTypeMapper {
             }
         }
         for model in this.LinkedDocumentModels(context) {
-            CollectPotentialSynthesizedNamespaceNames(model, names)
+            names.UnionWith(
+                PotentialSynthesizedNamespaceNamesByModel.GetValue(
+                    model,
+                    (m Microsoft.CodeAnalysis.SemanticModel) -> {
+                        let collected = HashSet[string](StringComparer.Ordinal)
+                        CollectPotentialSynthesizedNamespaceNames(m, collected)
+                        return collected
+                    }
+                )
+            )
         }
         this.potentialSynthesizedNamespaceNames = names
         return names
@@ -2481,7 +2493,10 @@ class CSharpTypeMapper {
     private func SourceTopLevelSimpleNames(compilation CSharpCompilation) IReadOnlyDictionary[string, HashSet[string]] {
         this.sourceTopLevelSimpleNames ??= Dictionary[CSharpCompilation, Dictionary[string, HashSet[string]]]()
         if !this.sourceTopLevelSimpleNames!!.TryGetValue(compilation, out var census) {
-            census = BuildSourceSimpleNames(compilation, nested: false)
+            census = SourceTopLevelSimpleNamesByCompilation.GetValue(
+                compilation,
+                (c Compilation) -> BuildSourceSimpleNames(c, nested: false)
+            )
             this.sourceTopLevelSimpleNames!![compilation] = census
         }
         return census
@@ -2495,7 +2510,10 @@ class CSharpTypeMapper {
     private func SourceNestedSimpleNames(compilation CSharpCompilation) IReadOnlyDictionary[string, HashSet[string]] {
         this.sourceNestedSimpleNames ??= Dictionary[CSharpCompilation, Dictionary[string, HashSet[string]]]()
         if !this.sourceNestedSimpleNames!!.TryGetValue(compilation, out var census) {
-            census = BuildSourceSimpleNames(compilation, nested: true)
+            census = SourceNestedSimpleNamesByCompilation.GetValue(
+                compilation,
+                (c Compilation) -> BuildSourceSimpleNames(c, nested: true)
+            )
             this.sourceNestedSimpleNames!![compilation] = census
         }
         return census
@@ -2667,7 +2685,16 @@ class CSharpTypeMapper {
         // them.
         let names = HashSet[string]()
         for model in this.LinkedDocumentModels(context) {
-            CollectImportedNamespaceNames(model, names)
+            names.UnionWith(
+                ImportedNamespaceNamesByModel.GetValue(
+                    model,
+                    (m Microsoft.CodeAnalysis.SemanticModel) -> {
+                        let collected = HashSet[string](StringComparer.Ordinal)
+                        CollectImportedNamespaceNames(m, collected)
+                        return collected
+                    }
+                )
+            )
         }
         this.importedNamespaceNames = names
         return names
@@ -2712,7 +2739,7 @@ class CSharpTypeMapper {
             if object.ReferenceEquals(context.SemanticModel.SyntaxTree, tree) {
                 context.SemanticModel
             } else {
-                context.Compilation.GetSemanticModel(tree!!)
+                TranslationContext.GetSemanticModel(context.Compilation, tree!!)
             }
         }
         let path = tree!!.FilePath
@@ -2732,7 +2759,7 @@ class CSharpTypeMapper {
                 ) &&
                     linkedTree
                     .GetText().ContentEquals(text) {
-                    models.Add(compilation.GetSemanticModel(linkedTree))
+                    models.Add(TranslationContext.GetSemanticModel(compilation, linkedTree))
                 }
             }
         }
@@ -2778,7 +2805,10 @@ class CSharpTypeMapper {
         }
         if !object.ReferenceEquals(this.identityCriticalDelegatesCompilation, context!!.Compilation) {
             this.identityCriticalDelegatesCompilation = context!!.Compilation
-            this.identityCriticalDelegates = CollectIdentityCriticalDelegates(context!!.Compilation)
+            this.identityCriticalDelegates = IdentityCriticalDelegatesByCompilation.GetValue(
+                context!!.Compilation,
+                CollectIdentityCriticalDelegates
+            )
         }
         return this.identityCriticalDelegates.Contains(named)
     }
@@ -3020,6 +3050,36 @@ class CSharpTypeMapper {
             Compilation,
             Dictionary[string, List[(PropertyTypes[]ITypeSymbol, AcceptsNil[]bool)]]
         ]()
+
+        private let SourceTopLevelSimpleNamesByCompilation ConditionalWeakTable[
+            Compilation,
+            Dictionary[string, HashSet[string]]
+        ] = ConditionalWeakTable[Compilation, Dictionary[string, HashSet[string]]]()
+
+        private let SourceNestedSimpleNamesByCompilation ConditionalWeakTable[
+            Compilation,
+            Dictionary[string, HashSet[string]]
+        ] = ConditionalWeakTable[Compilation, Dictionary[string, HashSet[string]]]()
+
+        private let IdentityCriticalDelegatesByCompilation ConditionalWeakTable[
+            Compilation,
+            HashSet[INamedTypeSymbol]
+        ] = ConditionalWeakTable[Compilation, HashSet[INamedTypeSymbol]]()
+
+        private let SourceDeclaredTypeNamesByCompilation ConditionalWeakTable[
+            Compilation,
+            HashSet[string]
+        ] = ConditionalWeakTable[Compilation, HashSet[string]]()
+
+        private let ImportedNamespaceNamesByModel ConditionalWeakTable[
+            Microsoft.CodeAnalysis.SemanticModel,
+            HashSet[string]
+        ] = ConditionalWeakTable[Microsoft.CodeAnalysis.SemanticModel, HashSet[string]]()
+
+        private let PotentialSynthesizedNamespaceNamesByModel ConditionalWeakTable[
+            Microsoft.CodeAnalysis.SemanticModel,
+            HashSet[string]
+        ] = ConditionalWeakTable[Microsoft.CodeAnalysis.SemanticModel, HashSet[string]]()
 
         /// The G# spelling of a C# predefined type keyword (ADR-0115 §B.12's
         /// width-bearing primitive names), or `null` when the
@@ -3991,7 +4051,7 @@ class CSharpTypeMapper {
                 StringComparer.Ordinal
             )
             for tree in compilation.SyntaxTrees {
-                let model = compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 for creation in tree.GetRoot().DescendantNodes().OfType[AnonymousObjectCreationExpressionSyntax]() {
                     if model.GetTypeInfo(creation).Type is not INamedTypeSymbol candidateType {
                         continue
