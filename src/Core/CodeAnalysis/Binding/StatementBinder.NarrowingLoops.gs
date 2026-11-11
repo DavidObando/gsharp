@@ -5767,6 +5767,9 @@ internal partial class StatementBinder {
     private func AnalyzeBoundCallEffects(callNode BoundExpression, visiting HashSet[FunctionSymbol]) CallEffectSummary {
         switch callNode {
             case call is BoundCallExpression {
+                if call.IsConditionalElided {
+                    return CallEffectSummary()
+                }
                 let fn = call.Function
                 if (fn.MethodKind is MethodKind.PropertyGet or MethodKind.PropertySet) || IsConversionOperator(fn) {
                     let any = CallEffectSummary()
@@ -5793,11 +5796,7 @@ internal partial class StatementBinder {
                     default(TypeSymbol?)
                 }
                 let subst = ApplyReceiverAndMethodSubstitution(raw, receiverType, fn, call.MethodTypeArguments)
-                let res = ResolveBoundCallCallbackEffects(subst, call.Arguments, visiting)
-                if BoundArgumentsContainLazyEnumerable(call.Arguments) {
-                    MergeDeferredEnumerableCallbackEffects(visiting, res)
-                }
-                return res
+                return ResolveBoundCallCallbackEffects(subst, call.Arguments, visiting)
             }
             case uic is BoundUserInstanceCallExpression {
                 let fn = uic.Method
@@ -5815,11 +5814,7 @@ internal partial class StatementBinder {
                     (recvType is StructSymbol s && (s.IsOpen || s.IsAbstract || s.IsSealedHierarchy))
                 let raw = GetFunctionEffectSummaryCore(fn, incOverrides, visiting, out _)
                 let subst = ApplyReceiverAndMethodSubstitution(raw, recvType, fn, uic.MethodTypeArguments)
-                let res = ResolveBoundCallCallbackEffects(subst, uic.Arguments, visiting)
-                if BoundArgumentsContainLazyEnumerable(uic.Arguments) {
-                    MergeDeferredEnumerableCallbackEffects(visiting, res)
-                }
-                return res
+                return ResolveBoundCallCallbackEffects(subst, uic.Arguments, visiting)
             }
             case baseIface is BoundBaseInterfaceCallExpression {
                 let fn = baseIface.Method
@@ -5887,11 +5882,7 @@ internal partial class StatementBinder {
                     includeOverrides: !impCall.Function.Method.IsStatic,
                     visiting
                 )
-                let res = ResolveBoundCallCallbackEffects(raw, impCall.Arguments, visiting)
-                if BoundArgumentsContainLazyEnumerable(impCall.Arguments) {
-                    MergeDeferredEnumerableCallbackEffects(visiting, res)
-                }
-                return res
+                return ResolveBoundCallCallbackEffects(raw, impCall.Arguments, visiting)
             }
             case impInst is BoundImportedInstanceCallExpression {
                 let recvType = impInst.ConstrainedInterfaceType ?? impInst.Receiver.Type
@@ -5904,13 +5895,7 @@ internal partial class StatementBinder {
                     includeOverrides: !impInst.IsNonVirtualBaseCall,
                     visiting
                 )
-                let res = ResolveBoundCallCallbackEffects(raw, impInst.Arguments, visiting)
-                if !IsConcreteNonIteratorCollectionType(recvType) &&
-                    IsLazyEnumerableType(recvType) ||
-                    BoundArgumentsContainLazyEnumerable(impInst.Arguments) {
-                    MergeDeferredEnumerableCallbackEffects(visiting, res)
-                }
-                return res
+                return ResolveBoundCallCallbackEffects(raw, impInst.Arguments, visiting)
             }
             case clrStatic is BoundClrStaticCallExpression {
                 let argTypes = ExtractBoundArgumentTypes(clrStatic.Arguments)
@@ -5922,11 +5907,7 @@ internal partial class StatementBinder {
                     includeOverrides: false,
                     visiting
                 )
-                let res = ResolveBoundCallCallbackEffects(raw, clrStatic.Arguments, visiting)
-                if BoundArgumentsContainLazyEnumerable(clrStatic.Arguments) {
-                    MergeDeferredEnumerableCallbackEffects(visiting, res)
-                }
-                return res
+                return ResolveBoundCallCallbackEffects(raw, clrStatic.Arguments, visiting)
             }
             case binEq is BoundBinaryExpression {
                 let eqSummary = CallEffectSummary()
@@ -6703,6 +6684,12 @@ internal partial class StatementBinder {
             for searchedType in searched {
                 for clrMember in searchedType.GetMember(member, flags) {
                     if clrMember is MethodInfo clrMethod && clrMethod.IsStatic == staticAccess {
+                        let clrParams = clrMethod.GetParameters()
+                        if argTypes != nil && clrParams.Length != argTypes.Count && !clrParams.Any(
+                            (p ParameterInfo) -> p.IsOptional || ClrOverloadResolution.IsParamsArrayParameter(p)
+                        ) {
+                            continue
+                        }
                         matched = true
                         let summary = AnalyzeImportedMethodEffects(
                             clrMethod,
@@ -7183,6 +7170,7 @@ internal partial class StatementBinder {
 
     private var activeTraversalDirectMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
     private var activeTraversalOverridesMemo Dictionary[FunctionSymbol, CallEffectSummary]? = nil
+    private var activeRootVisitingFunction FunctionSymbol? = nil
 
     private func GetFunctionEffectSummaryCore(
         function FunctionSymbol,
@@ -7226,6 +7214,7 @@ internal partial class StatementBinder {
             activeTraversalOverridesMemo = Dictionary[FunctionSymbol, CallEffectSummary](
                 ReferenceEqualityComparer.Instance
             )
+            activeRootVisitingFunction = orig
         }
         if !visiting.Add(orig) {
             hitCycle = true
@@ -7263,6 +7252,7 @@ internal partial class StatementBinder {
             if isTopLevelRoot {
                 activeTraversalDirectMemo = nil
                 activeTraversalOverridesMemo = nil
+                activeRootVisitingFunction = nil
             }
             hitCycle = localCycle
             return directSummary
@@ -7309,6 +7299,7 @@ internal partial class StatementBinder {
         if isTopLevelRoot {
             activeTraversalDirectMemo = nil
             activeTraversalOverridesMemo = nil
+            activeRootVisitingFunction = nil
         }
         hitCycle = localCycle
         return combined
@@ -7678,47 +7669,23 @@ internal partial class StatementBinder {
         if MayInvokeToStringCallback(declFullName, methodName) {
             MergeToStringCallbackEffects(methodName, receiverType, argumentTypes, visiting, summary)
         }
+        if !IsDeferredLinqOperatorName(methodName) && methodName !is "Empty" or "Range" or "Repeat" {
+            let hasLazySource = IsLazyEnumerableType(receiverType) ||
+                (argumentTypes != nil && argumentTypes.Any((a TypeSymbol?) -> IsLazyEnumerableType(a)))
+            if hasLazySource &&
+                (
+                visiting.Count == 0 ||
+                    CompilationHasGlobalOrStaticEnumerable() ||
+                    VisitingChainAcceptsEnumerable(visiting)
+            ) {
+                MergeDeferredEnumerableCallbackEffects(visiting, summary)
+            }
+        }
 
-        if methodName is "ForEach" or
-            "Find" or
-            "FindAll" or
-            "FindIndex" or
-            "FindLast" or
-            "FindLastIndex" or
-            "Exists" or
-            "TrueForAll" or
-            "RemoveAll" or
-            "ConvertAll" or
-            "Where" or
-            "Select" or
-            "SelectMany" or
-            "TakeWhile" or
-            "SkipWhile" or
-            "OrderBy" or
-            "OrderByDescending" or
-            "ThenBy" or
-            "ThenByDescending" or
-            "Any" or
-            "All" or
-            "Count" or
-            "LongCount" or
-            "First" or
-            "FirstOrDefault" or
-            "Last" or
-            "LastOrDefault" or
-            "Single" or
-            "SingleOrDefault" or
-            "Min" or
-            "Max" or
-            "Sum" or
-            "Average" or
-            "Aggregate" or
-            "Sort" {
-            for p in method.GetParameters() {
-                if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
-                    summary.InvokesCallbackParameter = true
-                    break
-                }
+        for p in method.GetParameters() {
+            if ClrTypeUtilities.IsDelegateType(p.ParameterType) {
+                summary.InvokesCallbackParameter = true
+                break
             }
         }
 
@@ -7779,6 +7746,37 @@ internal partial class StatementBinder {
         }
     }
 
+    private func CompilationHasGlobalOrStaticEnumerable() bool {
+        var curScope BoundScope? = $scope
+        while curScope != nil {
+            for v in curScope.GetDeclaredVariables() {
+                if v is GlobalVariableSymbol && IsLazyEnumerableType(v.Type) {
+                    return true
+                }
+            }
+            curScope = curScope.Parent
+        }
+        for tree in CollectCompilationSyntaxTrees() {
+            for member in tree.Root.Members {
+                if member is VariableDeclarationSyntax {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func VisitingChainAcceptsEnumerable(visiting HashSet[FunctionSymbol]) bool {
+        if activeRootVisitingFunction is {} rootFn {
+            for p in rootFn.Parameters {
+                if IsLazyEnumerableType(p.Type) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private func IsDeferredLinqOperatorName(mName string) bool -> mName is "Where" or
         "Select" or
         "SelectMany" or
@@ -7798,50 +7796,6 @@ internal partial class StatementBinder {
         "ExceptBy" or
         "Chunk"
 
-    private func ExpressionRootIsLazyEnumerable(
-        expr ExpressionSyntax?,
-        origCallee FunctionSymbol,
-        enclosingType TypeSymbol?,
-        parameters Dictionary[string, ParameterSymbol],
-        calleeTypeParams Dictionary[string, TypeParameterSymbol],
-        localTypes Dictionary[string, TypeSymbol?]
-    ) bool {
-        var cur = expr
-        while cur is ParenthesizedExpressionSyntax paren {
-            cur = paren.Expression
-        }
-        if cur is AccessorExpressionSyntax acc &&
-            acc.RightPart is CallExpressionSyntax rightCall &&
-            IsDeferredLinqOperatorName(rightCall.Identifier.ValueText) {
-            return ExpressionRootIsLazyEnumerable(
-                acc.LeftPart,
-                origCallee,
-                enclosingType,
-                parameters,
-                calleeTypeParams,
-                localTypes
-            )
-        }
-        if cur is NameExpressionSyntax rootName {
-            let rName = rootName.IdentifierToken.ValueText
-            if localTypes.ContainsKey(rName) && !parameters.ContainsKey(rName) {
-                return false
-            }
-        } else if cur is not AccessorExpressionSyntax {
-            return false
-        }
-        let t = InferCalleeExpressionType(
-            cur,
-            origCallee,
-            enclosingType,
-            parameters,
-            calleeTypeParams,
-            localTypes,
-            out _
-        )
-        return IsLazyEnumerableType(t)
-    }
-
     private func CollectCompilationSyntaxTrees() List[SyntaxTree] {
         let trees = List[SyntaxTree]()
         let seen = HashSet[SyntaxTree](ReferenceEqualityComparer.Instance)
@@ -7851,55 +7805,59 @@ internal partial class StatementBinder {
         if function?.Declaration?.SyntaxTree is {} fnTree && seen.Add(fnTree) {
             trees.Add(fnTree)
         }
-        for s in binderCtx.RootScope.GetDeclaredStructs() {
-            if s.Declaration?.SyntaxTree is {} sTree && seen.Add(sTree) {
-                trees.Add(sTree)
-            }
-            for m in s.Methods {
-                if m.Declaration?.SyntaxTree is {} mTree && seen.Add(mTree) {
-                    trees.Add(mTree)
+        var curScope BoundScope? = $scope
+        while curScope != nil {
+            for s in curScope.GetDeclaredStructs() {
+                if s.Declaration?.SyntaxTree is {} sTree && seen.Add(sTree) {
+                    trees.Add(sTree)
+                }
+                for m in s.Methods {
+                    if m.Declaration?.SyntaxTree is {} mTree && seen.Add(mTree) {
+                        trees.Add(mTree)
+                    }
+                }
+                for sm in s.StaticMethods {
+                    if sm.Declaration?.SyntaxTree is {} smTree && seen.Add(smTree) {
+                        trees.Add(smTree)
+                    }
                 }
             }
-            for sm in s.StaticMethods {
-                if sm.Declaration?.SyntaxTree is {} smTree && seen.Add(smTree) {
-                    trees.Add(smTree)
+            for iface in curScope.GetDeclaredInterfaces() {
+                if iface.Declaration?.SyntaxTree is {} iTree && seen.Add(iTree) {
+                    trees.Add(iTree)
                 }
             }
-        }
-        for iface in binderCtx.RootScope.GetDeclaredInterfaces() {
-            if iface.Declaration?.SyntaxTree is {} iTree && seen.Add(iTree) {
-                trees.Add(iTree)
+            for en in curScope.GetDeclaredEnums() {
+                if en.Declaration?.SyntaxTree is {} eTree && seen.Add(eTree) {
+                    trees.Add(eTree)
+                }
             }
-        }
-        for en in binderCtx.RootScope.GetDeclaredEnums() {
-            if en.Declaration?.SyntaxTree is {} eTree && seen.Add(eTree) {
-                trees.Add(eTree)
+            for del in curScope.GetDeclaredDelegates() {
+                if del.Declaration?.SyntaxTree is {} dTree && seen.Add(dTree) {
+                    trees.Add(dTree)
+                }
             }
-        }
-        for del in binderCtx.RootScope.GetDeclaredDelegates() {
-            if del.Declaration?.SyntaxTree is {} dTree && seen.Add(dTree) {
-                trees.Add(dTree)
+            for fn in curScope.GetDeclaredFunctions() {
+                if fn.Declaration?.SyntaxTree is {} fTree && seen.Add(fTree) {
+                    trees.Add(fTree)
+                }
             }
-        }
-        for fn in binderCtx.RootScope.GetDeclaredFunctions() {
-            if fn.Declaration?.SyntaxTree is {} fTree && seen.Add(fTree) {
-                trees.Add(fTree)
+            for extFn in curScope.GetDeclaredExtensionFunctions() {
+                if extFn.Declaration?.SyntaxTree is {} extTree && seen.Add(extTree) {
+                    trees.Add(extTree)
+                }
             }
-        }
-        for extFn in binderCtx.RootScope.GetDeclaredExtensionFunctions() {
-            if extFn.Declaration?.SyntaxTree is {} extTree && seen.Add(extTree) {
-                trees.Add(extTree)
+            for v in curScope.GetDeclaredVariables() {
+                if v.DeclaringSyntax?.SyntaxTree is {} vTree && seen.Add(vTree) {
+                    trees.Add(vTree)
+                }
             }
-        }
-        for v in binderCtx.RootScope.GetDeclaredVariables() {
-            if v.DeclaringSyntax?.SyntaxTree is {} vTree && seen.Add(vTree) {
-                trees.Add(vTree)
+            for imp in curScope.GetDeclaredImports() {
+                if imp.Declaration?.SyntaxTree is {} impTree && seen.Add(impTree) {
+                    trees.Add(impTree)
+                }
             }
-        }
-        for imp in binderCtx.RootScope.GetDeclaredImports() {
-            if imp.Declaration?.SyntaxTree is {} impTree && seen.Add(impTree) {
-                trees.Add(impTree)
-            }
+            curScope = curScope.Parent
         }
         return trees
     }
@@ -7910,16 +7868,86 @@ internal partial class StatementBinder {
             return
         }
         var dummyCycle = false
-        MergeIteratorCallbackEffects(visiting, summary, ref dummyCycle)
+        MergeIteratorCallbackEffects(visiting, summary, ref dummyCycle, includeCountGetter: true)
         if summary.WritesAnyStorage {
             return
+        }
+        var curScope BoundScope? = $scope
+        while curScope != nil {
+            for fn in curScope.GetDeclaredFunctions() {
+                if IsLazyEnumerableType(fn.Type) {
+                    let s = GetFunctionEffectSummaryCore(fn, includeOverrides: false, visiting, out _)
+                    summary.MergeFrom(s)
+                    if summary.WritesAnyStorage {
+                        return
+                    }
+                }
+            }
+            for extFn in curScope.GetDeclaredExtensionFunctions() {
+                if IsLazyEnumerableType(extFn.Type) {
+                    let s = GetFunctionEffectSummaryCore(extFn, includeOverrides: false, visiting, out _)
+                    summary.MergeFrom(s)
+                    if summary.WritesAnyStorage {
+                        return
+                    }
+                }
+            }
+            curScope = curScope.Parent
         }
         let emptyParams = Dictionary[string, ParameterSymbol](StringComparer.Ordinal)
         let emptyTypeParams = Dictionary[string, TypeParameterSymbol](StringComparer.Ordinal)
         let dummyFn = FunctionSymbol("<deferred_linq>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
         let index = GetCompilationMethodsByName()
+        let scannedYieldFunctions = HashSet[SyntaxNode](ReferenceEqualityComparer.Instance)
         for tree in CollectCompilationSyntaxTrees() {
             for node in tree.Root.DescendantNodesAndSelf() {
+                if node is YieldStatementSyntax {
+                    var p SyntaxNode? = node.Parent
+                    while p != nil &&
+                        p is not FunctionDeclarationSyntax &&
+                        p is not FunctionLiteralExpressionSyntax &&
+                        p is not LambdaExpressionSyntax {
+                        p = p.Parent
+                    }
+                    if p is FunctionDeclarationSyntax yieldFnDecl &&
+                        yieldFnDecl.Body is {} yieldBody &&
+                        scannedYieldFunctions
+                        .Add(yieldFnDecl) {
+                        let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+                        let refLocals = HashSet[string](StringComparer.Ordinal)
+                        let refExt = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+                        let localFns = Dictionary[string, SyntaxNode](StringComparer.Ordinal)
+                        let visitingLocalFns = HashSet[string](StringComparer.Ordinal)
+                        for yp in yieldFnDecl.Parameters {
+                            if yp.Identifier is {} ypId && ypId.ValueText.Length > 0 {
+                                localTypes[ypId.ValueText] = ResolveCalleeTypeClause(yp.Type, nil)
+                                refLocals.Add(ypId.ValueText)
+                            }
+                        }
+                        CollectCalleeFreshLocals(yieldBody, refLocals)
+                        ScanCalleeSyntaxNode(
+                            yieldBody,
+                            nil,
+                            false,
+                            dummyFn,
+                            nil,
+                            false,
+                            emptyParams,
+                            emptyTypeParams,
+                            localTypes,
+                            refLocals,
+                            refExt,
+                            localFns,
+                            visitingLocalFns,
+                            visiting,
+                            summary,
+                            ref dummyCycle
+                        )
+                        if summary.WritesAnyStorage {
+                            return
+                        }
+                    }
+                }
                 if node is CallExpressionSyntax call {
                     let mName = call.Identifier.ValueText
                     if IsDeferredLinqOperatorName(mName) {
@@ -8095,28 +8123,6 @@ internal partial class StatementBinder {
         return IsTrustedFrameworkPublicKeyToken(asmName.GetPublicKeyToken())
     }
 
-    private func IsTestHostOrToolchainAssembly(simpleAsmName string) bool -> simpleAsmName == "testhost" ||
-        simpleAsmName == "gsc" ||
-        simpleAsmName == "cs2gs" ||
-        simpleAsmName == "gsfmt" ||
-        simpleAsmName == "gsgen" ||
-        simpleAsmName == "gsi" ||
-        simpleAsmName == "IlVerifyDiagnostics" ||
-        simpleAsmName.StartsWith("GSharp.", StringComparison.OrdinalIgnoreCase) || simpleAsmName.StartsWith(
-        "Gsharp.",
-        StringComparison.OrdinalIgnoreCase
-    ) ||
-        simpleAsmName.StartsWith("xunit.", StringComparison.OrdinalIgnoreCase) || simpleAsmName.StartsWith(
-        "Microsoft.TestPlatform",
-        StringComparison.OrdinalIgnoreCase
-    ) ||
-        simpleAsmName.StartsWith("Microsoft.VisualStudio.TestPlatform", StringComparison.OrdinalIgnoreCase) ||
-        simpleAsmName.StartsWith("Newtonsoft.Json", StringComparison.OrdinalIgnoreCase) || simpleAsmName.StartsWith(
-        "NuGet.",
-        StringComparison.OrdinalIgnoreCase
-    ) ||
-        simpleAsmName.EndsWith(".Tests", StringComparison.Ordinal)
-
     private func MergeCreatedComparerCallbackEffects(
         comparedTypes List[TypeSymbol?],
         hasUnknownType bool,
@@ -8127,6 +8133,7 @@ internal partial class StatementBinder {
         let emptyTypeParams = Dictionary[string, TypeParameterSymbol](StringComparer.Ordinal)
         let dummyFn = FunctionSymbol("<comparer_create>", ImmutableArray[ParameterSymbol].Empty, TypeSymbol.Void)
         var dummyCycle = false
+        let index = GetCompilationMethodsByName()
         for tree in CollectCompilationSyntaxTrees() {
             for node in tree.Root.DescendantNodesAndSelf() {
                 if node is AccessorExpressionSyntax acc &&
@@ -8240,6 +8247,32 @@ internal partial class StatementBinder {
                                 summary,
                                 ref dummyCycle
                             )
+                        } else if cur is NameExpressionSyntax nameArg {
+                            let cbName = nameArg.IdentifierToken.ValueText
+                            var matchedFn = false
+                            for fn in $scope.TryLookupFunctions(cbName) {
+                                matchedFn = true
+                                summary.MergeFrom(
+                                    GetFunctionEffectSummaryCore(fn, includeOverrides: false, visiting, out _)
+                                )
+                            }
+                            if index.TryGetValue(cbName, out var methods) {
+                                for m in methods {
+                                    if m.Declaration != nil || m.LocalDeclaration != nil {
+                                        matchedFn = true
+                                        summary.MergeFrom(
+                                            GetFunctionEffectSummaryCore(m, includeOverrides: false, visiting, out _)
+                                        )
+                                    }
+                                }
+                            }
+                            if !matchedFn {
+                                summary.WritesAnyStorage = true
+                                return
+                            }
+                        } else if !IsCalleeNilSyntax(cur) {
+                            summary.WritesAnyStorage = true
+                            return
                         }
                         if summary.WritesAnyStorage {
                             return
@@ -8267,11 +8300,12 @@ internal partial class StatementBinder {
                 }
             }
             for asm in refs.Assemblies {
-                if IsTrustedFrameworkAssembly(asm) {
+                if object.ReferenceEquals(asm.GetType(), typeof(object).Assembly.GetType()) ||
+                    IsTrustedFrameworkAssembly(asm) {
                     continue
                 }
                 let simpleAsmName = asm.GetName().Name ?? ""
-                if IsTestHostOrToolchainAssembly(simpleAsmName) || hostTpaNames.Contains(simpleAsmName) {
+                if refs.IsHostFallbackName(simpleAsmName) || hostTpaNames.Contains(simpleAsmName) {
                     continue
                 }
                 // Any non-trusted external assembly can supply a public or private comparer
@@ -8738,11 +8772,15 @@ internal partial class StatementBinder {
         callee FunctionSymbol?,
         methodTypeArgs ImmutableArray[TypeSymbol]
     ) CallEffectSummary {
-        if sourceSummary.WritesAnyStorage || sourceSummary.IsEmpty {
-            return sourceSummary
-        }
         let substituted = CallEffectSummary()
+        if sourceSummary.WritesAnyStorage {
+            substituted.WritesAnyStorage = true
+            return substituted
+        }
         substituted.InvokesCallbackParameter = sourceSummary.InvokesCallbackParameter
+        if sourceSummary.IsEmpty {
+            return substituted
+        }
         for ft in sourceSummary.WrittenFieldTypes {
             substituted.AddFieldType(SubstituteWrittenType(ft, receiverType, callee, methodTypeArgs))
         }
@@ -9743,7 +9781,11 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                if !IsKnownEffectFreeIterable(collType) && !IsKnownEffectFreeCollectionSyntax(forRange.Collection) {
+                if IsLazyEnumerableType(collType) &&
+                    (CompilationHasGlobalOrStaticEnumerable() || VisitingChainAcceptsEnumerable(visiting)) {
+                    MergeDeferredEnumerableCallbackEffects(visiting, summary)
+                } else if !IsKnownEffectFreeIterable(collType) &&
+                    !IsKnownEffectFreeCollectionSyntax(forRange.Collection) {
                     ScanCalleeForEachIteratorEffects(collType, calleeTypeParams, visiting, summary, ref hitCycle)
                 }
                 let elemType = if forRange.TypeClause != nil {
@@ -9805,7 +9847,11 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                if !IsKnownEffectFreeIterable(collType) && !IsKnownEffectFreeCollectionSyntax(forTuple.Collection) {
+                if IsLazyEnumerableType(collType) &&
+                    (CompilationHasGlobalOrStaticEnumerable() || VisitingChainAcceptsEnumerable(visiting)) {
+                    MergeDeferredEnumerableCallbackEffects(visiting, summary)
+                } else if !IsKnownEffectFreeIterable(collType) &&
+                    !IsKnownEffectFreeCollectionSyntax(forTuple.Collection) {
                     ScanCalleeForEachIteratorEffects(collType, calleeTypeParams, visiting, summary, ref hitCycle)
                 }
                 let elemType = GetElementOrIndexerTypeOf(collType)
@@ -10394,10 +10440,10 @@ internal partial class StatementBinder {
                 )
                 let recvName = fieldAssign.Receiver.ValueText
                 let fieldName = fieldAssign.FieldIdentifier.ValueText
-                if refLocalsFromParams.Contains("#fresh:" + recvName) {
-                    return
-                }
-                if isConstructor && (recvName == "this" || recvName == origCallee.ExplicitReceiverParameter?.Name) {
+                let isFreshRecv = refLocalsFromParams.Contains("#fresh:" + recvName)
+                if !isFreshRecv &&
+                    isConstructor &&
+                    (recvName == "this" || recvName == origCallee.ExplicitReceiverParameter?.Name) {
                     RecordConstructorSelfMemberWrite(enclosingType, fieldName, visiting, summary, ref hitCycle)
                     return
                 }
@@ -10410,7 +10456,15 @@ internal partial class StatementBinder {
                     localTypes,
                     out var isTypeRecv
                 )
-                RecordCalleeMemberWriteOnType(recvType, fieldName, isTypeRecv, visiting, summary, ref hitCycle)
+                RecordCalleeMemberWriteOnType(
+                    recvType,
+                    fieldName,
+                    isTypeRecv,
+                    visiting,
+                    summary,
+                    ref hitCycle,
+                    isFreshReceiver: isFreshRecv
+                )
                 return
             }
             case memberFieldAssign is MemberFieldAssignmentExpressionSyntax {
@@ -10450,9 +10504,7 @@ internal partial class StatementBinder {
                     summary,
                     ref hitCycle
                 )
-                if IsCalleeFreshLocalExpression(memberFieldAssign.Receiver, refLocalsFromParams) {
-                    return
-                }
+                let isFreshRecv = IsCalleeFreshLocalExpression(memberFieldAssign.Receiver, refLocalsFromParams)
                 let recvType = InferCalleeExpressionType(
                     memberFieldAssign.Receiver,
                     origCallee,
@@ -10468,7 +10520,8 @@ internal partial class StatementBinder {
                     isTypeRecv,
                     visiting,
                     summary,
-                    ref hitCycle
+                    ref hitCycle,
+                    isFreshReceiver: isFreshRecv
                 )
                 return
             }
@@ -10511,9 +10564,7 @@ internal partial class StatementBinder {
                     summary,
                     ref hitCycle
                 )
-                if refLocalsFromParams.Contains("#fresh:" + indexAssign.TargetIdentifier.ValueText) {
-                    return
-                }
+                let isFreshTarget = refLocalsFromParams.Contains("#fresh:" + indexAssign.TargetIdentifier.ValueText)
                 let targetType = InferCalleeNameOrType(
                     indexAssign.TargetIdentifier.ValueText,
                     origCallee,
@@ -10523,7 +10574,13 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                RecordCalleeElementWriteOnType(targetType, visiting, summary, ref hitCycle)
+                RecordCalleeElementWriteOnType(
+                    targetType,
+                    visiting,
+                    summary,
+                    ref hitCycle,
+                    isFreshReceiver: isFreshTarget
+                )
                 return
             }
             case memberIndexAssign is MemberIndexAssignmentExpressionSyntax {
@@ -10583,9 +10640,7 @@ internal partial class StatementBinder {
                     summary,
                     ref hitCycle
                 )
-                if IsCalleeFreshLocalExpression(memberIndexAssign.Target.Target, refLocalsFromParams) {
-                    return
-                }
+                let isFreshTarget = IsCalleeFreshLocalExpression(memberIndexAssign.Target.Target, refLocalsFromParams)
                 let targetType = InferCalleeExpressionType(
                     memberIndexAssign.Target.Target,
                     origCallee,
@@ -10595,7 +10650,13 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                RecordCalleeElementWriteOnType(targetType, visiting, summary, ref hitCycle)
+                RecordCalleeElementWriteOnType(
+                    targetType,
+                    visiting,
+                    summary,
+                    ref hitCycle,
+                    isFreshReceiver: isFreshTarget
+                )
                 return
             }
             case compoundIndexAssign is CompoundIndexAssignmentExpressionSyntax {
@@ -10655,9 +10716,7 @@ internal partial class StatementBinder {
                     summary,
                     ref hitCycle
                 )
-                if IsCalleeFreshLocalExpression(compoundIndexAssign.Target.Target, refLocalsFromParams) {
-                    return
-                }
+                let isFreshTarget = IsCalleeFreshLocalExpression(compoundIndexAssign.Target.Target, refLocalsFromParams)
                 let targetType = InferCalleeExpressionType(
                     compoundIndexAssign.Target.Target,
                     origCallee,
@@ -10667,7 +10726,14 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                RecordCalleeElementWriteOnType(targetType, visiting, summary, ref hitCycle)
+                RecordCalleeElementWriteOnType(
+                    targetType,
+                    visiting,
+                    summary,
+                    ref hitCycle,
+                    isFreshReceiver: isFreshTarget,
+                    isCompound: true
+                )
                 return
             }
             case compound is EventSubscriptionExpressionSyntax {
@@ -11335,24 +11401,6 @@ internal partial class StatementBinder {
                         summary,
                         ref hitCycle
                     )
-                    for arg in call.Arguments {
-                        let unwrappedArg = if arg is NamedArgumentExpressionSyntax namedArg {
-                            namedArg.Expression
-                        } else {
-                            arg
-                        }
-                        if ExpressionRootIsLazyEnumerable(
-                            unwrappedArg,
-                            origCallee,
-                            enclosingType,
-                            parameters,
-                            calleeTypeParams,
-                            localTypes
-                        ) {
-                            MergeDeferredEnumerableCallbackEffects(visiting, summary)
-                            break
-                        }
-                    }
                     return
                 }
                 let memberName = call.Identifier.ValueText
@@ -11429,37 +11477,6 @@ internal partial class StatementBinder {
                     summary,
                     ref hitCycle
                 )
-                if !IsDeferredLinqOperatorName(memberName) {
-                    if ExpressionRootIsLazyEnumerable(
-                        receiverExpr,
-                        origCallee,
-                        enclosingType,
-                        parameters,
-                        calleeTypeParams,
-                        localTypes
-                    ) {
-                        MergeDeferredEnumerableCallbackEffects(visiting, summary)
-                    } else {
-                        for arg in call.Arguments {
-                            let unwrappedArg = if arg is NamedArgumentExpressionSyntax namedArg {
-                                namedArg.Expression
-                            } else {
-                                arg
-                            }
-                            if ExpressionRootIsLazyEnumerable(
-                                unwrappedArg,
-                                origCallee,
-                                enclosingType,
-                                parameters,
-                                calleeTypeParams,
-                                localTypes
-                            ) {
-                                MergeDeferredEnumerableCallbackEffects(visiting, summary)
-                                break
-                            }
-                        }
-                    }
-                }
                 return
             }
             case baseIface is BaseInterfaceCallExpressionSyntax {
@@ -13374,9 +13391,7 @@ internal partial class StatementBinder {
             case acc is AccessorExpressionSyntax {
                 SplitRightmostMemberAccess(acc, out var recvExpr, out var rightExpr)
                 if rightExpr is NameExpressionSyntax memberName {
-                    if IsCalleeFreshLocalExpression(recvExpr, refLocalsFromParams) {
-                        return
-                    }
+                    let isFreshRecv = IsCalleeFreshLocalExpression(recvExpr, refLocalsFromParams)
                     let recvType = InferCalleeExpressionType(
                         recvExpr,
                         origCallee,
@@ -13392,7 +13407,9 @@ internal partial class StatementBinder {
                         isTypeRecv,
                         visiting,
                         summary,
-                        ref hitCycle
+                        ref hitCycle,
+                        isFreshReceiver: isFreshRecv,
+                        isCompound: true
                     )
                 } else if rightExpr is IndexExpressionSyntax idxRight {
                     let combinedIdxTarget = if recvExpr != nil {
@@ -13400,9 +13417,7 @@ internal partial class StatementBinder {
                     } else {
                         idxRight.Target
                     }
-                    if IsCalleeFreshLocalExpression(combinedIdxTarget, refLocalsFromParams) {
-                        return
-                    }
+                    let isFreshTarget = IsCalleeFreshLocalExpression(combinedIdxTarget, refLocalsFromParams)
                     let targetType = InferCalleeExpressionType(
                         combinedIdxTarget,
                         origCallee,
@@ -13412,7 +13427,14 @@ internal partial class StatementBinder {
                         localTypes,
                         out _
                     )
-                    RecordCalleeElementWriteOnType(targetType, visiting, summary, ref hitCycle)
+                    RecordCalleeElementWriteOnType(
+                        targetType,
+                        visiting,
+                        summary,
+                        ref hitCycle,
+                        isFreshReceiver: isFreshTarget,
+                        isCompound: true
+                    )
                 } else {
                     let exprType = InferCalleeExpressionType(
                         acc,
@@ -13432,9 +13454,7 @@ internal partial class StatementBinder {
                 }
             }
             case idx is IndexExpressionSyntax {
-                if IsCalleeFreshLocalExpression(idx.Target, refLocalsFromParams) {
-                    return
-                }
+                let isFreshTarget = IsCalleeFreshLocalExpression(idx.Target, refLocalsFromParams)
                 let targetType = InferCalleeExpressionType(
                     idx.Target,
                     origCallee,
@@ -13444,7 +13464,14 @@ internal partial class StatementBinder {
                     localTypes,
                     out _
                 )
-                RecordCalleeElementWriteOnType(targetType, visiting, summary, ref hitCycle)
+                RecordCalleeElementWriteOnType(
+                    targetType,
+                    visiting,
+                    summary,
+                    ref hitCycle,
+                    isFreshReceiver: isFreshTarget,
+                    isCompound: true
+                )
             }
             default {
                 let exprType = InferCalleeExpressionType(
@@ -13491,10 +13518,15 @@ internal partial class StatementBinder {
         isStatic bool,
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
-        ref hitCycle bool
+        ref hitCycle bool,
+        isFreshReceiver bool = false,
+        isCompound bool = false
     ) {
         let stripped = StripAllNullability(receiverType) ?? receiverType
         if stripped == nil {
+            if isFreshReceiver {
+                return
+            }
             if memberName is "Value" or "ValueRef" {
                 summary.WritesAnyStorage = true
                 return
@@ -13588,6 +13620,9 @@ internal partial class StatementBinder {
         }
         switch stripped {
             case tuple is TupleTypeSymbol {
+                if isFreshReceiver {
+                    return
+                }
                 if tuple.TryGetElementIndexByName(memberName, out var element) {
                     summary.AddFieldType(tuple.ElementTypes[element])
                     return
@@ -13618,7 +13653,7 @@ internal partial class StatementBinder {
                     for f in level.Fields {
                         if f.Name == memberName {
                             found = true
-                            if CanFieldBeAliasedByRef(level, f) {
+                            if !isFreshReceiver && CanFieldBeAliasedByRef(level, f) {
                                 summary.AddFieldType(
                                     s.SubstituteMemberType(f.Type) ?? level.SubstituteMemberType(f.Type) ?? f.Type
                                 )
@@ -13638,29 +13673,56 @@ internal partial class StatementBinder {
                     for p in level.Properties {
                         if p.Name == memberName {
                             found = true
-                            if CanPropertyBeAliasedByRef(level, p) {
+                            if !isFreshReceiver && CanPropertyBeAliasedByRef(level, p) {
                                 summary.AddFieldType(
                                     s.SubstituteMemberType(p.Type) ?? level.SubstituteMemberType(p.Type) ?? p.Type
                                 )
                             }
-                            if p.SetterSymbol is {} setter {
-                                let setterSummary = GetFunctionEffectSummaryCore(
-                                    setter,
-                                    includeOverrides: true,
-                                    visiting,
-                                    out var c
-                                )
-                                if c {
-                                    hitCycle = true
-                                }
-                                summary.MergeFrom(
-                                    ApplyReceiverAndMethodSubstitution(
-                                        setterSummary,
-                                        s,
-                                        setter,
-                                        ImmutableArray[TypeSymbol].Empty
+                            if isCompound && !p.IsAutoProperty && p.GetterSymbol is {} getter {
+                                if isFreshReceiver {
+                                    ScanFreshReceiverAccessorBody(getter, s, visiting, summary, ref hitCycle)
+                                } else {
+                                    let getterSummary = GetFunctionEffectSummaryCore(
+                                        getter,
+                                        includeOverrides: true,
+                                        visiting,
+                                        out var gc
                                     )
-                                )
+                                    if gc {
+                                        hitCycle = true
+                                    }
+                                    summary.MergeFrom(
+                                        ApplyReceiverAndMethodSubstitution(
+                                            getterSummary,
+                                            s,
+                                            getter,
+                                            ImmutableArray[TypeSymbol].Empty
+                                        )
+                                    )
+                                }
+                            }
+                            if (!isFreshReceiver || !p.IsAutoProperty) && p.SetterSymbol is {} setter {
+                                if isFreshReceiver {
+                                    ScanFreshReceiverAccessorBody(setter, s, visiting, summary, ref hitCycle)
+                                } else {
+                                    let setterSummary = GetFunctionEffectSummaryCore(
+                                        setter,
+                                        includeOverrides: true,
+                                        visiting,
+                                        out var c
+                                    )
+                                    if c {
+                                        hitCycle = true
+                                    }
+                                    summary.MergeFrom(
+                                        ApplyReceiverAndMethodSubstitution(
+                                            setterSummary,
+                                            s,
+                                            setter,
+                                            ImmutableArray[TypeSymbol].Empty
+                                        )
+                                    )
+                                }
                             }
                         }
                     }
@@ -13688,10 +13750,19 @@ internal partial class StatementBinder {
                     }
                 }
                 if !found && s.GetHierarchy().Last().ImportedBaseType is {} impBase {
-                    RecordCalleeMemberWriteOnType(impBase, memberName, isStatic, visiting, summary, ref hitCycle)
+                    RecordCalleeMemberWriteOnType(
+                        impBase,
+                        memberName,
+                        isStatic,
+                        visiting,
+                        summary,
+                        ref hitCycle,
+                        isFreshReceiver: isFreshReceiver,
+                        isCompound: isCompound
+                    )
                     return
                 }
-                if !found {
+                if !found && !isFreshReceiver {
                     summary.WritesAnyStorage = true
                 }
                 return
@@ -13703,7 +13774,9 @@ internal partial class StatementBinder {
                     for p in level.Properties {
                         if p.Name == memberName {
                             found = true
-                            summary.AddFieldType(iface.SubstituteMemberType(level.SubstituteMemberType(p.Type)))
+                            if !isFreshReceiver {
+                                summary.AddFieldType(iface.SubstituteMemberType(level.SubstituteMemberType(p.Type)))
+                            }
                             if p.SetterSymbol is {} setter {
                                 let setterSummary = GetFunctionEffectSummaryCore(
                                     setter,
@@ -13722,13 +13795,13 @@ internal partial class StatementBinder {
                                         ImmutableArray[TypeSymbol].Empty
                                     )
                                 )
-                            } else {
+                            } else if !isFreshReceiver {
                                 summary.WritesAnyStorage = true
                             }
                         }
                     }
                 }
-                if !found {
+                if !found && !isFreshReceiver {
                     summary.WritesAnyStorage = true
                 }
                 return
@@ -13737,7 +13810,9 @@ internal partial class StatementBinder {
         }
         let clr = (stripped as ImportedTypeSymbol)?.OpenDefinition ?? stripped.ClrType
         if clr == nil || ReflectionType(clr) is not{} reflected {
-            summary.WritesAnyStorage = true
+            if !isFreshReceiver {
+                summary.WritesAnyStorage = true
+            }
             return
         }
         try {
@@ -13746,14 +13821,18 @@ internal partial class StatementBinder {
             for clrMember in reflected.GetMember(memberName, flags) {
                 if clrMember is FieldInfo clrField {
                     found = true
-                    let fType = MemberLookup.GetClrFieldTypeSymbol(stripped, clrField) ??
-                        ClrNullability.GetFieldTypeSymbol(clrField)
-                    summary.AddFieldType(fType)
+                    if !isFreshReceiver {
+                        let fType = MemberLookup.GetClrFieldTypeSymbol(stripped, clrField) ??
+                            ClrNullability.GetFieldTypeSymbol(clrField)
+                        summary.AddFieldType(fType)
+                    }
                 } else if clrMember is PropertyInfo clrProp && clrProp.GetIndexParameters().Length == 0 {
                     found = true
                     let pType = MemberLookup.GetClrPropertyTypeSymbol(stripped, clrProp) ??
                         ClrNullability.GetPropertyTypeSymbol(clrProp)
-                    summary.AddFieldType(pType)
+                    if !isFreshReceiver {
+                        summary.AddFieldType(pType)
+                    }
                     if clrProp.SetMethod is {} clrSetter {
                         summary.MergeFrom(
                             AnalyzeImportedMethodEffects(
@@ -13762,17 +13841,20 @@ internal partial class StatementBinder {
                                 List[TypeSymbol?]{pType},
                                 default(ImmutableArray[TypeSymbol?]),
                                 includeOverrides: !isStatic,
-                                visiting
+                                visiting,
+                                receiverIsFreshLocal: isFreshReceiver
                             )
                         )
                     }
                 }
             }
-            if !found {
+            if !found && !isFreshReceiver {
                 summary.WritesAnyStorage = true
             }
         } catch (ex NotSupportedException) {
-            summary.WritesAnyStorage = true
+            if !isFreshReceiver {
+                summary.WritesAnyStorage = true
+            }
         }
     }
 
@@ -13780,39 +13862,74 @@ internal partial class StatementBinder {
         targetType TypeSymbol?,
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
-        ref hitCycle bool
+        ref hitCycle bool,
+        isFreshReceiver bool = false,
+        isCompound bool = false
     ) {
         let stripped = StripAllNullability(targetType) ?? targetType
         if stripped == nil {
-            summary.WritesAnyStorage = true
+            if !isFreshReceiver {
+                summary.WritesAnyStorage = true
+            }
             return
         }
-        if GetElementOrIndexerTypeOf(stripped) is {} elemType {
-            summary.AddElementType(elemType)
-        } else {
-            summary.WritesAnyStorage = true
+        if !isFreshReceiver {
+            if GetElementOrIndexerTypeOf(stripped) is {} elemType {
+                summary.AddElementType(elemType)
+            } else {
+                summary.WritesAnyStorage = true
+            }
         }
         if stripped is StructSymbol s {
             for level in s.GetHierarchy() {
                 for p in level.Properties {
-                    if p.IsIndexer && p.SetterSymbol is {} setter {
-                        let setterSummary = GetFunctionEffectSummaryCore(
-                            setter,
-                            includeOverrides: true,
-                            visiting,
-                            out var c
-                        )
-                        if c {
-                            hitCycle = true
+                    if p.IsIndexer {
+                        if isCompound && p.GetterSymbol is {} getter {
+                            if isFreshReceiver {
+                                ScanFreshReceiverAccessorBody(getter, s, visiting, summary, ref hitCycle)
+                            } else {
+                                let getterSummary = GetFunctionEffectSummaryCore(
+                                    getter,
+                                    includeOverrides: true,
+                                    visiting,
+                                    out var gc
+                                )
+                                if gc {
+                                    hitCycle = true
+                                }
+                                summary.MergeFrom(
+                                    ApplyReceiverAndMethodSubstitution(
+                                        getterSummary,
+                                        s,
+                                        getter,
+                                        ImmutableArray[TypeSymbol].Empty
+                                    )
+                                )
+                            }
                         }
-                        summary.MergeFrom(
-                            ApplyReceiverAndMethodSubstitution(
-                                setterSummary,
-                                s,
-                                setter,
-                                ImmutableArray[TypeSymbol].Empty
-                            )
-                        )
+                        if p.SetterSymbol is {} setter {
+                            if isFreshReceiver {
+                                ScanFreshReceiverAccessorBody(setter, s, visiting, summary, ref hitCycle)
+                            } else {
+                                let setterSummary = GetFunctionEffectSummaryCore(
+                                    setter,
+                                    includeOverrides: true,
+                                    visiting,
+                                    out var c
+                                )
+                                if c {
+                                    hitCycle = true
+                                }
+                                summary.MergeFrom(
+                                    ApplyReceiverAndMethodSubstitution(
+                                        setterSummary,
+                                        s,
+                                        setter,
+                                        ImmutableArray[TypeSymbol].Empty
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -13821,6 +13938,25 @@ internal partial class StatementBinder {
                 level.EnsureMembersResolved()
                 for p in level.Properties {
                     if p.IsIndexer {
+                        if isCompound && p.GetterSymbol is {} getter {
+                            let getterSummary = GetFunctionEffectSummaryCore(
+                                getter,
+                                includeOverrides: true,
+                                visiting,
+                                out var gc
+                            )
+                            if gc {
+                                hitCycle = true
+                            }
+                            summary.MergeFrom(
+                                ApplyReceiverAndMethodSubstitution(
+                                    getterSummary,
+                                    iface,
+                                    getter,
+                                    ImmutableArray[TypeSymbol].Empty
+                                )
+                            )
+                        }
                         if p.SetterSymbol is {} setter {
                             let setterSummary = GetFunctionEffectSummaryCore(
                                 setter,
@@ -13839,15 +13975,15 @@ internal partial class StatementBinder {
                                     ImmutableArray[TypeSymbol].Empty
                                 )
                             )
-                        } else {
+                        } else if !isFreshReceiver {
                             summary.WritesAnyStorage = true
                         }
                     }
                 }
             }
-        } else if stripped is MapTypeSymbol mapType {
+        } else if !isFreshReceiver && stripped is MapTypeSymbol mapType {
             MergeEqualityOrComparerCallbackEffects("", "set_Item", mapType, nil, visiting, summary)
-        } else if stripped is ImportedTypeSymbol imp {
+        } else if !isFreshReceiver && stripped is ImportedTypeSymbol imp {
             let openName = (imp.OpenDefinition ?? imp.ClrType)?.FullName ?? ""
             if openName.StartsWith("System.Collections.Generic.Dictionary`", StringComparison.Ordinal) ||
                 openName
@@ -13855,6 +13991,71 @@ internal partial class StatementBinder {
                 MergeEqualityOrComparerCallbackEffects(openName, "set_Item", imp, nil, visiting, summary)
             }
         }
+    }
+
+    private func ScanFreshReceiverAccessorBody(
+        accessorFn FunctionSymbol,
+        owner StructSymbol,
+        visiting HashSet[FunctionSymbol],
+        summary CallEffectSummary,
+        ref hitCycle bool
+    ) {
+        if !visiting.Add(accessorFn) {
+            hitCycle = true
+            return
+        }
+        var body SyntaxNode? = accessorFn.Declaration?.Body
+        if body == nil && accessorFn.AssociatedSymbol is PropertySymbol assocProp {
+            let origProp = assocProp.OriginalDefinition ?? assocProp
+            if accessorFn.MethodKind == MethodKind.PropertyGet || object.ReferenceEquals(
+                assocProp.GetterSymbol,
+                accessorFn
+            ) ||
+                object.ReferenceEquals(origProp.GetterSymbol, accessorFn) {
+                body = origProp.GetterBodySyntax ?? assocProp.GetterBodySyntax
+            } else {
+                body = origProp.SetterBodySyntax ?? assocProp.SetterBodySyntax
+            }
+        }
+        if body != nil {
+            let accParams = Dictionary[string, ParameterSymbol](StringComparer.Ordinal)
+            for p in accessorFn.Parameters {
+                accParams[p.Name] = p
+            }
+            let accTypeParams = Dictionary[string, TypeParameterSymbol](StringComparer.Ordinal)
+            for tp in(owner.Definition ?? owner).TypeParameters {
+                accTypeParams[tp.Name] = tp
+            }
+            let localTypes = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+            let refLocals = HashSet[string](StringComparer.Ordinal)
+            let refExt = Dictionary[string, TypeSymbol?](StringComparer.Ordinal)
+            let localFns = Dictionary[string, SyntaxNode](StringComparer.Ordinal)
+            let visitingLocalFns = HashSet[string](StringComparer.Ordinal)
+            CollectCalleeFreshLocals(body, refLocals)
+            let accSummary = CallEffectSummary()
+            ScanCalleeSyntaxNode(
+                body,
+                nil,
+                false,
+                accessorFn,
+                owner,
+                true,
+                accParams,
+                accTypeParams,
+                localTypes,
+                refLocals,
+                refExt,
+                localFns,
+                visitingLocalFns,
+                visiting,
+                accSummary,
+                ref hitCycle
+            )
+            summary.MergeFrom(
+                ApplyReceiverAndMethodSubstitution(accSummary, owner, accessorFn, ImmutableArray[TypeSymbol].Empty)
+            )
+        }
+        visiting.Remove(accessorFn)
     }
 
     private func RecordCalleeBareReadEffects(
@@ -14777,17 +14978,26 @@ internal partial class StatementBinder {
     private func MergeIteratorCallbackEffects(
         visiting HashSet[FunctionSymbol],
         summary CallEffectSummary,
-        ref hitCycle bool
+        ref hitCycle bool,
+        includeCountGetter bool = false
     ) {
         let index = GetCompilationMethodsByName()
-        let iterNames = []string{"GetEnumerator", "MoveNext", "get_Current"}
+        let iterNames = if includeCountGetter {
+            []string{"GetEnumerator", "MoveNext", "get_Current", "get_Count"}
+        } else {
+            []string{"GetEnumerator", "MoveNext", "get_Current"}
+        }
         for name in iterNames {
             if index.TryGetValue(name, out var methods) {
                 for m in methods {
                     if m.IsStatic || m.Parameters.Length != 0 {
                         continue
                     }
-                    if name is "MoveNext" or "get_Current" {
+                    if name == "get_Count" {
+                        if (m.AssociatedSymbol as PropertySymbol)?.IsAutoProperty == true {
+                            continue
+                        }
+                    } else if name is "MoveNext" or "get_Current" {
                         if (m.ReceiverType as StructSymbol) is not{} owner || !owner.Properties.Any(
                             (p PropertySymbol) -> p.Name == "Current"
                         ) {
@@ -14903,6 +15113,12 @@ internal partial class StatementBinder {
         }
         if MayInvokeToStringCallback("", memberName) {
             MergeToStringCallbackEffects(memberName, nil, argTypes, visiting, summary)
+        }
+        if !IsDeferredLinqOperatorName(memberName) && argTypes.Any((a TypeSymbol?) -> IsLazyEnumerableType(a)) &&
+            (
+            visiting.Count == 0 || CompilationHasGlobalOrStaticEnumerable() || VisitingChainAcceptsEnumerable(visiting)
+        ) {
+            MergeDeferredEnumerableCallbackEffects(visiting, summary)
         }
         for argType in argTypes {
             if argType != nil && TryGetMutableBufferElementType(argType) is {} elemType {

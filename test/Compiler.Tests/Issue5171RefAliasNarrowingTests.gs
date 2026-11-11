@@ -1678,6 +1678,149 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref globalC))
 `}
+            yield []object{"issue-5326-yield-iterator-deferred-count-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Items() sequence[int32] {
+    globalC = nil
+    yield 1
+}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let seq = Items()
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-loop-enumerable-toarray-deferred-where-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = seq.ToArray()
+    }
+    return total
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-concurrent-dictionary-getoradd-callback-clears-global", `
+import System
+import System.Collections.Concurrent
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Populate(d ConcurrentDictionary[int32, int32]) int32 {
+    return d.GetOrAdd(1, (k int32) -> {
+        globalC = nil
+        return k
+    })
+}
+func Run(ref a C?, d ConcurrentDictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let n = Populate(d)
+    return a.Value + n
+}
+let d = ConcurrentDictionary[int32, int32]()
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-count-global-via-local-copy-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+let xs = List[int32](){1}
+var globalSeq IEnumerable[int32] = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+func CountGlobalViaLocal() int32 {
+    let local = globalSeq
+    return Enumerable.Count(local)
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    let n = CountGlobalViaLocal()
+    return a.Value + n
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-equality-comparer-create-method-group-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func SameInt(x int32, y int32) bool -> x == y
+func HashAndClear(x int32) int32 {
+    globalC = nil
+    return x
+}
+func Run(ref a C?, d Dictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = d.ContainsKey(1)
+    return a.Value
+}
+let cmp = EqualityComparer[int32].Create(SameInt, HashAndClear)
+let d = Dictionary[int32, int32](cmp)
+d[1] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-fresh-receiver-property-setter-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Scratch {
+    prop Tag int32 {
+        get -> 0
+        set {
+            globalC = nil
+        }
+    }
+}
+func TouchScratch() {
+    let s = Scratch{}
+    s.Tag = 1
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    TouchScratch()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).
@@ -2081,6 +2224,47 @@ func Main() {
     Console.WriteLine(Run(ref x))
 }
 `, []string{"2"}}
+            yield []object{"issue-5326-safe-ignore-enumerable-preserves-narrowing", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Ignore(seq IEnumerable[int32]) { }
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    Ignore(seq)
+    return a.Value
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-elided-conditional-call-preserves-narrowing", `
+import System
+import System.Diagnostics
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+@Conditional("NEVER_DEFINED_SYMBOL_5326")
+func ElidedClear() {
+    globalC = nil
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    ElidedClear()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`, []string{"1"}}
         }
 
         private func Compile(dir string, source string, outPath string)(Exit int32, Log string) {

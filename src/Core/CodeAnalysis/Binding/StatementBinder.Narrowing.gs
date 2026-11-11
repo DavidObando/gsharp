@@ -6195,7 +6195,10 @@ internal partial class StatementBinder {
                     allEntryCallableState.CapturedVariables.Add(captured)
                 }
             }
-            if !isStableSystemIndexOp && node is BoundCallOperationExpression && !IsCallableValueInvocation(node) {
+            if !isStableSystemIndexOp &&
+                node is BoundCallOperationExpression &&
+                node is not BoundCallExpression{IsConditionalElided: true} &&
+                !IsCallableValueInvocation(node) {
                 MarkRunsEscapedClosure(invalidateCallableAliases: false)
                 runsEscapedClosureHere = true
                 callExpressions.Add(node)
