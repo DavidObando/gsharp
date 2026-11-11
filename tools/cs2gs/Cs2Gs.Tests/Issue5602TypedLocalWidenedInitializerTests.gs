@@ -260,30 +260,42 @@ namespace Demo
 
     /// Issue #5645: both the typed promoted local and its inferred source keep the conditional's narrowing.
     @Fact
-    func PromotedLocalInItsOwnNullTestArm_DoesNotAssert() {
+    func Issue5645_PromotedLocalInItsOwnNullTestArm_DoesNotAssert() {
         let (printed, compilation) = Translate(`
 namespace Demo
 {
-    public class Node { public override string ToString() => "node"; }
+    public class Node
+    {
+        public Node Child { get; }
+        public bool IsValid { get; }
+        public override string ToString() => "node";
+    }
     public record Entry(Node Item, int Id);
     public static class Use
     {
         public static Entry Empty() => new Entry(null, 0);
         public static string Tested(Entry entry) { var item = entry.Item; object o = item; return o == null ? "null" : o.ToString(); }
         public static string Inferred(Entry entry) { var item = entry.Item; return item == null ? "null" : item.ToString(); }
+        public static string StablePath(Entry entry)
+        {
+            var item = entry.Item;
+            if (item == null) return "null";
+            return item.Child == null || !item.Child.IsValid ? "node" : "bad";
+        }
         public static string Run() => Tested(Empty()) + " " + Tested(new Entry(new Node(), 1)) + " " +
-            Inferred(Empty()) + " " + Inferred(new Entry(new Node(), 1));
+            Inferred(Empty()) + " " + Inferred(new Entry(new Node(), 1)) + " " +
+            StablePath(Empty()) + " " + StablePath(new Entry(new Node(), 1));
     }
 }`)
-        Assert.Equal("null node null node", RunCSharp(compilation).Trim())
-        Assert.Equal("null node null node", CompileAndRun(printed).Trim())
+        Assert.Equal("null node null node null node", RunCSharp(compilation).Trim())
+        Assert.Equal("null node null node null node", CompileAndRun(printed).Trim())
         Assert.Contains("let o object? = item\n", printed)
         Assert.DoesNotContain("!!", printed)
     }
 
     /// Issue #5645: receiver and argument reads share G#'s guard regions even without Roslyn flow analysis.
     @Fact
-    func PromotedLocalGuardRegions_NarrowReceiverAndArgumentReads() {
+    func Issue5645_PromotedLocalGuardRegions_NarrowReceiverAndArgumentReads() {
         let source = StringBuilder(`
 namespace Demo
 {
@@ -332,7 +344,7 @@ namespace Demo
 
     /// Issue #5645: writes and escaped closure calls end narrowing; mutable captures do not inherit an outer guard.
     @Fact
-    func PromotedLocalInvalidatedGuards_KeepRequiredAssertions() {
+    func Issue5645_PromotedLocalInvalidatedGuards_KeepRequiredAssertions() {
         let (printed, compilation) = Translate(`
 namespace Demo
 {

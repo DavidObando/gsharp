@@ -13860,6 +13860,7 @@ partial class CSharpToGSharpTranslator {
             let isDeconstructedForEachLeaf = declaration is SingleVariableDesignationSyntax && declaration.Ancestors()
                 .Any((ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is ForEachVariableStatementSyntax)
             let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
+            // Issues #4190/#5645: oblivious mutable receivers keep their bridge; read-only locals can use native guard narrowing.
             if requireRoslynFlowNotNull &&
                 flowState != Microsoft
                 .CodeAnalysis
@@ -13870,12 +13871,11 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableFlowState
                     .None &&
+                    declaringScope != nil &&
+                    this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
                     (
-                    this.IsObliviousCompilation() ||
-                        (
-                        declaringScope != nil && this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
-                            (isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_))
-                    )
+                    isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_) ||
+                        (this.IsObliviousCompilation() && symbol is ILocalSymbol)
                 )
             ) {
                 return false
