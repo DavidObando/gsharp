@@ -52,7 +52,8 @@ class AssertImagesTests(unittest.TestCase):
         self.workspace.cleanup()
 
     def run_task(self, portable: list[Path], ready_to_run: list[Path], packed: list[Path],
-                 forbidden: str = "Gsharp.Runtime.Channels.dll;Gsharp.Runtime.Values.dll") -> subprocess.CompletedProcess:
+                 forbidden: str = "Gsharp.Runtime.Channels.dll;Gsharp.Runtime.Values.dll",
+                 continue_on_error: str = "ErrorAndStop") -> subprocess.CompletedProcess:
         def group(name: str, paths: list[Path]) -> str:
             return f'<{name} Include="{";".join(str(path) for path in paths)}" />' if paths else ""
         project = self.root / "Check.proj"
@@ -64,7 +65,9 @@ class AssertImagesTests(unittest.TestCase):
       {group("R2R", ready_to_run)}
       {group("Packed", packed)}
     </ItemGroup>
-    <GsharpAssertImages Portable="@(Portable)" ReadyToRun="@(R2R)" ForbiddenNames="{forbidden}" Packed="@(Packed)" />
+    <GsharpAssertImages Portable="@(Portable)" ReadyToRun="@(R2R)" ForbiddenNames="{forbidden}" Packed="@(Packed)"
+                        ContinueOnError="{continue_on_error}" />
+    <Message Importance="high" Text="AssertImagesResult=$(MSBuildLastTaskResult)" />
   </Target>
 </Project>""", encoding="utf-8")
         env = dict(os.environ, MSBUILDDISABLENODEREUSE="1", DOTNET_CLI_TELEMETRY_OPTOUT="1")
@@ -77,6 +80,40 @@ class AssertImagesTests(unittest.TestCase):
         packed = fake_pe(self.root / "GSharp.Core.dll", LINUX_X64_READY_TO_RUN)
         result = self.run_task([portable], [r2r], [packed])
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("CS0162", result.stdout + result.stderr)
+        self.assertIn("assertimagesresult=true", (result.stdout + result.stderr).lower())
+
+    def test_logged_errors_return_false(self) -> None:
+        # Downgrade logged errors so MSBuildLastTaskResult tests Execute(), not the build's error count.
+        missing = self.root / "missing.dll"
+        wrong_portable = fake_pe(self.root / "runtime.dll", LINUX_X64_READY_TO_RUN)
+        wrong_r2r = fake_pe(self.root / "gsc.dll", PORTABLE)
+        forbidden = fake_pe(self.root / "Gsharp.Runtime.Values.dll", PORTABLE)
+        cases = [
+            ([missing], [], [], "Portable runtime file is missing"),
+            ([], [missing], [], "ReadyToRun file is missing"),
+            ([wrong_portable], [], [], "must be 0x14C"),
+            ([], [wrong_r2r], [], "crossgen2 did not run"),
+            ([], [], [forbidden], "portable runtime set"),
+        ]
+        for portable, r2r, packed, diagnostic in cases:
+            with self.subTest(diagnostic=diagnostic):
+                result = self.run_task(portable, r2r, packed, continue_on_error="WarnAndContinue")
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertIn(diagnostic, output)
+                self.assertIn("assertimagesresult=false", output.lower())
+
+    def test_truncated_images_fail_the_pack(self) -> None:
+        corrupt = self.root / "corrupt.dll"
+        corrupt.write_bytes(b"MZ")
+        for portable, r2r in (([corrupt], []), ([], [corrupt])):
+            with self.subTest(portable=bool(portable)):
+                result = self.run_task(portable, r2r, [])
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertIn("MSB4018", output)
+                self.assertIn("EndOfStreamException", output)
 
     def test_a_ready_to_run_runtime_file_fails_the_pack(self) -> None:
         # Mutant: the channels runtime went through crossgen2.

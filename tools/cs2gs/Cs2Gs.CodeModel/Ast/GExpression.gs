@@ -11,12 +11,12 @@ import System.Linq
 /// Base type for a G# expression.
 abstract class GExpression : GNode { }
 
-/// A general block expression `{ statements; value }`.
+/// A block expression with an optional trailing value.
 class BlockExpression : GExpression {
     /// Initializes a new instance of the (cref:BlockExpression) class.
     /// @param statements Statements evaluated before the value.
-    /// @param value The trailing value expression.
-    init(statements IReadOnlyList[GStatement], value GExpression) {
+    /// @param value The trailing value expression; omit it for a void block.
+    init(statements IReadOnlyList[GStatement], value GExpression? = nil) {
         Statements = statements ?? List[GStatement]()
         Value = value
     }
@@ -26,8 +26,8 @@ class BlockExpression : GExpression {
         get;
     }
 
-    /// Gets the trailing value expression.
-    prop Value GExpression {
+    /// Gets the optional trailing value expression.
+    prop Value GExpression? {
         get;
     }
 }

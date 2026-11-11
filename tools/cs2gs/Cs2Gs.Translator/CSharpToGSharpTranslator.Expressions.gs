@@ -11311,6 +11311,16 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            // A checked cast sets its own top-level nullability, independently of nested nullable positions.
+            if Unparenthesize(expression) is CastExpressionSyntax cast &&
+                cast.Type is not NullableTypeSyntax &&
+                this.CastUsesCheckedReferenceConversion(cast) &&
+                this
+                .typeMapper
+                .Map(this.context.GetTypeInfo(cast.Type).Type, this.context, cast.Type.GetLocation())
+                ?.IsNullable == false {
+                return true
+            }
             // Issue #5582: the emitted value is `T?` although C# types it non-null. Asked here, so that each
             // operand of a composed value (`flag ? a : b`, `a ?? b`) is decided by its emitted type too.
             if expression != nil &&
@@ -11405,18 +11415,6 @@ partial class CSharpToGSharpTranslator {
                     .GetTypeInfo(concatenation)
                     .Type
                     ?.SpecialType == SpecialType.System_String {
-                    return true
-                }
-                case cast is CastExpressionSyntax when !(cast.Type is NullableTypeSyntax) &&
-                    this
-                    .CastUsesCheckedReferenceConversion(cast) {
-                    // Issue #3843: EVERY checked reference cast now lowers to
-                    // `cast[T](expr)`, whose static result is non-nullable `T`
-                    // regardless of the operand's nullability — exactly as C#
-                    // `(T)x` is statically `T`. (Both languages let a nil slip
-                    // through that non-nullable static type; that is the
-                    // shared, documented ADR-0167 behaviour, not a G#-only
-                    // hole.)
                     return true
                 }
                 case conditional is Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalExpressionSyntax {
@@ -14039,11 +14037,17 @@ partial class CSharpToGSharpTranslator {
             }
             for nullCheck in $scope.DescendantNodesAndSelf(WithinScope)
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
-                if nullCheck.SpanStart >= effectiveTarget.SpanStart || !this.TryGetNullComparisonNonNullPolarity(
-                    nullCheck,
-                    symbol,
-                    out var whenTrue
-                ) ||
+                // Roslyn represents the classic `x is T` form as a binary expression, not a pattern expression.
+                let typeTest = nullCheck.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
+                    this.IsTypeReferencePattern(nullCheck.Right) && this.BindsToGuardSymbol(nullCheck.Left, symbol) &&
+                    this
+                    .TypeTestNarrowing(
+                    this.context.GetTypeInfo(nullCheck.Right).Type,
+                    this.GetPatternScrutineeUnderlyingType(nullCheck.Left)
+                ) != nil
+                var whenTrue = true
+                if nullCheck.SpanStart >= effectiveTarget.SpanStart ||
+                    (!typeTest && !this.TryGetNullComparisonNonNullPolarity(nullCheck, symbol, out whenTrue)) ||
                     !this
                     .ComputeBooleanFlowRegions(nullCheck, whenTrue, includeWhenClauseRegion: false).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(effectiveTarget.Span)
@@ -14408,6 +14412,9 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     case ElementAccessExpressionSyntax {
+                        continue
+                    }
+                    case conditionalAccess is ConditionalAccessExpressionSyntax when conditionalAccess.Expression == node {
                         continue
                     }
                     case coalesceAssignment is Microsoft
