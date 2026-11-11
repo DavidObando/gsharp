@@ -15,6 +15,8 @@ import System.Linq
 /// the earliest label that a later `goto` targets through the statement that
 /// holds the last such `goto`.
 internal sealed class BackwardJumpSpan {
+    private var containedStatements HashSet[SyntaxNode]?
+
     init(
         owner SyntaxNode,
         statements ImmutableArray[StatementSyntax],
@@ -93,6 +95,20 @@ internal sealed class BackwardJumpSpan {
             result.Add(NodeAt(i))
         }
         return result.ToArray()
+    }
+
+    /// Tests logical statement membership, including spans that cross source files.
+    func Contains(syntax SyntaxNode) bool {
+        let statements = containedStatements ?? HashSet[SyntaxNode](Statements())
+        containedStatements = statements
+        var current SyntaxNode? = syntax
+        while current != nil {
+            if statements.Contains(current) {
+                return true
+            }
+            current = current.Parent
+        }
+        return false
     }
 }
 

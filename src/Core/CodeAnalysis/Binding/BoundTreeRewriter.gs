@@ -2326,7 +2326,7 @@ abstract class BoundTreeRewriter {
         return if builder == nil {
             node
         } else {
-            BoundTupleLiteralExpression(node.Syntax, node.TupleType, builder.ToImmutable())
+            BoundTupleLiteralExpression(node.Syntax, node.TupleType, builder.ToImmutable(), node.NarrowedElementReads)
         }
     }
 

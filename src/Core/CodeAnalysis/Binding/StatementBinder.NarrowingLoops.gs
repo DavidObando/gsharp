@@ -5260,9 +5260,16 @@ internal partial class StatementBinder {
     }
 
     private sealed class SpanEntrySnapshot {
-        init(frames[]Dictionary[AccessPath, TypeSymbol], externalCallableAliases[]VariableSymbol) {
+        init(
+            frames[]Dictionary[AccessPath, TypeSymbol],
+            externalCallableAliases[]VariableSymbol,
+            before NarrowingState,
+            lowered NarrowingState
+        ) {
             Frames = frames
             ExternalCallableAliases = externalCallableAliases
+            Before = before
+            Lowered = lowered
         }
 
         prop Frames[]Dictionary[AccessPath, TypeSymbol] {
@@ -5270,6 +5277,14 @@ internal partial class StatementBinder {
         }
 
         prop ExternalCallableAliases[]VariableSymbol {
+            get;
+        }
+
+        // These immutable states identify retracted reads. They do not restore flow proofs.
+        prop Before NarrowingState {
+            get;
+        }
+        prop Lowered NarrowingState {
             get;
         }
     }
@@ -5389,6 +5404,7 @@ internal partial class StatementBinder {
 
     private func ApplySpanEntryLowerBound(span BackwardJumpSpan) {
         JoinPendingForwardJumpsIntoRegion(span.Labels)
+        let before = binderCtx.Narrowing
         if HasAnyActiveNarrowings() || externalCallableAliases.Count > 0 {
             ApplyRegionLowerBoundCore(GetSpanEffects(span), span.FirstStatement)
         }
@@ -5400,8 +5416,20 @@ internal partial class StatementBinder {
                 .NarrowedVariables
                 .Select((frame NarrowingFrame) -> Dictionary[AccessPath, TypeSymbol](frame))
                 .ToArray(),
-            externalCallableAliases.ToArray()
+            externalCallableAliases.ToArray(),
+            before,
+            binderCtx.Narrowing
         )
+    }
+
+    internal func WasNarrowedBeforeBackwardJump(syntax SyntaxNode, path AccessPath) bool {
+        let span = GetEnclosingBackwardJumpSpan(syntax)
+        if span == nil || !spanEntryStates.TryGetValue(span, out var entry) {
+            return false
+        }
+        return span.Contains(syntax) && entry.Before.NarrowedType(path) != nil && entry.Lowered.NarrowedType(
+            path
+        ) == nil
     }
 
     /// ADR-0213 section 11 (slice L2, #5318, #5671): binds a participant label of [`span`](paramref) under
