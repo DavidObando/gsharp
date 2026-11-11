@@ -200,24 +200,51 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func OwnerHasMixedRecordPositionalAndPropertyPatterns(owner SyntaxNode) bool {
-            let patterns = owner
+            let allPatterns = owner
                 .DescendantNodes()
                 .OfType[RecursivePatternSyntax]()
                 .Where(
                 (pattern RecursivePatternSyntax) -> object.ReferenceEquals(
                     this.RecordPatternDecisionOwner(pattern),
                     owner
-                ) &&
-                    this
-                    .RecordPatternDecisionPath(pattern, owner).Length == 0
+                )
             )
                 .ToArray()
-            return patterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) &&
-                patterns
+            let rootPatterns = allPatterns.Where(
+                (pattern RecursivePatternSyntax) -> this.RecordPatternDecisionPath(pattern, owner).Length == 0
+            )
+                .ToArray()
+            return rootPatterns.Any((pattern RecursivePatternSyntax) -> pattern.PropertyPatternClause != nil) &&
+                allPatterns
                 .Any(
                 (pattern RecursivePatternSyntax) ->
                 this.UserRecordPatternDeconstruct(pattern) != nil && this.RecordPatternNeedsDeconstruction(pattern)
             )
+        }
+
+        private func EffectiveRootRecursivePatternType(
+            pattern RecursivePatternSyntax,
+            receiverType ITypeSymbol?
+        ) ITypeSymbol? {
+            let explicitType = if pattern.Type != nil {
+                this.context.GetTypeInfo(pattern.Type).Type
+            } else {
+                default(ITypeSymbol?)
+            }
+            let rawType = explicitType ?? receiverType ?? this.UserRecordPatternDeconstruct(pattern)?.ContainingType
+            if rawType == nil {
+                return nil
+            }
+            let unwrappedRaw = UnwrapNullablePatternType(rawType)
+            if receiverType != nil {
+                let unwrappedReceiver = UnwrapNullablePatternType(receiverType)
+                if unwrappedReceiver is INamedTypeSymbol receiverNamed &&
+                    unwrappedRaw is INamedTypeSymbol rawNamed &&
+                    ReceiverTypeHierarchy(receiverNamed).Contains(rawNamed, SymbolEqualityComparer.Default) {
+                    return unwrappedReceiver
+                }
+            }
+            return unwrappedRaw
         }
 
         private func GetOrCreateRecordPatternTypeGuard(
@@ -300,42 +327,34 @@ partial class CSharpToGSharpTranslator {
             if path.Length != 0 {
                 return false
             }
-            let positional = owner
+            let matchedType = this.EffectiveRootRecursivePatternType(recursive, receiverType)
+            if matchedType == nil {
+                return false
+            }
+            let rootCandidates = owner
                 .DescendantNodes()
                 .OfType[RecursivePatternSyntax]()
-                .FirstOrDefault(
+                .Where(
                 (candidate RecursivePatternSyntax) -> object.ReferenceEquals(
                     this.RecordPatternDecisionOwner(candidate),
                     owner
                 ) &&
-                    this.RecordPatternDecisionPath(candidate, owner) == path && this.UserRecordPatternDeconstruct(
-                    candidate
-                ) != nil &&
-                    this.RecordPatternNeedsDeconstruction(candidate) &&
-                    candidate.SpanStart <= recursive.SpanStart &&
-                    this
-                    .PositionalPatternProvesRecursiveType(
-                    candidate,
-                    recursive,
-                    receiverType,
-                    this.UserRecordPatternDeconstruct(candidate)!!
+                    this.RecordPatternDecisionPath(candidate, owner) == path && SymbolEqualityComparer.Default.Equals(
+                    this.EffectiveRootRecursivePatternType(candidate, receiverType),
+                    matchedType
                 )
             )
-            let method = if positional == nil {
-                default(IMethodSymbol?)
-            } else {
-                this.UserRecordPatternDeconstruct(positional)
-            }
-            let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
-            if method == nil || declarations == nil {
+                .OrderBy((candidate RecursivePatternSyntax) -> candidate.SpanStart)
+                .ToArray()
+            if rootCandidates.Length == 0 ||
+                (
+                rootCandidates.Length == 1 &&
+                    (recursive.PositionalPatternClause == nil || recursive.PropertyPatternClause == nil)
+            ) {
                 return false
             }
-            let matchedType = if recursive.Type != nil {
-                this.context.GetTypeInfo(recursive.Type).Type
-            } else {
-                receiverType ?? method.ContainingType
-            }
-            if matchedType == nil {
+            let declarations = this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue
+            if declarations == nil {
                 return false
             }
             let narrowedType = if recursive.Type != nil {
@@ -356,7 +375,7 @@ partial class CSharpToGSharpTranslator {
                 path,
                 matchedType,
                 requiresConversion,
-                positional!!,
+                rootCandidates[0],
                 declarations
             )
             let flagExpr = IdentifierExpression(guardFlag)
@@ -408,35 +427,6 @@ partial class CSharpToGSharpTranslator {
             return true
         }
 
-        private func PositionalPatternProvesRecursiveType(
-            positional RecursivePatternSyntax,
-            recursive RecursivePatternSyntax,
-            receiverType ITypeSymbol?,
-            method IMethodSymbol
-        ) bool {
-            let positionalType = if positional.Type != nil {
-                this.context.GetTypeInfo(positional.Type).Type
-            } else {
-                receiverType ?? method.ContainingType
-            }
-            let recursiveType = if recursive.Type != nil {
-                this.context.GetTypeInfo(recursive.Type).Type
-            } else {
-                receiverType
-            }
-            if positionalType == nil || recursiveType == nil {
-                return false
-            }
-            let unwrappedPositional = UnwrapNullablePatternType(positionalType)
-            let unwrappedRecursive = UnwrapNullablePatternType(recursiveType)
-            if SymbolEqualityComparer.Default.Equals(unwrappedPositional, unwrappedRecursive) {
-                return true
-            }
-            return unwrappedPositional is INamedTypeSymbol positionalNamed &&
-                unwrappedRecursive is INamedTypeSymbol recursiveNamed &&
-                ReceiverTypeHierarchy(positionalNamed).Contains(recursiveNamed, SymbolEqualityComparer.Default)
-        }
-
         private func UnwrapNullablePatternType(type ITypeSymbol) ITypeSymbol {
             if type is INamedTypeSymbol{
                 OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
@@ -450,7 +440,8 @@ partial class CSharpToGSharpTranslator {
         private func BuildRecordDeconstructionAdapter(
             method IMethodSymbol,
             forceConcreteImplementation bool = false,
-            ownerIsUnsafe bool = false
+            ownerIsUnsafe bool = false,
+            explicitInterfaceOverride GTypeReference? = nil
         ) MethodDeclaration? {
             if method.IsExtensionMethod {
                 return this.BuildExtensionRecordDeconstructionAdapter(method)
@@ -523,10 +514,9 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             let syntaxNode = method.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-            let explicitInterfaceType GTypeReference? = if !forceConcreteImplementation &&
-                !method
-                .ExplicitInterfaceImplementations
-                .IsDefaultOrEmpty {
+            let explicitInterfaceType GTypeReference? = if explicitInterfaceOverride != nil {
+                explicitInterfaceOverride
+            } else if !forceConcreteImplementation && !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty {
                 this.typeMapper.Map(
                     method.ExplicitInterfaceImplementations[0].ContainingType,
                     this.context,
@@ -553,7 +543,7 @@ partial class CSharpToGSharpTranslator {
                 statements.Add(LocalDeclarationStatement(BindingKind.Var, receiverName, initializer: receiver))
                 receiver = IdentifierExpression(receiverName)
             }
-            if explicitInterfaceType != nil && !method.ContainingType.IsValueType {
+            if !forceConcreteImplementation && explicitInterfaceType != nil && !method.ContainingType.IsValueType {
                 receiver = ParenthesizedExpression(
                     ConversionExpression(explicitInterfaceType, receiver, isCheckedReferenceCast: true)
                 )
@@ -602,10 +592,10 @@ partial class CSharpToGSharpTranslator {
                 Array.Empty[Parameter](),
                 resultType,
                 BlockStatement(statements),
-                visibility: if forceConcreteImplementation {
-                    Visibility.Public
-                } else if explicitInterfaceType != nil || method.ContainingType.TypeKind == TypeKind.Interface {
+                visibility: if explicitInterfaceType != nil || method.ContainingType.TypeKind == TypeKind.Interface {
                     Visibility.Default
+                } else if forceConcreteImplementation {
+                    Visibility.Public
                 } else {
                     MapVisibility(method, this.context, syntaxNode)
                 },
@@ -748,7 +738,30 @@ partial class CSharpToGSharpTranslator {
             if signature.PartialDefinitionPart != nil {
                 parameters = this.ReconcilePartialMethodParameters(signature, parameters, isDeclaringPart: false)
             }
-            let receiverParameter = parameters[0]
+            let holderName = this.EmittedName(signature.ContainingType, signature.ContainingType.Name)!!
+            let targetMethodName = this.EmittedName(signature, signature.Name)!!
+            let adapterName = this.RecordDeconstructionAdapterName(method)
+            let occupied = HashSet[string](StringComparer.Ordinal){holderName, targetMethodName, adapterName}
+            for typeParameter in signature.TypeParameters {
+                occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
+            }
+            var receiverParameter = parameters[0]
+            if occupied.Contains(receiverParameter.Name) {
+                let receiverStem = receiverParameter.Name.TrimStart('$')
+                var renamedReceiver = receiverStem + "_2"
+                for var suffix = 3; occupied.Contains(renamedReceiver); suffix++ {
+                    renamedReceiver = receiverStem + "_" + suffix.ToString(CultureInfo.InvariantCulture)
+                }
+                receiverParameter = Parameter(
+                    renamedReceiver,
+                    receiverParameter.Type,
+                    receiverParameter.IsVariadic,
+                    receiverParameter.RefKind,
+                    receiverParameter.DefaultValue,
+                    receiverParameter.Attributes
+                )
+            }
+            occupied.Add(receiverParameter.Name)
             let outputTypes = parameters.Skip(1).Select((parameter Parameter) -> parameter.Type).ToList()
             let outputParameters = signature.Parameters.Skip(1).ToList()
             let statements = List[GStatement]()
@@ -756,10 +769,6 @@ partial class CSharpToGSharpTranslator {
                 PassStaticExtensionHelperReceiver(IdentifierExpression(receiverParameter.Name), signature)!!
             }
             let elements = List[GExpression]()
-            let occupied = HashSet[string](StringComparer.Ordinal){receiverParameter.Name}
-            for typeParameter in signature.TypeParameters {
-                occupied.Add(this.EmittedName(typeParameter, typeParameter.Name)!!)
-            }
             for var i = 0; i < outputParameters.Count; i++ {
                 let stem = "component" + i.ToString(CultureInfo.InvariantCulture)
                 var name = stem
@@ -1061,9 +1070,6 @@ partial class CSharpToGSharpTranslator {
                 HashSet[INamedTypeSymbol](SymbolEqualityComparer.Default)
             }
             for iface in symbol.AllInterfaces {
-                if baseInterfaces.Contains(iface) {
-                    continue
-                }
                 for slot in iface.GetMembers("Deconstruct").OfType[IMethodSymbol]() {
                     if !this.nameAllocator.HasRenamedDeconstructContract(slot) &&
                         !this.TryResolveMigratedProducerDeconstruct(slot, out _, out _) {
@@ -1076,11 +1082,27 @@ partial class CSharpToGSharpTranslator {
                     if symbol.FindImplementationForInterfaceMember(slot) is IMethodSymbol impl &&
                         !impl.IsStatic &&
                         !impl.IsPartialDefinition &&
-                        !SymbolEqualityComparer
-                        .Default
-                        .Equals(impl.ContainingType, symbol) && this.EmittedName(impl, impl.Name) != slotName &&
-                        seenSlots.Add(slot) {
-                        results.Add((slot, impl))
+                        (
+                        impl.IsImplicitlyDeclared ||
+                            (
+                            !SymbolEqualityComparer.Default.Equals(impl.ContainingType, symbol) && this.EmittedName(
+                                impl,
+                                impl.Name
+                            ) != slotName
+                        )
+                    ) {
+                        if symbol.BaseType is {} existingBase && baseInterfaces.Contains(iface) &&
+                            !existingBase
+                            .DeclaringSyntaxReferences
+                            .IsDefaultOrEmpty &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(existingBase.FindImplementationForInterfaceMember(slot), impl) {
+                            continue
+                        }
+                        if seenSlots.Add(slot) {
+                            results.Add((slot, impl))
+                        }
                     }
                 }
             }
@@ -1135,7 +1157,8 @@ partial class CSharpToGSharpTranslator {
             while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
                 membersToReserve,
                 candidateName,
-                out assignedName
+                out assignedName,
+                role: "protected-hook"
             ) {
                 do {
                     candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
@@ -1247,6 +1270,48 @@ partial class CSharpToGSharpTranslator {
                     interfaces.RemoveAt(i)
                 }
             }
+        }
+
+        private func BuildImplicitRecordDeconstructMethod(
+            slot IMethodSymbol,
+            impl IMethodSymbol,
+            emittedMethodName string,
+            isOpen bool
+        ) MethodDeclaration {
+            let syntax = slot.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as MethodDeclarationSyntax
+            using let modelScope = if syntax != nil {
+                this.context.UseSemanticModelFor(syntax.SyntaxTree)
+            } else {
+                default(IDisposable?)
+            }
+            let parameters = this.MapParameters(slot, syntax?.ParameterList, skipFirst: false)
+            let statements = List[GStatement](parameters.Count)
+            for var i = 0; i < parameters.Count && i < impl.Parameters.Length; i++ {
+                let implParam = impl.Parameters[i]
+                let prop = ReceiverTypeHierarchy(impl.ContainingType).SelectMany(
+                    (owner INamedTypeSymbol) -> owner.GetMembers(implParam.Name).OfType[IPropertySymbol]()
+                )
+                    .FirstOrDefault()
+                let memberName = if prop != nil {
+                    this.EmittedName(prop, prop.Name)!!
+                } else {
+                    this.EmittedName(implParam, implParam.Name)!!
+                }
+                statements.Add(
+                    AssignmentStatement(
+                        IdentifierExpression(parameters[i].Name),
+                        MemberAccessExpression(ThisExpression(), memberName)
+                    )
+                )
+            }
+            return MethodDeclaration(
+                emittedMethodName,
+                parameters,
+                returnType: nil,
+                BlockStatement(statements),
+                visibility: Visibility.Public,
+                isOpen: isOpen
+            )
         }
 
         private func BuildDeconstructContractForwardingMethod(
@@ -1363,7 +1428,8 @@ partial class CSharpToGSharpTranslator {
             while !LiftedLocalFunctionNameAllocator.For(this.context.Compilation).TryReserveContractMemberNames(
                 membersToReserve,
                 candidateName,
-                out assignedName
+                out assignedName,
+                role: "base-helper"
             ) {
                 do {
                     candidateName = stem + suffix.ToString(CultureInfo.InvariantCulture)
@@ -1937,7 +2003,11 @@ partial class CSharpToGSharpTranslator {
                 }
                 var receiverPrologue List[GStatement]? = nil
                 var receiverArgument = receiver
-                if receiverParam.RefKind == RefKind.Ref || receiverParam.RefKind == RefKind.Out {
+                if receiverParam.RefKind == RefKind.Ref ||
+                    receiverParam.RefKind == RefKind.Out ||
+                    receiverParam.RefKind == RefKind.In ||
+                    receiverParam.RefKind == RefKind
+                    .RefReadOnlyParameter {
                     let receiverCopy = this.NewSpillName()
                     receiverPrologue = List[GStatement]{
                         LocalDeclarationStatement(BindingKind.Var, receiverCopy, initializer: receiver)

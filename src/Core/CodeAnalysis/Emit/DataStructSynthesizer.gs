@@ -704,7 +704,7 @@ internal class DataStructSynthesizer {
             (_ ParametersEncoder) -> { }
         )
         var attributes = MethodAttributes.HideBySig | MethodAttributes.SpecialName
-        if structSym.BaseClass?.IsData == true {
+        if structSym.GetDataCloneAncestor() != nil || DataEqualityMemberModel.GetDirectBase(structSym, out _) != nil {
             attributes |= MethodAttributes.Family | MethodAttributes.Virtual
         } else if IsDataTypeSealed(structSym) {
             attributes |= MethodAttributes.Private

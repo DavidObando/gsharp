@@ -1665,7 +1665,12 @@ partial class CSharpToGSharpTranslator {
                 )
             ) ||
                 this.TypeHasUnsafeSignatureMember(mergedMembers)
-            if (kind == TypeDeclarationKind.Class || kind == TypeDeclarationKind.DataClass) &&
+            if (
+                kind == TypeDeclarationKind.Class ||
+                    kind == TypeDeclarationKind.DataClass ||
+                    kind == TypeDeclarationKind.Struct ||
+                    kind == TypeDeclarationKind.DataStruct
+            ) &&
                 symbol != nil &&
                 this
                 .ShouldAttachOwnedExtensions(node, symbol) {
@@ -1690,7 +1695,24 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let emittedForwarderKeys = HashSet[string](StringComparer.Ordinal)
-                let emittedAdapterKeys = HashSet[string](StringComparer.Ordinal)
+                let emittedAdapterReturnTypes = Dictionary[string, string](StringComparer.Ordinal)
+                let emittedExplicitAdapterKeys = HashSet[string](StringComparer.Ordinal)
+                for existingMethod in members.OfType[MethodDeclaration]() {
+                    if existingMethod.ExplicitInterfaceType == nil &&
+                        existingMethod
+                        .Parameters
+                        .Count == 0 &&
+                        existingMethod
+                        .TypeParameters
+                        .Count == 0 {
+                        let existingReturn = if existingMethod.ReturnType != nil {
+                            GSharpPrinter.RenderTypeReference(existingMethod.ReturnType)
+                        } else {
+                            ""
+                        }
+                        emittedAdapterReturnTypes.TryAdd(existingMethod.Name, existingReturn)
+                    }
+                }
                 for (slot, impl) in this.GetInheritedRenamedDeconstructInterfaceContracts(symbol) {
                     if this.TypeContainsPointerOrFunctionPointer(slot.ReturnType) || slot.Parameters.Any(
                         (p IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(p.Type)
@@ -1700,14 +1722,23 @@ partial class CSharpToGSharpTranslator {
                     ) {
                         isUnsafe = true
                     }
-                    let forwarder = this.BuildDeconstructContractForwardingMethod(
-                        slot,
-                        this.EmittedName(slot, slot.Name)!!,
-                        ThisExpression(),
-                        this.EmittedName(impl, impl.Name)!!,
-                        isOpen: kind == TypeDeclarationKind.Class && !symbol.IsSealed,
-                        isOverride: false
-                    )
+                    let forwarder = if impl.IsImplicitlyDeclared && impl.ContainingType.IsRecord {
+                        this.BuildImplicitRecordDeconstructMethod(
+                            slot,
+                            impl,
+                            this.EmittedName(slot, slot.Name)!!,
+                            isOpen: isOpen
+                        )
+                    } else {
+                        this.BuildDeconstructContractForwardingMethod(
+                            slot,
+                            this.EmittedName(slot, slot.Name)!!,
+                            ThisExpression(),
+                            this.EmittedName(impl, impl.Name)!!,
+                            isOpen: isOpen,
+                            isOverride: false
+                        )
+                    }
                     let forwarderKey = forwarder.Name + "(" + string.Join(
                         ",",
                         forwarder.Parameters.Select(
@@ -1723,8 +1754,32 @@ partial class CSharpToGSharpTranslator {
                         forceConcreteImplementation: true,
                         ownerIsUnsafe: isUnsafe
                     )
-                    if adapter != nil && emittedAdapterKeys.Add(adapter.Name) {
-                        members.Add(adapter)
+                    if adapter != nil {
+                        let renderedReturnType = if adapter.ReturnType != nil {
+                            GSharpPrinter.RenderTypeReference(adapter.ReturnType)
+                        } else {
+                            ""
+                        }
+                        if !emittedAdapterReturnTypes.TryGetValue(adapter.Name, out var existingReturnType) {
+                            emittedAdapterReturnTypes.Add(adapter.Name, renderedReturnType)
+                            members.Add(adapter)
+                        } else if existingReturnType != renderedReturnType {
+                            let mappedIface = this.typeMapper.Map(slot.ContainingType, this.context, node.GetLocation())
+                            if mappedIface != nil {
+                                let explicitKey = GSharpPrinter.RenderTypeReference(mappedIface) + ":" + adapter.Name
+                                if emittedExplicitAdapterKeys.Add(explicitKey) {
+                                    let explicitAdapter = this.BuildRecordDeconstructionAdapter(
+                                        slot,
+                                        forceConcreteImplementation: true,
+                                        ownerIsUnsafe: isUnsafe,
+                                        explicitInterfaceOverride: mappedIface
+                                    )
+                                    if explicitAdapter != nil {
+                                        members.Add(explicitAdapter)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

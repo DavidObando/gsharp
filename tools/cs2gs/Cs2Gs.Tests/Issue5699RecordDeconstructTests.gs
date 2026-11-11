@@ -596,10 +596,20 @@ namespace RecordDeconstruction {
     public record R {
         public int Value = 3;
         public static System.Action? Hook;
+        public int DynamicValue {
+            get {
+                Hook?.Invoke();
+                return 1;
+            }
+        }
         public void Deconstruct(out int x, out int y) { x = 1; y = 2; Hook?.Invoke(); }
     }
     public record Sub : R {
         public int Extra = 9;
+    }
+    public class Holder {
+        public R Child = new R();
+        public int Value = 3;
     }
     public static class Probe {
         public static string Run() {
@@ -613,6 +623,16 @@ namespace RecordDeconstruction {
             string singleOutcome;
             try { singleOutcome = (rSingle is R(1, _) { Value: 3 }).ToString(); }
             catch (System.NullReferenceException) { singleOutcome = "threw"; }
+            Holder? h = new Holder();
+            R.Hook = () => h = null;
+            string nestedHolderOutcome;
+            try { nestedHolderOutcome = (h is Holder { Child: R(0, _) } or Holder { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { nestedHolderOutcome = "threw"; }
+            R? propFirst = new R();
+            R.Hook = () => propFirst = null;
+            string propFirstOutcome;
+            try { propFirstOutcome = (propFirst is R { DynamicValue: 0 } or R(1, _)).ToString(); }
+            catch (System.NullReferenceException) { propFirstOutcome = "threw"; }
             object? boxedCleared = new R();
             R.Hook = () => boxedCleared = null;
             var boxedClearedMatch = boxedCleared is PATTERN;
@@ -625,7 +645,7 @@ namespace RecordDeconstruction {
             var inheritedSubtypeMiss = plain is R(0, _) or Sub(1, _) { Extra: 9 };
             object boxed = new R();
             var boxedMatch = boxed is PATTERN;
-            return $"{first},{singleOutcome},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
+            return $"{first},{singleOutcome},{nestedHolderOutcome},{propFirstOutcome},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
         }
     }
 }`).Replace(
@@ -896,18 +916,25 @@ namespace External {
         let part1 = (`
 using External;
 namespace RecordDeconstruction {
+    SHARED_CONTRACT
     public partial record R : PARENT {
         FIELDS
     }
 }`).Replace(
+            "SHARED_CONTRACT",
+            if overrideBase {
+                "public interface ISharedContract { void Deconstruct(out int x, out int y); }"
+            } else {
+                ""
+            }
+        ).Replace(
             "PARENT",
             if overrideBase {
-                "External.Base"
+                "External.Base, ISharedContract"
             } else {
                 "External.IParts"
             }
-        )
-            .Replace(
+        ).Replace(
             "FIELDS",
             if overrideBase {
                 ""
@@ -966,6 +993,14 @@ namespace RecordDeconstruction {
             "EXTRA_TYPES",
             if overrideBase {
                 `public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }
+                public class UnrelatedContractConsumer : ISharedContract {
+                    public void Deconstruct(out int x, out int y) { x = 11; y = 22; }
+                    public int RunLocal() {
+                        int baseDeconstruct(int n) => n <= 0 ? 5 : baseDeconstruct(n - 1);
+                        int deconstructTuple(int n) => n <= 0 ? 6 : deconstructTuple(n - 1);
+                        return baseDeconstruct(1) + deconstructTuple(1);
+                    }
+                }
                 public record ProtectedRecord : External.Base {
                     public ProtectedRecord(ref int seed) : base(ref seed) { }
                     protected override void Deconstruct(out int x, out int y, out int z) {
@@ -1039,9 +1074,9 @@ namespace RecordDeconstruction {
         ).Replace(
             "EXTRA_ASSERT",
             if overrideBase {
-                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()}\";"
+                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); ISharedContract sc = new UnrelatedContractConsumer(); var (scx, scy) = sc; var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()},{scx},{scy},{new UnrelatedContractConsumer().RunLocal()},{new External.Base { X = 2, Y = 3 }.Equals(r)},{r.Equals(new External.Base { X = 2, Y = 3 })}\";"
             } else {
-                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; External.IParts inh = new InheritedImpl(7); var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; External.IDerivedParts dp = new DerivedPartsRec(); var (dpx, dpy) = dp; var extra = $\"{cx},{cy},{ix},{iy},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{dpx},{dpy},{dp.Count},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var baseRec = new BaseRec(7); var inhRec = new InheritedImpl(7); External.IParts inh = inhRec; var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; External.IDerivedParts dp = new DerivedPartsRec(); var (dpx, dpy) = dp; var extra = $\"{cx},{cy},{ix},{iy},{baseRec.Equals(inhRec)},{inhRec.Equals(baseRec)},{inhRec.Equals(new InheritedImpl(7))},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{dpx},{dpy},{dp.Count},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
             }
         )
         VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
@@ -1253,11 +1288,16 @@ namespace RecordDeconstruction {
     public interface IParts {
         void Deconstruct(out int x, out int y) { x = 11; y = 22; }
     }
+    public interface IRequiredParts {
+        void Deconstruct(out int x, out int y);
+    }
     public class DefaultImpl : IParts { }
     public class ExplicitImpl : IParts {
         void IParts.Deconstruct(out int x, out int y) { x = 77; y = 88; }
     }
-    public record R : IParts {
+    public record Auto(int X, int Y) : IParts, IRequiredParts;
+    public record struct AutoStruct(int X, int Y) : IParts, IRequiredParts;
+    public record R : IParts, IRequiredParts {
         public int X;
         public int Y;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
@@ -1273,7 +1313,13 @@ namespace RecordDeconstruction {
             var (dx, dy) = defParts;
             IParts expParts = new ExplicitImpl();
             var (ex, ey) = expParts;
-            return $"{x},{y},{dx},{dy},{ex},{ey},{new R { X = 2, Y = 3 }.Check()}";
+            IParts autoParts = new Auto(4, 5);
+            var (ax, ay) = autoParts;
+            IRequiredParts reqParts = new Auto(6, 7);
+            var (rqx, rqy) = reqParts;
+            IParts autoStructParts = new AutoStruct(8, 9);
+            var (asx, asy) = autoStructParts;
+            return $"{x},{y},{dx},{dy},{ex},{ey},{ax},{ay},{rqx},{rqy},{asx},{asy},{new R { X = 2, Y = 3 }.Check()}";
         }
     }
 }`).Replace("BODY", body))
@@ -1512,6 +1558,7 @@ namespace RecordDeconstruction {
         public int X;
         public int Y;
         public int Z;
+        public static System.Action? Mutate;
         public void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
     public static class Extensions {
@@ -1519,12 +1566,24 @@ namespace RecordDeconstruction {
             if (component0 is null) { x = -1; y = -2; z = -3; return; }
             x = component0.Y * 10; y = component0.X; z = component0.Z * 50;
         }
+        public static void Deconstruct(this R Extensions, out int a, out int b, out int c, out int d) {
+            a = Extensions.X; b = Extensions.Y; c = Extensions.Z; d = a + b + c;
+        }
         public static void Deconstruct(this ref RS r, out int x, out int y, out int z) {
             r.X += 100;
             x = r.X; y = r.Y; z = r.Z;
         }
         public static void Deconstruct(this in RS r, out int x, out int y, out int z, out int w) {
-            x = r.X; y = r.Y; z = r.Z; w = r.X + r.Y + r.Z;
+            x = r.X;
+            RS.Mutate?.Invoke();
+            y = r.Y;
+            z = r.Z;
+            w = r.X + r.Y + r.Z;
+        }
+    }
+    public static class component0 {
+        public static void Deconstruct(this R r, out int a, out int b, out int c, out int d, out int e) {
+            a = r.X; b = r.Y; c = r.Z; d = 10; e = 20;
         }
     }
     public static class Probe {
@@ -1532,10 +1591,16 @@ namespace RecordDeconstruction {
             BODY
             R? absent = null;
             var (nx, ny, nz) = absent;
+            var (ea, eb, ec, ed) = new R { X = 1, Y = 2, Z = 3 };
+            var (ca, cb, cc, cd, ce) = new R { X = 4, Y = 5, Z = 6 };
             var rs = new RS { X = 2, Y = 3, Z = 4 };
+            RS.Mutate = () => rs = new RS { X = 99, Y = 88, Z = 77 };
             var (ix, iy, iz, iw) = rs;
+            RS.Mutate = null;
+            var mutatedX = rs.X;
+            rs = new RS { X = 2, Y = 3, Z = 4 };
             rs.Deconstruct(out var rx, out var ry, out var rz);
-            return $"{x},{y},{z},{nx},{ny},{nz},{ix},{iy},{iz},{iw},{rx},{ry},{rz},{rs.X}";
+            return $"{x},{y},{z},{nx},{ny},{nz},{ea},{eb},{ec},{ed},{ca},{cb},{cc},{cd},{ce},{ix},{iy},{iz},{iw},{mutatedX},{rx},{ry},{rz},{rs.X}";
         }
     }
 }`).Replace("BODY", body))
@@ -1876,6 +1941,7 @@ namespace ExternalContracts {
         public int X = 4;
         public int Y = 7;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public void Deconstruct(out string x, out int y) { x = $"S{Y}"; y = X; }
     }
 }`
         let consumerSource = `
@@ -1963,12 +2029,16 @@ namespace RecordDeconstruction {
     public interface ISourceParts2 {
         void Deconstruct(out int x, out int y);
     }
-    public record SourceRecord : ISourceParts, ISourceParts2 {
+    public interface IGenericSourceParts<T> {
+        void Deconstruct(out T x, out int y);
+    }
+    public record SourceRecord : ISourceParts, ISourceParts2, IGenericSourceParts<int>, IGenericSourceParts<string> {
         public int X = 2;
         public int Y = 3;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public void Deconstruct(out string x, out int y) { x = $"R{Y}"; y = X; }
     }
-    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts, ISourceParts2 { }
+    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts, ISourceParts2, IGenericSourceParts<int>, IGenericSourceParts<string> { }
     public class KeywordDerived : ExternalContracts.KeywordBase {
         public override int func() => 42;
     }
@@ -1988,8 +2058,12 @@ namespace RecordDeconstruction {
             var im = new InheritedMetadataParts();
             ISourceParts sp = im;
             ISourceParts2 sp2 = im;
+            IGenericSourceParts<int> gsp1 = im;
+            IGenericSourceParts<string> gsp2 = im;
             var (ix, iy) = sp;
             var (ix2, iy2) = sp2;
+            var (gix, giy) = gsp1;
+            var (gsx, gsy) = gsp2;
             var hookVal = new ProtectedHookCollision().Compute();
             var asyncRef = new AsyncAndRefRecord();
             ExternalContracts.IAsyncDeconstruct ia = asyncRef;
@@ -2013,7 +2087,7 @@ namespace RecordDeconstruction {
                     ptrTag = uy;
                 }
             }
-            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby},{ptrVal},{ptrTag}";
+            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{gix},{giy},{gsx},{gsy},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby},{ptrVal},{ptrTag}";
         }
     }
 }`
