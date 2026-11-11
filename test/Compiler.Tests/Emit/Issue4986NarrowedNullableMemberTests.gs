@@ -3013,6 +3013,10 @@ namespace Fixture4986 {
     public static class Extensions {
         public static (IList<string>, int)? StoredInterface(bool present) =>
             present ? (new string[1], 7) : ((IList<string>, int)?)null;
+        public static List<(IList<string>, int)?> StoredInterfaceList() =>
+            new List<(IList<string>, int)?> { (new string[1], 7) };
+        public static int CountNullableTuples(this IEnumerable<(IList<string>, int)?> items) =>
+            items is ICollection<(IList<string>, int)?> c ? c.Count : 0;
         public static (int?, string[])? StoredNullableElement(bool present) =>
             present ? (7, new string[1]) : ((int?, string[])?)null;
         public static (int, int) GetValueOrDefault<T>(this (T?, string[]) value)
@@ -3029,6 +3033,10 @@ func ifaceGuarded(present bool) int32 {
     let n = Extensions.StoredInterface(present)
     return n != nil ? n.GetValueOrDefault(([]string{"x"}, 0)).Item2 : 0
 }
+func ifaceListCount() int32 {
+    let items = Extensions.StoredInterfaceList()
+    return items.CountNullableTuples()
+}
 func nullableElemImported(present bool) int32 {
     let n = Extensions.StoredNullableElement(present)
     return n != nil ? n.GetValueOrDefault().Item1 : 0
@@ -3042,9 +3050,9 @@ func openStructTuple[T struct](x T?) {
     Console.WriteLine((x, 0))
 }
 openStructTuple[int32](5)
-Console.WriteLine("${ifaceUnguarded(true)} ${ifaceUnguarded(false)} ${ifaceGuarded(true)} ${ifaceGuarded(false)} ${nullableElemImported(true)} ${nullableElemImported(false)} ${nullableElemSymbolic(true)} ${nullableElemSymbolic(false)}")
+Console.WriteLine("${ifaceUnguarded(true)} ${ifaceUnguarded(false)} ${ifaceGuarded(true)} ${ifaceGuarded(false)} ${ifaceListCount()} ${nullableElemImported(true)} ${nullableElemImported(false)} ${nullableElemSymbolic(true)} ${nullableElemSymbolic(false)}")
 `, fixture.AssemblyPath)
-        Assert.Equal("(5, 0)" + Environment.NewLine + "7 0 7 0 99 0 99 0" + Environment.NewLine, result.Output)
+        Assert.Equal("(5, 0)" + Environment.NewLine + "7 0 7 0 1 99 0 99 0" + Environment.NewLine, result.Output)
     }
 
     @Fact

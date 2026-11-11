@@ -4010,7 +4010,8 @@ internal class MemberLookup {
                         return true
                     }
                     try {
-                        let contextObject = ResolveErasedObjectInContext(erasedUnderlying)
+                        let contextObject = TupleTypeSymbol.FindLoadContextObject(erasedUnderlying) ??
+                            ResolveErasedObjectInContext(erasedUnderlying)
                         let nullableDefinition = if contextObject.Assembly == typeof(object).Assembly {
                             typeof(Nullable[_])
                         } else {
@@ -7795,6 +7796,9 @@ internal class MemberLookup {
             let hostObject = typeof(object)
             if openDef == nil || openDef.Assembly == hostObject.Assembly {
                 return hostObject
+            }
+            if TupleTypeSymbol.FindLoadContextObject(openDef) is {} contextObject {
+                return contextObject
             }
             for p in openDef.GetGenericArguments() {
                 let baseType Type? = p.BaseType
