@@ -75,7 +75,7 @@ internal class DocumentTranslationState {
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         DeconstructionInitializers = Dictionary[
-            (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode),
+            (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode, Context int32),
             ExpressionSyntax?
         ]()
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
@@ -463,7 +463,7 @@ internal class DocumentTranslationState {
 
     // Issue #5633: retain each deconstruction projection, including misses, across composed alias arms.
     prop DeconstructionInitializers Dictionary[
-        (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode),
+        (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode, Context int32),
         ExpressionSyntax?
     ] {
         get;

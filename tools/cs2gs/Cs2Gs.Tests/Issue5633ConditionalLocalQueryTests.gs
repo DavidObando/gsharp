@@ -95,6 +95,55 @@ open class Issue5633ConditionalLocalQueryTests {
     }
 
     @Theory
+    @InlineData(8, "self")
+    @InlineData(10, "self")
+    @InlineData(12, "self")
+    @InlineData(14, "self")
+    @InlineData(16, "self")
+    @InlineData(18, "self")
+    @InlineData(18, "alias")
+    @InlineData(18, "loop")
+    @InlineData(18, "tuple")
+    @InlineData(18, "deconstruct")
+    func CyclicOriginChain_CompletesWithinBound(links int32, shape string) {
+        let body = StringBuilder(
+            switch shape {
+                case "alias": "var x0 = p; var alias = x0; x0 = alias; alias = x0;\n"
+                case "loop": "var x0 = p; var alias = x0; do { x0 = alias; alias = x0; } while (flag);\n"
+                case "tuple": "var x0 = (p, 0); x0 = x0;\n"
+                case "deconstruct": "var pair = (p, 0); pair = pair; var (x0, _) = pair;\n"
+                default: "var x0 = p; x0 = x0;\n"
+            }
+        )
+        for var i = 1; i <= links; i++ {
+            body.AppendLine(
+                if shape == "deconstruct" {
+                    "var (x$i, _) = (flag ? x${i - 1} : x${i - 1}, 0);"
+                } else {
+                    "var x$i = flag ? x${i - 1} : x${i - 1};"
+                }
+            )
+        }
+        if shape == "tuple" {
+            body.AppendLine("var (end, _) = x$links;")
+        }
+        let result = if shape == "tuple" {
+            "end"
+        } else {
+            "x$links"
+        }
+        let printed = this.TranslateWithinBound(
+            "#nullable enable\nnamespace Demo {\n" +
+                "public class Node { }\npublic static class P {\n" +
+                "static Node Chain(Node p, bool flag) {\n" +
+                body.ToString() + "return $result;\n} } }",
+            enabled: true
+        )
+        Assert.Contains("return $result", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Theory
     @InlineData(true, true, false)
     @InlineData(false, true, false)
     @InlineData(true, false, false)

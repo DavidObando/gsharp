@@ -35,6 +35,9 @@ partial class CSharpToGSharpTranslator {
             HashSet[string]
         ]()
         private var defaultOriginCycleVersion int32 = 0
+        private let defaultOriginContexts Dictionary[HashSet[ISymbol], int32] = Dictionary[HashSet[ISymbol], int32](
+            HashSet[ISymbol].CreateSetComparer()
+        )
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -833,6 +836,16 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return cached
             }
+            let contextPathKey = pathKey + ":blocked:${this.GetDefaultOriginContext(visited)}"
+            if declaration != nil && this.TryGetSlotChainNodeMemo(
+                declaration,
+                emptyChain,
+                out var contextual,
+                pathKey: contextPathKey
+            ) {
+                this.defaultOriginCycleVersion++
+                return contextual
+            }
             let cycleVersion = this.defaultOriginCycleVersion
             let result = this.GetReachingLocalValues(local, usePosition, visited).Any(
                 (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
@@ -841,11 +854,31 @@ partial class CSharpToGSharpTranslator {
                     HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                 )
             )
-            // A cycle can hide evidence from an ancestor. Keep negative answers only after complete walks.
-            if declaration != nil && (result || cycleVersion == this.defaultOriginCycleVersion) {
-                this.SetSlotChainNodeMemo(declaration, emptyChain, result, pathKey: pathKey)
+            // A truncated negative answer is valid only with the same blocked symbols (#5633).
+            if declaration != nil {
+                this.SetSlotChainNodeMemo(
+                    declaration,
+                    emptyChain,
+                    result,
+                    pathKey: if result || cycleVersion == this.defaultOriginCycleVersion {
+                        pathKey
+                    } else {
+                        contextPathKey
+                    }
+                )
             }
             return result
+        }
+
+        private func GetDefaultOriginContext(visited HashSet[ISymbol]?) int32 {
+            let symbols = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
+            if this.defaultOriginContexts.TryGetValue(symbols, out var cached) {
+                return cached
+            }
+            let id = this.defaultOriginContexts.Count + 1
+            // Callers extend their visited sets. Retain an immutable snapshot for this cache key.
+            this.defaultOriginContexts.Add(HashSet[ISymbol](symbols, SymbolEqualityComparer.Default), id)
+            return id
         }
 
         private func TryGetTupleElementAccess(
@@ -933,9 +966,14 @@ partial class CSharpToGSharpTranslator {
             if left == nil || right == nil {
                 return nil
             }
-            let key = (cast[SyntaxNode](target), left, cast[SyntaxNode](right))
+            let key = (cast[SyntaxNode](target), left, cast[SyntaxNode](right), 0)
             if this.state.DeconstructionInitializers.TryGetValue(key, out var cached) {
                 return cached
+            }
+            let contextualKey = (key.Item1, key.Item2, key.Item3, this.GetDefaultOriginContext(visited))
+            if this.state.DeconstructionInitializers.TryGetValue(contextualKey, out var contextual) {
+                this.defaultOriginCycleVersion++
+                return contextual
             }
             let cycleVersion = this.defaultOriginCycleVersion
             let result = switch left {
@@ -953,9 +991,15 @@ partial class CSharpToGSharpTranslator {
                 )
                 default: default(ExpressionSyntax?)
             }
-            if cycleVersion == this.defaultOriginCycleVersion {
-                this.state.DeconstructionInitializers[key] = result
-            }
+            this
+                .state
+                .DeconstructionInitializers[
+                if cycleVersion == this.defaultOriginCycleVersion {
+                    key
+                } else {
+                    contextualKey
+                }
+            ] = result
             return result
         }
 
