@@ -5882,7 +5882,7 @@ internal partial class ExpressionBinder {
             }
         }
 
-        private func ApplyEffectiveReferenceNullability(
+        internal func ApplyEffectiveReferenceNullability(
             declaredStorageType TypeSymbol,
             effectiveType TypeSymbol?
         ) TypeSymbol {

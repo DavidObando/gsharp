@@ -13049,7 +13049,8 @@ partial class CSharpToGSharpTranslator {
                     targetMethodName,
                     receiverType,
                     invocation.SyntaxTree
-                ) {
+                ) &&
+                    !this.InstanceMethodStepResolvesInRegion(invocation, method, receiverType, regionScope) {
                     return nil
                 }
             }
@@ -13058,6 +13059,71 @@ partial class CSharpToGSharpTranslator {
             } else {
                 default(List[ITypeSymbol]?)
             }
+        }
+
+        private func InstanceMethodStepResolvesInRegion(
+            invocation InvocationExpressionSyntax,
+            method IMethodSymbol,
+            receiverType ITypeSymbol,
+            regionScope Microsoft.CodeAnalysis.SyntaxNode
+        ) bool {
+            if method.IsExtensionMethod || method.ReducedFrom != nil {
+                return false
+            }
+            if receiverType is INamedTypeSymbol namedReceiver && this.IsSourceSymbol(namedReceiver) {
+                for owner in this.EnumerateReceiverMemberOwners(namedReceiver) {
+                    if !this.IsSourceSymbol(owner) {
+                        continue
+                    }
+                    for member in owner.GetMembers(method.Name) {
+                        if member is IMethodSymbol candidate &&
+                            !candidate.IsStatic &&
+                            this.IsVisibleMemberOnRegionOwner(owner, candidate) {
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            if this.InvocationHasEmittedNamedArgument(invocation, method) {
+                return false
+            }
+            for argument in invocation.ArgumentList.Arguments {
+                let expr = argument.Expression
+                if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) {
+                    if expr is Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationExpressionSyntax decl {
+                        if decl.Type is not IdentifierNameSyntax{IsVar: true} {
+                            let declType = this.context.GetTypeInfo(decl.Type).Type
+                            if declType is INamedTypeSymbol{IsGenericType: true} ||
+                                ContainsTypeParameter(declType) ||
+                                this.ResolveExplicitTypeClauseOrigin(declType) == nil {
+                                return false
+                            }
+                        }
+                        continue
+                    }
+                    if StripParentheses(expr) is not IdentifierNameSyntax operandId {
+                        return false
+                    }
+                    let operandSymbol = this.context.GetSymbolInfo(operandId).Symbol
+                    let operandType ITypeSymbol? = switch operandSymbol {
+                        case local is ILocalSymbol when !this.IsDeclaredInRegion(local, regionScope): local.Type
+                        case parameter is IParameterSymbol: parameter.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if operandType == nil || ContainsTypeParameter(operandType) {
+                        return false
+                    }
+                    continue
+                }
+                if IsNullLiteral(expr) || this.IsPureStringFormInRegion(expr) {
+                    continue
+                }
+                if this.ResolveExpressionRegionReceiverTypes(expr, regionScope) == nil {
+                    return false
+                }
+            }
+            return true
         }
 
         private func TryGetRewrittenSourceExtensionReceiver(
