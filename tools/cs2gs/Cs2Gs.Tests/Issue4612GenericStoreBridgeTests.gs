@@ -1467,6 +1467,35 @@ public static class C
         Assert.Empty(sites)
     }
 
+    @Theory
+    @InlineData("(copy, id) = entry;")
+    @InlineData("((copy, id), outer) = (entry, 0);")
+    func DeconstructionParameterAssignments_UseAssignmentMetadata(assignment string) {
+        let source = `public class Node { }
+public record Entry<T>(T Item, int Id) where T : class;
+public static class C
+{
+    public static Entry<Node> Empty() => new Entry<Node>(null, 0);
+    public static T Store<T>(T copy, Entry<T> entry) where T : class
+    {
+        int id, outer;
+        ` + assignment + `
+        return copy;
+    }
+}`
+        let (printed, sites) = Translate(source)
+        Assert.Contains("copy = copyValue!!\n", printed, StringComparison.Ordinal)
+        let site = Assert.Single(sites)
+        Assert.Equal(Expected(source, "copy, id"), Position(site))
+        Assert.Equal("copy", source.Substring(site.Location!!.SourceSpan.Start, site.Location!!.SourceSpan.Length))
+        Assert.StartsWith(
+            "kind=type-parameter-assignment | target=C.Store<T>(T, Entry<T>) parameter 'copy' | slot-type=T",
+            site.Message,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("| result-depends-on-slot=no | value=copy", site.Message, StringComparison.Ordinal)
+    }
+
     @Fact
     func GenericParameterVariableAssignments_UseAssignmentMetadataAndPreserveFinalArguments() {
         let source = `#nullable enable
