@@ -1032,9 +1032,13 @@ shared class GSharpPrinter {
         return RenderExpression(expression, indent)
     }
 
-    private func RenderBranch(statements IReadOnlyList[GStatement], value GExpression, indent int32) string {
+    private func RenderBranch(statements IReadOnlyList[GStatement], value GExpression?, indent int32) string {
         if statements.Count == 0 {
-            return "{ ${RenderBranchValue(value, indent)} }"
+            return if value == nil {
+                "{ }"
+            } else {
+                "{ ${RenderBranchValue(value, indent)} }"
+            }
         }
         let sb = StringBuilder()
         sb.Append('{')
@@ -1042,9 +1046,11 @@ shared class GSharpPrinter {
             sb.Append('\n')
             sb.Append(RenderStatement(statement, indent + 1))
         }
-        sb.Append('\n')
-        sb.Append(Indent(indent + 1))
-        sb.Append(RenderBranchValue(value, indent))
+        if value != nil {
+            sb.Append('\n')
+            sb.Append(Indent(indent + 1))
+            sb.Append(RenderBranchValue(value, indent))
+        }
         sb.Append('\n')
         sb.Append(Indent(indent))
         sb.Append('}')

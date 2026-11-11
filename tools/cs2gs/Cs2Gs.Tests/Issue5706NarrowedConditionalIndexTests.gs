@@ -12,6 +12,7 @@ import Xunit
 /// Issue #5706: preserve nullable results without conditional indexing on a non-null receiver.
 /// @remarks ADR-0154: disabling the non-null receiver rewrite makes the original five tests fail with GS0300.
 /// On 14f1e3aa2, cast receivers throw on nil, and named constant guards cause nullable indexing errors.
+/// On 39fcd66c7, void lambda and nested continuation tests fail with invalid nullable System.Void output.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
@@ -219,6 +220,85 @@ namespace Demo
 }`)
         Assert.Contains("s?[0]", printed)
         Assert.DoesNotContain("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func VoidExpressionBodies_UseGuardedBlocksWithoutNullableVoidResults() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Cell { public static int Touched; public void Touch() { Touched++; } }
+    public static class P
+    {
+        static int receivers;
+        static int indices;
+        static int Index() { indices++; return 0; }
+        static Cell[] Get(Cell[] cells) { receivers++; return cells; }
+        static void Lambda(Cell[] cells)
+        {
+            Action f = () => cells?[Index()].Touch();
+            f();
+        }
+        static void Captured(Cell[] cells)
+        {
+            Action f = () => Get(cells)?[Index()].Touch();
+            f(); f();
+        }
+        static void Method(Cell[] cells) => cells?[Index()].Touch();
+        public static string Run()
+        {
+            var missing = (Cell[])(object?)null;
+            var present = new[] { new Cell() };
+            Lambda(missing); Lambda(present);
+            Captured(missing); Captured(present);
+            Method(missing); Method(present);
+            return Cell.Touched + ":" + receivers + ":" + indices;
+        }
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.DoesNotContain("System.Void", printed)
+        Assert.DoesNotContain("default(void", printed)
+    }
+
+    @Fact
+    func NestedVoidContinuations_GuardBothIndexReceiversWithoutNullableResults() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public class Cell { public static int Touched; public void Touch() { Touched++; } }
+    public static class P
+    {
+        static int receivers;
+        static int indices;
+        static int Index() { indices++; return 0; }
+        static Cell[][] Get(Cell[][] cells) { receivers++; return cells; }
+        static void Statement(Cell[][] cells) { Get(cells)?[Index()]?[Index()].Touch(); }
+        static void Method(Cell[][] cells) => cells?[Index()]?[Index()].Touch();
+        static void Lambda(Cell[][] cells)
+        {
+            Action f = () => Get(cells)?[Index()]?[Index()].Touch();
+            f(); f();
+        }
+        public static string Run()
+        {
+            var missing = (Cell[][])(object?)null;
+            var missingInner = new[] { (Cell[])(object?)null };
+            var present = new[] { new[] { new Cell() } };
+            Statement(missing); Statement(missingInner); Statement(present);
+            Method(missing); Method(missingInner); Method(present);
+            Lambda(missing); Lambda(missingInner); Lambda(present);
+            return Cell.Touched + ":" + receivers + ":" + indices;
+        }
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.DoesNotContain("System.Void", printed)
+        Assert.DoesNotContain("default(void", printed)
     }
 
     @Fact

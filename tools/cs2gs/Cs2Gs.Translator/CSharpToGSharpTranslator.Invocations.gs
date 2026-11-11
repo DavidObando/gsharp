@@ -69,13 +69,15 @@ partial class CSharpToGSharpTranslator {
                     // expression. A managed reference needs a stack frame.
                     let statements = block.Statements.ToList()
                     let returnsVoid = this.context.GetTypeInfo(invocation).Type?.SpecialType == SpecialType.System_Void
-                    statements.Add(
-                        if returnsVoid {
-                            cast[GStatement](ExpressionStatement(block.Value))
-                        } else {
-                            cast[GStatement](ReturnStatement(block.Value))
-                        }
-                    )
+                    if let value = block.Value {
+                        statements.Add(
+                            if returnsVoid {
+                                cast[GStatement](ExpressionStatement(value))
+                            } else {
+                                cast[GStatement](ReturnStatement(value))
+                            }
+                        )
+                    }
                     return InvocationExpression(
                         ParenthesizedExpression(
                             LambdaExpression(Array.Empty[Parameter](), blockBody: BlockStatement(statements))

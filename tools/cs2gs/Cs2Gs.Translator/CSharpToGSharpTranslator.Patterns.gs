@@ -711,6 +711,15 @@ partial class CSharpToGSharpTranslator {
         private func TranslateConditionalAccessWithLocalAssignmentSeam(
             conditionalAccess ConditionalAccessExpressionSyntax
         ) GExpression {
+            if this.context.GetTypeInfo(conditionalAccess).Type?.SpecialType == SpecialType.System_Void {
+                return BlockExpression(
+                    this.WithSpillSeam(
+                        () -> []GStatement{
+                            this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
+                        }
+                    )
+                )
+            }
             let translatedReceiver = this.TranslateExpression(conditionalAccess.Expression)
             let staticallyNonNull = this.GSharpExpressionIsStaticallyNonNull(
                 conditionalAccess.Expression,
