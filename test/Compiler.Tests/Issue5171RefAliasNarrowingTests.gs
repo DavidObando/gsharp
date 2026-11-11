@@ -1090,9 +1090,9 @@ import System
 class C {
     var Value int32 = 1
 }
-var globalSlot C? = C{}
+var globalPair (C?, int32) = (C{}, 1)
 func ClearSlot() {
-    globalSlot = nil
+    globalPair.Item1 = nil
 }
 func Run(ref row (C?, int32)) int32 {
     let ref a = row.Item1
@@ -1100,8 +1100,7 @@ func Run(ref row (C?, int32)) int32 {
     ClearSlot()
     return a.Value
 }
-var pair = (C{}, 1)
-Console.WriteLine(Run(ref pair))
+Console.WriteLine(Run(ref globalPair))
 `}
             yield []object{"issue-5326-structural-equality-callback-clears-global", `
 import System
@@ -1381,6 +1380,60 @@ func Run(ref a C?, x Pair, y Pair) int32 {
 }
 let t = Pair(Trigger{})
 Console.WriteLine(Run(ref globalC, t, t))
+`}
+            yield []object{"issue-5326-loop-source-operator-interpolation-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+struct Token {
+    var Id int32
+    shared {
+        func +(a Token, b Token) Noisy -> Noisy{}
+    }
+}
+func Run(ref a C?, token Token) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        let _ = "${token + token}"
+    }
+    return total
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
+`}
+            yield []object{"issue-5326-base-call-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+open class BaseRunner {
+    open func Invoke(cb () -> void) {
+        cb()
+    }
+}
+class DerivedRunner : BaseRunner {
+    func Wrap() {
+        base.Invoke(() -> { globalC = nil })
+    }
+}
+func Run(ref a C?, d DerivedRunner) int32 {
+    if a == nil { return 0 }
+    d.Wrap()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, DerivedRunner{}))
 `}
         }
 

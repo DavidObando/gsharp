@@ -70,6 +70,7 @@ internal class BindingServices {
     var HasCachedMethodsByName bool
     var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
     var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
+    var CachedHasUnmodeledImportedComparer bool?
 }
 
 /// Issue #5326: summarizes the storage locations (fields/globals and elements) that a callee may transitively write.

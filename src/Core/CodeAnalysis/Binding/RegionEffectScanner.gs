@@ -957,12 +957,18 @@ internal sealed class RegionEffectScanner {
                     current.ContainsCall = true
                     for segment in interp.Segments {
                         if segment.IsExpression && segment.Expression is {} holeExpr {
-                            if IsPureStringForm(holeExpr) ||
-                                IsPureBooleanForm(holeExpr) ||
-                                IsStringForm(holeExpr) ||
-                                IsOperatorForm(holeExpr) ||
-                                IsNilLiteral(holeExpr) {
+                            if IsPureStringForm(holeExpr) || IsPureBooleanForm(holeExpr) || IsNilLiteral(holeExpr) {
                                 continue
+                            }
+                            var holePath = BuildPath(holeExpr)
+                            if holePath == nil && (IsStringForm(holeExpr) || IsOperatorForm(holeExpr)) {
+                                holePath = RegionReceiverPath(
+                                    nil,
+                                    false,
+                                    nil,
+                                    "<operator>",
+                                    ImmutableArray[RegionReceiverStep].Empty
+                                )
                             }
                             current.Calls.Add(
                                 RegionCall(
@@ -973,7 +979,7 @@ internal sealed class RegionEffectScanner {
                                     false,
                                     node.Span.Start,
                                     nil,
-                                    BuildPath(holeExpr),
+                                    holePath,
                                     nil
                                 )
                             )
