@@ -4249,13 +4249,6 @@ internal partial class ExpressionBinder {
             }
         }
         if !(source is NullableTypeSymbol && !(target is NullableTypeSymbol) && !(target is PlatformTypeSymbol)) &&
-            (
-            TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target) || Conversion.Classify(
-                source.StripToBareShape(),
-                target.StripToBareShape()
-            )
-                .IsImplicit
-        ) &&
             Conversion.TryRelatePlatformContainer(
             source,
             target,
@@ -4264,7 +4257,13 @@ internal partial class ExpressionBinder {
         ) &&
             !isImplicit &&
             !rejectsImportedParameter {
-            return source
+            if TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(source, target) {
+                return source
+            }
+            let strippedTarget = target.StripToBareShape()
+            if Conversion.Classify(source, strippedTarget).IsImplicit {
+                return strippedTarget
+            }
         }
         return target
     }

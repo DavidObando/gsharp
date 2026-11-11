@@ -3007,6 +3007,43 @@ Console.WriteLine("${Extensions.Oracle()} ${unguarded(true)} ${unguarded(false)}
     }
 
     @Fact
+    func Issue5030_Array_To_Interface_Tuple_Fallback_And_Nullable_Value_Element_Extension_Probe() {
+        using let fixture = CSharpFixture(`using System.Collections.Generic;
+namespace Fixture4986 {
+    public static class Extensions {
+        public static (IList<string>, int)? StoredInterface(bool present) =>
+            present ? (new string[1], 7) : ((IList<string>, int)?)null;
+        public static (int?, string[])? StoredNullableElement(bool present) =>
+            present ? (7, new string[1]) : ((int?, string[])?)null;
+        public static (int, int) GetValueOrDefault<T>(this (T?, string[]) value)
+            where T : struct => (99, 99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ifaceUnguarded(present bool) int32 {
+    let n = Extensions.StoredInterface(present)
+    return n.GetValueOrDefault(([]string{"x"}, 0)).Item2
+}
+func ifaceGuarded(present bool) int32 {
+    let n = Extensions.StoredInterface(present)
+    return n != nil ? n.GetValueOrDefault(([]string{"x"}, 0)).Item2 : 0
+}
+func nullableElemImported(present bool) int32 {
+    let n = Extensions.StoredNullableElement(present)
+    return n != nil ? n.GetValueOrDefault().Item1 : 0
+}
+func nullableElemSymbolic(present bool) int32 {
+    let v int32? = 7
+    let n (int32?, []string?)? = if present { (v, []string?{"a"}) } else { nil }
+    return n != nil ? n.GetValueOrDefault().Item1 : 0
+}
+Console.WriteLine("${ifaceUnguarded(true)} ${ifaceUnguarded(false)} ${ifaceGuarded(true)} ${ifaceGuarded(false)} ${nullableElemImported(true)} ${nullableElemImported(false)} ${nullableElemSymbolic(true)} ${nullableElemSymbolic(false)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("7 0 7 0 99 0 99 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
     func Recursive_Array_Upper_Bound_Keeps_Nullable_Storage_Fallback() {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public interface IProbe<in T> {}
