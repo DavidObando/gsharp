@@ -825,7 +825,7 @@ partial class CSharpToGSharpTranslator {
             let emptyChain = Array.Empty[ITypeParameterSymbol]()
             // Reaching values depend on the read position, including reads of reassigned locals (#5633).
             let pathKey = "@default:${usePosition}" + FormatTupleProjection(path.ToList())
-            if declaration is VariableDeclaratorSyntax && this.TryGetSlotChainNodeMemo(
+            if declaration != nil && this.TryGetSlotChainNodeMemo(
                 declaration,
                 emptyChain,
                 out var cached,
@@ -842,7 +842,7 @@ partial class CSharpToGSharpTranslator {
                 )
             )
             // A cycle can hide evidence from an ancestor. Keep negative answers only after complete walks.
-            if declaration is VariableDeclaratorSyntax && (result || cycleVersion == this.defaultOriginCycleVersion) {
+            if declaration != nil && (result || cycleVersion == this.defaultOriginCycleVersion) {
                 this.SetSlotChainNodeMemo(declaration, emptyChain, result, pathKey: pathKey)
             }
             return result
@@ -1226,7 +1226,11 @@ partial class CSharpToGSharpTranslator {
             visited ??= HashSet[ISymbol](SymbolEqualityComparer.Default)
             var usePosition = expression!!.SpanStart
             expression = this.UnwrapTuplePreservingCasts(expression)
-            while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local && visited!!.Add(local) {
+            while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local {
+                if !visited!!.Add(local) {
+                    this.defaultOriginCycleVersion++
+                    break
+                }
                 let reaching = this.GetReachingLocalValues(local, usePosition, visited)
                 if reaching.Count == 0 {
                     break

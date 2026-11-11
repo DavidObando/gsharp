@@ -168,6 +168,53 @@ namespace Demo
         )
     }
 
+    @Fact
+    func TruncatedTupleAlias_DoesNotCacheAMissingDefault() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static bool IsNull<T>(T value) => value is null;
+        public static bool Probe<T>(T replacement, bool flag)
+        {
+            T a = replacement;
+            var b = (default(T), 0);
+            (a, _) = b;
+            T d = a;
+            b = (d, 0);
+            var end = flag ? b.Item1 : d;
+            return IsNull(end);
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("let end T? = if flag { b.Item1 } else { d }\n", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Theory
+    @InlineData(true)
+    @InlineData(false)
+    func DeconstructionAtEveryLink_CompletesWithinBound(enabled bool) {
+        let body = StringBuilder("var (x0, _) = (p, 0);\n")
+        for var i = 1; i <= 24; i++ {
+            body.AppendLine("var (x$i, _) = (flag ? x${i - 1} : x${i - 1}, 0);")
+        }
+        let mode = if enabled {
+            "enable"
+        } else {
+            "disable"
+        }
+        let source = "#nullable $mode\nnamespace Demo {\n" +
+            "public class Node { }\npublic static class P {\n" +
+            "static Node Chain(Node p, bool flag) {\n" +
+            body.ToString() + "return x24;\n} } }"
+        let printed = this.TranslateWithinBound(source, enabled)
+        Assert.Contains("return x24", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
     private func TranslateWithinBound(source string, enabled bool) string {
         let project = CSharpProjectLoader.LoadInMemory([](string, string){("Chain.cs", source)})
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics))
