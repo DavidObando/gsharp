@@ -10,7 +10,8 @@ import System.IO
 import Xunit
 
 /// Issue #5706: preserve nullable results without conditional indexing on a non-null receiver.
-/// @remarks ADR-0154: disabling the non-null receiver rewrite makes all five tests fail with GS0300.
+/// @remarks ADR-0154: disabling the non-null receiver rewrite makes the original five tests fail with GS0300.
+/// On 14f1e3aa2, cast receivers throw on nil, and named constant guards cause nullable indexing errors.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
@@ -140,9 +141,84 @@ namespace Demo
             Maybe(null) + " " + Maybe("c") + " " + MutableLambda("m") + " " + InnerWrite("w") + " " + calls;
     }
 }`)
-        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("object.ReferenceEquals(s, nil)", printed)
         Assert.Contains("s?[0]", printed)
         Assert.DoesNotContain("Get()?[", printed)
+    }
+
+    @Fact
+    func CheckedCastReceivers_KeepNullGuardsAndEvaluateIndicesOnlyAfterTheGuard() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int receivers;
+        static int indices;
+        static object? Get(object? value) { receivers++; return value; }
+        static int Index() { indices++; return 0; }
+        static char? Read(object? value) => ((string)value)?[Index()];
+        static char? Captured(object? value) => ((string)Get(value))?[Index()];
+        static int? Continued(object? value) => ((string)Get(value))?[Index()].GetHashCode();
+        static int? Nested(object? value) => ((string?[])Get(value))?[Index()]?.Length;
+        static char? Conditional(bool run, object? value) => run ? ((string)Get(value))?[Index()] : null;
+        public static string Run() =>
+            Read(null) + "|" + Read("a") + "|" + Captured(null) + "|" + Captured("b") + "|" +
+            Continued(null) + "|" + Continued("c") + "|" + Nested(null) + "|" +
+            Nested(new string?[] { null }) + "|" + Nested(new string?[] { "ab" }) + "|" +
+            Conditional(false, "x") + "|" + Conditional(true, null) + "|" + Conditional(true, "d") + "|" +
+            receivers + ":" + indices;
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.DoesNotContain("?[", printed)
+    }
+
+    @Fact
+    func NonNullableContracts_StillGuardNullValuesAndVoidContinuations() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public class Cell { public static int Touched; public void Touch() { Touched++; } }
+    public static class P
+    {
+        static int receivers;
+        static int indices;
+        static int Index() { indices++; return 0; }
+        static string Get(object? value) { receivers++; return (string)value; }
+        static char? Parameter(string s) => s?[Index()];
+        static char? Result(object? value) => Get(value)?[Index()];
+        static void Void(object? value) { ((Cell[])value)?[Index()].Touch(); }
+        public static string Run()
+        {
+            Void(null);
+            Void(new[] { new Cell() });
+            return Parameter((string)(object?)null) + "|" + Parameter("a") + "|" +
+                Result(null) + "|" + Result("b") + "|" + receivers + ":" + indices + ":" + Cell.Touched;
+        }
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals(s, nil)", printed)
+        Assert.DoesNotContain("?[", printed)
+    }
+
+    @Fact
+    func NamedConstantGuards_DoNotImplyGSharpTypeTestNarrowing() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        const string K = "a";
+        static char? Read(string? s) { if (s is K) { return s?[0]; } return null; }
+        public static string Run() => Read("a") + "|" + Read("b") + "|" + Read(null) + "|end";
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("cast[char?](s[0])", printed)
     }
 
     @Fact

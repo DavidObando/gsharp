@@ -392,14 +392,14 @@ partial class CSharpToGSharpTranslator {
                             .state
                             .ConditionalElementReceivers
                             .ContainsKey(receiverBinding)
-                        if (!dependsOnReceiver || detachedReceiver) &&
-                            (
-                            this.GSharpExpressionIsStaticallyNonNull(conditionalAccess.Expression) ||
-                                this.IsGSharpFlowNarrowedLocal(
-                                conditionalAccess.Expression,
-                                requireRoslynFlowNotNull: false
-                            ) ||
-                                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(conditionalAccess.Expression)
+                        if this.ConditionalIndexNeedsRuntimeGuard(conditionalAccess) {
+                            return this.TranslateWithLocalAssignmentSeam(
+                                conditionalAccess,
+                                () -> this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
+                            )
+                        }
+                        if (!dependsOnReceiver || detachedReceiver) && this.ConditionalIndexReceiverIsFlowNarrowed(
+                            conditionalAccess.Expression
                         ) {
                             let indexed = this.TranslateNonNullableConditionalIndex(
                                 conditionalAccess.WhenNotNull,
@@ -673,21 +673,70 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
+        private func ConditionalIndexReceiverIsFlowNarrowed(
+            receiver ExpressionSyntax
+        ) bool -> this.IsGSharpFlowNarrowedLocal(receiver, requireRoslynFlowNotNull: false) ||
+            this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(receiver)
+
+        private func ConditionalIndexNeedsRuntimeGuard(conditionalAccess ConditionalAccessExpressionSyntax) bool {
+            let receiver = conditionalAccess.Expression
+            let detachedReceiver = FindLeadingElementBinding(receiver) is ElementBindingExpressionSyntax binding &&
+                this
+                .state
+                .ConditionalElementReceivers
+                .ContainsKey(binding)
+            return FindLeadingElementBinding(conditionalAccess.WhenNotNull) != nil &&
+                (!DependsOnEnclosingConditionalReceiver(receiver) || detachedReceiver) &&
+                this.GSharpExpressionIsStaticallyNonNull(receiver) && !this.ConditionalIndexReceiverIsFlowNarrowed(
+                receiver
+            )
+        }
+
+        private func BuildConditionalReceiverGuard(receiver GExpression?, staticallyNonNull bool) GExpression {
+            // A non-null static type can still hold nil after a checked reference cast.
+            return if staticallyNonNull {
+                UnaryExpression(
+                    "!",
+                    InvocationExpression(
+                        MemberAccessExpression(TypeExpression(NamedTypeReference("object")), "ReferenceEquals"),
+                        List[GExpression]{receiver!!, LiteralExpression.Null()},
+                        nil
+                    )
+                )
+            } else {
+                cast[GExpression](BinaryExpression(receiver, "!=", LiteralExpression.Null()))
+            }
+        }
+
         private func TranslateConditionalAccessWithLocalAssignmentSeam(
             conditionalAccess ConditionalAccessExpressionSyntax
         ) GExpression {
+            let translatedReceiver = this.TranslateExpression(conditionalAccess.Expression)
+            let staticallyNonNull = this.GSharpExpressionIsStaticallyNonNull(
+                conditionalAccess.Expression,
+                translatedReceiver
+            )
             let receiver GExpression? = this.CaptureReceiverOnce(
-                this.TranslateExpression(conditionalAccess.Expression),
+                translatedReceiver,
                 conditionalAccess.Expression,
                 "a conditional-access expression here has no enclosing evaluation seam to capture its receiver once."
             )
+            let guardedReceiver = if staticallyNonNull {
+                receiver
+            } else {
+                cast[GExpression](NonNullAssertionExpression(receiver))
+            }
             let previousReceiver GExpression? = this.state.ConditionalReceiverReplacement
-            this.state.ConditionalReceiverReplacement = NonNullAssertionExpression(receiver)
+            this.state.ConditionalReceiverReplacement = guardedReceiver
             var whenNotNull GExpression
             try {
                 whenNotNull = this.TranslateWithLocalAssignmentSeam(
                     conditionalAccess.WhenNotNull,
-                    () -> this.TranslateExpression(conditionalAccess.WhenNotNull)!!
+                    () -> this.TranslateNonNullableConditionalIndex(
+                        conditionalAccess.WhenNotNull,
+                        FindLeadingElementBinding(conditionalAccess.WhenNotNull),
+                        guardedReceiver
+                    )!!
                 )
             } finally {
                 this.state.ConditionalReceiverReplacement = previousReceiver
@@ -703,7 +752,7 @@ partial class CSharpToGSharpTranslator {
             }
             return ParenthesizedExpression(
                 IfExpression(
-                    BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                    this.BuildConditionalReceiverGuard(receiver, staticallyNonNull),
                     whenNotNull,
                     DefaultValueExpression(nullableType)
                 )
@@ -712,9 +761,12 @@ partial class CSharpToGSharpTranslator {
 
         private func TranslateNonNullableConditionalIndex(
             continuation ExpressionSyntax,
-            elementBinding ElementBindingExpressionSyntax,
+            elementBinding ElementBindingExpressionSyntax?,
             receiver GExpression?
         ) GExpression? {
+            if elementBinding == nil {
+                return this.TranslateExpression(continuation)
+            }
             this.state.ConditionalElementReceivers.Add(elementBinding, receiver!!)
             try {
                 return this.TranslateExpression(continuation)
