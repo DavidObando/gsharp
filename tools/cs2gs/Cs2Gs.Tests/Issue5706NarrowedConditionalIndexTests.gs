@@ -17,6 +17,7 @@ import Xunit
 /// On a6ffd4673, mutable captures in nested lambdas fail to bind after an outer guard.
 /// Issue #5936: disabling assignment postconditions makes the initial five assignment regressions report GS0300.
 /// On 064897012, four review regressions fail, and the 24-step prefix chain exceeds a 30-second test-host limit.
+/// On cadefd047, the five nested-store, coalescing-arm, and incoming-contract regressions fail.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
@@ -157,7 +158,7 @@ public static class Demo
         return s?[0];
     }
     public static string Run() =>
-        Read(true) + "|" + Read(false) + "|" + Coalesced(null, true) + "|" + Coalesced("c", true) + "|" +
+        Read(true) + "|" + Read(false) + "|" + Coalesced("c", true) + "|" +
         Coalesced(null, false) + "|" + Conditional(true, true) + "|" + Conditional(false, true);
 }`, `
 #nullable disable

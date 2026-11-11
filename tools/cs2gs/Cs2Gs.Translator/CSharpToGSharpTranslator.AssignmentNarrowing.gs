@@ -231,14 +231,38 @@ partial class CSharpToGSharpTranslator {
                 )
             ) {
                 if this.BindsTo(assignment.Left, symbol) {
+                    if assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
+                        inherited != nil &&
+                        this.AssignmentNarrowingSurvivesToRead(
+                        symbol,
+                        inherited,
+                        assignment.Left,
+                        assignment.Left,
+                        $scope
+                    ) &&
+                        !this
+                        .AssignmentRegionInvalidatesNarrowing(
+                        symbol,
+                        assignment.Right,
+                        assignment.Right.SpanStart,
+                        assignment.Right.Span.End
+                    ) {
+                        return statement
+                    }
                     let coalescing = assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)
                     let staticProof = if coalescing {
                         this.CoalesceAssignmentResultIsStaticallyNonNull(assignment)
                     } else {
-                        !this.AssignmentHasNullableTargetTypedRhs(assignment) &&
-                            this.GSharpAssignmentRhsProvesNonNull(assignment.Right, allowPlatform: true)
+                        !this.AssignmentHasNullableTargetTypedRhs(assignment) && this.GSharpAssignmentRhsProvesNonNull(
+                            assignment.Right,
+                            allowPlatform: true
+                        )
                     }
-                    let value ExpressionSyntax = if coalescing { assignment } else { assignment.Right }
+                    let value ExpressionSyntax = if coalescing {
+                        assignment
+                    } else {
+                        assignment.Right
+                    }
                     return if staticProof &&
                         (!requireRuntimeNonNullProof || this.GSharpValueHasRuntimeNonNullProof(value)) {
                         cast[SyntaxNode](statement)
@@ -388,7 +412,9 @@ partial class CSharpToGSharpTranslator {
 
         // Chained stores complete conversions, setters, and reference-storage effects after their inner assignment.
         private func AssignmentStoreCompletesAfterProof(
-            node SyntaxNode, proof SyntaxNode, includeReferenceStorageWrites bool = false
+            node SyntaxNode,
+            proof SyntaxNode,
+            includeReferenceStorageWrites bool = false
         ) bool ->
         node is AssignmentExpressionSyntax assignment &&
             assignment
@@ -433,39 +459,42 @@ partial class CSharpToGSharpTranslator {
             if this.context.SemanticModel.GetConversion(value).IsUserDefined {
                 return false
             }
-            if this.GSharpValueHasNonNullType(value, allowPlatform) ||
-                this.GSharpNestedAssignmentProvesNonNull(value) {
+            if this.GSharpValueHasNonNullType(value, allowPlatform) || this.GSharpNestedAssignmentProvesNonNull(value) {
                 return true
             }
             // gsc's RhsArmsProveNonNil recovers coalescing postconditions, not plain assignment result types.
             let operands = if recoverNullableArms {
                 this.ComposedValueOperands(
-                    Unparenthesize(value) ?? value, includeConvertedNonNullCoalesceAssignment: true
+                    Unparenthesize(value) ?? value,
+                    includeConvertedNonNullCoalesceAssignment: true
                 )
             } else {
                 default(List[ExpressionSyntax]?)
             }
             return operands != nil && operands.Count > 0 && operands.All(
                 (operand ExpressionSyntax) -> this.GSharpAssignmentRhsProvesNonNull(
-                    operand, allowPlatform: false, recoverNullableArms: true
+                    operand,
+                    allowPlatform: false,
+                    recoverNullableArms: true
                 )
             )
         }
 
         private func GSharpNestedAssignmentProvesNonNull(value ExpressionSyntax) bool {
-            if Unparenthesize(value) is not AssignmentExpressionSyntax assigned ||
-                !assigned.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+            if Unparenthesize(value) is not AssignmentExpressionSyntax assigned || !assigned.IsKind(
+                SyntaxKind.SimpleAssignmentExpression
+            ) ||
                 this.AssignmentHasNullableTargetTypedRhs(assigned) {
                 return false
             }
             let target = this.context.GetSymbolInfo(assigned.Left).Symbol
             // Match gsc's BoundAssignmentExpression and source BoundFieldAssignmentExpression recovery.
-            let recoverable = target is ILocalSymbol or IParameterSymbol ||
-                (target is IFieldSymbol field && this.IsSourceSymbol(field) &&
-                    field.ContainingType?.IsTupleType != true)
-            return recoverable && this.GSharpAssignmentRhsProvesNonNull(
-                assigned.Right, allowPlatform: false
+            let recoverable = target is ILocalSymbol or
+                IParameterSymbol ||
+                (
+                target is IFieldSymbol field && this.IsSourceSymbol(field) && field.ContainingType?.IsTupleType != true
             )
+            return recoverable && this.GSharpAssignmentRhsProvesNonNull(assigned.Right, allowPlatform: false)
         }
 
         private func GSharpValueHasNonNullType(value ExpressionSyntax, allowPlatform bool) bool {
@@ -477,8 +506,7 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is AssignmentExpressionSyntax assigned && assigned.IsKind(
                 SyntaxKind.SimpleAssignmentExpression
             ) {
-                return (!this.IsNullableArrayElementAccess(assigned.Left) &&
-                    this.AssignmentResultHasNonNullStaticType(assigned)) ||
+                return this.AssignmentResultHasNonNullStaticType(assigned) ||
                     (allowPlatform && this.ReadsPlatformTypedImportTopLevel(assigned.Left))
             }
             if unwrapped is AssignmentExpressionSyntax coalescing && coalescing.IsKind(
@@ -502,7 +530,8 @@ partial class CSharpToGSharpTranslator {
             if unwrapped is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                 // A platform fallback gives `??` a bare result, unless a literal nil selects that fallback directly.
                 return this.GSharpValueHasNonNullType(
-                    coalesce.Right, allowPlatform || !IsNullOrSuppressedNull(coalesce.Left)
+                    coalesce.Right,
+                    allowPlatform || !IsNullOrSuppressedNull(coalesce.Left)
                 )
             }
             if this.ComposedValueOperands(unwrapped) is {} operands {
@@ -520,19 +549,25 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             if unwrapped is AssignmentExpressionSyntax assigned {
-                return (assigned.IsKind(SyntaxKind.CoalesceAssignmentExpression) &&
-                    this.GSharpValueHasRuntimeNonNullProof(assigned.Left)) ||
+                return (
+                    assigned.IsKind(SyntaxKind.CoalesceAssignmentExpression) && this.GSharpValueHasRuntimeNonNullProof(
+                        assigned.Left
+                    )
+                ) ||
                     this.GSharpValueHasRuntimeNonNullProof(assigned.Right)
             }
             if unwrapped is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                return this.GSharpValueHasRuntimeNonNullProof(coalesce.Left) ||
-                    this.GSharpValueHasRuntimeNonNullProof(coalesce.Right)
+                return this.GSharpValueHasRuntimeNonNullProof(coalesce.Left) || this.GSharpValueHasRuntimeNonNullProof(
+                    coalesce.Right
+                )
             }
-            if unwrapped is PostfixUnaryExpressionSyntax suppression &&
-                suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression) {
+            if unwrapped is PostfixUnaryExpressionSyntax suppression && suppression.IsKind(
+                SyntaxKind.SuppressNullableWarningExpression
+            ) {
                 let (targetType, targetSymbol) = this.FindNullForgivingTarget(suppression)
                 return if this.NullForgivingTargetAcceptsNil(targetType, targetSymbol) ||
-                    this.GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
+                    this
+                    .GSharpExpressionIsStaticallyNonNull(suppression.Operand) {
                     this.GSharpValueHasRuntimeNonNullProof(suppression.Operand)
                 } else {
                     !IsNullOrSuppressedNull(suppression.Operand)
@@ -543,13 +578,15 @@ partial class CSharpToGSharpTranslator {
                     (operand ExpressionSyntax) -> this.GSharpValueHasRuntimeNonNullProof(operand)
                 )
             }
-            if this.context.GetTypeInfo(unwrapped).Type is {IsValueType: true} type &&
-                IsNonNullableValueType(type) {
+            if this.context.GetTypeInfo(unwrapped).Type is {IsValueType: true} type && IsNonNullableValueType(type) {
                 return true
             }
             // A non-null contract or checked reference cast can still return nil. Conditional indexing must test it.
-            return (unwrapped is LiteralExpressionSyntax && !IsNullOrSuppressedNull(unwrapped) &&
-                !unwrapped.IsKind(SyntaxKind.DefaultLiteralExpression)) ||
+            return (
+                unwrapped is LiteralExpressionSyntax && !IsNullOrSuppressedNull(unwrapped) && !unwrapped.IsKind(
+                    SyntaxKind.DefaultLiteralExpression
+                )
+            ) ||
                 unwrapped is ObjectCreationExpressionSyntax ||
                 unwrapped is ImplicitObjectCreationExpressionSyntax ||
                 unwrapped is ArrayCreationExpressionSyntax ||

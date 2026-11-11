@@ -5286,33 +5286,24 @@ partial class CSharpToGSharpTranslator {
                     cast[GExpression](BlockExpression(statements, value))
                 }
             }
-            // Issue #3774: G# `!!` is a CHECKED assertion that THROWS on nil, not
-            // C#'s erased `!`, so an assertion here is faithful only when the
-            // `??=` expression's value genuinely cannot be nil — and its value is
-            // nil exactly when the right-hand side is. Roslyn's flow state proves
-            // that in a nullable-ENABLED compilation, and
-            // `NullableReferenceValueMayBeNull` reads the C# annotations. Neither
-            // says anything in an OBLIVIOUS compilation, where a same-project
-            // member the whole-program taint analysis promoted to `T?` still reads
-            // as non-null — so `cache ??= Make()` (C#: yields null) gained a
-            // guaranteed throw. Consult the promotion result too in that mode,
-            // which is the same "can this be nil at runtime in G#" question the
-            // rest of the bridge already asks; a literal / provably non-null RHS
-            // keeps its assertion.
-            let rightHandSideMayBeNil = this.NullableReferenceValueMayBeNull(assignment.Right) ||
-                (this.IsObliviousCompilation() && this.IsNullablePromotedValue(assignment.Right))
-            let result GExpression? = if this
+            // Static contracts can preserve nil. Keep the result type without throwing before a conditional guard.
+            var result GExpression? = value
+            if this.GSharpValueHasRuntimeNonNullProof(assignment) {
+                result = EnsureNonNullAssertion(value)
+            } else if this.CoalesceAssignmentResultIsStaticallyNonNull(assignment) &&
+                this
                 .context
                 .GetTypeInfo(assignment)
-                .Nullability
-                .FlowState == Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull ||
-                !rightHandSideMayBeNil {
-                EnsureNonNullAssertion(value)
-            } else {
-                cast[GExpression](value)
+                .Type is {IsReferenceType: true} resultType {
+                result = ConversionExpression(
+                    this.typeMapper.Map(
+                        resultType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                        this.context,
+                        assignment.GetLocation()
+                    ),
+                    value,
+                    isCheckedReferenceCast: true
+                )
             }
             return if statements.Count == 0 {
                 result

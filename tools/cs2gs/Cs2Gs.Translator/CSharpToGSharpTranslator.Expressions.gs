@@ -11742,7 +11742,7 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
-            return this.GSharpExpressionIsStaticallyNonNull(unwrapped, translated)
+            return this.GSharpAssignmentRhsProvesNonNull(unwrapped, allowPlatform: false, recoverNullableArms: true)
         }
 
         // Whether a value of `symbol`, of C# type `type`, is non-null in the emitted G#.
@@ -14694,7 +14694,9 @@ partial class CSharpToGSharpTranslator {
         private func AssignmentResultHasNonNullStaticType(
             assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
         ) bool {
-            if this.PatternLocalUsesNullableStorage(assignment.Left) {
+            if this.PatternLocalUsesNullableStorage(assignment.Left) || this.IsNullableArrayElementAccess(
+                assignment.Left
+            ) {
                 return false
             }
             let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -19317,7 +19319,8 @@ partial class CSharpToGSharpTranslator {
                         (
                             node.SpanStart >= narrowingGuard.Span.End || this.AssignmentStoreCompletesAfterProof(
                                 node,
-                                narrowingGuard
+                                narrowingGuard,
+                                includeReferenceStorageWrites: byReference
                             )
                         ) &&
                             node
@@ -20061,7 +20064,8 @@ partial class CSharpToGSharpTranslator {
                             (
                                 node.SpanStart >= effectiveStartEnd || this.AssignmentStoreCompletesAfterProof(
                                     node,
-                                    start
+                                    start,
+                                    includeReferenceStorageWrites: true
                                 )
                             ) &&
                                 node
