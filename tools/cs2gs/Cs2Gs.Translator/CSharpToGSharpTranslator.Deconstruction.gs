@@ -2161,6 +2161,12 @@ partial class CSharpToGSharpTranslator {
         private func DisambiguateAgainstMigratedProducerDeconstruct(symbol ISymbol?, allocated string?) string? {
             if symbol == nil ||
                 allocated == nil ||
+                (
+                !allocated.StartsWith("deconstruct", StringComparison.OrdinalIgnoreCase) && !symbol.Name.Contains(
+                    "deconstruct",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ||
                 symbol.ContainingType is not{} initialOwner ||
                 !(
                 symbol is IFieldSymbol || symbol is IPropertySymbol || symbol is IMethodSymbol || symbol is IEventSymbol

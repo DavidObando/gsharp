@@ -12,6 +12,7 @@ import System
 import System.Collections.Generic
 import System.Collections.Immutable
 import System.Linq
+import System.Runtime.CompilerServices
 
 /// Carries the bound Roslyn state a translation pass needs and accumulates the
 /// structured (cref:TranslationDiagnostic) records the later mapping
@@ -91,6 +92,7 @@ class TranslationContext {
         this.rootCompilation = this.Compilation
         this.SemanticModel = semanticModel ?? throw ArgumentNullException("semanticModel")
         this.modelsByTree[this.SemanticModel.SyntaxTree] = this.SemanticModel
+        CacheSemanticModel(this.Compilation, this.SemanticModel)
         this.FilePath = filePath
         this.siblingCompilations = siblingCompilations
         this.repositoryCompilations = repositoryCompilations
@@ -176,7 +178,7 @@ class TranslationContext {
                     }
                 }
             }
-            model = ownerCompilation.GetSemanticModel(tree)
+            model = GetSemanticModel(ownerCompilation, tree)
             this.modelsByTree[tree] = model
         }
         let previousCompilation = this.Compilation
@@ -331,6 +333,34 @@ class TranslationContext {
 
         shared {
             let Instance NoOpScope = NoOpScope()
+        }
+    }
+
+    shared {
+        private let SemanticModelsByCompilation ConditionalWeakTable[
+            Compilation,
+            Dictionary[SyntaxTree, SemanticModel]
+        ] = ConditionalWeakTable[Compilation, Dictionary[SyntaxTree, SemanticModel]]()
+
+        internal func GetSemanticModel(compilation Compilation, tree SyntaxTree) SemanticModel {
+            let models = SemanticModelsByCompilation.GetOrCreateValue(compilation)
+            lock models {
+                if !models.TryGetValue(tree, out var model) {
+                    model = compilation.GetSemanticModel(tree)
+                    models[tree] = model
+                }
+                return model
+            }
+        }
+
+        internal func CacheSemanticModel(compilation Compilation, model SemanticModel) {
+            if model.IgnoresAccessibility || !object.ReferenceEquals(model.Compilation, compilation) {
+                return
+            }
+            let models = SemanticModelsByCompilation.GetOrCreateValue(compilation)
+            lock models {
+                models.TryAdd(model.SyntaxTree, model)
+            }
         }
     }
 }

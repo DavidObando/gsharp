@@ -57,7 +57,7 @@ internal class ObliviousSignatureGroups {
     init(compilation Compilation) {
         let visited = HashSet[ISymbol](SymbolEqualityComparer.Default)
         for tree in compilation.SyntaxTrees {
-            let model = compilation.GetSemanticModel(tree)
+            let model = TranslationContext.GetSemanticModel(compilation, tree)
             for declaration in tree.GetRoot().DescendantNodes().OfType[BaseTypeDeclarationSyntax]() {
                 if model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol type || !visited.Add(type) {
                     continue
@@ -2188,7 +2188,7 @@ partial class CSharpToGSharpTranslator {
                 ]
             ](System.StringComparer.Ordinal)
             for tree in compilation.SyntaxTrees {
-                let model = compilation.GetSemanticModel(tree)
+                let model = TranslationContext.GetSemanticModel(compilation, tree)
                 for node in tree.GetRoot().DescendantNodes() {
                     if node is AnonymousObjectCreationExpressionSyntax anonymousCreation && model.GetTypeInfo(
                         anonymousCreation
