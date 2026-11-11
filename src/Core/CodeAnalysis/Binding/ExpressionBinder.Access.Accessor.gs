@@ -3939,8 +3939,15 @@ internal partial class ExpressionBinder {
 
     internal func BindUserTypeStaticCall(
         structSym StructSymbol,
-        ce CallExpressionSyntax
-    ) BoundExpression -> BindUserTypeStaticCall(cast[TypeSymbol](structSym), ce)
+        ce CallExpressionSyntax,
+        preboundArguments ImmutableArray[BoundExpression] = default(ImmutableArray[BoundExpression]),
+        preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot = default(StatementBinder.NarrowingBindSnapshot)
+    ) BoundExpression -> BindUserTypeStaticCall(
+        cast[TypeSymbol](structSym),
+        ce,
+        preboundArguments,
+        preArgumentsNarrowing
+    )
 
     /// Issue #1433: resolves `TypeName.method(args)` for a static
     /// (`shared`) method declared on a user struct/class OR interface. The
@@ -3954,10 +3961,15 @@ internal partial class ExpressionBinder {
     /// #1030 parenting extended to methods) so the call is parented at the
     /// correct construction `TypeSpec`. A non-generic owner of either kind
     /// emits a bare `MethodDef` token.
-    internal func BindUserTypeStaticCall(ownerType TypeSymbol, ce CallExpressionSyntax) BoundExpression {
+    internal func BindUserTypeStaticCall(
+        ownerType TypeSymbol,
+        ce CallExpressionSyntax,
+        preboundArguments ImmutableArray[BoundExpression] = default(ImmutableArray[BoundExpression]),
+        preArgumentsNarrowing StatementBinder.NarrowingBindSnapshot = default(StatementBinder.NarrowingBindSnapshot)
+    ) BoundExpression {
         let frame = CallCandidateRecorder.Begin(ce, ownerType)
         try {
-            var bound = BindUserTypeStaticCallCore(ownerType, ce)
+            var bound = BindUserTypeStaticCallCore(ownerType, ce, preboundArguments, preArgumentsNarrowing)
             if verifyCallArgumentsAfterConversions != nil {
                 bound = verifyCallArgumentsAfterConversions!!(
                     ce.Arguments,
@@ -3973,14 +3985,23 @@ internal partial class ExpressionBinder {
         }
     }
 
-    private func BindUserTypeStaticCallCore(ownerType TypeSymbol, ce CallExpressionSyntax) BoundExpression {
+    private func BindUserTypeStaticCallCore(
+        ownerType TypeSymbol,
+        ce CallExpressionSyntax,
+        preboundArguments ImmutableArray[BoundExpression] = default(ImmutableArray[BoundExpression]),
+        preboundNarrowing StatementBinder.NarrowingBindSnapshot = default(StatementBinder.NarrowingBindSnapshot)
+    ) BoundExpression {
         let structSym StructSymbol? = ownerType as StructSymbol
         let ifaceSym = ownerType as InterfaceSymbol
         let methodName = ce.Identifier.ValueText
         if !overloads.TryAnalyzeCallArgumentLayout(ce.Arguments, out _, out var argumentNames) {
             return BoundErrorExpression(nil)
         }
-        let preArgumentsNarrowing = CaptureNarrowingBindSnapshot()
+        let preArgumentsNarrowing = if preboundArguments.IsDefault {
+            CaptureNarrowingBindSnapshot()
+        } else {
+            preboundNarrowing
+        }
         let preAppliedCallableProperty = ApplyPreArgumentsCallablePropertyEffects(
             receiver: nil,
             ownerType,
@@ -3996,11 +4017,14 @@ internal partial class ExpressionBinder {
             for argument in ce.Arguments {
                 let inner = OverloadResolver.UnwrapNamedArgumentValue(argument)
                 var boundArgument BoundExpression? = nil
+                if !preboundArguments.IsDefault {
+                    boundArgument = preboundArguments[staticArgIndex]
+                }
                 let refArgument RefArgumentExpressionSyntax? = inner as RefArgumentExpressionSyntax
-                if refArgument != nil {
+                if boundArgument == nil && refArgument != nil {
                     boundArgument = BindRefArgumentExpression(refArgument, parameter: nil)
                 }
-                if boundArgument == nil && IsUntypedArrowLambda(inner) {
+                if IsUntypedArrowLambda(inner) && (boundArgument == nil || boundArgument is BoundErrorExpression) {
                     (
                         (
                             if deferredStaticLambdaIndices == nil {
@@ -4015,7 +4039,9 @@ internal partial class ExpressionBinder {
                 if boundArgument == nil {
                     boundArgument = BindArgumentDeferringBranchy(inner)
                 }
-                ApplySubExpressionNarrowingEffects(inner, boundArgument)
+                if preboundArguments.IsDefault {
+                    ApplySubExpressionNarrowingEffects(inner, boundArgument)
+                }
                 boundArguments.Add(boundArgument)
                 staticArgIndex++
             }
