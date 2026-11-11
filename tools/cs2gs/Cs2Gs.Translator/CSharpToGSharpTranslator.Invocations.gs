@@ -92,10 +92,6 @@ partial class CSharpToGSharpTranslator {
             invocation InvocationExpressionSyntax,
             snapshotDelegateTarget bool = false
         ) GExpression? {
-            this.ReportMetadataRecordDeconstruction(
-                this.context.GetSymbolInfo(invocation).Symbol as IMethodSymbol,
-                invocation
-            )
             if (invocation.Expression is IdentifierNameSyntax and {Identifier: {ValueText: "nameof"}}) &&
                 this
                 .context
@@ -2804,10 +2800,32 @@ partial class CSharpToGSharpTranslator {
                     this.EmittedName(method, method!!.Name)
                 )
             }
+            if expression is IdentifierNameSyntax identifier &&
+                !method!!.IsStatic &&
+                method!!.MethodKind == MethodKind
+                .Ordinary {
+                return MemberAccessExpression(
+                    ThisExpression(),
+                    this.EmittedName(method, identifier.Identifier.ValueText)
+                )
+            }
             if expression is MemberAccessExpressionSyntax member &&
                 !method!!.IsStatic &&
                 !this
                 .TryGetStaticExtensionHelper(method, out _, out _) {
+                if member.Expression is BaseExpressionSyntax {
+                    if method!!.Name == "Deconstruct" && this.TryGetImportedBaseDeconstructHelperName(
+                        member,
+                        method!!,
+                        out var baseHelperName
+                    ) {
+                        return MemberAccessExpression(ThisExpression(), baseHelperName)
+                    }
+                    return MemberAccessExpression(
+                        IdentifierExpression("base"),
+                        this.EmittedName(method, member.Name.Identifier.ValueText)
+                    )
+                }
                 let receiver GExpression? = this.CaptureMethodGroupReceiver(
                     this.TranslateReceiverWithNullForgiveness(member.Expression),
                     member.Expression
@@ -3075,7 +3093,10 @@ partial class CSharpToGSharpTranslator {
                 // constructor argument list maps to the canonical G# struct
                 // literal `T{Field: value, ...}` (spec §Struct literals; ADR-0115
                 // §B.11).
-                if !hasCtorArgs &&
+                if !hasCtorArgs && !this.InitializerAssignsImportedBaseField(
+                    initializer,
+                    typeSymbol as INamedTypeSymbol
+                ) &&
                     (
                     typeSymbol is ITypeParameterSymbol ||
                         (
@@ -3126,6 +3147,35 @@ partial class CSharpToGSharpTranslator {
 
         private func InvokesParameterlessConstructor(creationNode BaseObjectCreationExpressionSyntax) bool {
             return (this.context.GetSymbolInfo(creationNode).Symbol is IMethodSymbol and {Parameters: {Length: 0}})
+        }
+
+        private func InitializerAssignsImportedBaseField(
+            initializer InitializerExpressionSyntax,
+            constructedType INamedTypeSymbol?
+        ) bool {
+            if constructedType == nil || constructedType.DeclaringSyntaxReferences.IsDefaultOrEmpty {
+                return false
+            }
+            for element in initializer.Expressions {
+                if element is Microsoft
+                    .CodeAnalysis
+                    .CSharp
+                    .Syntax
+                    .AssignmentExpressionSyntax assignment &&
+                    this
+                    .context
+                    .GetSymbolInfo(assignment.Left)
+                    .Symbol is IFieldSymbol field &&
+                    field
+                    .DeclaringSyntaxReferences
+                    .IsDefaultOrEmpty &&
+                    !SymbolEqualityComparer
+                    .Default
+                    .Equals(field.ContainingType.OriginalDefinition, constructedType.OriginalDefinition) {
+                    return true
+                }
+            }
+            return false
         }
 
         private func MaterializeOmittedConstructorArguments(

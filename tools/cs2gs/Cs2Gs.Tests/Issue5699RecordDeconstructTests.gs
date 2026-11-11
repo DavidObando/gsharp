@@ -10,15 +10,22 @@ import System.Diagnostics
 import System.IO
 import System.Linq
 import System.Reflection
+import System.Runtime.Loader
 import Xunit
 
 class Issue5699RecordDeconstructTests {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func BroaderSourceExtensions_ReportGapForTheActualRecordReceiver(forEach bool) {
-        let source = (`
-namespace Broader {
+    func BroaderSourceExtensions_InvokeSelectedOverloadForTheActualRecordReceiver(forEach bool) {
+        let statement = if forEach {
+            `int x = 0, y = 0, z = 0;
+            foreach (var (a, b, c) in new[] { r }) { x = a; y = b; z = c; }`
+        } else {
+            "var (x, y, z) = r;"
+        }
+        Verify((`
+namespace RecordDeconstruction {
     public record R {
         public int X = 2, Y = 3, Z = 4;
         public void Deconstruct(out int x, out int y) { x = 30; y = 2; }
@@ -29,32 +36,15 @@ namespace Broader {
         }
     }
     public static class Probe {
-        public static void Run() {
+        public static string Run() {
             var r = new R();
             STATEMENT
+            var pat = r is R(70, 80, 90);
+            var sw = r switch { R(70, 80, 90) => 1, _ => 0 };
+            return $"{x},{y},{z},{pat},{sw}";
         }
     }
-}`).Replace(
-            "STATEMENT",
-            if forEach {
-                "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
-            } else {
-                "var (x, y, z) = r;"
-            }
-        )
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Source.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let oracle = MemoryStream()
-        Assert.True(project.Compilation.Emit(oracle).Success)
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("extension Deconstruct", gap.Message)
-        Assert.Equal("Source.cs", gap.Location!!.SourceTree!!.FilePath)
+}`).Replace("STATEMENT", statement))
     }
 
     @Theory
@@ -63,87 +53,86 @@ namespace Broader {
     @InlineData("broad extension")
     @InlineData("broad extension foreach")
     @InlineData("interface")
+    @InlineData("interface deconstruct")
     @InlineData("unqualified")
-    func MetadataContractsAndExtensions_ReportConsumerBridgeGaps(shape string) {
+    func MetadataContractsAndExtensions_PreserveDispatchAndSelectedOverloads(shape string) {
         const producer = `
 namespace Producer {
     public interface IParts { void Deconstruct(out int x, out int y); }
     public record R : IParts {
+        public int deconstruct;
         public int X = 2, Y = 3, Z = 4;
-        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public virtual void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
 }`
-        let consumer = if shape == "unqualified" {
-            `
-namespace Consumer {
-    public record Child : Producer.R {
+        if shape == "unqualified" {
+            const middle = `
+namespace Middle {
+    public record Mid : Producer.R {
+        public int deconstruct2 = 9;
+        public int deconstruct3 = 11;
+        public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
+    }
+}`
+            const thirdConsumer = `
+namespace RecordDeconstruction {
+    public record Child : Middle.Mid {
         public delegate void Parts(out int x, out int y);
+        public override void Deconstruct(out int x, out int y) { x = Y * 10 + deconstruct2; y = X; }
         public Parts Save() => Deconstruct;
     }
+    public class ConsumerExplicit : Producer.IParts {
+        void Producer.IParts.Deconstruct(out int x, out int y) { x = 91; y = 92; }
+    }
+    public static class Probe {
+        public static string Run() {
+            var child = new Child();
+            var saved = child.Save();
+            saved(out var x, out var y);
+            Middle.Mid mid = child;
+            var (mx, my) = mid;
+            Producer.IParts expConsumer = new ConsumerExplicit();
+            var (ex, ey) = expConsumer;
+            return $"{x},{y},{mx},{my},{ex},{ey},{mid.deconstruct2}";
+        }
+    }
 }`
-        } else {
-            (`
-namespace Consumer {
+            VerifyThreeMigratedCompilations(producer, middle, thirdConsumer)
+            return
+        }
+        let consumer = (`
+namespace RecordDeconstruction {
     public static class Extensions {
         public static void Deconstruct(this RECEIVER r, out int x, out int y, out int z) {
             x = 70; y = 80; z = 90;
         }
     }
     public static class Probe {
-        public static void Run() {
+        public static string Run() {
             var r = new Producer.R();
             STATEMENT
         }
     }
 }`).Replace(
-                "STATEMENT",
-                switch shape {
-                    case "extension" or "broad extension": "var (x, y, z) = r;"
-                    case "extension foreach" or "broad extension foreach":
-                    "foreach (var (x, y, z) in new[] { r }) { System.Console.WriteLine(x); }"
-                    default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y);"
-                }
-            )
-                .Replace(
-                "RECEIVER",
-                if shape.StartsWith("broad", StringComparison.Ordinal) {
-                    "object"
-                } else {
-                    "Producer.R"
-                }
-            )
-        }
-        let project = CSharpProjectLoader.LoadInMemory(
-            [](string, string){("Producer.cs", producer)},
-            assemblyName: "Producer" + Guid.NewGuid().ToString("N")
+            "STATEMENT",
+            switch shape {
+                case "extension" or "broad extension": "var (x, y, z) = r; return $\"{x},{y},{z}\";"
+                case "extension foreach" or "broad extension foreach":
+                "int x = 0, y = 0, z = 0; foreach (var (a, b, c) in new[] { r }) { x = a; y = b; z = c; } return $\"{x},{y},{z}\";"
+                case "interface deconstruct":
+                "Producer.IParts parts = r; var (x, y) = parts; return $\"{x},{y}\";"
+                default: "Producer.IParts parts = r; parts.Deconstruct(out var x, out var y); return $\"{x},{y}\";"
+            }
         )
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(project.Compilation.Emit(image).Success)
-        let input = CSharpProjectLoader.LoadInMemory(
-            [](string, string){("Consumer.cs", consumer)},
-            CSharpProjectLoader.RuntimeReferences().Append(MetadataReference.CreateFromImage(image.ToArray())).ToArray()
+            .Replace(
+            "RECEIVER",
+            if shape.StartsWith("broad", StringComparison.Ordinal) {
+                "object"
+            } else {
+                "Producer.R"
+            }
         )
-        Assert.True(input.BoundWithoutErrors, string.Join("\n", input.ErrorDiagnostics))
-        using let oracle = MemoryStream()
-        Assert.True(input.Compilation.Emit(oracle).Success)
-        let document = Assert.Single(input.Documents)
-        let context = TranslationContext(
-            input.Compilation,
-            document.SemanticModel,
-            document.FilePath,
-            repositoryCompilations: []Microsoft
-                .CodeAnalysis
-                .CSharp
-                .CSharpCompilation{project.Compilation, input.Compilation}
-        )
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("migrated producer", gap.Message)
-        Assert.Equal("Consumer.cs", gap.Location!!.SourceTree!!.FilePath)
+        VerifyMigratedProducerAndConsumer(producer, consumer)
     }
 
     @Theory
@@ -260,77 +249,46 @@ namespace RecordDeconstruction {
     @InlineData("pattern")
     @InlineData("switch pattern")
     @InlineData("method group")
-    func MetadataRecursiveAndForEachConsumers_ReportLocatedGaps(shape string) {
-        let producer = CSharpProjectLoader.LoadInMemory([](string, string){("Producer.cs", `
+    func MetadataRecursiveAndForEachConsumers_PreserveMigratedProducerDeconstruct(shape string) {
+        const producer = `
 namespace Producer {
     public record struct R {
         public int X, Y;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
-}`)}, assemblyName: "Producer" + Guid.NewGuid().ToString("N"))
-        Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(producer.Compilation.Emit(image).Success)
-        let statement = switch shape {
-            case "foreach": "foreach (var (x, y) in new[] { r }) { System.Console.WriteLine(x + y); }"
-            case "await foreach": "await foreach (var (x, y) in Values(r)) { System.Console.WriteLine(x + y); }"
-            case "nested": "var ((x, y), tag) = (r, 1);"
-            case "pattern": "if (r is Producer.R(30, 2)) return \"matched\";"
-            case "switch pattern": "return r switch { Producer.R(30, 2) => \"matched\", _ => \"\" };"
-            case "method group": "Read read = r.Deconstruct; read(out var x, out var y);"
-            default: "foreach (var ((x, y), tag) in new[] { (r, 1) }) { System.Console.WriteLine(x + y + tag); }"
+}`
+        let statement = if shape == "foreach" {
+            "var total = 0; foreach (var (x, y) in new[] { r }) { total += x + y; } return total.ToString();"
+        } else if shape == "await foreach" {
+            "var total = 0; await foreach (var (x, y) in Values(r)) { total += x + y; } return total.ToString();"
+        } else if shape == "nested" {
+            "var ((x, y), tag) = (r, 1); return $\"{x},{y},{tag}\";"
+        } else if shape == "pattern" {
+            "if (r is Producer.R(30, 2)) return \"matched\"; return \"\";"
+        } else if shape == "switch pattern" {
+            "return r switch { Producer.R(30, 2) => \"matched\", _ => \"\" };"
+        } else if shape == "method group" {
+            "Read read = r.Deconstruct; read(out var x, out var y); return $\"{x},{y}\";"
+        } else {
+            "var total = 0; foreach (var ((x, y), tag) in new[] { (r, 1) }) { total += x + y + tag; } return total.ToString();"
         }
-        let source = (`
+        let consumer = (`
 namespace RecordDeconstruction {
     public static class Probe {
         public delegate void Read(out int x, out int y);
-        public static async System.Threading.Tasks.Task<string> Run() {
+        public static async System.Threading.Tasks.Task<string> Step() {
             var r = new Producer.R { X = 2, Y = 3 };
+            await System.Threading.Tasks.Task.CompletedTask;
             STATEMENT
-            return "";
         }
+        public static string Run() => Step().GetAwaiter().GetResult();
         public static async System.Collections.Generic.IAsyncEnumerable<Producer.R> Values(Producer.R r) {
             yield return r;
             await System.Threading.Tasks.Task.CompletedTask;
         }
     }
 }`).Replace("STATEMENT", statement)
-        let consumer = CSharpProjectLoader.LoadInMemory(
-            [](string, string){("Consumer.cs", source)},
-            CSharpProjectLoader
-                .RuntimeReferences()
-                .Append(MetadataReference.CreateFromImage(image.ToArray()))
-                .ToArray(),
-            assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
-        )
-        Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
-        using let baseline = MemoryStream()
-        Assert.True(consumer.Compilation.Emit(baseline).Success)
-        let document = Assert.Single(consumer.Documents)
-        let context = TranslationContext(
-            consumer.Compilation,
-            document.SemanticModel,
-            document.FilePath,
-            repositoryCompilations: []Microsoft
-                .CodeAnalysis
-                .CSharp
-                .CSharpCompilation{producer.Compilation, consumer.Compilation}
-        )
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("migrated producer", gap.Message)
-        let location = gap.Location!!
-        Assert.Equal("Consumer.cs", location.SourceTree!!.FilePath)
-        let site = switch shape {
-            case "nested" or "nested foreach": "(x, y)"
-            case "pattern" or "switch pattern": "Producer.R(30, 2)"
-            case "method group": "r.Deconstruct"
-            default: shape
-        }
-        Assert.Equal(source.IndexOf(site, StringComparison.Ordinal), location.SourceSpan.Start)
+        VerifyMigratedProducerAndConsumer(producer, consumer)
     }
 
     @Theory
@@ -404,18 +362,15 @@ namespace RecordDeconstruction {
     @InlineData("record")
     @InlineData("record class")
     @InlineData("record struct")
-    func MetadataConsumersOfMigratedRecords_ReportGapAtEachAffectedUse(kind string) {
-        let producer = CSharpProjectLoader.LoadInMemory([](string, string){("Producer.cs", (`
+    func MetadataConsumersOfMigratedRecords_UseProducerRenamedAndAdaptedMembers(kind string) {
+        let producer = (`
 namespace Producer {
     public KIND R {
         public int X, Y;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
-}`).Replace("KIND", kind))}, assemblyName: "Producer" + Guid.NewGuid().ToString("N"))
-        Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(producer.Compilation.Emit(image).Success)
-        const source = `
+}`).Replace("KIND", kind)
+        const consumer = `
 namespace RecordDeconstruction {
     public static class Probe {
         public static string Run() {
@@ -426,93 +381,131 @@ namespace RecordDeconstruction {
         }
     }
 }`
-        let references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromImage(image.ToArray()))
-            .ToArray()
-        let consumer = CSharpProjectLoader.LoadInMemory(
-            [](string, string){("Consumer.cs", source)},
-            references,
-            assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
-        )
-        Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
-        using let baseline = MemoryStream()
-        Assert.True(consumer.Compilation.Emit(baseline).Success)
-        let document = Assert.Single(consumer.Documents)
-        let context = TranslationContext(
-            consumer.Compilation,
-            document.SemanticModel,
-            document.FilePath,
-            repositoryCompilations: []Microsoft
-                .CodeAnalysis
-                .CSharp
-                .CSharpCompilation{producer.Compilation, consumer.Compilation}
-        )
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gaps = context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported).ToArray()
-        Assert.Equal(2, gaps.Length)
-        Assert.All(
-            gaps,
-            (gap TranslationDiagnostic) -> {
-                Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-                Assert.Contains("migrated producer", gap.Message)
-                Assert.Equal("Consumer.cs", gap.Location!!.SourceTree!!.FilePath)
-            }
-        )
+        VerifyMigratedProducerAndConsumer(producer, consumer)
     }
 
     @Theory
-    @InlineData("record", false)
-    @InlineData("record", true)
-    @InlineData("record class", false)
-    @InlineData("record class", true)
-    @InlineData("record struct", false)
-    @InlineData("record struct", true)
-    func PointerOutputs_ReportDeclarationGapWithoutEmittingAdapters(kind string, scalar bool) {
-        let source = (`
+    @InlineData("record", false, false)
+    @InlineData("record", true, false)
+    @InlineData("record class", false, false)
+    @InlineData("record class", true, false)
+    @InlineData("record struct", false, false)
+    @InlineData("record struct", true, false)
+    @InlineData("record", false, true)
+    @InlineData("record", true, true)
+    @InlineData("record struct", false, true)
+    @InlineData("record struct", true, true)
+    func PointerAndFunctionPointerOutputs_EmitAdaptersAndPreserveConsumers(
+        kind string,
+        scalar bool,
+        functionPointer bool
+    ) {
+        let source = if functionPointer {
+            (`
 namespace RecordDeconstruction {
     public KIND R {
+        public static int Double(int v) => v * 2;
         public unsafe void Deconstruct(PARAMETERS) { BODY }
     }
     public static class Probe {
-        public static string Run() { return new R().ToString(); }
+        public static unsafe string Run() {
+            var r = new R();
+            CONSUMER
+        }
     }
 }`).Replace(
-            "KIND",
-            kind
-        ).Replace(
-            "PARAMETERS",
-            if scalar {
-                "out int* p"
-            } else {
-                "out int* p, out int n"
+                "KIND",
+                kind
+            ).Replace(
+                "PARAMETERS",
+                if scalar {
+                    "out delegate*<int, int> fn"
+                } else {
+                    "out delegate*<int, int> fn, out int n"
+                }
+            ).Replace(
+                "BODY",
+                if scalar {
+                    "fn = &Double;"
+                } else {
+                    "fn = &Double; n = 5;"
+                }
+            ).Replace(
+                "CONSUMER",
+                if scalar {
+                    "var pat = r is R(var f) ? f(7) : -1; r.Deconstruct(out var direct); return $\"{pat},{direct(3)}\";"
+                } else {
+                    `var (fn, n) = r;
+                    delegate*<int, int> a = null;
+                    int b = 0;
+                    (a, b) = r;
+                    var total = 0;
+                    foreach (var (qf, qn) in new[] { r }) total += qf(qn);
+                    var pat = r is R(var pf, var pn) ? pf(pn) : -1;
+                    r.Deconstruct(out var df, out var dn);
+                    return $"{fn(n)},{a(b)},{total},{pat},{df(dn)}";`
+                }
+            )
+        } else {
+            (`
+namespace RecordDeconstruction {
+    public KIND R {
+        public static int[] Cells = new[] { 42 };
+        public unsafe void Deconstruct(PARAMETERS) { BODY }
+    }
+    public static class PtrExt {
+        public static unsafe void Deconstruct(this object value, out int* p, out int n, out int tag) {
+            fixed (int* ptr = R.Cells) p = ptr;
+            n = 5;
+            tag = 7;
+        }
+    }
+    public static class Probe {
+        public static unsafe string Run() {
+            fixed (int* cell = R.Cells) {
+                var r = new R();
+                CONSUMER
             }
-        ).Replace(
-            "BODY",
-            if scalar {
-                "p = null;"
-            } else {
-                "p = null; n = 1;"
-            }
-        )
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(project.Compilation.Emit(image).Success)
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("pointer outputs", gap.Message)
-        Assert.Equal(
-            source.IndexOf("public unsafe void Deconstruct", StringComparison.Ordinal),
-            gap.Location!!.SourceSpan.Start
-        )
-        Assert.DoesNotContain("func deconstructTuple", printed)
-        Assert.DoesNotContain("func deconstructValue", printed)
+        }
+    }
+}`).Replace(
+                "KIND",
+                kind
+            ).Replace(
+                "PARAMETERS",
+                if scalar {
+                    "out int* p"
+                } else {
+                    "out int* p, out int n"
+                }
+            ).Replace(
+                "BODY",
+                if scalar {
+                    "fixed (int* ptr = Cells) p = ptr;"
+                } else {
+                    "fixed (int* ptr = Cells) p = ptr; n = 5;"
+                }
+            ).Replace(
+                "CONSUMER",
+                if scalar {
+                    "var pat = r is R(var p) ? *p : -1; r.Deconstruct(out var direct); return $\"{pat},{*direct}\";"
+                } else {
+                    `var (p, n) = r;
+                    var (ep, en, etag) = r;
+                    int* a = null;
+                    int b = 0;
+                    int t = 0;
+                    (a, b) = r;
+                    (a, b, t) = r;
+                    var total = 0;
+                    foreach (var (qp, qn) in new[] { r }) total += *qp + qn;
+                    var pat = r is R(var pp, var pn) ? *pp + pn : -1;
+                    r.Deconstruct(out var dp, out var dn);
+                    return $"{*p},{n},{*ep},{en},{etag},{*a},{b},{t},{total},{pat},{*dp},{dn}";`
+                }
+            )
+        }
+        Verify(source)
     }
 
     @Theory
@@ -596,53 +589,94 @@ namespace RecordDeconstruction {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func MixedPositionalPropertyDecision_ReportsGapInsteadOfChangingRoslynEvaluation(separateClauses bool) {
-        let source = (`
+    func MixedPositionalPropertyDecision_PreservesRoslynReceiverAndOutputEvaluation(separateClauses bool) {
+        Verify((`
 #nullable enable
 namespace RecordDeconstruction {
     public record R {
-            public int Value = 3;
-            public static System.Action? Hook;
-            public void Deconstruct(out int x, out int y) { x = 1; y = 2; Hook?.Invoke(); }
+        public int Value = 3;
+        public static System.Action? Hook;
+        public int DynamicValue {
+            get {
+                Hook?.Invoke();
+                return 1;
+            }
+        }
+        public void Deconstruct(out int x, out int y) { x = 1; y = 2; Hook?.Invoke(); }
+    }
+    public record Sub : R {
+        public int Extra = 9;
+    }
+    public record struct RS {
+        public int Value;
+        public RS() { Value = 3; }
+        public void Deconstruct(out int x, out int y) { x = 1; y = 2; R.Hook?.Invoke(); }
+    }
+    public class Holder {
+        public R Child = new R();
+        public int Value = 3;
     }
     public static class Probe {
-            public static string Run() {
-                R? r = new R();
-                R.Hook = () => r = null;
-                try { return (r is PATTERN).ToString(); }
-                catch (System.NullReferenceException) { return "threw"; }
-            }
+        public static string Run() {
+            R? r = new R();
+            R.Hook = () => r = null;
+            string first;
+            try { first = (r is PATTERN).ToString(); }
+            catch (System.NullReferenceException) { first = "threw"; }
+            R? rSingle = new R();
+            R.Hook = () => rSingle = null;
+            string singleOutcome;
+            try { singleOutcome = (rSingle is R(1, _) { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { singleOutcome = "threw"; }
+            Holder? h = new Holder();
+            R.Hook = () => h = null;
+            string nestedHolderOutcome;
+            try { nestedHolderOutcome = (h is Holder { Child: R(0, _) } or Holder { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { nestedHolderOutcome = "threw"; }
+            R? propFirst = new R();
+            R.Hook = () => propFirst = null;
+            string propFirstOutcome;
+            try { propFirstOutcome = (propFirst is R { DynamicValue: 0 } or R(1, _)).ToString(); }
+            catch (System.NullReferenceException) { propFirstOutcome = "threw"; }
+            Sub? subCleared = new Sub();
+            R.Hook = () => subCleared = null;
+            string subClearedOutcome;
+            try { subClearedOutcome = (subCleared is R(1, _) { Value: 3 }).ToString(); }
+            catch (System.NullReferenceException) { subClearedOutcome = "threw"; }
+            RS? nullableStructSingle = new RS();
+            R.Hook = () => nullableStructSingle = null;
+            var nullableStructSingleMatch = nullableStructSingle is RS(1, _) { Value: 3 };
+            RS? nullableStructMulti = new RS();
+            R.Hook = () => nullableStructMulti = null;
+            var nullableStructMultiMatch = nullableStructMulti is RS(0, _) or RS(1, _) { Value: 3 };
+            RS? nullableStructUntyped = new RS();
+            R.Hook = () => nullableStructUntyped = null;
+            var nullableStructUntypedMatch = nullableStructUntyped is { Value: 0 } or RS(1, _) { Value: 3 };
+            object? boxedCleared = new R();
+            R.Hook = () => boxedCleared = null;
+            var boxedClearedMatch = boxedCleared is PATTERN;
+            object? boxedSingleCleared = new R();
+            R.Hook = () => boxedSingleCleared = null;
+            var boxedSingleClearedMatch = boxedSingleCleared is R(1, _) { Value: 3 };
+            R.Hook = null;
+            Sub? liveSub = new Sub();
+            var liveSubMatch = liveSub is R(1, _) { Value: 3 };
+            R plain = new R();
+            var subtypeMiss = plain is R(0, _) or Sub { Extra: 9 };
+            var inheritedSubtypeMiss = plain is R(0, _) or Sub(1, _) { Extra: 9 };
+            object boxed = new R();
+            var boxedMatch = boxed is PATTERN;
+            return $"{first},{singleOutcome},{nestedHolderOutcome},{propFirstOutcome},{subClearedOutcome},{nullableStructSingleMatch},{nullableStructMultiMatch},{nullableStructUntypedMatch},{liveSubMatch},{boxedClearedMatch},{boxedSingleClearedMatch},{subtypeMiss},{inheritedSubtypeMiss},{boxedMatch}";
+        }
     }
 }`).Replace(
-            "PATTERN",
-            if separateClauses {
-                "R(0, _) or R { Value: 3 }"
-            } else {
-                "R(0, _) or R(1, _) { Value: 3 }"
-            }
-        )
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(project.Compilation.WithAssemblyName("Mixed" + Guid.NewGuid().ToString("N")).Emit(image).Success)
-        Assert.Equal(
-            "threw",
-            cast[string](
-                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
-                    nil,
-                    nil
-                )
-            )
-        )
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("positional and property", gap.Message)
-        Assert.Equal(source.IndexOf("r is R(0, _)", StringComparison.Ordinal), gap.Location!!.SourceSpan.Start)
+                "PATTERN",
+                if separateClauses {
+                    "R(0, _) or R { Value: 3 }"
+                } else {
+                    "R(0, _) or R(1, _) { Value: 3 }"
+                }
+            ))
     }
 
     @Fact
@@ -852,29 +886,107 @@ namespace RecordDeconstruction {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func ImportedDeconstructContracts_ReportDeclarationGapWithoutRenaming(overrideBase bool) {
-        let external = CSharpProjectLoader.LoadInMemory([](string, string){("External.cs", `
+    func ImportedDeconstructContracts_EmitDispatchPreservingBridges(overrideBase bool) {
+        const external = `
 namespace External {
-    public interface IParts { void Deconstruct(out int x, out int y); }
+    public interface IParts {
+        int Count { get; }
+        int Reset();
+        int Deconstruct(int scale);
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IStaticParts {
+        static abstract int Deconstruct(int scale);
+    }
+    public interface IA {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IB {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IHasCount {
+        int Count { get; }
+    }
+    public interface IDerivedParts : IHasCount {
+        void Deconstruct(out int x, out int y);
+    }
     public record Base {
         public int X, Y;
+        public Base() { }
+        public Base(ref int seed) { X = ++seed; Y = seed + 1; }
         public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
+        protected virtual void Deconstruct(out int x, out int y, out int z) { x = X; y = Y; z = X + Y; }
+        public string RunProtected() {
+            Deconstruct(out var x, out var y, out var z);
+            return $"{x},{y},{z}";
+        }
     }
-}`)}, assemblyName: "External" + Guid.NewGuid().ToString("N"))
-        Assert.True(external.BoundWithoutErrors, string.Join("\n", external.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(external.Compilation.Emit(image).Success)
-        let source = (`
+    public abstract record AbstractExternal {
+        protected abstract void Deconstruct(out int x, out int y);
+    }
+    public unsafe record ExtPtr {
+        public static int[] Cells = new[] { 42 };
+        public void Deconstruct(out int* p, out int n) { fixed (int* ptr = Cells) p = ptr; n = 5; }
+    }
+    public static class Ext {
+        public static void Deconstruct(this object value, out int x, out int y, out int z) {
+            x = 10; y = 20; z = 30;
+        }
+    }
+}`
+        let part1 = (`
+using External;
 namespace RecordDeconstruction {
-    public record R : PARENT {
+    SHARED_CONTRACT
+    public partial record R : PARENT {
         FIELDS
-        public OVERRIDE void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
+}`).Replace(
+            "SHARED_CONTRACT",
+            if overrideBase {
+                "public interface ISharedContract { void Deconstruct(out int x, out int y); }"
+            } else {
+                ""
+            }
+        ).Replace(
+            "PARENT",
+            if overrideBase {
+                "External.Base, ISharedContract"
+            } else {
+                "External.IParts"
+            }
+        ).Replace(
+            "FIELDS",
+            if overrideBase {
+                ""
+            } else {
+                "public int X, Y; public int Count => X + Y; public int Reset() => Count * 2; public int Deconstruct(int scale) => (X + Y) * scale;"
+            }
+        )
+        let part2 = (`
+using External;
+namespace RecordDeconstruction {
+    public partial record R {
+        public OVERRIDE void Deconstruct(out int x, out int y) { BODY }
+    }
+    EXTRA_TYPES
     public static class Probe {
         public static string Run() {
             var r = new R { X = 2, Y = 3 };
             r.Deconstruct(out var x, out var y);
-            return $"{x},{y}";
+            var (a, b) = r;
+            PARENT contract = r;
+            contract.Deconstruct(out var c, out var d);
+            var (e, f) = contract;
+            var (ex1, ex2, ex3) = r;
+            int ptrCell = 0, len = 0;
+            unsafe {
+                var (ptr, ptrLen) = new External.ExtPtr();
+                ptrCell = *ptr;
+                len = ptrLen;
+            }
+            EXTRA_ASSERT
+            return $"{x},{y},{a},{b},{c},{d},{e},{f},{ex1},{ex2},{ex3},{ptrCell},{len},{extra},{r == new R { X = 2, Y = 3 }}";
         }
     }
 }`).Replace(
@@ -885,52 +997,118 @@ namespace RecordDeconstruction {
                 "External.IParts"
             }
         ).Replace(
-            "FIELDS",
-            if overrideBase {
-                ""
-            } else {
-                "public int X, Y;"
-            }
-        ).Replace(
             "OVERRIDE",
             if overrideBase {
                 "override"
             } else {
                 ""
             }
-        )
-        let references = CSharpProjectLoader
-            .RuntimeReferences()
-            .Append(MetadataReference.CreateFromImage(image.ToArray()))
-            .ToArray()
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)}, references)
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let baseline = MemoryStream()
-        Assert.True(project.Compilation.Emit(baseline).Success)
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("imported Deconstruct contract", gap.Message)
-        Assert.Equal(
-            source.IndexOf(
-                "public " +
-                    (
-                    if overrideBase {
-                        "override"
-                    } else {
-                        ""
+        ).Replace(
+            "BODY",
+            if overrideBase {
+                "base.Deconstruct(out var bx, out var by); x = by * 10; y = bx;"
+            } else {
+                "x = Y * 10; y = X;"
+            }
+        ).Replace(
+            "EXTRA_TYPES",
+            if overrideBase {
+                `public record Derived : R { public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; } }
+                public class UnrelatedContractConsumer : ISharedContract {
+                    public void Deconstruct(out int x, out int y) { x = 11; y = 22; }
+                    public int RunLocal() {
+                        int baseDeconstruct(int n) => n <= 0 ? 5 : baseDeconstruct(n - 1);
+                        int deconstructTuple(int n) => n <= 0 ? 6 : deconstructTuple(n - 1);
+                        return baseDeconstruct(1) + deconstructTuple(1);
                     }
-                ) +
-                    " void Deconstruct",
-                StringComparison.Ordinal
-            ),
-            gap.Location!!.SourceSpan.Start
+                }
+                public record ProtectedRecord : External.Base {
+                    public ProtectedRecord(ref int seed) : base(ref seed) { }
+                    protected override void Deconstruct(out int x, out int y, out int z) {
+                        base.Deconstruct(out var bx, out var by, out var bz);
+                        x = bx * 10; y = by * 10; z = bz * 10;
+                    }
+                    public string ReadSelf() { var (px, py, pz) = this; return $"{px},{py},{pz}"; }
+                }
+                public abstract record AbstractDerived : External.AbstractExternal {
+                    protected override void Deconstruct(out int x, out int y) { x = 1; y = 2; }
+                }`
+            } else {
+                `public class C : External.IParts {
+                    public int X, Y;
+                    public int Count => X + Y;
+                    public int Reset() => Count;
+                    public int Deconstruct(int scale) => (X + Y) * scale;
+                    public void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
+                }
+                public record BaseRec {
+                    public int Tag;
+                    internal BaseRec(int v) { Tag = v; }
+                    public void Deconstruct(out int x, out int y) { x = Tag * 10; y = 1; }
+                }
+                public record InheritedImpl : BaseRec, External.IParts {
+                    public InheritedImpl(int v) : base(v) { }
+                    public int Count => Tag;
+                    public int Reset() => Tag;
+                    public int Deconstruct(int scale) => Tag * scale;
+                }
+                public abstract record AbstractPropBase {
+                    public abstract int Count { get; }
+                }
+                public record ConcretePropRecord : AbstractPropBase, External.IParts {
+                    public override int Count => 7;
+                    public int Reset() => Count;
+                    public int Deconstruct(int scale) => Count * scale;
+                    public void Deconstruct(out int x, out int y) { x = Count * 10; y = 3; }
+                }
+                public class Outer {
+                    public record R : External.IParts {
+                        public class RDeconstructBridge { }
+                        public int Count => 4;
+                        public int Reset() => 4;
+                        public int Deconstruct(int scale) => 4 * scale;
+                        public void Deconstruct(out int x, out int y) { x = 40; y = 4; }
+                    }
+                }
+                public class classDeconstructBridge { }
+                public record @class : External.IParts {
+                    public int Count => 5;
+                    public int Reset() => 5;
+                    public int Deconstruct(int scale) => 5 * scale;
+                    public void Deconstruct(out int x, out int y) { x = 50; y = 5; }
+                }
+                public record ExplicitRec : External.IParts {
+                    public int Count => 6;
+                    public int Reset() => 6;
+                    int External.IParts.Deconstruct(int scale) => 6 * scale;
+                    void External.IParts.Deconstruct(out int x, out int y) { x = 60; y = 6; }
+                }
+                public record DualExplicit : External.IA, External.IB {
+                    void External.IA.Deconstruct(out int x, out int y) { x = 70; y = 7; }
+                    void External.IB.Deconstruct(out int x, out int y) { x = 80; y = 8; }
+                }
+                public record DerivedPartsRec : External.IDerivedParts {
+                    public int Count => 9;
+                    void External.IDerivedParts.Deconstruct(out int x, out int y) { x = 90; y = 9; }
+                }`
+            }
+        ).Replace(
+            "EXTRA_ASSERT",
+            if overrideBase {
+                "External.Base dContract = new Derived { X = 2, Y = 3 }; var (dx, dy) = dContract; int seed = 6; var prot = new ProtectedRecord(ref seed); ISharedContract sc = new UnrelatedContractConsumer(); var (scx, scy) = sc; var extra = $\"{dx},{dy},{seed},{prot.RunProtected()},{prot.ReadSelf()},{scx},{scy},{new UnrelatedContractConsumer().RunLocal()},{new External.Base { X = 2, Y = 3 }.Equals(r)},{r.Equals(new External.Base { X = 2, Y = 3 })}\";"
+            } else {
+                "External.IParts cContract = new C { X = 2, Y = 3 }; var (cx, cy) = cContract; var baseRec = new BaseRec(7); var inhRec = new InheritedImpl(7); External.IParts inh = inhRec; var (ix, iy) = inh; External.IParts propRec = new ConcretePropRecord(); var (prx, pry) = propRec; External.IParts nestedRec = new Outer.R(); var (nrx, nry) = nestedRec; External.IParts kwRec = new @class(); var (kwx, kwy) = kwRec; External.IParts expRec = new ExplicitRec(); var (erx, ery) = expRec; External.IA da = new DualExplicit(); var (dax, day) = da; External.IB db = new DualExplicit(); var (dbx, dby) = db; External.IDerivedParts dp = new DerivedPartsRec(); var (dpx, dpy) = dp; var extra = $\"{cx},{cy},{ix},{iy},{baseRec.Equals(inhRec)},{inhRec.Equals(baseRec)},{inhRec.Equals(new InheritedImpl(7))},{prx},{pry},{nrx},{nry},{kwx},{kwy},{erx},{ery},{dax},{day},{dbx},{dby},{dpx},{dpy},{dp.Count},{expRec.Deconstruct(2)},{contract.Count},{contract.Reset()},{contract.Deconstruct(3)},{cContract.Deconstruct(4)}\";"
+            }
         )
-        Assert.DoesNotContain("func deconstruct", printed)
+        VerifyWithExternalReference(external, [](string, string){("Part1.cs", part1), ("Part2.cs", part2)})
+        if !overrideBase {
+            VerifyExternalUnsupported(external, `
+namespace RecordDeconstruction {
+    public record StaticRec : External.IStaticParts {
+        public static int Deconstruct(int scale) => scale * 2;
+    }
+}`)
+        }
     }
 
     @Theory
@@ -1119,52 +1297,53 @@ namespace RecordDeconstruction {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func RenamedSourceInterfaceDeconstruction_ReportsDispatchGap(forEach bool) {
+    func RenamedSourceInterfaceDeconstruction_PreservesDispatch(forEach bool) {
         let body = if forEach {
             `int x = 0, y = 0;
             foreach (var (a, b) in new IParts[] { new R { X = 2, Y = 3 } }) { x = a; y = b; }`
         } else {
             "IParts parts = new R { X = 2, Y = 3 }; var (x, y) = parts;"
         }
-        let source = (`
+        Verify((`
 namespace RecordDeconstruction {
-    public interface IParts { void Deconstruct(out int x, out int y); }
-    public record R : IParts {
+    public interface IParts {
+        void Deconstruct(out int x, out int y) { x = 11; y = 22; }
+    }
+    public interface IRequiredParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public class DefaultImpl : IParts { }
+    public class ExplicitImpl : IParts {
+        void IParts.Deconstruct(out int x, out int y) { x = 77; y = 88; }
+    }
+    public record Auto(int X, int Y) : IParts, IRequiredParts;
+    public record struct AutoStruct(int X, int Y) : IParts, IRequiredParts;
+    public record R : IParts, IRequiredParts {
         public int X;
         public int Y;
         public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public int Check() {
+            int deconstructTuple(int n) => n <= 0 ? X + Y : deconstructTuple(n - 1);
+            return deconstructTuple(1);
+        }
     }
     public static class Probe {
         public static string Run() {
             BODY
-            return $"{x},{y}";
+            IParts defParts = new DefaultImpl();
+            var (dx, dy) = defParts;
+            IParts expParts = new ExplicitImpl();
+            var (ex, ey) = expParts;
+            IParts autoParts = new Auto(4, 5);
+            var (ax, ay) = autoParts;
+            IRequiredParts reqParts = new Auto(6, 7);
+            var (rqx, rqy) = reqParts;
+            IParts autoStructParts = new AutoStruct(8, 9);
+            var (asx, asy) = autoStructParts;
+            return $"{x},{y},{dx},{dy},{ex},{ey},{ax},{ay},{rqx},{rqy},{asx},{asy},{new R { X = 2, Y = 3 }.Check()}";
         }
     }
-}`).Replace("BODY", body)
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(
-            project.Compilation.WithAssemblyName("InterfaceBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
-        )
-        Assert.Equal(
-            "30,2",
-            cast[string](
-                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
-                    nil,
-                    nil
-                )
-            )
-        )
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("renamed interface or non-record contract", gap.Message)
-        Assert.Equal(source.IndexOf("void Deconstruct", StringComparison.Ordinal), gap.Location!!.SourceSpan.Start)
+}`).Replace("BODY", body))
     }
 
     @Theory
@@ -1316,20 +1495,29 @@ namespace RecordDeconstruction {
         Verify(`
 namespace RecordDeconstruction {
     public delegate void Parts(out int x, out int y);
-    public record Base(int X, int Y) {
+    public record Z(int X, int Y) {
         public virtual void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
-    public record R(int A, int B) : Base(A, B) {
+    public record A(int A1, int B1) : Z(A1, B1) {
+        public override void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+    public abstract record AbstractBase {
+        public abstract void Deconstruct(out int x, out int y);
+    }
+    public record Concrete : AbstractBase {
+        public int X = 4, Y = 5;
         public override void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
     }
     public static class Probe {
         public static string Run() {
-            Base r = new R(2, 3);
+            Z r = new A(2, 3);
             var (a, b) = r;
             Parts parts = r.Deconstruct;
             parts(out var c, out var d);
-            var pattern = r is Base(var e, var f) ? e + f : -1;
-            return $"{a},{b},{c},{d},{pattern}|{r with { X = 5 }}";
+            var pattern = r is Z(var e, var f) ? e + f : -1;
+            AbstractBase abs = new Concrete();
+            var (ax, ay) = abs;
+            return $"{a},{b},{c},{d},{pattern},{ax},{ay}|{r with { X = 5 }}";
         }
     }
 }`)
@@ -1371,14 +1559,15 @@ namespace RecordDeconstruction {
     @Theory
     @InlineData(false)
     @InlineData(true)
-    func UserRecordWithSelectedExtensionDeconstruct_ReportsGapInsteadOfReadingDataFields(forEach bool) {
+    func UserRecordWithSelectedExtensionDeconstruct_InvokesSelectedExtensionOverload(forEach bool) {
         let body = if forEach {
             `int x = 0, y = 0, z = 0;
             foreach (var (a, b, c) in new[] { new R { X = 2, Y = 3, Z = 4 } }) { x = a; y = b; z = c; }`
         } else {
             "var (x, y, z) = new R { X = 2, Y = 3, Z = 4 };"
         }
-        let source = (`
+        Verify((`
+#nullable enable
 namespace RecordDeconstruction {
     public record R {
         public int X;
@@ -1386,103 +1575,145 @@ namespace RecordDeconstruction {
         public int Z;
         public void Deconstruct(out int x, out int y) { x = X; y = Y; }
     }
+    public record struct RS {
+        public int X;
+        public int Y;
+        public int Z;
+        public static System.Action? Mutate;
+        public void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
     public static class Extensions {
-        public static void Deconstruct(this R r, out int x, out int y, out int z) {
-            x = r.Y * 10; y = r.X; z = r.Z * 50;
+        public static void Deconstruct(this R? component0, out int x, out int y, out int z) {
+            if (component0 is null) { x = -1; y = -2; z = -3; return; }
+            x = component0.Y * 10; y = component0.X; z = component0.Z * 50;
+        }
+        public static void Deconstruct(this R Extensions, out int a, out int b, out int c, out int d) {
+            a = Extensions.X; b = Extensions.Y; c = Extensions.Z; d = a + b + c;
+        }
+        public static void Deconstruct(this ref RS r, out int x, out int y, out int z) {
+            r.X += 100;
+            x = r.X; y = r.Y; z = r.Z;
+        }
+        public static void Deconstruct(this in RS r, out int x, out int y, out int z, out int w) {
+            x = r.X;
+            RS.Mutate?.Invoke();
+            y = r.Y;
+            z = r.Z;
+            w = r.X + r.Y + r.Z;
+        }
+    }
+    public static class component0 {
+        public static void Deconstruct(this R r, out int a, out int b, out int c, out int d, out int e) {
+            a = r.X; b = r.Y; c = r.Z; d = 10; e = 20;
         }
     }
     public static class Probe {
         public static string Run() {
             BODY
-            return $"{x},{y},{z}";
+            R? absent = null;
+            var (nx, ny, nz) = absent;
+            var (ea, eb, ec, ed) = new R { X = 1, Y = 2, Z = 3 };
+            var (ca, cb, cc, cd, ce) = new R { X = 4, Y = 5, Z = 6 };
+            var rs = new RS { X = 2, Y = 3, Z = 4 };
+            RS.Mutate = () => rs = new RS { X = 99, Y = 88, Z = 77 };
+            var (ix, iy, iz, iw) = rs;
+            RS.Mutate = null;
+            var mutatedX = rs.X;
+            rs = new RS { X = 2, Y = 3, Z = 4 };
+            rs.Deconstruct(out var rx, out var ry, out var rz);
+            return $"{x},{y},{z},{nx},{ny},{nz},{ea},{eb},{ec},{ed},{ca},{cb},{cc},{cd},{ce},{ix},{iy},{iz},{iw},{mutatedX},{rx},{ry},{rz},{rs.X}";
         }
     }
-}`).Replace("BODY", body)
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(
-            project.Compilation.WithAssemblyName("ExtensionBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
-        )
-        Assert.Equal(
-            "30,2,200",
-            cast[string](
-                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
-                    nil,
-                    nil
-                )
-            )
-        )
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gap = Assert.Single(
-            context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported)
-        )
-        Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-        Assert.Contains("extension Deconstruct calls", gap.Message)
-        Assert.Equal(
-            source.IndexOf("public void Deconstruct", StringComparison.Ordinal),
-            gap.Location!!.SourceSpan.Start
-        )
+}`).Replace("BODY", body))
     }
 
-    @Fact
-    func NestedUserRecordPatterns_ReportGapInsteadOfRepeatingDeconstruct() {
-        const source = `
+    @Theory
+    @InlineData(false)
+    @InlineData(true)
+    func NestedUserRecordPatterns_ShareReceiverAndOutputState(mutateNestedReceiver bool) {
+        let hook = if mutateNestedReceiver {
+            "Holder.Current.Child = null;"
+        } else {
+            ""
+        }
+        Verify((`
 namespace RecordDeconstruction {
     public record R {
         public int X;
         public int Y;
         public static int Calls;
-        public void Deconstruct(out int x, out int y) { Calls++; x = Y * 10; y = X; }
+        public void Deconstruct(out int x, out int y) { Calls++; x = Y * 10; y = X; HOOK }
     }
-    public class Holder { public R Child = new R { X = 2, Y = 3 }; }
+    public class Holder {
+        public static Holder Current;
+        public R Child = new R { X = 2, Y = 3 };
+    }
+    public class DerivedHolder : Holder {
+        public new R Child = new R { X = 4, Y = 5 };
+    }
+    public class OuterHolder {
+        public static int Reads;
+        private Holder inner = new Holder();
+        public Holder Inner { get { Reads++; return inner; } }
+    }
+    public interface ICarrier<T> {
+        R Child { get; }
+    }
+    public class Carrier : ICarrier<int>, ICarrier<string> {
+        private R first = new R { X = 2, Y = 3 };
+        private R second = new R { X = 7, Y = 8 };
+        R ICarrier<int>.Child => first;
+        R ICarrier<string>.Child => second;
+    }
+    public record Outer {
+        public R First = new R { X = 2, Y = 3 };
+        public R Second = new R { X = 6, Y = 7 };
+        public void Deconstruct(out R child, out int a) { child = First; a = 1; }
+        public void Deconstruct(out R child, out int a, out int b) { child = Second; a = 1; b = 2; }
+    }
     public static class Probe {
         public static string Run() {
-            var result = new Holder() switch {
+            Holder.Current = new Holder();
+            var result = Holder.Current switch {
                 Holder { Child: R(0, _) } => 0,
                 Holder { Child: R(var x, var y) } => x + y,
                 _ => -1
             };
-            return $"{result},{R.Calls}";
+            var firstCalls = R.Calls;
+            var firstNull = Holder.Current.Child is null;
+            Holder.Current = new Holder();
+            Holder hiddenSubject = new DerivedHolder();
+            var hiddenResult = hiddenSubject switch {
+                DerivedHolder { Child: R(0, _) } => 0,
+                Holder { Child: R(var hx, var hy) } => hx + hy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            var overloadResult = new Outer() switch {
+                Outer(R(0, _), _) => 0,
+                Outer(R(var ox, var oy), _, _) => ox + oy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            var dottedResult = new OuterHolder() switch {
+                OuterHolder { Inner.Child: R(0, _) } => 0,
+                OuterHolder { Inner: { Child: R(var dx, var dy) } } => dx + dy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            object carrier = new Carrier();
+            var carrierResult = carrier switch {
+                ICarrier<int> { Child: R(0, _) } => 0,
+                ICarrier<string> { Child: R(var cx, var cy) } => cx + cy,
+                _ => -1
+            };
+            Holder.Current = new Holder();
+            var items = new[] { new R { X = 1, Y = 9 }, new R { X = 2, Y = 1 }, new R { X = 5, Y = 3 } };
+            var listMatch = items is [_, R(0, _), ..] or [.., R(30, 5)];
+            return $"{result},{firstCalls},{firstNull},{hiddenResult},{overloadResult},{dottedResult},{OuterHolder.Reads},{carrierResult},{listMatch},{R.Calls}";
         }
     }
-}`
-        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
-        using let image = MemoryStream()
-        Assert.True(
-            project.Compilation.WithAssemblyName("NestedBaseline" + Guid.NewGuid().ToString("N")).Emit(image).Success
-        )
-        Assert.Equal(
-            "32,1",
-            cast[string](
-                Assembly.Load(image.ToArray()).GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(
-                    nil,
-                    nil
-                )
-            )
-        )
-        let document = Assert.Single(project.Documents)
-        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
-        CSharpToGSharpTranslator().TranslateDocument(document, context)
-        let gaps = context.Diagnostics.Where((diagnostic TranslationDiagnostic) -> diagnostic.IsUnsupported).ToArray()
-        Assert.Equal(2, gaps.Length)
-        Assert.All(
-            gaps,
-            (gap TranslationDiagnostic) -> {
-                Assert.Equal(UnsupportedClassification.Gap, gap.Classification)
-                Assert.Contains("nested user-declared record Deconstruct", gap.Message)
-            }
-        )
-        Assert.Equal(
-            []int32{
-                source.IndexOf("R(0, _)", StringComparison.Ordinal),
-                source.IndexOf("R(var x, var y)", StringComparison.Ordinal)
-            },
-            gaps.Select((gap TranslationDiagnostic) -> gap.Location!!.SourceSpan.Start).ToArray()
-        )
+}`).Replace("HOOK", hook))
     }
 
     @Fact
@@ -1548,6 +1779,431 @@ namespace RecordDeconstruction {
 }`)
     }
 
+    @Fact
+    func UnsafeSameArityPointerOverloadsAndCovariantPatternCache_PreserveParity() {
+        Verify(`
+#nullable enable
+namespace RecordDeconstruction {
+    public interface IGenericParts<T> {
+        void Deconstruct(out T x, out int y);
+    }
+    public record MultiParts : IGenericParts<int>, IGenericParts<string> {
+        public int Num = 7;
+        public string Text = "hi";
+        public void Deconstruct(out int x, out int y) { x = Num; y = Num * 2; }
+        public void Deconstruct(out string x, out int y) { x = Text; y = Text.Length; }
+    }
+    public interface IBoxedParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public record struct BoxedCounter : IBoxedParts {
+        public int Count;
+        public void Deconstruct(out int x, out int y) {
+            Count++;
+            x = Count;
+            y = Count * 10;
+        }
+    }
+    public record struct ExplicitBoxedCounter : IBoxedParts {
+        public int Count;
+        void IBoxedParts.Deconstruct(out int x, out int y) {
+            Count++;
+            x = Count;
+            y = Count * 10;
+        }
+    }
+    public unsafe record OverloadedPtr {
+        public static int[] IntCells = new[] { 11 };
+        public static long[] LongCells = new[] { 22L };
+        public void Deconstruct(out int* p, out int tag) {
+            fixed (int* ptr = IntCells) { p = ptr; }
+            tag = 1;
+        }
+        public void Deconstruct(out long* p, out int tag) {
+            fixed (long* ptr = LongCells) { p = ptr; }
+            tag = 2;
+        }
+    }
+    public unsafe static class UnsafeExtensions {
+        public static void Deconstruct(this OverloadedPtr r, out int* p, out int a, out int b) {
+            fixed (int* ptr = OverloadedPtr.IntCells) { p = ptr; }
+            a = 3;
+            b = 4;
+        }
+        public static void Deconstruct(this OverloadedPtr r, out long* p, out int a, out int b) {
+            fixed (long* ptr = OverloadedPtr.LongCells) { p = ptr; }
+            a = 5;
+            b = 6;
+        }
+        public static void Deconstruct(this R r, out int x, out int y, out int z) {
+            x = r.X + 10;
+            y = r.Y + 20;
+            z = r.X + r.Y;
+        }
+        public static void Deconstruct(this R r, int* x, out int y, out int z) {
+            y = -1;
+            z = -2;
+        }
+    }
+    public record R {
+        public int X;
+        public int Y;
+        public static int Calls;
+        public static System.Action? ClearFirst;
+        public void Deconstruct(out int x, out int y) {
+            Calls++;
+            x = Y * 10;
+            y = X;
+            ClearFirst?.Invoke();
+        }
+    }
+    public record D : R {
+        public int Extra = 9;
+    }
+    public class Holder {
+        public int Reads;
+        private readonly R child;
+        public Holder(R child) { this.child = child; }
+        public virtual R Child { get { Reads++; return child; } }
+    }
+    public class DerivedHolder : Holder {
+        private readonly D derivedChild;
+        public DerivedHolder(D child) : base(child) { this.derivedChild = child; }
+        public override D Child { get { Reads++; return derivedChild; } }
+    }
+    public class BaseList {
+        public int Count => 1;
+        public R this[int i] => new R { X = 2, Y = 1 };
+    }
+    public class DerivedList : BaseList {
+        public new int Count => 1;
+        public new R this[int i] => new R { X = 2, Y = 1 };
+    }
+    public static class Probe {
+        public static unsafe string Run() {
+            fixed (int* pinnedInt = OverloadedPtr.IntCells)
+            fixed (long* pinnedLong = OverloadedPtr.LongCells) {
+                var item = new OverloadedPtr();
+                int* ip;
+                int itag;
+                item.Deconstruct(out ip, out itag);
+                long* lp;
+                int ltag;
+                item.Deconstruct(out lp, out ltag);
+                int* eip;
+                int ea, eb;
+                UnsafeExtensions.Deconstruct(item, out eip, out ea, out eb);
+                long* elp;
+                int ela, elb;
+                UnsafeExtensions.Deconstruct(item, out elp, out ela, out elb);
+                var (rx, ry, rz) = new R { X = 2, Y = 3 };
+                var mp = new MultiParts();
+                int mi1, mi2;
+                mp.Deconstruct(out mi1, out mi2);
+                string ms1;
+                int ms2;
+                mp.Deconstruct(out ms1, out ms2);
+                IGenericParts<int> gpi = mp;
+                var (gix, giy) = gpi;
+                IGenericParts<string> gps = mp;
+                var (gsx, gsy) = gps;
+                var bc = new BoxedCounter { Count = 1 };
+                var (bc1, _) = bc;
+                var (bc2, _) = bc;
+                IBoxedParts bp = new BoxedCounter { Count = 1 };
+                var (bp1, _) = bp;
+                var (bp2, _) = bp;
+                IBoxedParts ebp = new ExplicitBoxedCounter { Count = 1 };
+                var (ebp1, _) = ebp;
+                var (ebp2, _) = ebp;
+                ebp.Deconstruct(out var ebp3, out _);
+                R?[] listItems = new R?[] { new R { X = 2, Y = 1 } };
+                R.ClearFirst = () => listItems[0] = null;
+                var listMatched = listItems is [R(0, _)] or [R(10, 2)];
+                R.ClearFirst = null;
+                BaseList xs = new DerivedList();
+                var hiddenListMatch = xs is (DerivedList and [R(0, _)]) or (BaseList and [R(10, 2)]);
+                Holder h = new DerivedHolder(new D { X = 2, Y = 3, Extra = 9 });
+                var matched = h is DerivedHolder { Child: D(0, _) { Extra: 9 } } or Holder { Child: R(30, 2) };
+                var untypedCovariant = h is DerivedHolder { Child: { Extra: 0 } } or Holder { Child: R(30, 2) };
+                return $"{*ip},{itag},{*lp},{ltag},{*eip},{ea + eb},{*elp},{ela + elb},{rx},{ry},{rz},{mi1},{mi2},{ms1},{ms2},{gix},{giy},{gsx},{gsy},{bc1},{bc2},{bc.Count},{bp1},{bp2},{ebp1},{ebp2},{ebp3},{listMatched},{hiddenListMatch},{matched},{untypedCovariant}";
+            }
+        }
+    }
+}`)
+    }
+
+    @Fact
+    func ImportedContracts_CoverBridgeConstructorsValueSnapshotsEscapedOverridesAndInheritedSourceInterfaces() {
+        let externalSource = `
+namespace ExternalContracts {
+    public interface IParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IAsyncDeconstruct {
+        System.Threading.Tasks.Task<int> Deconstruct(int delta);
+    }
+    public interface IRefDeconstruct {
+        ref int Deconstruct();
+        ref readonly int Deconstruct(short tag);
+    }
+    public record ProtectedBase {
+        protected virtual void Deconstruct(out int x, out int y) { x = 1; y = 2; }
+    }
+    public unsafe record UnsafeCtorBase {
+        public int Value;
+        public UnsafeCtorBase() { Value = 5; }
+        public UnsafeCtorBase(int* p) { Value = *p; }
+    }
+    public record CopyableBase(int X);
+    public record struct MutatingStruct(int X, int Y) {
+        public void Deconstruct(out int x, out int y) {
+            X += 100;
+            x = Y * 10;
+            y = X;
+        }
+    }
+    public class KeywordBase {
+        public virtual int func() => 1;
+    }
+    public unsafe interface IPtrParts {
+        void Deconstruct(out int* p, out int y);
+    }
+    public unsafe interface IDerivedPtrParts : IPtrParts { }
+    public class UnrenamedBase {
+        public int X = 4;
+        public int Y = 7;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public void Deconstruct(out string x, out int y) { x = $"S{Y}"; y = X; }
+    }
+}`
+        let consumerSource = `
+namespace RecordDeconstruction {
+    public unsafe class PtrBase : ExternalContracts.IPtrParts {
+        public static int[] Cells = new[] { 19 };
+        public void Deconstruct(out int* p, out int y) {
+            fixed (int* ptr = Cells) { p = ptr; }
+            y = 7;
+        }
+    }
+    public unsafe record SourcePtrRecord : ExternalContracts.IPtrParts {
+        public void Deconstruct(out int* p, out int y) {
+            fixed (int* ptr = PtrBase.Cells) { p = ptr; }
+            y = 3;
+        }
+    }
+    public class SafeInheritedUnsafeParts : PtrBase, ExternalContracts.IDerivedPtrParts { }
+    public abstract record RefCtorBase {
+        public int Seed;
+        protected RefCtorBase(ref RefCtorBase other) {
+            Seed = other.Seed + 5;
+        }
+        protected RefCtorBase(int seed) {
+            Seed = seed;
+        }
+    }
+    public record RefCtorDerived : RefCtorBase, ExternalContracts.IParts {
+        public RefCtorDerived(ref RefCtorBase other) : base(ref other) { }
+        public RefCtorDerived(int seed) : base(seed) { }
+        public void Deconstruct(out int x, out int y) { x = Seed; y = Seed * 2; }
+    }
+    public abstract record GenericBase<T> {
+        public int Value;
+        protected GenericBase(GenericBase<int> other) {
+            Value = (other == null ? 8 : other.Value) + 10;
+        }
+        protected GenericBase(int v) {
+            Value = v;
+        }
+    }
+    public record StringDerived : GenericBase<string>, ExternalContracts.IParts {
+        public StringDerived(GenericBase<int> other) : base(other) { }
+        public void Deconstruct(out int x, out int y) { x = Value; y = Value + 1; }
+    }
+    public record ProtectedHookCollision : ExternalContracts.ProtectedBase {
+        public int Seed = 9;
+        protected override void Deconstruct(out int x, out int y) { x = Seed; y = Seed + 1; }
+        public int Compute() {
+            void deconstructBridge(out int a, out int b) {
+                Bounce<int>(0, out a, out b);
+            }
+            void Bounce<T>(int depth, out int a, out int b) {
+                if (depth > 0) {
+                    deconstructBridge(out a, out b);
+                    return;
+                }
+                Deconstruct(out a, out b);
+            }
+            deconstructBridge(out var x, out var y);
+            return x + y;
+        }
+    }
+    public record AsyncAndRefRecord : ExternalContracts.IAsyncDeconstruct, ExternalContracts.IRefDeconstruct {
+        public int Cell = 30;
+        public async System.Threading.Tasks.Task<int> Deconstruct(int delta) {
+            await System.Threading.Tasks.Task.Yield();
+            return Cell + delta;
+        }
+        public ref int Deconstruct() => ref Cell;
+        public ref readonly int Deconstruct(short tag) => ref Cell;
+    }
+    public record SafeDerivedFromUnsafeBase : ExternalContracts.UnsafeCtorBase, ExternalContracts.IParts {
+        public void Deconstruct(out int x, out int y) { x = Value; y = Value * 3; }
+    }
+    public record CopyCtorDerived : ExternalContracts.CopyableBase, ExternalContracts.IParts {
+        public int Extra;
+        public CopyCtorDerived(int x, int extra) : base(x) { Extra = extra; }
+        public CopyCtorDerived(ExternalContracts.CopyableBase other, int extra) : base(other) { Extra = extra; }
+        public void Deconstruct(out int x, out int y) { x = X; y = Extra; }
+    }
+    public interface ISourceParts {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface ISourceParts2 {
+        void Deconstruct(out int x, out int y);
+    }
+    public interface IGenericSourceParts<T> {
+        void Deconstruct(out T x, out int y);
+    }
+    public record SourceRecord : ISourceParts, ISourceParts2, IGenericSourceParts<int>, IGenericSourceParts<string> {
+        public int X = 2;
+        public int Y = 3;
+        public void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+        public void Deconstruct(out string x, out int y) { x = $"R{Y}"; y = X; }
+    }
+    public class InheritedMetadataParts : ExternalContracts.UnrenamedBase, ISourceParts, ISourceParts2, IGenericSourceParts<int>, IGenericSourceParts<string> { }
+    public class KeywordDerived : ExternalContracts.KeywordBase {
+        public override int func() => 42;
+    }
+    public static class StructHolder {
+        public static ExternalContracts.MutatingStruct Current = new ExternalContracts.MutatingStruct(2, 3);
+    }
+    public static class Probe {
+        public static string Run() {
+            RefCtorBase seedBase = new RefCtorDerived(10);
+            ExternalContracts.IParts p1 = new RefCtorDerived(ref seedBase);
+            var (a1, b1) = p1;
+            ExternalContracts.IParts p2 = new StringDerived(default(GenericBase<int>));
+            var (a2, b2) = p2;
+            var (sx, sy) = StructHolder.Current;
+            var (sx2, sy2) = StructHolder.Current;
+            ExternalContracts.KeywordBase kb = new KeywordDerived();
+            var im = new InheritedMetadataParts();
+            ISourceParts sp = im;
+            ISourceParts2 sp2 = im;
+            IGenericSourceParts<int> gsp1 = im;
+            IGenericSourceParts<string> gsp2 = im;
+            var (ix, iy) = sp;
+            var (ix2, iy2) = sp2;
+            var (gix, giy) = gsp1;
+            var (gsx, gsy) = gsp2;
+            var hookVal = new ProtectedHookCollision().Compute();
+            var asyncRef = new AsyncAndRefRecord();
+            ExternalContracts.IAsyncDeconstruct ia = asyncRef;
+            var asyncVal = ia.Deconstruct(3).GetAwaiter().GetResult();
+            ExternalContracts.IRefDeconstruct ir = asyncRef;
+            ir.Deconstruct() += 5;
+            var refRoVal = ir.Deconstruct((short)1);
+            ExternalContracts.IParts unsafeBridge = new SafeDerivedFromUnsafeBase();
+            var (ubx, uby) = unsafeBridge;
+            ExternalContracts.IParts copyBridge = new CopyCtorDerived(new CopyCtorDerived(12, 1), 99);
+            var (cbx, cby) = copyBridge;
+            int ptrVal = 0;
+            int ptrTag = 0;
+            unsafe {
+                fixed (int* pinned = PtrBase.Cells) {
+                    ExternalContracts.IDerivedPtrParts spp = new SafeInheritedUnsafeParts();
+                    int* up;
+                    int uy;
+                    spp.Deconstruct(out up, out uy);
+                    ptrVal = *up;
+                    ptrTag = uy;
+                }
+            }
+            return $"{a1},{b1},{a2},{b2},{sx},{sy},{sx2},{sy2},{StructHolder.Current.X},{kb.func()},{ix},{iy},{ix2},{iy2},{gix},{giy},{gsx},{gsy},{hookVal},{asyncVal},{refRoVal},{ubx},{uby},{cbx},{cby},{ptrVal},{ptrTag}";
+        }
+    }
+}`
+        VerifyWithExternalReference(externalSource, [](string, string){("Snippet.cs", consumerSource)})
+    }
+
+    @Fact
+    func MigratedProducerDeconstructCollision_RenamesConsumerInterfaceAndImplementingRecordTogether() {
+        let producerSource = `
+namespace Producer {
+    public record R {
+        public int X = 2;
+        public int Y = 3;
+        public virtual void Deconstruct(out int x, out int y) { x = Y * 10; y = X; }
+    }
+}`
+        let consumerSource = `
+namespace RecordDeconstruction {
+    public delegate void Read(out int x, out int y);
+    public interface I {
+        int deconstruct();
+    }
+    public record D : Producer.R, I {
+        public override void Deconstruct(out int x, out int y) { x = Y * 100; y = X; }
+        public Read SaveBase() => base.Deconstruct;
+        public int deconstruct() => 7;
+    }
+    public static class Probe {
+        public static int Makes;
+        public static Producer.R Make() {
+            Makes++;
+            return new Producer.R { X = 4, Y = 5 };
+        }
+        public static Producer.R Accept(Read r) => Make();
+        public static string Run() {
+            var d = new D { X = 4, Y = 5 };
+            I i = d;
+            var (x, y) = d;
+            var baseRead = d.SaveBase();
+            baseRead(out var bx, out var by);
+            Read saved = Accept(Make().Deconstruct).Deconstruct;
+            saved(out var mx, out var my);
+            return $"{x},{y},{bx},{by},{d.deconstruct()},{i.deconstruct()},{mx},{my},{Makes}";
+        }
+    }
+}`
+        VerifyMigratedProducerAndConsumer(producerSource, consumerSource)
+    }
+
+    @Fact
+    func SelectedExtensionDeconstructWithRefLikeOutput_ReportsUnsupportedDiagnosticAtConsumer() {
+        let source = `
+namespace RecordDeconstruction {
+    public record R {
+        public int X = 2;
+        public int Y = 3;
+        public void Deconstruct(out int x, out int y) { x = X; y = Y; }
+    }
+    public static class Extensions {
+        public static void Deconstruct(this R r, out System.Span<int> span, out int y, out int z) {
+            span = default;
+            y = r.X;
+            z = r.Y;
+        }
+    }
+    public static class Probe {
+        public static int Run() {
+            var (span, y, z) = new R();
+            return span.Length + y + z;
+        }
+    }
+}`
+        let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+        let document = Assert.Single(project.Documents)
+        let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+        let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+        Assert.Contains(
+            context.Diagnostics,
+            (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+        )
+    }
+
     shared {
         private func Verify(source string, emittedSignature string? = nil) {
             Verify([](string, string){("Snippet.cs", source)}, emittedSignature)
@@ -1598,7 +2254,317 @@ namespace RecordDeconstruction {
             Assert.Equal(expected + "\n", CompileAndRun(printedSources).Replace("\r\n", "\n"))
         }
 
-        private func CompileAndRun(printedSources[]string) string {
+        private func VerifyWithExternalReference(externalSource string, sources[](string, string)) {
+            let externalName = "External" + Guid.NewGuid().ToString("N")
+            let external = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("External.cs", externalSource)},
+                assemblyName: externalName
+            )
+            Assert.True(external.BoundWithoutErrors, string.Join("\n", external.ErrorDiagnostics))
+            using let externalImage = MemoryStream()
+            Assert.True(external.Compilation.Emit(externalImage).Success)
+            let externalBytes = externalImage.ToArray()
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(externalBytes))
+                .ToArray()
+            let project = CSharpProjectLoader.LoadInMemory(
+                sources,
+                references,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+            using let image = MemoryStream()
+            Assert.True(project.Compilation.Emit(image).Success)
+            let loadContext = AssemblyLoadContext("ExternalContext" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            var expected = ""
+            try {
+                using let externalStream = MemoryStream(externalBytes)
+                loadContext.LoadFromStream(externalStream)
+                using let consumerStream = MemoryStream(image.ToArray())
+                let loadedConsumer = loadContext.LoadFromStream(consumerStream)
+                expected = cast[string](
+                    loadedConsumer.GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+                )
+            } finally {
+                loadContext.Unload()
+            }
+            let printedSources = project
+                .Documents
+                .Select(
+                (document LoadedDocument) -> {
+                    let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+                    let printed = GSharpPrinter.Print(CSharpToGSharpTranslator().TranslateDocument(document, context))
+                    Assert.DoesNotContain(
+                        context.Diagnostics,
+                        (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+                    )
+                    Assert.DoesNotContain("func __", printed)
+                    return printed
+                }
+            )
+                .ToArray()
+            Assert.Contains("data ", string.Join("\n", printedSources))
+            Assert.Equal(
+                expected + "\n",
+                CompileAndRun(printedSources, externalBytes, externalName + ".dll").Replace("\r\n", "\n")
+            )
+        }
+
+        private func VerifyExternalUnsupported(externalSource string, source string) {
+            let externalName = "External" + Guid.NewGuid().ToString("N")
+            let external = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("External.cs", externalSource)},
+                assemblyName: externalName
+            )
+            Assert.True(external.BoundWithoutErrors, string.Join("\n", external.ErrorDiagnostics))
+            using let externalImage = MemoryStream()
+            Assert.True(external.Compilation.Emit(externalImage).Success)
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(externalImage.ToArray()))
+                .ToArray()
+            let project = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Snippet.cs", source)},
+                references,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics))
+            let document = Assert.Single(project.Documents)
+            let context = TranslationContext(project.Compilation, document.SemanticModel, document.FilePath)
+            let _ = CSharpToGSharpTranslator().TranslateDocument(document, context)
+            Assert.Contains(
+                context.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+        }
+
+        private func VerifyMigratedProducerAndConsumer(producerSource string, consumerSource string) {
+            const producerName = "Producer"
+            let producer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Producer.cs", producerSource)},
+                assemblyName: producerName
+            )
+            Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
+            using let producerImage = MemoryStream()
+            Assert.True(producer.Compilation.Emit(producerImage).Success)
+            let producerBytes = producerImage.ToArray()
+            let references = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(producerBytes))
+                .ToArray()
+            let consumer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Consumer.cs", consumerSource)},
+                references,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
+            using let consumerImage = MemoryStream()
+            Assert.True(consumer.Compilation.Emit(consumerImage).Success)
+            let loadContext = AssemblyLoadContext("MigratedContext" + Guid.NewGuid().ToString("N"), isCollectible: true)
+            var expected = ""
+            try {
+                using let producerStream = MemoryStream(producerBytes)
+                loadContext.LoadFromStream(producerStream)
+                using let consumerStream = MemoryStream(consumerImage.ToArray())
+                let loadedConsumer = loadContext.LoadFromStream(consumerStream)
+                expected = cast[string](
+                    loadedConsumer.GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+                )
+            } finally {
+                loadContext.Unload()
+            }
+            let compilations = []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{producer.Compilation, consumer.Compilation}
+            let producerDoc = Assert.Single(producer.Documents)
+            let producerContext = TranslationContext(
+                producer.Compilation,
+                producerDoc.SemanticModel,
+                producerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let producerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(producerDoc, producerContext)
+            )
+            Assert.DoesNotContain(
+                producerContext.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+            let consumerDoc = Assert.Single(consumer.Documents)
+            let consumerContext = TranslationContext(
+                consumer.Compilation,
+                consumerDoc.SemanticModel,
+                consumerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let consumerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(consumerDoc, consumerContext)
+            )
+            Assert.DoesNotContain(
+                consumerContext.Diagnostics,
+                (diagnostic TranslationDiagnostic) -> diagnostic.Severity == TranslationSeverity.Unsupported
+            )
+            Assert.DoesNotContain("func __", producerPrinted)
+            Assert.DoesNotContain("func __", consumerPrinted)
+            Assert.Contains("data ", producerPrinted)
+            Assert.Equal(
+                expected + "\n",
+                CompileProducerAndConsumerAndRun(producerPrinted, consumerPrinted, producerName).Replace("\r\n", "\n")
+            )
+        }
+
+        private func VerifyThreeMigratedCompilations(
+            producerSource string,
+            middleSource string,
+            consumerSource string
+        ) {
+            const producerName = "Producer"
+            const middleName = "Middle"
+            let producer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Producer.cs", producerSource)},
+                assemblyName: producerName
+            )
+            Assert.True(producer.BoundWithoutErrors, string.Join("\n", producer.ErrorDiagnostics))
+            using let producerImage = MemoryStream()
+            Assert.True(producer.Compilation.Emit(producerImage).Success)
+            let producerBytes = producerImage.ToArray()
+            let middleRefs = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(producerBytes))
+                .ToArray()
+            let middle = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Middle.cs", middleSource)},
+                middleRefs,
+                assemblyName: middleName
+            )
+            Assert.True(middle.BoundWithoutErrors, string.Join("\n", middle.ErrorDiagnostics))
+            using let middleImage = MemoryStream()
+            Assert.True(middle.Compilation.Emit(middleImage).Success)
+            let middleBytes = middleImage.ToArray()
+            let consumerRefs = CSharpProjectLoader
+                .RuntimeReferences()
+                .Append(MetadataReference.CreateFromImage(producerBytes))
+                .Append(MetadataReference.CreateFromImage(middleBytes))
+                .ToArray()
+            let consumer = CSharpProjectLoader.LoadInMemory(
+                [](string, string){("Consumer.cs", consumerSource)},
+                consumerRefs,
+                assemblyName: "Consumer" + Guid.NewGuid().ToString("N")
+            )
+            Assert.True(consumer.BoundWithoutErrors, string.Join("\n", consumer.ErrorDiagnostics))
+            using let consumerImage = MemoryStream()
+            Assert.True(consumer.Compilation.Emit(consumerImage).Success)
+            let loadContext = AssemblyLoadContext(
+                "ThreeProjectContext" + Guid.NewGuid().ToString("N"),
+                isCollectible: true
+            )
+            var expected = ""
+            try {
+                using let producerStream = MemoryStream(producerBytes)
+                loadContext.LoadFromStream(producerStream)
+                using let middleStream = MemoryStream(middleBytes)
+                loadContext.LoadFromStream(middleStream)
+                using let consumerStream = MemoryStream(consumerImage.ToArray())
+                let loadedConsumer = loadContext.LoadFromStream(consumerStream)
+                expected = cast[string](
+                    loadedConsumer.GetType("RecordDeconstruction.Probe")!!.GetMethod("Run")!!.Invoke(nil, nil)
+                )
+            } finally {
+                loadContext.Unload()
+            }
+            let compilations = []Microsoft
+                .CodeAnalysis
+                .CSharp
+                .CSharpCompilation{producer.Compilation, middle.Compilation, consumer.Compilation}
+            let producerDoc = Assert.Single(producer.Documents)
+            let producerContext = TranslationContext(
+                producer.Compilation,
+                producerDoc.SemanticModel,
+                producerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let producerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(producerDoc, producerContext)
+            )
+            let middleDoc = Assert.Single(middle.Documents)
+            let middleContext = TranslationContext(
+                middle.Compilation,
+                middleDoc.SemanticModel,
+                middleDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let middlePrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(middleDoc, middleContext)
+            )
+            let consumerDoc = Assert.Single(consumer.Documents)
+            let consumerContext = TranslationContext(
+                consumer.Compilation,
+                consumerDoc.SemanticModel,
+                consumerDoc.FilePath,
+                repositoryCompilations: compilations
+            )
+            let consumerPrinted = GSharpPrinter.Print(
+                CSharpToGSharpTranslator().TranslateDocument(consumerDoc, consumerContext)
+            )
+            var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
+                root = root.Parent
+            }
+            Assert.NotNull(root)
+            let configuration = if AppContext.BaseDirectory.Contains(
+                Path.DirectorySeparatorChar + "Release" + Path.DirectorySeparatorChar
+            ) {
+                "Release"
+            } else {
+                "Debug"
+            }
+            let compiler = Path.Combine(root!!.FullName, "out", "bin", configuration, "Compiler", "gsc.dll")
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue-5699", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let producerDll = Path.Combine(directory, producerName + ".dll")
+                let producerGs = Path.Combine(directory, "Producer.gs")
+                File.WriteAllText(producerGs, producerPrinted)
+                let compileProducer = RunDotnet(
+                    []string{compiler, "/target:library", "/out:" + producerDll, producerGs}
+                )
+                Assert.True(compileProducer.Exit == 0, compileProducer.Output + "\n" + producerPrinted)
+                let middleDll = Path.Combine(directory, middleName + ".dll")
+                let middleGs = Path.Combine(directory, "Middle.gs")
+                File.WriteAllText(middleGs, middlePrinted)
+                let compileMiddle = RunDotnet(
+                    []string{compiler, "/target:library", "/out:" + middleDll, "/r:" + producerDll, middleGs}
+                )
+                Assert.True(compileMiddle.Exit == 0, compileMiddle.Output + "\n" + middlePrinted)
+                let consumerDll = Path.Combine(directory, "Snippet.dll")
+                let consumerGs = Path.Combine(directory, "Consumer.gs")
+                File.WriteAllText(consumerGs, consumerPrinted + "\nSystem.Console.WriteLine(Probe.Run())\n")
+                let compileConsumer = RunDotnet(
+                    []string{
+                        compiler,
+                        "/target:exe",
+                        "/out:" + consumerDll,
+                        "/r:" + producerDll,
+                        "/r:" + middleDll,
+                        consumerGs
+                    }
+                )
+                Assert.True(compileConsumer.Exit == 0, compileConsumer.Output + "\n" + consumerPrinted)
+                let run = RunDotnet([]string{consumerDll})
+                Assert.True(run.Exit == 0, run.Output)
+                Assert.Equal(expected + "\n", run.Output.Replace("\r\n", "\n"))
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+
+        private func CompileAndRun(
+            printedSources[]string,
+            externalAssemblyBytes([]byte)? = nil,
+            externalFileName string? = nil
+        ) string {
             var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
             while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
                 root = root.Parent
@@ -1618,6 +2584,11 @@ namespace RecordDeconstruction {
             try {
                 let output = Path.Combine(directory, "Snippet.dll")
                 let arguments = System.Collections.Generic.List[string]{compiler, "/target:exe", "/out:" + output}
+                if externalAssemblyBytes != nil && externalFileName != nil {
+                    let externalPath = Path.Combine(directory, externalFileName)
+                    File.WriteAllBytes(externalPath, externalAssemblyBytes)
+                    arguments.Add("/r:" + externalPath)
+                }
                 for var i = 0; i < printedSources.Length; i++ {
                     let source = Path.Combine(directory, "Snippet" + i.ToString() + ".gs")
                     File.WriteAllText(
@@ -1633,6 +2604,50 @@ namespace RecordDeconstruction {
                 let compile = RunDotnet(arguments.ToArray())
                 Assert.True(compile.Exit == 0, compile.Output + "\n" + string.Join("\n", printedSources))
                 let run = RunDotnet([]string{output})
+                Assert.True(run.Exit == 0, run.Output)
+                return run.Output
+            } finally {
+                Directory.Delete(directory, recursive: true)
+            }
+        }
+
+        private func CompileProducerAndConsumerAndRun(
+            producerPrinted string,
+            consumerPrinted string,
+            producerAssemblyName string
+        ) string {
+            var root DirectoryInfo? = DirectoryInfo(AppContext.BaseDirectory)
+            while root != nil && !RepositoryRootMarker.IsRoot(root.FullName) {
+                root = root.Parent
+            }
+            Assert.NotNull(root)
+            let configuration = if AppContext.BaseDirectory.Contains(
+                Path.DirectorySeparatorChar + "Release" + Path.DirectorySeparatorChar
+            ) {
+                "Release"
+            } else {
+                "Debug"
+            }
+            let compiler = Path.Combine(root!!.FullName, "out", "bin", configuration, "Compiler", "gsc.dll")
+            Assert.True(File.Exists(compiler), compiler)
+            let directory = Path.Combine(AppContext.BaseDirectory, "issue-5699", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(directory)
+            try {
+                let producerDll = Path.Combine(directory, producerAssemblyName + ".dll")
+                let producerGs = Path.Combine(directory, "Producer.gs")
+                File.WriteAllText(producerGs, producerPrinted)
+                let compileProducer = RunDotnet(
+                    []string{compiler, "/target:library", "/out:" + producerDll, producerGs}
+                )
+                Assert.True(compileProducer.Exit == 0, compileProducer.Output + "\n" + producerPrinted)
+                let consumerDll = Path.Combine(directory, "Snippet.dll")
+                let consumerGs = Path.Combine(directory, "Consumer.gs")
+                File.WriteAllText(consumerGs, consumerPrinted + "\nSystem.Console.WriteLine(Probe.Run())\n")
+                let compileConsumer = RunDotnet(
+                    []string{compiler, "/target:exe", "/out:" + consumerDll, "/r:" + producerDll, consumerGs}
+                )
+                Assert.True(compileConsumer.Exit == 0, compileConsumer.Output + "\n" + consumerPrinted)
+                let run = RunDotnet([]string{consumerDll})
                 Assert.True(run.Exit == 0, run.Output)
                 return run.Output
             } finally {

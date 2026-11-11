@@ -1816,9 +1816,7 @@ partial class CSharpToGSharpTranslator {
                     }
                 }
                 let iterable GExpression? = this.TranslateReceiverWithNullForgiveness(node.Expression)
-                if !isAwait && !EmittedNameAllocator.IsUserRecordDeconstruct(deconstruction.Method) {
-                    this.ReportMetadataRecordDeconstruction(deconstruction.Method, node, forEachInfo.ElementType)
-                    this.ReportUnsupportedRecordDeconstruction(deconstruction.Method, forEachInfo.ElementType)
+                if !isAwait && !this.UsesRecordDeconstructionAdapter(deconstruction.Method, forEachInfo.ElementType) {
                     if extractions.Count > 0 || conversions.Count > 0 {
                         let statements = List[GStatement](extractions.Count + conversions.Count + body.Statements.Count)
                         statements.AddRange(extractions)
@@ -2139,9 +2137,11 @@ partial class CSharpToGSharpTranslator {
                 default(IdentifierNameSyntax?)
             }
             let captured = capturedRead != nil
+            let pointerCarrier = this.IsPointerOrFunctionPointerType(sourceType)
             if local == nil ||
                 (
-                (!hasSlot || conversion.IsIdentity) &&
+                !pointerCarrier &&
+                    (!hasSlot || conversion.IsIdentity) &&
                     (
                     inferredType || sourceType == nil || SymbolEqualityComparer.IncludeNullability.Equals(
                         local.Type,
@@ -2199,7 +2199,14 @@ partial class CSharpToGSharpTranslator {
                 // Inferred captures retain platform and widened element types without a new coercion.
                 mappedType = nil
             }
-            let value = cast[GExpression](IdentifierExpression(carrier))
+            var value = cast[GExpression](IdentifierExpression(carrier))
+            if pointerCarrier && sourceType != nil {
+                value = ConversionExpression(
+                    this.typeMapper.Map(sourceType, this.context, single.GetLocation())!!,
+                    value,
+                    isCheckedReferenceCast: true
+                )
+            }
             conversions.Add(
                 LocalDeclarationStatement(
                     if this.IsLocalReassigned(local) {
@@ -2797,6 +2804,26 @@ partial class CSharpToGSharpTranslator {
                     elements.Count,
                     sliceIndex
                 )
+                if this.RecordPatternDecisionOwner(element) is {} owner &&
+                    this
+                    .DecisionSubtreeRunsUserRecordDeconstruct(owner, element) {
+                    let elementType = this.GetListPatternElementType(
+                        listPattern,
+                        if this.context.SemanticModel.GetOperation(listPattern) is IPatternOperation op {
+                            op.InputType
+                        } else {
+                            default(ITypeSymbol?)
+                        }
+                    )
+                    this.AddTypedSubpatternGuard(
+                        () -> this.TranslateRecordPatternMemberSubpatternTest(element, elementReceiver, elementType),
+                        bindings,
+                        guards,
+                        mutableBindings
+                    )
+                    translated.Add(DiscardPattern())
+                    continue
+                }
                 translated.Add(
                     this.TranslatePattern(
                         element,
@@ -3203,8 +3230,13 @@ partial class CSharpToGSharpTranslator {
                     for memberName in memberPath {
                         memberAccess = MemberAccessExpression(memberAccess, memberName)
                     }
-                    let memberType ITypeSymbol? = if sub.NameColon != nil {
-                        this.RegisterPatternMemberSlot(this.GetPatternMemberSymbol(sub.NameColon!!.Name), memberAccess)
+                    let subpatternMember ISymbol? = if sub.NameColon != nil {
+                        this.GetPatternMemberSymbol(sub.NameColon!!.Name)
+                    } else {
+                        default(ISymbol?)
+                    }
+                    let memberType ITypeSymbol? = if subpatternMember != nil {
+                        this.RegisterPatternMemberSlot(subpatternMember, memberAccess)
                     } else {
                         default(ITypeSymbol?)
                     }
@@ -3214,7 +3246,8 @@ partial class CSharpToGSharpTranslator {
                         bindings,
                         guards,
                         mutableBindings,
-                        memberType
+                        memberType,
+                        subpatternMember
                     )
                 }
             }
@@ -3280,7 +3313,8 @@ partial class CSharpToGSharpTranslator {
                         bindings,
                         guards,
                         mutableBindings,
-                        this.RegisterPatternMemberSlot(memberSymbol, memberAccess)
+                        this.RegisterPatternMemberSlot(memberSymbol, memberAccess),
+                        memberSymbol
                     )
                 }
             }
@@ -3396,7 +3430,8 @@ partial class CSharpToGSharpTranslator {
             bindings List[(Symbol ISymbol, Replacement GExpression)],
             guards List[GExpression],
             mutableBindings List[(Symbol ILocalSymbol, MatchedValue GExpression)]?,
-            memberType ITypeSymbol? = nil
+            memberType ITypeSymbol? = nil,
+            memberSymbol ISymbol? = nil
         ) {
             if pattern is Microsoft.CodeAnalysis.CSharp.Syntax.DiscardPatternSyntax {
                 return
@@ -3422,7 +3457,7 @@ partial class CSharpToGSharpTranslator {
             // Issue #4356: the member's type lets the nested test guard a
             // nullable member and read it once (TranslatePatternTest).
             this.AddTypedSubpatternGuard(
-                () -> this.TranslatePatternTest(memberAccess, pattern, memberType, isNestedPatternMember: true),
+                () -> this.TranslateRecordPatternMemberSubpatternTest(pattern, memberAccess, memberType, memberSymbol),
                 bindings,
                 guards,
                 mutableBindings

@@ -41,7 +41,20 @@ partial class CSharpToGSharpTranslator {
                         EmittedNameAllocator.IsUserRecordDeconstruct(importedContractMethod) &&
                         this
                         .nameAllocator
-                        .HasImportedDeconstructionContract(importedContractMethod) {
+                        .HasImportedDeconstructionContract(importedContractMethod) &&
+                        (
+                        importedContractMethod
+                            .ContainingType
+                            .IsValueType ||
+                            importedContractMethod.IsStatic ||
+                            (
+                            !importedContractMethod
+                                .ExplicitInterfaceImplementations
+                                .IsDefaultOrEmpty &&
+                                this.HasConflictingImportedDeconstructSignature(importedContractMethod) &&
+                                !this.IsExplicitImportedDeconstructOnlyInterface(importedContractMethod)
+                        )
+                    ) {
                         this.context.ReportUnsupported(
                             method,
                             "record methods implementing an imported Deconstruct contract need a dispatch-preserving bridge."
@@ -70,9 +83,24 @@ partial class CSharpToGSharpTranslator {
                         yield (methodMember, methodIsStatic)
                     }
                     if this.context.GetDeclaredSymbol(method) is IMethodSymbol deconstruct {
+                        let explicitStructForwarder = this.BuildValueTypeExplicitDeconstructForwarder(deconstruct)
+                        if explicitStructForwarder != nil {
+                            yield (explicitStructForwarder, false)
+                        }
+                        let forwarder = this.BuildImportedDeconstructForwarder(deconstruct, ownerKind)
+                        if forwarder != nil {
+                            yield (forwarder, false)
+                        }
+                        let protectedHook = this.BuildImportedProtectedDeconstructHook(deconstruct, ownerKind)
+                        if protectedHook != nil {
+                            yield (protectedHook, false)
+                        }
                         let adapter = this.BuildRecordDeconstructionAdapter(deconstruct)
                         if adapter != nil {
-                            yield (adapter, false)
+                            yield (adapter, deconstruct.IsStatic)
+                        }
+                        for interfaceAdapter in this.BuildConstructedInterfaceDeconstructionAdapters(deconstruct) {
+                            yield (interfaceAdapter, false)
                         }
                     }
                     if ownedExtensionTarget == nil && !preservedOwnedExtension && this.context.GetDeclaredSymbol(
@@ -272,6 +300,9 @@ partial class CSharpToGSharpTranslator {
                 }
                 case nestedType is BaseTypeDeclarationSyntax {
                     let nested GMember? = this.Visit(nestedType)
+                    if this.pendingNestedBridges.Remove(nestedType, out var nestedBridge) {
+                        yield (nestedBridge, true)
+                    }
                     if nested != nil {
                         yield (nested, true)
                     }
@@ -309,7 +340,10 @@ partial class CSharpToGSharpTranslator {
                 .Length == 0 {
                 return false
             }
-            if !this.CanPreserveSuspendingExtensionSignature(symbol, method) {
+            if !this.CanPreserveSuspendingExtensionSignature(symbol, method) ||
+                this.TypeContainsPointerOrFunctionPointer(symbol.ReturnType) || symbol.Parameters.Any(
+                (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+            ) {
                 return false
             }
             let receiver = symbol.Parameters[0]
@@ -1196,10 +1230,19 @@ partial class CSharpToGSharpTranslator {
                     return (nil, false)
                 }
             }
+            let bridgedExplicitRecordDeconstruct = isExplicitInterfaceImpl &&
+                symbol != nil &&
+                symbol
+                .ContainingType
+                .IsRecord &&
+                this.DirectlyImplementsImportedDeconstructContract(symbol)
+            let helperExplicitValueTypeDeconstruct = this.NeedsValueTypeExplicitDeconstructHelper(symbol)
             // ADR-0149: the resolved explicit-interface qualifier clause type
             // for a clause-compatible explicit implementation, or null for an
             // ordinary method / safe fallback.
-            let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl {
+            let explicitInterfaceType GTypeReference? = if hasClauseCompatibleExplicitInterfaceImpl &&
+                !bridgedExplicitRecordDeconstruct &&
+                !helperExplicitValueTypeDeconstruct {
                 this.typeMapper.Map(
                     symbol!!.ExplicitInterfaceImplementations[0].ContainingType,
                     this.context,
@@ -1373,12 +1416,20 @@ partial class CSharpToGSharpTranslator {
                 body = BlockStatement([]GStatement{BlockStatement(body.Statements, isUnsafe: true)})
             }
             let isAsyncVoidHandler = IsCSharpAsyncVoidHandler(symbol)
-            var isOverride = symbol != nil && symbol.IsOverride
+            let overridesImportedNonMigratedDeconstruct = symbol != nil &&
+                symbol.Name == "Deconstruct" &&
+                this.EmittedName(symbol, symbol.Name) != symbol.Name &&
+                symbol.OverriddenMethod != nil &&
+                symbol.OverriddenMethod!!
+                .DeclaringSyntaxReferences
+                .IsDefaultOrEmpty &&
+                !this.TryResolveMigratedProducerDeconstruct(symbol.OverriddenMethod, out _, out _)
+            var isOverride = symbol != nil && symbol.IsOverride && !overridesImportedNonMigratedDeconstruct
             // Interface members are implicitly abstract in C#; in canonical G# the
             // members of an `interface` carry no modifier (the `open` keyword is for
             // virtual/abstract members of a class). Suppress `open` for them so the
             // emitted G# round-trips (ADR-0115 §B.6).
-            var isOpen = this.IsMemberEmittedOpen(symbol, isOverride)
+            var isOpen = this.IsMemberEmittedOpen(symbol, symbol != nil && symbol.IsOverride)
             // Receiver-clause methods have no `open`/`override`, and a value
             // aggregate has no open members of its own. A `data struct`
             // replaces its synthesized `ToString` with a plain `func` (ADR-0029
@@ -1426,7 +1477,9 @@ partial class CSharpToGSharpTranslator {
             // where an explicit impl is not publicly callable by the type name.
             //
             // Fallbacks still rely on name-based dispatch and stay public.
-            let explicitInterfaceVisibility = if isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl {
+            let explicitInterfaceVisibility = if bridgedExplicitRecordDeconstruct {
+                Visibility.Internal
+            } else if isExplicitInterfaceImpl && !hasClauseCompatibleExplicitInterfaceImpl {
                 Visibility.Default
             } else {
                 MapVisibility(symbol, this.context, node)
@@ -1460,8 +1513,13 @@ partial class CSharpToGSharpTranslator {
             // C# definition for the declaring part (the pre-ADR-0192
             // implementation-only translation silently dropped its
             // attributes).
+            let emittedMethodName = if helperExplicitValueTypeDeconstruct {
+                this.ValueTypeExplicitDeconstructHelperName(symbol!!)
+            } else {
+                this.EmittedName(symbol, node.Identifier.ValueText)
+            }
             let method = MethodDeclaration(
-                this.EmittedName(symbol, node.Identifier.ValueText),
+                emittedMethodName,
                 parameters: parameters,
                 returnType: returnType,
                 body: body,
@@ -2085,10 +2143,19 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func IsStaticExtensionHelper(method IMethodSymbol?) bool {
+            let original IMethodSymbol? = method?.ReducedFrom ?? method
+            if original != nil &&
+                original.IsExtensionMethod &&
+                (
+                this.TypeContainsPointerOrFunctionPointer(original.ReturnType) || original.Parameters.Any(
+                    (parameter IParameterSymbol) -> this.TypeContainsPointerOrFunctionPointer(parameter.Type)
+                )
+            ) {
+                return true
+            }
             if this.IsPreservedOwnedExtension(method) || this.ownedExtensions.IsStaticHelper(method) {
                 return true
             }
-            let original IMethodSymbol? = method?.ReducedFrom ?? method
             if !CSharpToGSharpTranslator.RequiresOwnerScopedExtension(original) ||
                 this
                 .context
