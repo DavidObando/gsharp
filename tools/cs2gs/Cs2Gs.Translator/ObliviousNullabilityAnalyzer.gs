@@ -5932,6 +5932,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if argument.Parameter is IParameterSymbol parameter &&
+                parameter.RefKind != RefKind.Out &&
                 argument
                 .Value
                 ?.Syntax is ExpressionSyntax value &&
@@ -7398,7 +7399,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     },
                     secondPrefix: sourcePath,
                     bidirectional: !isOutput,
-                    isContractBoundary: true
+                    isContractBoundary: true,
+                    tupleContractEdges: tupleContractEdges
                 )
                 if targetType is INamedTypeSymbol{IsTupleType: true} {
                     continue
@@ -7515,6 +7517,26 @@ internal shared class ObliviousNullabilityAnalyzer {
             }
             for candidate in EnumerateTupleContainerSources(conditional.WhenFalse, model, unwrapSuppressions, visited) {
                 yield candidate
+            }
+            yield break
+        }
+        if current is MemberAccessExpressionSyntax nullableValue && model.GetSymbolInfo(nullableValue)
+            .Symbol is IPropertySymbol{
+            Name: "Value",
+            ContainingType: {OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T}}
+        } {
+            let receiver = if unwrapSuppressions {
+                Unwrap(nullableValue.Expression, unwrapSuppressions: true)
+            } else {
+                nullableValue.Expression
+            }
+            for parent in EnumerateTupleContainerSources(receiver, model, unwrapSuppressions, visited) {
+                if parent.StorageType is INamedTypeSymbol{
+                    OriginalDefinition: {SpecialType: SpecialType.System_Nullable_T},
+                    TypeArguments: {Length: 1}
+                } nullableParent {
+                    yield (parent.Symbol, nullableParent.TypeArguments[0], AppendTuplePath(parent.Prefix, 0))
+                }
             }
             yield break
         }
@@ -9136,7 +9158,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         secondPrefix string = "",
         bidirectional bool = true,
         firstPrefix string = "",
-        isContractBoundary bool = false
+        isContractBoundary bool = false,
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         let comparisonType = TupleContractComparisonType(first, firstType, second)
         // Covariant envelopes can reorder type arguments. Bare tuple
@@ -9192,7 +9215,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for var i = 0; i < firstSlots.Count; i++ {
             let secondPath = secondSlots[i].Path
-            if bidirectional {
+            let isContainerSlot = SlotCrossesSharedContainer(firstType, firstPrefix, firstSlots[i].Path)
+            let slotEdges = if isContainerSlot && tupleContractEdges != nil {
+                tupleContractEdges
+            } else {
+                tupleEdges
+            }
+            if bidirectional || isContainerSlot {
                 AddTupleShapeEdges(
                     first,
                     firstSlots[i].Tuple,
@@ -9201,7 +9230,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     secondSlots[i].Tuple,
                     secondPath,
                     tupleTainted,
-                    tupleEdges,
+                    slotEdges,
+                    tupleContractEdges,
                     isContractBoundary: isContractBoundary
                 )
             }
@@ -9213,10 +9243,54 @@ internal shared class ObliviousNullabilityAnalyzer {
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
                 tupleTainted,
-                tupleEdges,
+                slotEdges,
+                tupleContractEdges,
                 isContractBoundary: isContractBoundary
             )
         }
+    }
+
+    // Inline tuple elements and Nullable<T> value wrappers live in caller storage (#5905).
+    // Only array elements and other constructed generic type arguments share a container object.
+    private func SlotCrossesSharedContainer(rootType ITypeSymbol?, rootPrefix string, slotPath string) bool {
+        if slotPath == rootPrefix {
+            return false
+        }
+        let relativePath = if rootPrefix.Length == 0 {
+            slotPath
+        } else if slotPath.StartsWith(rootPrefix + ".", StringComparison.Ordinal) {
+            slotPath.Substring(rootPrefix.Length + 1)
+        } else {
+            return false
+        }
+        var current = rootType
+        for component in relativePath.Split('.') {
+            if current is IArrayTypeSymbol {
+                return true
+            }
+            if current is not INamedTypeSymbol named || !int32.TryParse(component, out var index) || index < 0 {
+                return false
+            }
+            if named.IsTupleType {
+                if index >= named.TupleElements.Length {
+                    return false
+                }
+                current = named.TupleElements[index].Type
+                continue
+            }
+            if named
+                .OriginalDefinition
+                .SpecialType == SpecialType.System_Nullable_T &&
+                index == 0 &&
+                named
+                .TypeArguments
+                .Length == 1 {
+                current = named.TypeArguments[0]
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     private func TupleContractComparisonType(first ISymbol, firstType ITypeSymbol?, second ISymbol?) ITypeSymbol? {
