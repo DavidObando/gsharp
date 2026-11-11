@@ -13870,9 +13870,13 @@ partial class CSharpToGSharpTranslator {
                     .CodeAnalysis
                     .NullableFlowState
                     .None &&
-                    declaringScope != nil &&
-                    this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
-                    (isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_))
+                    (
+                    this.IsObliviousCompilation() ||
+                        (
+                        declaringScope != nil && this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
+                            (isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_))
+                    )
+                )
             ) {
                 return false
             }
@@ -14584,6 +14588,9 @@ partial class CSharpToGSharpTranslator {
             // remark above. `this` checkpoints are never asserted and are
             // not added to this list by the decomposer.
             for checkpoint in leftReceiverCheckpoints {
+                if this.IsGSharpFlowNarrowedLocal(checkpoint) {
+                    continue
+                }
                 if this.ReceiverNeedsNullForgiveness(checkpoint, isDereferenceReceiver: true) ||
                     this.ReceiverIsNullableReferenceFieldOrProperty(checkpoint) || this.NullableReferenceValueMayBeNull(
                     checkpoint
@@ -22201,17 +22208,17 @@ partial class CSharpToGSharpTranslator {
         // `F != null ? …F… : …` conditional expression, whose condition
         // directly null-checks that same symbol. Originally scoped to the
         // field/property caller (<see cref="IsNullGuardNarrowedFieldUse"/>),
-        // this walk is symbol-kind-agnostic and is reused as-is by the
-        // argument-forwarding rule (#2434,
-        // <see cref="IsUnguardedForwardOfTaintedValueAsArgument"/>), which
-        // needs the identical textual-guard detection for a LOCAL/PARAMETER —
-        // a guarded local is narrowed by gsc's own Kotlin-style smart-cast
-        // exactly as a guarded field is narrowed here, syntactically, so a
-        // single shared walk serves both callers.
+        // argument-forwarding and value bridges also ask this query.
+        // Locals and parameters use IsGSharpFlowNarrowedLocal, which checks guard regions and narrowing invalidation.
+        // Fields and properties keep the textual guard walk because gsc does not narrow their storage across statements.
         private func IsDominatedByNullCheckGuard(
             use Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
             symbol ISymbol?
         ) bool {
+            // Issue #5645: a local guard must survive writes, escaped closure calls, and capture boundaries.
+            if symbol is ILocalSymbol || symbol is IParameterSymbol {
+                return this.IsGSharpFlowNarrowedLocal(use, requireRoslynFlowNotNull: false)
+            }
             for var node Microsoft.CodeAnalysis.SyntaxNode? = use; node != nil; node = node!!.Parent {
                 switch node.Parent {
                     case elseClause is Microsoft

@@ -367,25 +367,8 @@ namespace Demo
     }
 
     @Fact
-    func GuardedProperty_SameConditionOr_RootItselfNullForgiven_StillAssertsOnMember() {
-        // PR #4277 review fix (live-CI-confirmed): reproduces the hot-core
-        // guard regression this predicate caused in
-        // src/Core/CodeAnalysis/Binding/StatementBinder.Loops.cs's
-        // IsLockableReferenceType — `type.ClrType == null || !type.ClrType.IsValueType`.
-        // `type` is a defensively-checked, non-nullable-DECLARED parameter in
-        // an oblivious (no `#nullable`) file, so cs2gs itself asserts `type!!`
-        // at every dereference (the pre-existing, unrelated "promoted
-        // nullable receiver" rule). `ClrType` is otherwise a perfectly
-        // stable get-only, non-virtual property, and both operands denote
-        // the SAME `type.ClrType` path — so without this fix this predicate
-        // would ALSO suppress `!!` on `.ClrType`, leaving
-        // `type!!.ClrType.IsValueType`. gsc's own SmartCastStability only
-        // recognises a bare variable as a stable-path ROOT: once `type` is
-        // itself emitted as `type!!` (a BoundUnaryExpression, not a bare
-        // variable), the chain hanging off it is no longer a stable path at
-        // all, and gsc genuinely cannot narrow `.ClrType` — dropping its `!!`
-        // there produced the real GS0158 ('Cannot find member IsValueType')
-        // this test pins against regressing.
+    func GuardedProperty_SameConditionOr_NarrowedRootDoesNotAssert() {
+        // Issue #5645: the early exit narrows `type`, so its stable property path also narrows within `||`.
         let printed = TranslateUnit(`
 namespace Demo
 {
@@ -402,7 +385,8 @@ namespace Demo
         }
     }
 }`)
-        Assert.Contains("type!!.ClrType!!.IsValueType", printed)
+        Assert.Contains("return type.ClrType == nil || !type.ClrType.IsValueType", printed)
+        Assert.DoesNotContain("!!", printed)
     }
 
     shared {
