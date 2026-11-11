@@ -381,17 +381,50 @@ partial class CSharpToGSharpTranslator {
                     if this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull) {
                         return this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess)
                     }
-                    if DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression) &&
-                        FindLeadingElementBinding(
+                    if FindLeadingElementBinding(
                         conditionalAccess.WhenNotNull
-                    ) is ElementBindingExpressionSyntax conditionalIndexBinding &&
-                        !this
-                        .ConditionalIndexReceiverIsNullable(conditionalAccess.Expression) {
-                        return this.TranslateNonNullableConditionalIndex(
-                            conditionalAccess.WhenNotNull,
-                            conditionalIndexBinding,
-                            this.TranslateExpression(conditionalAccess.Expression)
-                        )
+                    ) is ElementBindingExpressionSyntax conditionalIndexBinding {
+                        let dependsOnReceiver = DependsOnEnclosingConditionalReceiver(conditionalAccess.Expression)
+                        let detachedReceiver = FindLeadingElementBinding(
+                            conditionalAccess.Expression
+                        ) is ElementBindingExpressionSyntax receiverBinding &&
+                            this
+                            .state
+                            .ConditionalElementReceivers
+                            .ContainsKey(receiverBinding)
+                        if (!dependsOnReceiver || detachedReceiver) &&
+                            (
+                            this.GSharpExpressionIsStaticallyNonNull(conditionalAccess.Expression) ||
+                                this.IsGSharpFlowNarrowedLocal(
+                                conditionalAccess.Expression,
+                                requireRoslynFlowNotNull: false
+                            ) ||
+                                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(conditionalAccess.Expression)
+                        ) {
+                            let indexed = this.TranslateNonNullableConditionalIndex(
+                                conditionalAccess.WhenNotNull,
+                                conditionalIndexBinding,
+                                this.TranslateExpression(conditionalAccess.Expression)
+                            )
+                            let conditionalType = this.context.GetTypeInfo(conditionalAccess).Type
+                            if conditionalType?.SpecialType == SpecialType.System_Void {
+                                return indexed
+                            }
+                            // Preserve conditional-access lifting after the entire continuation, not at its first index.
+                            let resultType = this.typeMapper.Map(
+                                conditionalType,
+                                this.context,
+                                conditionalAccess.GetLocation()
+                            )
+                            return ConversionExpression(MakeNullable(resultType), indexed, isCheckedReferenceCast: true)
+                        }
+                        if dependsOnReceiver && !this.ConditionalIndexReceiverIsNullable(conditionalAccess.Expression) {
+                            return this.TranslateNonNullableConditionalIndex(
+                                conditionalAccess.WhenNotNull,
+                                conditionalIndexBinding,
+                                this.TranslateExpression(conditionalAccess.Expression)
+                            )
+                        }
                     }
                     // Issue #3700: gsc's `?[i]` is a single postfix STEP whose
                     // result is `T?`, unlike `?.` — which swallows the whole
@@ -7049,6 +7082,9 @@ partial class CSharpToGSharpTranslator {
                 case elementBinding is ElementBindingExpressionSyntax: elementBinding
                 case parenthesized is ParenthesizedExpressionSyntax: FindLeadingElementBinding(parenthesized.Expression)
                 case invocation is InvocationExpressionSyntax: FindLeadingElementBinding(invocation.Expression)
+                case conditionalAccess is ConditionalAccessExpressionSyntax: FindLeadingElementBinding(
+                    conditionalAccess.Expression
+                )
                 case memberAccess is MemberAccessExpressionSyntax: FindLeadingElementBinding(memberAccess.Expression)
                 case elementAccess is ElementAccessExpressionSyntax: FindLeadingElementBinding(elementAccess.Expression)
                 default: default(ElementBindingExpressionSyntax?)

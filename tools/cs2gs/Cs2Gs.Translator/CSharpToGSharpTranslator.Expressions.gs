@@ -13811,7 +13811,8 @@ partial class CSharpToGSharpTranslator {
 
         private func IsGSharpFlowNarrowedLocal(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            requireRoslynFlowNotNull bool = true
+            requireRoslynFlowNotNull bool = true,
+            scopeOverride Microsoft.CodeAnalysis.SyntaxNode? = nil
         ) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -13833,13 +13834,24 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return false
             }
-            let scope_ Microsoft.CodeAnalysis.SyntaxNode? = this.state.CurrentBodyScope ?? expression.Ancestors()
-                .FirstOrDefault(
+            let bodyScope Microsoft
+                .CodeAnalysis
+                .SyntaxNode? = scopeOverride ??
+                this
+                .state
+                .CurrentBodyScope ??
+                expression
+                .Ancestors().FirstOrDefault(
                 (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
                     node is AccessorDeclarationSyntax ||
                     node is LocalFunctionStatementSyntax ||
                     node is AnonymousFunctionExpressionSyntax
             )
+            let scope_ = if bodyScope is AnonymousFunctionExpressionSyntax lambda {
+                lambda.Body
+            } else {
+                bodyScope
+            }
             if scope_ == nil {
                 return false
             }
@@ -13882,11 +13894,15 @@ partial class CSharpToGSharpTranslator {
                 )
             )
                 .OfType[Microsoft.CodeAnalysis.CSharp.Syntax.BinaryExpressionSyntax]() {
-                if nullCheck.SpanStart >= expression.SpanStart || !this.TryGetNullComparisonNonNullPolarity(
-                    nullCheck,
-                    symbol,
-                    out var whenTrue
-                ) ||
+                // Roslyn represents the classic `x is T` form as a binary expression, not a pattern expression.
+                let typeTest = nullCheck.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression) &&
+                    this.BindsToGuardSymbol(nullCheck.Left, symbol) && this.TypeTestNarrowing(
+                    this.context.GetTypeInfo(nullCheck.Right).Type,
+                    this.GetPatternScrutineeUnderlyingType(nullCheck.Left)
+                ) != nil
+                var whenTrue = true
+                if nullCheck.SpanStart >= expression.SpanStart ||
+                    (!typeTest && !this.TryGetNullComparisonNonNullPolarity(nullCheck, symbol, out whenTrue)) ||
                     !this
                     .ComputeBooleanFlowRegions(nullCheck, whenTrue, includeWhenClauseRegion: false).Any(
                     (region Microsoft.CodeAnalysis.SyntaxNode) -> region.Span.Contains(expression!!.Span)
@@ -13902,7 +13918,22 @@ partial class CSharpToGSharpTranslator {
                 }
                 return true
             }
-            return this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_)
+            if this.IsGSharpSwitchNarrowedLocal(expression, symbol, scope_) {
+                return true
+            }
+            // A stable lambda capture keeps the enclosing narrowing; a reassigned or by-reference variable does not.
+            if bodyScope is AnonymousFunctionExpressionSyntax && !this.IsByReferenceVariable(symbol) {
+                let enclosingScope = bodyScope.Ancestors().FirstOrDefault(
+                    (node Microsoft.CodeAnalysis.SyntaxNode) -> node is BaseMethodDeclarationSyntax ||
+                        node is AccessorDeclarationSyntax ||
+                        node is LocalFunctionStatementSyntax ||
+                        node is AnonymousFunctionExpressionSyntax
+                )
+                if enclosingScope != nil && !this.IsSymbolReassigned(symbol, enclosingScope) {
+                    return this.IsGSharpFlowNarrowedLocal(expression, requireRoslynFlowNotNull, enclosingScope)
+                }
+            }
+            return false
         }
 
         // A `goto case` or `goto default` enters a section without its case test, and gsc does not narrow there.
@@ -14123,6 +14154,9 @@ partial class CSharpToGSharpTranslator {
                         continue
                     }
                     case ElementAccessExpressionSyntax {
+                        continue
+                    }
+                    case conditionalAccess is ConditionalAccessExpressionSyntax when conditionalAccess.Expression == node {
                         continue
                     }
                     case coalesceAssignment is Microsoft
