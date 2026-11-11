@@ -8,6 +8,7 @@ import Cs2Gs.CodeModel.Printing
 import Cs2Gs.Pipeline
 import Cs2Gs.Translator
 import Cs2Gs.Translator.Loading
+import GSharp.Tests
 import Microsoft.CodeAnalysis
 import Microsoft.CodeAnalysis.CSharp
 import Microsoft.CodeAnalysis.CSharp.Syntax
@@ -28,6 +29,102 @@ import Xunit
 /// before it reports, every test that expects a site fails, and the output
 /// assertions still pass, which shows the report does not change the code.
 open class Issue4612GenericStoreBridgeTests {
+    @Fact
+    func DeconstructionStores_ReportOnlyGenericSlots_WithoutChangingOutput() {
+        let source = `using System.Collections.Generic;
+public class Node { }
+public record Entry(Node Item, int Id);
+public record GenericEntry<T>(T Item, int Id) where T : class;
+public class Holder<T>
+{
+    public T Field;
+    public T Property { get; set; }
+}
+public class Concrete
+{
+    public Node Field;
+    public Node this[int index] { get => new Node(); set { } }
+}
+public class ConcreteBox
+{
+    public static implicit operator ConcreteBox(Node node) => new ConcreteBox();
+}
+public class GenericBox<T>
+{
+    public static implicit operator GenericBox<T>(T value) => new GenericBox<T>();
+}
+public static class C
+{
+    public static Entry Empty() => new Entry(null, 0);
+    public static GenericEntry<Node> GenericEmpty() => new GenericEntry<Node>(null, 0);
+    public static void Store(Entry entry, Node[] array, List<Node> list, Holder<Node> holder,
+        Concrete concrete, ConcreteBox[] converted, GenericBox<Node>[] genericConverted)
+    {
+        int id;
+        Node local;
+        (array[0], id) = entry;
+        (list[0], id) = entry;
+        (holder.Field, id) = entry;
+        (holder.Property, id) = entry;
+        (local, id) = entry;
+        (concrete.Field, id) = entry;
+        (concrete[0], id) = entry;
+        (converted[0], id) = entry;
+        (genericConverted[0], id) = entry;
+    }
+    public static void GenericLocal<T>(GenericEntry<T> entry) where T : class
+    {
+        T copy;
+        int id;
+        (copy, id) = entry;
+    }
+#nullable enable
+    public static void NullableStores(Entry entry, Node?[] array, List<Node?> list, Holder<Node?> holder)
+    {
+        Node? local;
+        int id;
+        (array[0], id) = entry;
+        (list[0], id) = entry;
+        (holder.Field, id) = entry;
+        (local, id) = entry;
+    }
+}`
+        let (printed, sites) = Translate(source)
+        GoldenFile.AssertMatches(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue5942DeconstructionStores.golden"),
+            printed
+        )
+        Assert.Equal(
+            []string{
+                "array[0] | kind=array-element",
+                "list[0] | kind=constructed-generic-member",
+                "holder.Field | kind=constructed-generic-member",
+                "holder.Property | kind=constructed-generic-member",
+                "genericConverted[0] | kind=constructed-generic-member",
+                "copy | kind=type-parameter-local"
+            },
+            sites.Select(
+                (site TranslationDiagnostic) -> source.Substring(
+                    site.Location!!.SourceSpan.Start,
+                    site.Location!!.SourceSpan.Length
+                ) +
+                    " | " +
+                    site.Message!!.Split(" | ", StringSplitOptions.None)[0]
+            )
+        )
+        Assert.All(
+            sites,
+            func (site TranslationDiagnostic) {
+                let target = source.Substring(site.Location!!.SourceSpan.Start, site.Location!!.SourceSpan.Length)
+                Assert.Equal(Expected(source, target + ","), Position(site))
+                Assert.Equal(TranslationSeverity.Warning, site.Severity)
+                Assert.EndsWith("| value=" + target, site.Message, StringComparison.Ordinal)
+            }
+        )
+        Assert.Contains("parameter 'value' | slot-type=Node", sites[4].Message, StringComparison.Ordinal)
+        Assert.Contains("| result-depends-on-slot=yes |", sites[4].Message, StringComparison.Ordinal)
+    }
+
     @Fact
     func InferredMethodTypeParameter_Append_IsReported() {
         let (printed, sites) = Translate(`using System.Linq;
@@ -1368,6 +1465,35 @@ public static class C
         Assert.Contains("generic!!", printed, StringComparison.Ordinal)
         Assert.Contains("collection!!", printed, StringComparison.Ordinal)
         Assert.Empty(sites)
+    }
+
+    @Theory
+    @InlineData("(copy, id) = entry;")
+    @InlineData("((copy, id), outer) = (entry, 0);")
+    func DeconstructionParameterAssignments_UseAssignmentMetadata(assignment string) {
+        let source = `public class Node { }
+public record Entry<T>(T Item, int Id) where T : class;
+public static class C
+{
+    public static Entry<Node> Empty() => new Entry<Node>(null, 0);
+    public static T Store<T>(T copy, Entry<T> entry) where T : class
+    {
+        int id, outer;
+        ` + assignment + `
+        return copy;
+    }
+}`
+        let (printed, sites) = Translate(source)
+        Assert.Contains("copy = copyValue!!\n", printed, StringComparison.Ordinal)
+        let site = Assert.Single(sites)
+        Assert.Equal(Expected(source, "copy, id"), Position(site))
+        Assert.Equal("copy", source.Substring(site.Location!!.SourceSpan.Start, site.Location!!.SourceSpan.Length))
+        Assert.StartsWith(
+            "kind=type-parameter-assignment | target=C.Store<T>(T, Entry<T>) parameter 'copy' | slot-type=T",
+            site.Message,
+            StringComparison.Ordinal
+        )
+        Assert.Contains("| result-depends-on-slot=no | value=copy", site.Message, StringComparison.Ordinal)
     }
 
     @Fact

@@ -147,7 +147,6 @@ open class Issue4612StoreBridgeInventoryTests {
         )
         // The pinned C# archive has an independent inventory. Do not mask changes to either source tree.
         if !isGSharp {
-            expected.Remove("BridgeDeconstructedElementStore")
             expected.Remove("BuildBridgedTupleLeaf")
             expected.Remove("BuildBridgedTupleLiteral")
             expected.Remove("BuildCachedSwitchTypeConversion")
@@ -186,7 +185,6 @@ open class Issue4612StoreBridgeInventoryTests {
             (Count int32, Reason string)
         ]{
             ["AssertFlowNarrowedNullableReference"] = (1, "C# flow analysis proved the value non-null here"),
-            ["BridgeDeconstructedElementStore"] = (3, "deconstructed element store into a non-nullable target"),
             ["BuildBridgedTupleLeaf"] = (
                 1,
                 "converted tuple element handed to ReportStoreBridge on the next statement"

@@ -1,0 +1,103 @@
+import System.Collections.Generic
+import System
+
+open class Node {
+}
+
+open data class Entry(Item Node?, Id int32) : IEquatable[Entry] {
+}
+
+open data class GenericEntry[T class](Item T?, Id int32) : IEquatable[GenericEntry[T]] {
+}
+
+open class Holder[T] {
+    var Field T
+    prop Property T
+}
+
+open class Concrete {
+    var Field Node
+
+    prop this[index int32] Node {
+        get -> Node()
+        set {
+        }
+    }
+}
+
+open class ConcreteBox {
+    func operator implicit(node Node) ConcreteBox -> ConcreteBox()
+}
+
+open class GenericBox[T] {
+    func operator implicit(value T) GenericBox[T] -> GenericBox[T]()
+}
+
+shared class C {
+    func Empty() Entry -> Entry(nil, 0)
+    func GenericEmpty() GenericEntry[Node] -> GenericEntry[Node](nil, 0)
+
+    func Store(
+        entry Entry,
+        array []Node,
+        list List[Node],
+        holder Holder[Node],
+        concrete Concrete,
+        converted []ConcreteBox,
+        genericConverted []GenericBox[Node]) {
+        var id int32
+        var local Node
+        let (arrayValue, idValue) = entry
+        array[0] = arrayValue!!
+        id = idValue
+        let (listValue, idValue2) = entry
+        list[0] = listValue!!
+        id = idValue2
+        let (holderValue, idValue3) = entry
+        holder.Field = holderValue!!
+        id = idValue3
+        let (holderValue2, idValue4) = entry
+        holder.Property = holderValue2!!
+        id = idValue4
+        let (localValue, idValue5) = entry
+        local = localValue!!
+        id = idValue5
+        let (concreteValue, idValue6) = entry
+        concrete.Field = concreteValue!!
+        id = idValue6
+        let (concreteValue2, idValue7) = entry
+        concrete[0] = concreteValue2!!
+        id = idValue7
+        let (convertedValue, idValue8) = entry
+        converted[0] = convertedValue!!
+        id = idValue8
+        let (genericConvertedValue, idValue9) = entry
+        genericConverted[0] = genericConvertedValue!!
+        id = idValue9
+    }
+
+    func GenericLocal[T class](entry GenericEntry[T]) {
+        var copy T
+        var id int32
+        let (copyValue, idValue) = entry
+        copy = copyValue!!
+        id = idValue
+    }
+
+    func NullableStores(entry Entry, array []Node?, list List[Node?], holder Holder[Node?]) {
+        var local Node?
+        var id int32
+        let (arrayValue, idValue) = entry
+        array[0] = arrayValue
+        id = idValue
+        let (listValue, idValue2) = entry
+        list[0] = listValue
+        id = idValue2
+        let (holderValue, idValue3) = entry
+        holder.Field = holderValue
+        id = idValue3
+        let (localValue, idValue4) = entry
+        local = localValue
+        id = idValue4
+    }
+}
