@@ -11311,6 +11311,9 @@ partial class CSharpToGSharpTranslator {
             if translated != nil && TranslatedExpressionIsStaticallyNonNull(translated) {
                 return true
             }
+            if this.IsGSharpFlowNarrowedLocal(expression, requireRoslynFlowNotNull: false) {
+                return true
+            }
             // A checked cast sets its own top-level nullability, independently of nested nullable positions.
             if Unparenthesize(expression) is CastExpressionSyntax cast &&
                 cast.Type is not NullableTypeSyntax &&
@@ -11353,7 +11356,7 @@ partial class CSharpToGSharpTranslator {
             let captureIsNonNull = this.VarCaptureIsNonNull(expression)
             if captureIsNonNull == true ||
                 (captureIsNonNull == nil && this.IsActivePatternBinding(expression)) ||
-                this.IsGSharpFlowNarrowedLocal(expression) || this.IsGuardCapturedFieldRead(expression) {
+                this.IsGuardCapturedFieldRead(expression) {
                 return true
             }
             if captureIsNonNull == false {
@@ -13817,7 +13820,8 @@ partial class CSharpToGSharpTranslator {
 
         private func IsGSharpFlowNarrowedLocal(
             expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            requireRoslynFlowNotNull bool = true
+            requireRoslynFlowNotNull bool = true,
+            requireRuntimeNonNullProof bool = false
         ) bool {
             var expression = expression
             while expression is Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax parenthesized {
@@ -13877,7 +13881,14 @@ partial class CSharpToGSharpTranslator {
                 return false
             }
             let requireJumpFreeScope = flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull
-            if this.IsGSharpFlowNarrowedLocalInScope(expression, expression, symbol, scope_, requireJumpFreeScope) {
+            if this.IsGSharpFlowNarrowedLocalInScope(
+                expression,
+                expression,
+                symbol,
+                scope_,
+                requireJumpFreeScope,
+                requireRuntimeNonNullProof
+            ) {
                 return true
             }
             if !this.IsClosureBoundary(scope_) || declaringScope == nil || object.ReferenceEquals(
@@ -13907,7 +13918,8 @@ partial class CSharpToGSharpTranslator {
                     effectiveTarget,
                     symbol,
                     parentScope,
-                    requireJumpFreeScope
+                    requireJumpFreeScope,
+                    requireRuntimeNonNullProof
                 ) {
                     return true
                 }
@@ -13988,10 +14000,20 @@ partial class CSharpToGSharpTranslator {
             effectiveTarget Microsoft.CodeAnalysis.SyntaxNode,
             symbol ISymbol?,
             $scope Microsoft.CodeAnalysis.SyntaxNode,
-            requireJumpFreeScope bool
+            requireJumpFreeScope bool,
+            requireRuntimeNonNullProof bool
         ) bool {
             let WithinScope = func (node Microsoft.CodeAnalysis.SyntaxNode) bool {
                 return object.ReferenceEquals(node, $scope) || !this.IsClosureBoundary(node)
+            }
+            if this.IsGSharpAssignmentNarrowedLocal(
+                expression,
+                effectiveTarget,
+                symbol,
+                $scope,
+                requireRuntimeNonNullProof
+            ) {
+                return true
             }
             if requireJumpFreeScope &&
                 (

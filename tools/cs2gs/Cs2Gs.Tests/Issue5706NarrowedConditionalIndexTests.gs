@@ -14,8 +14,315 @@ import Xunit
 /// On 14f1e3aa2, cast receivers throw on nil, and named constant guards cause nullable indexing errors.
 /// On 39fcd66c7, void lambda and nested continuation tests fail with invalid nullable System.Void output.
 /// On a6ffd4673, mutable captures in nested lambdas fail to bind after an outer guard.
+/// Issue #5936: disabling assignment postconditions makes all five assignment regressions report GS0300.
+/// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func AssignmentsAndBranchJoins_NarrowOnlyAfterTheWrite() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static string Pick(char value) => "char";
+        static string Pick(char? value) => "nullable";
+        static string Assigned(string? seed)
+        {
+            string? s = seed;
+            s = "a";
+            var value = s?[0];
+            return Pick(s?[0]) + ":" + Pick(value) + ":" + value.HasValue;
+        }
+        static char? Parameter(string? s) { s = "p"; return s?[0]; }
+        static char? Coalesced(string? s) { s ??= "c"; return s?[0]; }
+        static char? CoalesceValue(string? s) { s = s ?? "v"; return s?[0]; }
+        static char? ExitJoin(bool flag, string? s) { if (flag) { s = "e"; } else { return null; } return s?[0]; }
+        static char? GuardJoin(string? s) { if (s == null) { s = "g"; } return s?[0]; }
+        static char? ForInitialized(string? s) { for (s = "h";;) { return s?[0]; } }
+        static char? Chained(string? seed)
+        {
+            string? s = seed, other = seed;
+            s = other = "j";
+            return s?[0];
+        }
+        static char? Joined(bool flag, string? seed)
+        {
+            string? s = seed;
+            if (flag) { s = "t"; } else { s = "f"; }
+            return s?[0];
+        }
+        static char? Nested(bool flag, string? seed)
+        {
+            string? s = seed;
+            { if (flag) { s = "n"; } else { s = "m"; } }
+            return s?[0];
+        }
+        static char? Initialized() { string? s = "i"; return s?[0]; }
+        public static string Run() =>
+            Assigned(null) + "|" + Parameter(null) + "|" + Coalesced(null) + "|" + Coalesced("b") + "|" +
+            Joined(true, null) + "|" + Joined(false, null) + "|" + Nested(true, null) + "|" + Nested(false, null) + "|" +
+            Initialized() + "|" + GuardJoin(null) + "|" + GuardJoin("k") + "|" + ForInitialized(null) + "|" + Chained(null) + "|" +
+            CoalesceValue(null) + "|" + CoalesceValue("o") + "|" + ExitJoin(true, null) + "|" + ExitJoin(false, null);
+    }
+}`)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("s!!", printed)
+    }
+
+    @Fact
+    func AssignmentFacts_EndAtNullableWritesAndControlFlowEntries() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static void Clear(out string? s) { s = null; }
+        static void Replace(ref string? s) { s = null; }
+        static char? Written(string? seed) { string? s = seed; s = "a"; s = seed; return s?[0]; }
+        static char? Out(string? seed) { string? s = seed; s = "a"; Clear(out s); return s?[0]; }
+        static char? Ref(string? seed) { string? s = seed; s = "a"; Replace(ref s); return s?[0]; }
+        static string Backward()
+        {
+            string? s = null;
+            s = "a";
+            string result = "";
+        read:
+            result += s?[0] + "";
+            if (s != null) { s = null; goto read; }
+            return result;
+        }
+        static string BackwardStable()
+        {
+            string? s = null;
+            s = "b";
+            string result = "";
+        read:
+            result += s?[0] + "";
+            if (result.Length < 2) goto read;
+            return result;
+        }
+        static char? Bypassed(bool skip)
+        {
+            string? s = null;
+            if (skip) goto read;
+            s = "a";
+        read:
+            return s?[0];
+        }
+        static string Loop()
+        {
+            string? s = null;
+            s = "a";
+            string result = "";
+            for (int i = 0; i < 2; i++) { result += s?[0] + ""; s = null; }
+            return result;
+        }
+        static string ForWritten(string? s)
+        {
+            string result = "";
+            for (s = "f"; result.Length < 3; s = null) { result += (s?[0] + "|"); }
+            return result;
+        }
+        static char? Reestablished()
+        {
+            string? s = null;
+            for (int i = 0; i < 1; i++) { s = "r"; return s?[0]; }
+            return null;
+        }
+        public static string Run() =>
+            Written(null) + "|" + Written("w") + "|" + Out(null) + "|" + Ref(null) + "|" +
+            Backward() + "|" + BackwardStable() + "|" + Bypassed(true) + "|" + Bypassed(false) + "|" + Loop() + "|" + ForWritten(null) + "|" + Reestablished();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func AssignmentFacts_DoNotCrossEscapedCallsFiltersOrMutableCaptureBoundaries() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        static Action? clear;
+        static void Call() { clear?.Invoke(); }
+        static int Getter { get { Call(); return 0; } }
+        sealed class C { public C() { Call(); } }
+        sealed class Token
+        {
+            public static Token operator +(Token left, Token right) { Call(); return left; }
+        }
+        static char? Called()
+        {
+            string? s = null;
+            clear = () => s = null;
+            s = "a";
+            Call();
+            return s?[0];
+        }
+        static char? Property()
+        {
+            string? s = null;
+            clear = () => s = null;
+            s = "a";
+            var ignored = Getter;
+            return s?[0];
+        }
+        static char? Constructed()
+        {
+            string? s = null;
+            clear = () => s = null;
+            s = "a";
+            var ignored = new C();
+            return s?[0];
+        }
+        static char? Filtered()
+        {
+            string? s = null;
+            s = "a";
+            try { Call(); return s?[0]; }
+            catch (Exception) when ((s = null) != null) { return null; }
+        }
+        static char? Operator()
+        {
+            string? s = null;
+            clear = () => s = null;
+            s = "a";
+            var ignored = new Token() + new Token();
+            return s?[0];
+        }
+        static string Captured()
+        {
+            string? s = null;
+            s = "a";
+            Func<char?> read = () => s?[0];
+            char? before = read();
+            s = null;
+            return before + ":" + read();
+        }
+        static char? Reestablished()
+        {
+            string? s = null;
+            clear = () => s = null;
+            Call();
+            s = "r";
+            return s?[0];
+        }
+        static string LocalFunction()
+        {
+            string? s = null;
+            s = "a";
+            char? Read() => s?[0];
+            char? before = Read();
+            s = null;
+            return before + ":" + Read();
+        }
+        public static string Run() =>
+            Called() + "|" + Property() + "|" + Constructed() + "|" + Filtered() + "|" + Operator() + "|" +
+            Captured() + "|" + LocalFunction() + "|" + Reestablished();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func ForgivenNullableAssignment_DoesNotBecomeARuntimeAssertion() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        sealed class Token { public static implicit operator string(Token value) => (string)(object?)null; }
+        static char? Read(string? seed)
+        {
+            string? s = seed;
+            s = seed!;
+            return s?[0];
+        }
+        static char? Composed(bool flag, string? seed)
+        {
+            string? s = null;
+            s = flag ? seed! : "a";
+            return s?[0];
+        }
+        static char? Coalesced(string? seed)
+        {
+            string? s = null;
+            s ??= seed!;
+            return s?[0];
+        }
+        static char? Cast(string? seed)
+        {
+            string? s = null;
+            s = (string)seed;
+            return s?[0];
+        }
+        static string Contract(string? seed) => (string)seed;
+        static char? Called(string? seed)
+        {
+            string? s = null;
+            s = Contract(seed);
+            return s?[0];
+        }
+        static char? Assigned() { string? s = null; s = "a"; return s?[0]; }
+        static char? Converted() { string? s = null; s = new Token(); return s?[0]; }
+        static char? NullableCast() { string? s = null; s = (string?)"n"; return s?[0]; }
+        [System.Diagnostics.CodeAnalysis.AllowNull]
+        static string PromotedValue = "a";
+        static char? Promoted() { PromotedValue = null; string? s = null; s = PromotedValue!; return s?[0]; }
+        public static string Run() =>
+            Read(null) + "|" + Read("x") + "|" + Composed(true, null) + "|" + Composed(false, null) + "|" +
+            Coalesced(null) + "|" + Coalesced("c") + "|" + Cast(null) + "|" + Cast("d") + "|" +
+            Called(null) + "|" + Called("e") + "|" + Converted() + "|" + NullableCast() + "|" + Promoted() + "|" + Assigned() + "|end";
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("seed!!", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("object.ReferenceEquals", printed)
+    }
+
+    @Fact
+    func PlatformAssignments_KeepTheRuntimeGuardAndDoNotNarrowCoalescingWrites() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static char? Assigned(bool nil)
+    {
+        string? s = null;
+        s = Lib.Value(nil);
+        return s?[0];
+    }
+    static char? Coalesced(bool nil)
+    {
+        string? s = null;
+        s ??= Lib.Value(nil);
+        return s?[0];
+    }
+    public static string Run() => Assigned(true) + "|" + Assigned(false) + "|" + Coalesced(true) + "|" + Coalesced(false);
+}`, `
+#nullable disable
+namespace ObLib5936;
+public static class Lib
+{
+    public static string Value(bool nil) => nil ? null : "a";
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("Lib.Value(nil)!!", printed)
+    }
+
     @Fact
     func NarrowedLocalsAndParameters_PreserveNullableValueTypes() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`

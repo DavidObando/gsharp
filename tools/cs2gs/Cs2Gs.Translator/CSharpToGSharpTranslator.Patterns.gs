@@ -674,8 +674,14 @@ partial class CSharpToGSharpTranslator {
         }
 
         private func ConditionalIndexReceiverIsFlowNarrowed(
-            receiver ExpressionSyntax
-        ) bool -> this.IsGSharpFlowNarrowedLocal(receiver, requireRoslynFlowNotNull: false) ||
+            receiver ExpressionSyntax,
+            requireRuntimeNonNullProof bool = false
+        ) bool -> this
+            .IsGSharpFlowNarrowedLocal(
+            receiver,
+            requireRoslynFlowNotNull: false,
+            requireRuntimeNonNullProof: requireRuntimeNonNullProof
+        ) ||
             this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(receiver)
 
         private func ConditionalIndexNeedsRuntimeGuard(conditionalAccess ConditionalAccessExpressionSyntax) bool {
@@ -695,7 +701,8 @@ partial class CSharpToGSharpTranslator {
                 )
             ) &&
                 this.GSharpExpressionIsStaticallyNonNull(receiver) && !this.ConditionalIndexReceiverIsFlowNarrowed(
-                receiver
+                receiver,
+                requireRuntimeNonNullProof: true
             )
         }
 
