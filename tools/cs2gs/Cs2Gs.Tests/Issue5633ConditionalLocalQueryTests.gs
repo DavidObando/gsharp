@@ -105,6 +105,9 @@ open class Issue5633ConditionalLocalQueryTests {
     @InlineData(18, "loop")
     @InlineData(18, "tuple")
     @InlineData(18, "deconstruct")
+    @InlineData(12, "split")
+    @InlineData(14, "split")
+    @InlineData(16, "split")
     func CyclicOriginChain_CompletesWithinBound(links int32, shape string) {
         let body = StringBuilder(
             switch shape {
@@ -117,7 +120,9 @@ open class Issue5633ConditionalLocalQueryTests {
         )
         for var i = 1; i <= links; i++ {
             body.AppendLine(
-                if shape == "deconstruct" {
+                if shape == "split" {
+                    "var a$i = x${i - 1}; var b$i = x${i - 1}; var x$i = flag ? a$i : b$i;"
+                } else if shape == "deconstruct" {
                     "var (x$i, _) = (flag ? x${i - 1} : x${i - 1}, 0);"
                 } else {
                     "var x$i = flag ? x${i - 1} : x${i - 1};"

@@ -35,9 +35,13 @@ partial class CSharpToGSharpTranslator {
             HashSet[string]
         ]()
         private var defaultOriginCycleVersion int32 = 0
-        private let defaultOriginContexts Dictionary[HashSet[ISymbol], int32] = Dictionary[HashSet[ISymbol], int32](
-            HashSet[ISymbol].CreateSetComparer()
-        )
+        private let defaultOriginContexts Dictionary[
+            object,
+            List[(Id int32, Visited HashSet[ISymbol], Probed HashSet[ISymbol])]
+        ] = Dictionary[object, List[(Id int32, Visited HashSet[ISymbol], Probed HashSet[ISymbol])]]()
+        private let defaultOriginProbeScopes Stack[HashSet[ISymbol]] = Stack[HashSet[ISymbol]]()
+        private var defaultOriginNextContextId int32 = 0
+        private var defaultOriginFactVersion int32 = 0
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -820,6 +824,7 @@ partial class CSharpToGSharpTranslator {
             path IReadOnlyList[int32],
             visited HashSet[ISymbol]
         ) bool {
+            this.RecordDefaultOriginProbe(local)
             if !visited.Add(local) {
                 this.defaultOriginCycleVersion++
                 return false
@@ -836,48 +841,103 @@ partial class CSharpToGSharpTranslator {
             ) {
                 return cached
             }
-            let contextPathKey = pathKey + ":blocked:${this.GetDefaultOriginContext(visited)}"
-            if declaration != nil && this.TryGetSlotChainNodeMemo(
+            let queryKey = (declaration, pathKey)
+            if declaration != nil && this.TryGetDefaultOriginContext(queryKey, visited, out var contextId) &&
+                this
+                .TryGetSlotChainNodeMemo(
                 declaration,
                 emptyChain,
                 out var contextual,
-                pathKey: contextPathKey
+                pathKey: pathKey + ":blocked:$contextId"
             ) {
                 this.defaultOriginCycleVersion++
                 return contextual
             }
             let cycleVersion = this.defaultOriginCycleVersion
-            let result = this.GetReachingLocalValues(local, usePosition, visited).Any(
-                (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                    value,
-                    path,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+            let factVersion = this.defaultOriginFactVersion
+            let snapshot = HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+            let probes = HashSet[ISymbol](SymbolEqualityComparer.Default)
+            this.defaultOriginProbeScopes.Push(probes)
+            var result bool
+            try {
+                result = this.GetReachingLocalValues(local, usePosition, visited).Any(
+                    (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
+                        value,
+                        path,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
                 )
-            )
-            // A truncated negative answer is valid only with the same blocked symbols (#5633).
-            if declaration != nil {
+            } finally {
+                this.EndDefaultOriginProbeScope(probes)
+            }
+            // Only tested memberships affect a truncated answer. Ignore unrelated ancestors (#5633).
+            if declaration != nil && (result || cycleVersion == this.defaultOriginCycleVersion) {
+                this.SetSlotChainNodeMemo(declaration, emptyChain, result, pathKey: pathKey)
+                if result {
+                    this.InvalidateDefaultOriginContexts()
+                }
+            } else if declaration != nil && factVersion == this.defaultOriginFactVersion {
                 this.SetSlotChainNodeMemo(
                     declaration,
                     emptyChain,
                     result,
-                    pathKey: if result || cycleVersion == this.defaultOriginCycleVersion {
-                        pathKey
-                    } else {
-                        contextPathKey
-                    }
+                    pathKey: pathKey + ":blocked:${this.AddDefaultOriginContext(queryKey, snapshot, probes)}"
                 )
             }
             return result
         }
 
-        private func GetDefaultOriginContext(visited HashSet[ISymbol]?) int32 {
-            let symbols = visited ?? HashSet[ISymbol](SymbolEqualityComparer.Default)
-            if this.defaultOriginContexts.TryGetValue(symbols, out var cached) {
-                return cached
+        private func RecordDefaultOriginProbe(symbol ISymbol) {
+            if this.defaultOriginProbeScopes.TryPeek(out var probes) {
+                probes.Add(symbol)
             }
-            let id = this.defaultOriginContexts.Count + 1
-            // Callers extend their visited sets. Retain an immutable snapshot for this cache key.
-            this.defaultOriginContexts.Add(HashSet[ISymbol](symbols, SymbolEqualityComparer.Default), id)
+        }
+
+        private func EndDefaultOriginProbeScope(probes HashSet[ISymbol]) {
+            this.defaultOriginProbeScopes.Pop()
+            if this.defaultOriginProbeScopes.TryPeek(out var parent) {
+                parent.UnionWith(probes)
+            }
+        }
+
+        private func InvalidateDefaultOriginContexts() {
+            // New complete facts can change walks that previously stopped at a cycle.
+            this.defaultOriginFactVersion++
+            this.defaultOriginContexts.Clear()
+        }
+
+        private func TryGetDefaultOriginContext(queryKey object, visited HashSet[ISymbol]?, out contextId int32) bool {
+            contextId = 0
+            if !this.defaultOriginContexts.TryGetValue(queryKey, out var contexts) {
+                return false
+            }
+            for entry in contexts {
+                // Preserve both successful and blocked visits, including dependencies from nested cache hits.
+                if entry.Probed.All(
+                    (symbol ISymbol) -> entry.Visited.Contains(symbol) == (visited?.Contains(symbol) == true)
+                ) {
+                    if this.defaultOriginProbeScopes.TryPeek(out var parent) {
+                        parent.UnionWith(entry.Probed)
+                    }
+                    contextId = entry.Id
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func AddDefaultOriginContext(
+            queryKey object,
+            snapshot HashSet[ISymbol],
+            probes HashSet[ISymbol]
+        ) int32 {
+            if !this.defaultOriginContexts.TryGetValue(queryKey, out var contexts) {
+                contexts = List[(Id int32, Visited HashSet[ISymbol], Probed HashSet[ISymbol])]()
+                this.defaultOriginContexts.Add(queryKey, contexts)
+            }
+            this.defaultOriginNextContextId++
+            let id = this.defaultOriginNextContextId
+            contexts.Add((id, snapshot, probes))
             return id
         }
 
@@ -970,36 +1030,56 @@ partial class CSharpToGSharpTranslator {
             if this.state.DeconstructionInitializers.TryGetValue(key, out var cached) {
                 return cached
             }
-            let contextualKey = (key.Item1, key.Item2, key.Item3, this.GetDefaultOriginContext(visited))
-            if this.state.DeconstructionInitializers.TryGetValue(contextualKey, out var contextual) {
+            let queryKey = (key.Item1, key.Item2, key.Item3)
+            if this.TryGetDefaultOriginContext(queryKey, visited, out var contextId) &&
+                this
+                .state
+                .DeconstructionInitializers
+                .TryGetValue((key.Item1, key.Item2, key.Item3, contextId), out var contextual) {
                 this.defaultOriginCycleVersion++
                 return contextual
             }
             let cycleVersion = this.defaultOriginCycleVersion
-            let result = switch left {
-                case expression is ExpressionSyntax: this.ComputeDeconstructionInitializer(
-                    target,
-                    expression,
-                    right,
-                    visited
-                )
-                case designation is VariableDesignationSyntax: this.ComputeDeconstructionInitializer(
-                    target,
-                    designation,
-                    right,
-                    visited
-                )
-                default: default(ExpressionSyntax?)
+            let factVersion = this.defaultOriginFactVersion
+            let snapshot = if visited == nil {
+                HashSet[ISymbol](SymbolEqualityComparer.Default)
+            } else {
+                HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
             }
-            this
-                .state
-                .DeconstructionInitializers[
-                if cycleVersion == this.defaultOriginCycleVersion {
-                    key
-                } else {
-                    contextualKey
+            let probes = HashSet[ISymbol](SymbolEqualityComparer.Default)
+            this.defaultOriginProbeScopes.Push(probes)
+            var result ExpressionSyntax?
+            try {
+                result = switch left {
+                    case expression is ExpressionSyntax: this.ComputeDeconstructionInitializer(
+                        target,
+                        expression,
+                        right,
+                        visited
+                    )
+                    case designation is VariableDesignationSyntax: this.ComputeDeconstructionInitializer(
+                        target,
+                        designation,
+                        right,
+                        visited
+                    )
+                    default: default(ExpressionSyntax?)
                 }
-            ] = result
+            } finally {
+                this.EndDefaultOriginProbeScope(probes)
+            }
+            if cycleVersion == this.defaultOriginCycleVersion {
+                this.state.DeconstructionInitializers[key] = result
+                if result != nil {
+                    this.InvalidateDefaultOriginContexts()
+                }
+            } else if factVersion == this.defaultOriginFactVersion {
+                this
+                    .state
+                    .DeconstructionInitializers[
+                    (key.Item1, key.Item2, key.Item3, this.AddDefaultOriginContext(queryKey, snapshot, probes))
+                ] = result
+            }
             return result
         }
 
@@ -1022,6 +1102,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(right)
                 .Symbol is ILocalSymbol alias {
+                this.RecordDefaultOriginProbe(alias)
                 if !visited!!.Add(alias) {
                     this.defaultOriginCycleVersion++
                     return nil
@@ -1148,6 +1229,7 @@ partial class CSharpToGSharpTranslator {
                 .context
                 .GetSymbolInfo(right)
                 .Symbol is ILocalSymbol alias {
+                this.RecordDefaultOriginProbe(alias)
                 if !visited!!.Add(alias) {
                     this.defaultOriginCycleVersion++
                     return nil
@@ -1271,6 +1353,7 @@ partial class CSharpToGSharpTranslator {
             var usePosition = expression!!.SpanStart
             expression = this.UnwrapTuplePreservingCasts(expression)
             while this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local {
+                this.RecordDefaultOriginProbe(local)
                 if !visited!!.Add(local) {
                     this.defaultOriginCycleVersion++
                     break
