@@ -27,7 +27,10 @@ let rows IEnumerable[(Path string, Original[]?uint8)] = Api.Prepare()
 for row in rows { Console.WriteLine(row.Original == nil) }
 `, "Consumer5956", executable: true, "/r:" + library)
         IlVerifier.Verify(consumer, []string{library})
-        Assert.Equal(Encoding.UTF8.GetBytes("props:True\nTrue:1\nTrue\n"), fixture.RunBytes(consumer))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("props:True\nTrue:1\nTrue\n".Replace("\n", System.Environment.NewLine)),
+            fixture.RunBytes(consumer)
+        )
         let (code, output) = fixture.TryCompile(`import Library5956
 let original[]uint8 = Api.Prepare()[0].Original
 `, "NarrowConsumer5956", executable: true, "/r:" + library)
@@ -65,6 +68,9 @@ Console.WriteLine(sdk.Equals(nil))
         } else {
             "SDK package: \nFalse\nTrue\n"
         }
-        Assert.Equal(Encoding.UTF8.GetBytes(expected), fixture.RunBytes(consumer))
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected.Replace("\n", System.Environment.NewLine)),
+            fixture.RunBytes(consumer)
+        )
     }
 }
