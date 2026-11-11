@@ -5932,6 +5932,7 @@ internal shared class ObliviousNullabilityAnalyzer {
                 }
             }
             if argument.Parameter is IParameterSymbol parameter &&
+                parameter.RefKind != RefKind.Out &&
                 argument
                 .Value
                 ?.Syntax is ExpressionSyntax value &&
@@ -7398,7 +7399,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     },
                     secondPrefix: sourcePath,
                     bidirectional: !isOutput,
-                    isContractBoundary: true
+                    isContractBoundary: true,
+                    tupleContractEdges: tupleContractEdges
                 )
                 if targetType is INamedTypeSymbol{IsTupleType: true} {
                     continue
@@ -9136,7 +9138,8 @@ internal shared class ObliviousNullabilityAnalyzer {
         secondPrefix string = "",
         bidirectional bool = true,
         firstPrefix string = "",
-        isContractBoundary bool = false
+        isContractBoundary bool = false,
+        tupleContractEdges List[(Target TupleElementKey, Source TupleElementKey)]? = nil
     ) {
         let comparisonType = TupleContractComparisonType(first, firstType, second)
         // Covariant envelopes can reorder type arguments. Bare tuple
@@ -9192,7 +9195,13 @@ internal shared class ObliviousNullabilityAnalyzer {
         }
         for var i = 0; i < firstSlots.Count; i++ {
             let secondPath = secondSlots[i].Path
-            if bidirectional {
+            let isContainerSlot = firstSlots[i].Path != firstPrefix
+            let slotEdges = if isContainerSlot && tupleContractEdges != nil {
+                tupleContractEdges
+            } else {
+                tupleEdges
+            }
+            if bidirectional || isContainerSlot {
                 AddTupleShapeEdges(
                     first,
                     firstSlots[i].Tuple,
@@ -9201,7 +9210,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                     secondSlots[i].Tuple,
                     secondPath,
                     tupleTainted,
-                    tupleEdges,
+                    slotEdges,
+                    tupleContractEdges,
                     isContractBoundary: isContractBoundary
                 )
             }
@@ -9213,7 +9223,8 @@ internal shared class ObliviousNullabilityAnalyzer {
                 firstSlots[i].Tuple,
                 firstSlots[i].Path,
                 tupleTainted,
-                tupleEdges,
+                slotEdges,
+                tupleContractEdges,
                 isContractBoundary: isContractBoundary
             )
         }

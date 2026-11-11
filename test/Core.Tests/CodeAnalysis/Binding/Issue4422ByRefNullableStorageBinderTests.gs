@@ -118,6 +118,13 @@ Console.WriteLine(Run("before"))
     @InlineData("var v List[string?] = List[string?]()\nOutList(&v)", "out")
     @InlineData("var v List[string?] = List[string?]()\nInList(&v)", "in")
     @InlineData("var v []string? = []string?{\"a\"}\nRefS(&v[0])", "ref")
+    @InlineData("var row (Text string?, Code int32) = (\"x\", 1)\nRefRow(&row)", "ref")
+    @InlineData("var row (Text string, Code int32) = (\"x\", 1)\nRefNullableRow(&row)", "ref")
+    @InlineData("var row (Text string, Code int32) = (\"x\", 1)\nOutNullableRow(&row)", "out")
+    @InlineData("var row (Text string?, Code int32) = (\"x\", 1)\nlet _ = InRow(&row)", "in")
+    @InlineData("var row (A string?, B string) = (\"a\", \"b\")\nOutMixedRow(&row)", "out")
+    @InlineData("var row (A string?, B string) = (\"a\", \"b\")\nlet _ = InMixedRow(&row)", "in")
+    @InlineData("var row (Values []string?, Code int32) = ([]string?{\"x\"}, 1)\nOutSliceRow(&row)", "out")
     func NullabilityOnlyDifference_IsAcceptedWithGS0612(body string, refKind string) {
         let result = EmittedOracle.Evaluate(Callees + body)
         Assert.DoesNotContain(result.Diagnostics, (d Diagnostic) -> d.Severity == DiagnosticSeverity.Error)
@@ -144,6 +151,17 @@ Console.WriteLine(InS(&v))`, "1")
 OutS(&v)
 RefS(&v)
 Console.WriteLine(v)`, "r")
+    @InlineData(`var row (Text string?, Code int32) = ("x", 1)
+OutRow(out row)
+Console.WriteLine(row.Text ?? "null")`, "p")
+    @InlineData(`var row (Inner (Text string?, Code int32), Flag int32) = (("x", 1), 2)
+OutNestedRow(out row)
+Console.WriteLine("${row.Inner.Text ?? "null"}:${row.Flag}")`, "p:3")
+    @InlineData(`var row (Inner (Text string?, Code int32), Flag int32) = (("x", 1), 2)
+OutRow(&row.Inner)
+Console.WriteLine("${row.Inner.Text ?? "null"}:${row.Flag}")`, "p:2")
+    @InlineData(`var row (Text string, Code int32) = ("abc", 1)
+Console.WriteLine(InNullableRow(in row))`, "3")
     func SafeDirection_IsAcceptedWithoutWarning(body string, expected string) {
         let result = EmittedOracle.Evaluate(Callees + body)
         Assert.Empty(result.Diagnostics)
@@ -822,6 +840,16 @@ func InList(in l List[string]) int32 -> l.Count
 func RefInt(ref i int32) { i = 42 }
 func RefInts(ref a []int32) { a[0] = 42 }
 func RefIntList(ref l List[int32]) { l.Add(1) }
+func RefRow(ref value (Text string, Code int32)) { value = ("r", 1) }
+func RefNullableRow(ref value (Text string?, Code int32)) { value = (nil, 1) }
+func OutRow(out value (Text string, Code int32)) { value = ("p", 1) }
+func OutNullableRow(out value (Text string?, Code int32)) { value = (nil, 1) }
+func OutNestedRow(out value (Inner (Text string, Code int32), Flag int32)) { value = (("p", 1), 3) }
+func OutMixedRow(out value (A string, B string?)) { value = ("a", nil) }
+func OutSliceRow(out value (Values []string, Code int32)) { value = ([]string{"p"}, 1) }
+func InRow(in value (Text string, Code int32)) int32 -> value.Text.Length
+func InNullableRow(in value (Text string?, Code int32)) int32 -> value.Text?.Length ?? -1
+func InMixedRow(in value (A string, B string?)) int32 -> value.A.Length
 `
     }
 }
