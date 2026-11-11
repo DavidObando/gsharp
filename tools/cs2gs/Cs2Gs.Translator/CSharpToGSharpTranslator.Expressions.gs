@@ -19904,13 +19904,12 @@ partial class CSharpToGSharpTranslator {
             .SyntaxNode? {
             // A node of a top-level program has no function ancestor: the compilation unit is its
             // function (the synthesized entry point).
-            return node.Ancestors().FirstOrDefault(
+            return node.AncestorsAndSelf().FirstOrDefault(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
                     ancestor is AccessorDeclarationSyntax ||
                     ancestor is ArrowExpressionClauseSyntax{Parent: BasePropertyDeclarationSyntax} ||
-                    ancestor is LocalFunctionStatementSyntax ||
-                    ancestor is AnonymousFunctionExpressionSyntax ||
-                    ancestor is TypeDeclarationSyntax
+                    ancestor is TypeDeclarationSyntax ||
+                    this.IsClosureBoundary(ancestor)
             ) ??
                 node
                 .SyntaxTree

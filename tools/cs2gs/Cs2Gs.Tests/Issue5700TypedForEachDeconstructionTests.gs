@@ -291,6 +291,7 @@ namespace TypedForEach {
     @InlineData("reassigned in loop body", "2,")
     @InlineData("reassigned in closure", "3,")
     @InlineData("in-closure local reassignment", "3,")
+    @InlineData("query clause assignment invalidates guard", "3")
     @InlineData("hoisted local function before guard", "3,")
     @InlineData("transitively hoisted local function", "3,")
     @InlineData("hoisted local function preserving index", "3,")
@@ -464,6 +465,12 @@ namespace TypedForEach {
                  a = GetMaybe(true);
                  return a.Length;
              });`
+            case "query clause assignment invalidates guard":
+            `string a = GetMaybe(true);
+             var q = from n in new[] { 0 } let unused = a = GetMaybe(true) select n;
+             if (a is null) return "0";
+             _ = q.ToArray();
+             return a.Length.ToString();`
             case "transitively hoisted local function":
             `foreach (var (a, b) in items) {
                  _ = Wrapper(false);
@@ -508,7 +515,7 @@ namespace TypedForEach {
                  if (a is null) return () => 0;
                  return () => int.Parse(a);
              }`
-            case "in-closure local reassignment":
+            case "in-closure local reassignment" or "query clause assignment invalidates guard":
             `private static string GetMaybe(bool present) => present ? "abc" : null;`
             default:
             string.Empty
@@ -546,6 +553,7 @@ namespace TypedForEach {
         ) ||
             shape == "primary constructor method capture" ||
             shape == "in-closure local reassignment" ||
+            shape == "query clause assignment invalidates guard" ||
             shape == "hoisted local function before guard" ||
             shape == "hoisted local function preserving index" ||
             shape == "transitively hoisted local function" {
