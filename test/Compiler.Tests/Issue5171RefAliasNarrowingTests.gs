@@ -1396,10 +1396,8 @@ class Noisy {
 }
 struct Token {
     var Id int32
-    shared {
-        func +(a Token, b Token) Noisy -> Noisy{}
-    }
 }
+func (a Token) operator +(b Token) Noisy -> Noisy{}
 func Run(ref a C?, token Token) int32 {
     if a == nil { return 0 }
     var total = 0
@@ -1434,6 +1432,184 @@ func Run(ref a C?, d DerivedRunner) int32 {
     return a.Value
 }
 Console.WriteLine(Run(ref globalC, DerivedRunner{}))
+`}
+            yield []object{"issue-5326-equality-comparer-create-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, d Dictionary[int32, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = d.ContainsKey(1)
+    return a.Value
+}
+let cmp = EqualityComparer[int32].Create(
+    (x int32, y int32) -> x == y,
+    (x int32) -> {
+        globalC = nil
+        return x
+    }
+)
+let d = Dictionary[int32, int32](cmp)
+d[1] = 1
+globalC = C{}
+Console.WriteLine(Run(ref globalC, d))
+`}
+            yield []object{"issue-5326-enumerable-count-deferred-where-callback-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let n = Enumerable.Count(seq)
+    return a.Value + n
+}
+let xs = List[int32](){1}
+let seq = xs.Where((x int32) -> {
+    globalC = nil
+    return true
+})
+Console.WriteLine(Run(ref globalC, seq))
+`}
+            yield []object{"issue-5326-local-function-callback-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Wrap() {
+    func Invoke(cb () -> void) {
+        cb()
+    }
+    Invoke(() -> { globalC = nil })
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Wrap()
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-priority-queue-enqueue-comparer-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class PrioComparer : IComparer[int32] {
+    func Compare(x int32, y int32) int32 {
+        globalC = nil
+        return 0
+    }
+}
+func Run(ref a C?, pq PriorityQueue[string, int32]) int32 {
+    if a == nil { return 0 }
+    pq.Enqueue("b", 2)
+    return a.Value
+}
+let pq = PriorityQueue[string, int32](PrioComparer{})
+pq.Enqueue("a", 1)
+globalC = C{}
+Console.WriteLine(Run(ref globalC, pq))
+`}
+            yield []object{"issue-5326-string-create-format-provider-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class ClearingProvider : IFormatProvider {
+    func GetFormat(formatType Type?) object? {
+        globalC = nil
+        return nil
+    }
+}
+func Run(ref a C?, provider IFormatProvider) int32 {
+    if a == nil { return 0 }
+    let _ = string.Create(provider, "${1}")
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, ClearingProvider{}))
+`}
+            yield []object{"issue-5326-callee-operator-interpolation-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "n"
+    }
+}
+struct Token {
+    var Id int32
+}
+func (a Token) operator +(b Token) Noisy -> Noisy{}
+func FormatToken(token Token) string {
+    return "${token + token}"
+}
+func Run(ref a C?, token Token) int32 {
+    if a == nil { return 0 }
+    let _ = FormatToken(token)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
+`}
+            yield []object{"issue-5326-cancellation-token-source-cancel-clears-global", `
+import System
+import System.Threading
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func Run(ref a C?, cts CancellationTokenSource) int32 {
+    if a == nil { return 0 }
+    cts.Cancel()
+    return a.Value
+}
+using let cts = CancellationTokenSource()
+let _ = cts.Token.Register(() -> { globalC = nil })
+Console.WriteLine(Run(ref globalC, cts))
+`}
+            yield []object{"issue-5326-callee-binary-operator-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+struct Token {
+    var Id int32
+}
+func (a Token) operator +(b Token) int32 {
+    globalC = nil
+    return a.Id + b.Id
+}
+func AddTokens(t Token) int32 {
+    return t + t
+}
+func Run(ref a C?, t Token) int32 {
+    if a == nil { return 0 }
+    let _ = AddTokens(t)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Token{Id: 1}))
 `}
         }
 
