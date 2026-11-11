@@ -1949,6 +1949,209 @@ func Main() {
         Check(fixture, source.ToString(), oracle.ToString(), "TrueTrueTrueTrueTrueTrueTrueTrue1111211")
     }
 
+    @Fact
+    func Issue5653_NullableTupleAndBlockConsumers_ExactReproRuns() {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        Check(fixture, `import System
+func N(x string?) bool -> x == nil
+func Main() {
+    var s string? = "a"
+    var n = 0
+    if s != nil {
+        L: if n > 0 {
+            let t (string?, int32) = (s, 1)
+            Console.Write(t.Item1 == nil)
+            Console.Write(N(({
+                n = n + 0
+                s
+            })))
+            Console.Write(({
+                n = n + 0
+                s
+            }) == nil)
+            return
+        }
+        n++
+        s = nil
+        goto L
+    }
+}
+`, `using System;
+class Program {
+    static bool N(string? x) => x == null;
+    static void Main() {
+        string? s = "a";
+        var n = 0;
+        if (s != null) {
+            L: if (n > 0) {
+                (string?, int) t = (s, 1);
+                Console.Write(t.Item1 == null);
+                n = n + 0;
+                Console.Write(N(s));
+                n = n + 0;
+                Console.Write(s == null);
+                return;
+            }
+            n++;
+            s = null;
+            goto L;
+        }
+    }
+}
+`, "TrueTrueTrue", requireNoDiagnostics: true)
+    }
+
+    @Fact
+    func Issue5653_NestedTupleAndCleanupBlockConsumers_Run() {
+        using let fixture = CSharpFixture(Contract + `
+namespace FunctionControl {
+    public sealed class NilSink {
+        public NilSink(string? value) { Value = value; }
+        public string? Value { get; }
+        public bool this[string? key] => key == null;
+    }
+}
+`, assemblyName: "FunctionContract", deterministic: true)
+        let cases[](Statement string, Oracle string, Expected string) = [](
+            Statement string,
+            Oracle string,
+            Expected string
+        ){
+            (
+                "let t ((string?, int32), int32) = ((s, 1), 2)\n            Console.Write(t.Item1.Item1 == nil)",
+                "((string?, int), int) t = ((s, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "True"
+            ),
+            (
+                "var t (string?, int32) = (nil, 0)\n            t = (s, 1)\n            Console.Write(t.Item1 == nil)",
+                "(string?, int) t = (null, 0); t = (s, 1); Console.Write(t.Item1 == null);",
+                "True"
+            ),
+            ("Console.Write(NT((s, 1)))", "Console.Write(NT((s, 1)));", "True"),
+            (
+                "let get = func() (string?, int32) { return (s, 1) }\n            Console.Write(get().Item1 == nil)",
+                "Func<(string?, int)> get = () => (s, 1); Console.Write(get().Item1 == null);",
+                "True"
+            ),
+            (
+                "let t ((string?, int32), int32) = ((({ n = n + 0\n                s }), 1), 2)\n" +
+                    "            Console.Write(t.Item1.Item1 == nil)",
+                "n = n + 0; ((string?, int), int) t = ((s, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "True"
+            ),
+            (
+                "Console.Write(NilSink(({ n = n + 0\n                s })).Value == nil)",
+                "n = n + 0; Console.Write(new NilSink(s).Value == null);",
+                "True"
+            ),
+            (
+                "Console.Write(NilSink(nil)[({ n = n + 0\n                s })])",
+                "n = n + 0; Console.Write(new NilSink(null)[s]);",
+                "True"
+            ),
+            (
+                "Console.Write(nil == ({ n = n + 0\n                s }))",
+                "n = n + 0; Console.Write(null == s);",
+                "True"
+            ),
+            (
+                "Console.Write(!(({ n = n + 0\n                s }) != nil))",
+                "n = n + 0; Console.Write(!(s != null));",
+                "True"
+            ),
+            (
+                "Console.Write((({ n = n + 0\n                s }) ?? \"fallback\") == \"fallback\")",
+                "n = n + 0; Console.Write((s ?? \"fallback\") == \"fallback\");",
+                "True"
+            ),
+            (
+                "Console.Write((U() ?? ({ n = n + 0\n                s })) == nil)",
+                "n = n + 0; Console.Write((U() ?? s) == null);",
+                "True"
+            ),
+            (
+                "Console.Write(N(({ defer Console.Write(\"D\")\n                s })))",
+                "string? value; try { value = s; } finally { Console.Write(\"D\"); } Console.Write(N(value));",
+                "DTrue"
+            ),
+            (
+                "Console.Write(N(({ using let stream = System.IO.MemoryStream()\n                s })))",
+                "string? value; using (var stream = new System.IO.MemoryStream()) { value = s; } Console.Write(N(value));",
+                "True"
+            ),
+            (
+                "let t ((string?, int32), int32) = ((({ defer Console.Write(\"D\")\n                s }), 1), 2)\n" +
+                    "            Console.Write(t.Item1.Item1 == nil)",
+                "string? value; try { value = s; } finally { Console.Write(\"D\"); } " +
+                    "((string?, int), int) t = ((value, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "DTrue"
+            ),
+            (
+                "let t ((string?, int32), int32) = ((({ using let stream = System.IO.MemoryStream()\n" +
+                    "                s }), 1), 2)\n            Console.Write(t.Item1.Item1 == nil)",
+                "string? value; using (var stream = new System.IO.MemoryStream()) { value = s; } " +
+                    "((string?, int), int) t = ((value, 1), 2); Console.Write(t.Item1.Item1 == null);",
+                "True"
+            )
+        }
+        Assert.NotEmpty(cases)
+        let source = StringBuilder(
+            "import FunctionControl\n" +
+                BranchValuePrelude +
+                "func N(x string?) bool -> x == nil\nfunc NT(x (string?, int32)) bool -> x.Item1 == nil\n"
+        )
+        let oracle = StringBuilder(
+            "using System;\nusing FunctionControl;\nclass Program {\n" +
+                "    static string? U() => null;\n    static bool N(string? x) => x == null;\n" +
+                "    static bool NT((string?, int) x) => x.Item1 == null;\n"
+        )
+        let main = StringBuilder("func Main() {\n")
+        let oracleMain = StringBuilder("    static void Main() {\n")
+        let expected = StringBuilder()
+        for var index = 0; index < cases.Length; index++ {
+            let (statement, oracleStatement, expectedOutput) = cases[index]
+            let name = "Case" + index.ToString()
+            source
+                .Append("func ")
+                .Append(name)
+                .Append("() {\n")
+                .Append(BranchValueBody.Replace("|", statement).Replace("#", "s = nil"))
+                .Append("\n}\n")
+            oracle
+                .Append("    static void ")
+                .Append(name)
+                .Append("() { string? s = \"a\"; var n = 0; if (s != null) { L: if (n > 0) { ")
+                .Append(oracleStatement)
+                .Append(" return; } n++; s = null; goto L; } }\n")
+            main.Append("    ").Append(name).Append("()\n")
+            oracleMain.Append("        ").Append(name).Append("();\n")
+            expected.Append(expectedOutput)
+        }
+        source.Append(main.ToString()).Append("}\n")
+        oracle.Append(oracleMain.ToString()).Append("    }\n}\n")
+        Check(fixture, source.ToString(), oracle.ToString(), expected.ToString(), requireNoDiagnostics: true)
+    }
+
+    @Theory
+    @InlineData("let t (string, int32) = @(s, 1)", "(s, 1)")
+    @InlineData("let t ((string, int32), int32) = (@(s, 1), 2)", "(s, 1)")
+    @InlineData("let t (string, int32) = @(({ s }), 1)", "(({ s }), 1)")
+    @InlineData("let t = (s, 1)\n            let u (string, int32) = @t", "t")
+    @InlineData("let t = ((s, 1), 2)\n            let u ((string, int32), int32) = @t", "t")
+    @InlineData("let t = (s, 1)\n            let r string = @t.Item1", "t.Item1")
+    @InlineData("Console.Write(F(({ n = n + 0\n                @s })))", "s")
+    @InlineData("Console.Write(F(({ defer Console.Write(\"\")\n                @s })))", "s")
+    @InlineData("Console.Write(F(({ using let stream = System.IO.MemoryStream()\n                @s })))", "s")
+    func Issue5653_NonNullTupleAndBlockConsumers_Reject(statement string, value string) {
+        using let fixture = CSharpFixture(Contract, assemblyName: "FunctionContract", deterministic: true)
+        RejectMarked(
+            fixture,
+            NoConversionPrelude + "func Main() {\n" + BranchValueBody.Replace("|", statement).Replace("#", "s = nil") +
+                "\n}\n",
+            value
+        )
+    }
+
     /// Issue #5635 (review of d3333218): an imported generic slot whose type argument inference takes from a narrowed
     /// read is decided for the slot under the inferred type arguments. A slot that takes nil (`Append` on `[]string?`,
     /// `IsNil`, `IsNilParams` over a source class, `First` with `U()`) does not need a nil-guard narrowing, while a
@@ -3449,13 +3652,22 @@ class Program {
         )
     }
 
-    private func Check(fixture CSharpFixture, source string, oracle string, expected string) {
+    private func Check(
+        fixture CSharpFixture,
+        source string,
+        oracle string,
+        expected string,
+        requireNoDiagnostics bool = false
+    ) {
         Assert.NotEqual("1", Environment.GetEnvironmentVariable("GSHARP_SKIP_ILVERIFY"))
         output.WriteLine("Contract source:\n" + Contract)
         output.WriteLine("Oracle source:\n" + oracle)
         let result = Compile(fixture, source)
         Assert.True(result.Code == 0, Encoding.UTF8.GetString(result.Bytes) + result.Error)
         Assert.Empty(result.Error)
+        if requireNoDiagnostics {
+            Assert.Empty(Regex.Matches(Encoding.UTF8.GetString(result.Bytes), `\): (?:error|warning) GS\d+:`))
+        }
         let paths = OutputPaths(fixture)
         let bytes = paths.Select((path string) -> File.ReadAllBytes(path)).ToArray()
         for content in bytes {

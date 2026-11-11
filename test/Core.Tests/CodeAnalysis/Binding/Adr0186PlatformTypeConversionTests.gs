@@ -130,6 +130,7 @@ class Adr0186PlatformTypeConversionTests {
         let toTuple = TupleTypeSymbol.Get(ImmutableArray.Create(TypeSymbol.String, TypeSymbol.Int32))
         let valueTypeContainer = Conversion.Classify(fromTuple, toTuple)
         Assert.True(valueTypeContainer.Exists, "a value-type container is copied, not aliased")
+        Assert.False(valueTypeContainer.IsIdentity, "a non-null element still requires its platform coercion check")
         // The control: a REFERENCE container in the same direction stays
         // rejected, so the gate above narrows rule 3 rather than repealing it.
         let referenceContainer = Conversion.Classify(

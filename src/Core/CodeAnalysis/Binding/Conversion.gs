@@ -1155,7 +1155,6 @@ class Conversion {
                     return Conversion.None
                 }
                 var allCrossContextIdentical = true
-                var allElementsImplicit = true
                 for var i = 0; i < fromTuple.Arity; i++ {
                     let fromElement = fromTuple.ElementTypes[i]
                     let toElement = toTuple.ElementTypes[i]
@@ -1170,10 +1169,14 @@ class Conversion {
                         continue
                     }
                     let elementConversion = Classify(fromElement, toElement)
-                    let isElementImplicit = elementConversion.Exists && elementConversion.IsImplicit
+                    if !elementConversion.Exists || !elementConversion.IsImplicit {
+                        return Conversion.None
+                    }
+                    // Runtime identity must not drop an element's nullable contract or platform check.
                     let isElementCrossContextIdentical = elementConversion.IsIdentity ||
                         (
-                        !hasFunctionPointer &&
+                        !elementConversion.RequiresPlatformNilCheck &&
+                            !hasFunctionPointer &&
                             !(
                             TupleTypeSymbol.TryGetTupleShape(fromElement, out _) && TupleTypeSymbol.TryGetTupleShape(
                                 toElement,
@@ -1182,22 +1185,14 @@ class Conversion {
                         ) &&
                             TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fromElement, toElement)
                     )
-                    if !isElementImplicit {
-                        allElementsImplicit = false
-                    }
                     if !isElementCrossContextIdentical {
                         allCrossContextIdentical = false
-                    }
-                    if !allElementsImplicit && !allCrossContextIdentical {
-                        return Conversion.None
                     }
                 }
                 return if allCrossContextIdentical {
                     Conversion.Identity
-                } else if allElementsImplicit {
-                    Conversion.Implicit
                 } else {
-                    Conversion.None
+                    Conversion.Implicit
                 }
             }
             // #313: two erased generics constructed over the same open definition
