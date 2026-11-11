@@ -21,6 +21,156 @@ import Xunit
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
     @Fact
+    func NestedReferenceStorageWrites_InvalidateInnerParameterFacts() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        sealed class Holder { public string? Value; }
+        static char? Array(ref string? s, string?[] a) { a[0] = s = "x"; return s?[0]; }
+        static char? Field(ref string? s, Holder h) { h.Value = s = "f"; return s?[0]; }
+        static char? Local(string? s, string?[] a) { a[0] = s = "l"; return s?[0]; }
+        public static string Run()
+        {
+            string? s = null;
+            var a = new string?[1];
+            var h = new Holder();
+            return Array(ref s, a) + ":" + s + ":" + a[0] + "|" +
+                Field(ref s, h) + ":" + s + ":" + h.Value + "|" + Local(null, a);
+        }
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Fact
+    func CoalescingArmProofs_RecoverConditionalAndSwitchFallbacks() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static char? Conditional(bool flag) { string? s = null; s ??= flag ? "a" : "b"; return s?[0]; }
+        static char? Switched(bool flag) { string? s = null; s ??= flag switch { true => "t", false => "f" }; return s?[0]; }
+        static char? Nested(bool flag)
+        {
+            string? s = null, other = null;
+            s = (other ??= flag ? "n" : "m");
+            return s?[0];
+        }
+        static char? Nullable(bool flag, string? seed) { string? s = null; s ??= flag ? seed : "r"; return s?[0]; }
+        public static string Run() =>
+            Conditional(true) + "|" + Conditional(false) + "|" + Switched(true) + "|" + Switched(false) + "|" +
+            Nested(true) + "|" + Nested(false) + "|" + Nullable(true, null) + "|" + Nullable(false, null);
+    }
+}`)
+        Assert.Contains("cast[char?](s[0])", printed)
+        Assert.Contains("s?[0]", printed)
+    }
+
+    @Fact
+    func IncomingContracts_CoalescingValuesKeepRuntimeNullGuards() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int calls, indices;
+        static string Contract(string? value) { calls++; return (string)value; }
+        static int Index() { indices++; return 0; }
+        static char? Read(string? seed)
+        {
+            string? s = null;
+            s = Contract(seed);
+            return (s ??= Contract(null))?[Index()];
+        }
+        static char? Known()
+        {
+            string? s = null;
+            s = "k";
+            return (s ??= Contract(null))?[Index()];
+        }
+        public static string Run() => Read(null) + "|" + Read("a") + "|" + Known() + "|" + calls + ":" + indices;
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.DoesNotContain("Contract(nil)!!", printed)
+    }
+
+    @Fact
+    func ChainedElementAssignments_KeepNullableStorageResultTypes() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static char? Nullable()
+        {
+            string? s = null;
+            var items = new string?[1];
+            s = items[0] = "a";
+            return s?[0];
+        }
+        static char? NonNull()
+        {
+            string? s = null;
+            var items = new[] { "n" };
+            s = items[0] = "b";
+            return s?[0];
+        }
+        public static string Run() => Nullable() + "|" + NonNull();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.DoesNotContain("items[0]!!", printed)
+    }
+
+    @Fact
+    func NestedPlatformStores_DoNotRecoverThroughNullableAssignmentResults() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static string Read(bool nil)
+    {
+        string? s = null, other = null;
+        s = other = Lib.Value(nil);
+        return s?[0] + ":" + other?[0];
+    }
+    static char? Coalesced(string? seed, bool nil)
+    {
+        string? s = null, other = null;
+        s = other = (seed ?? Lib.Value(nil));
+        return s?[0];
+    }
+    static char? Conditional(bool flag, bool nil)
+    {
+        string? s = null;
+        s ??= flag ? Lib.Value(nil) : "r";
+        return s?[0];
+    }
+    public static string Run() =>
+        Read(true) + "|" + Read(false) + "|" + Coalesced(null, true) + "|" + Coalesced("c", true) + "|" +
+        Coalesced(null, false) + "|" + Conditional(true, true) + "|" + Conditional(false, true);
+}`, `
+#nullable disable
+namespace ObLib5936;
+public static class Lib
+{
+    public static string Value(bool nil) => nil ? null : "x";
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("object.ReferenceEquals", printed)
+    }
+
+    @Fact
     func RepeatedAssignmentPrefixes_ReuseCompletedNarrowingQueries() {
         let assignments = String.Concat(Enumerable.Repeat("s = flag ? s : \"b\";\n", 24))
         let parenthesized = String.Concat(Enumerable.Repeat("s = (flag ? s : \"b\");\n", 24))
