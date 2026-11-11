@@ -267,6 +267,302 @@ namespace TypedForEach {
         Assert.DoesNotContain("aValue", printed)
     }
 
+    @Theory
+    @InlineData("deconstructed inferred parenthesized lambda", "3,")
+    @InlineData("deconstructed typed parenthesized lambda", "3,")
+    @InlineData("deconstructed simple lambda", "4,")
+    @InlineData("deconstructed anonymous method", "4,")
+    @InlineData("deconstructed local function", "4,")
+    @InlineData("deconstructed switch guard", "4,")
+    @InlineData("deconstructed lambda return and argument", "abc,")
+    @InlineData("deconstructed nested tuple capture", "6,")
+    @InlineData("deconstructed nested closure capture", "3,")
+    @InlineData("deconstructed direct body guard", "3")
+    @InlineData("deconstructed query select", "4")
+    @InlineData("primary constructor initializer capture", "3,")
+    @InlineData("promoted parameter closure argument", "123,")
+    @InlineData("hoisted local function after guard", "4,")
+    @InlineData("single foreach capture", "3,")
+    @InlineData("single foreach query select", "3")
+    @InlineData("single foreach query let", "3")
+    @InlineData("single foreach query select into", "3")
+    @InlineData("single foreach switch query let", "3")
+    @InlineData("primary constructor method capture", "3,")
+    @InlineData("reassigned in loop body", "2,")
+    @InlineData("reassigned in closure", "3,")
+    @InlineData("in-closure local reassignment", "3,")
+    @InlineData("query clause assignment invalidates guard", "3")
+    @InlineData("hoisted local function before guard", "3,")
+    @InlineData("transitively hoisted local function", "3,")
+    @InlineData("hoisted local function preserving index", "3,")
+    func NullGuardedForEachCaptures_MatchNarrowingAndCSharpOutput(shape string, expected string) {
+        let loopBody = switch shape {
+            case "deconstructed inferred parenthesized lambda":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 callbacks.Add(() => a.Length);
+             }`
+            case "deconstructed typed parenthesized lambda":
+            `foreach ((string a, int b) in items) {
+                 if (a is null) continue;
+                 callbacks.Add(() => a.Length);
+             }`
+            case "deconstructed simple lambda":
+            `foreach (var (a, b) in items) {
+                 if (a == null) continue;
+                 Func<int, int> add = x => a.Length + x;
+                 callbacks.Add(() => add(b));
+             }`
+            case "deconstructed anonymous method":
+            `foreach (var (a, b) in items) {
+                 if (a is not null) {
+                     callbacks.Add(delegate { return a.Length + b; });
+                 }
+             }`
+            case "deconstructed local function":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 int Read() => a.Length + b;
+                 callbacks.Add(Read);
+             }`
+            case "deconstructed switch guard":
+            `foreach (var (a, b) in items) {
+                 switch (a) {
+                     case "abc":
+                         callbacks.Add(() => a.Length + b);
+                         break;
+                 }
+             }`
+            case "deconstructed lambda return and argument":
+            `var textCallbacks = new List<Func<string>>();
+             foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 textCallbacks.Add(() => a);
+                 callbacks.Add(() => int.Parse(a));
+             }
+             string textResult = "";
+             foreach (var textCallback in textCallbacks) {
+                 textResult += textCallback() + ",";
+             }
+             return textResult;`
+            case "deconstructed nested tuple capture":
+            `var nested = new List<((string, int), int)>();
+             nested.Add(((missing, 0), 1));
+             nested.Add((("abc", 1), 2));
+             foreach (var ((a, b), c) in nested) {
+                 if (a is null) continue;
+                 callbacks.Add(() => a.Length + b + c);
+             }`
+            case "deconstructed nested closure capture":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 Func<Func<int>> outer = () => () => a.Length;
+                 callbacks.Add(outer());
+             }`
+            case "deconstructed direct body guard":
+            `int total = 0;
+             foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 total += a.Length;
+             }
+             return total.ToString();`
+            case "deconstructed query select":
+            `int total = 0;
+             foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 var q = from n in new[] { b } select a.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "primary constructor initializer capture":
+            `callbacks.Add(new PrimaryInitBox("abc").Callback);`
+            case "promoted parameter closure argument":
+            `_ = Make(null);
+             callbacks.Add(Make("123"));`
+            case "hoisted local function after guard":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 int offset = b;
+                 callbacks.Add(Read);
+                 int Read() => a.Length + offset;
+             }`
+            case "single foreach capture":
+            `var names = new string[] { null, "abc" };
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 callbacks.Add(() => a.Length);
+             }`
+            case "single foreach query select":
+            `int total = 0;
+             var names = new string[] { null, "abc" };
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } select a.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "single foreach query let":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } let text = a select text.Length + n;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "single foreach query select into":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 if (a is null) continue;
+                 var q = from n in new[] { 0 } select a into text select text.Length;
+                 foreach (var v in q) total += v;
+             }
+             return total.ToString();`
+            case "single foreach switch query let":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 switch (a) {
+                     case "abc":
+                         var q = from n in new[] { 0 } let text = a select text.Length + n;
+                         foreach (var v in q) total += v;
+                         break;
+                 }
+             }
+             return total.ToString();`
+            case "primary constructor method capture":
+            `var box = new PrimaryMethodBox("abc");
+             var fn = box.Read();
+             if (fn != null) callbacks.Add(fn);`
+            case "reassigned in loop body":
+            `foreach (var (item, b) in items) {
+                 var a = item;
+                 if (a is null) continue;
+                 callbacks.Add(() => a.Length);
+                 a = "xy";
+             }`
+            case "reassigned in closure":
+            `foreach ((string item, int b) in items) {
+                 string a = item;
+                 if (a is null) continue;
+                 callbacks.Add(() => {
+                     int len = a.Length;
+                     a = "xy";
+                     return len;
+                 });
+             }`
+            case "in-closure local reassignment":
+            `callbacks.Add(() => {
+                 string? a = GetMaybe(true);
+                 if (a is null) return 0;
+                 a = GetMaybe(true);
+                 return a.Length;
+             });`
+            case "query clause assignment invalidates guard":
+            `string? a = GetMaybe(true);
+             var q = from n in new[] { 0 } let unused = a = GetMaybe(true) select n;
+             if (a is null) return "0";
+             _ = q.ToArray();
+             return a.Length.ToString();`
+            case "transitively hoisted local function":
+            `foreach (var (a, b) in items) {
+                 _ = Wrapper(false);
+                 if (a is null) continue;
+                 int Read() => a.Length;
+                 int Wrapper(bool run) => run ? Read() : 0;
+                 callbacks.Add(() => Wrapper(true));
+             }`
+            case "hoisted local function preserving index":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 callbacks.Add(Read);
+                 int Read() => a.Length + Z1<int>() + Z2<int>();
+                 int Z1<T>() => 0;
+                 int Z2<T>() => 0;
+             }`
+            default:
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 callbacks.Add(ReadBeforeDecl);
+                 int ReadBeforeDecl() => a.Length;
+             }`
+        }
+        let extraTypes = switch shape {
+            case "primary constructor method capture":
+            `public class PrimaryMethodBox(string? a) {
+                 public Func<int>? Read() {
+                     if (a is null) return null;
+                     return () => a.Length;
+                 }
+             }`
+            case "primary constructor initializer capture":
+            `public class PrimaryInitBox(string? a) {
+                 public Func<int> Callback = a is null ? (() => 0) : (() => a.Length);
+             }`
+            default:
+            string.Empty
+        }
+        let extraMembers = switch shape {
+            case "promoted parameter closure argument":
+            `private static Func<int> Make(string a) {
+                 if (a is null) return () => 0;
+                 return () => int.Parse(a);
+             }`
+            case "in-closure local reassignment" or "query clause assignment invalidates guard":
+            `private static string GetMaybe(bool present) => present ? "abc" : null;`
+            default:
+            string.Empty
+        }
+        let source = (`
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace TypedForEach {
+    EXTRA_TYPES
+    public static class Probe {
+        public static bool Try(out string value) { value = null; return false; }
+        EXTRA_MEMBERS
+        public static string Run() {
+            var items = new List<(string, int)>();
+            Try(out var missing);
+            items.Add((missing, 0));
+            items.Add(("abc", 1));
+            var callbacks = new List<Func<int>>();
+            LOOP_BODY
+            string result = "";
+            foreach (var callback in callbacks) result += callback() + ",";
+            return result;
+        }
+    }
+}`).Replace("EXTRA_TYPES", extraTypes).Replace("EXTRA_MEMBERS", extraMembers).Replace("LOOP_BODY", loopBody)
+        let printed = Verify(source, expected)
+        if shape == "single foreach query let" ||
+            shape == "single foreach query select into" ||
+            shape == "single foreach switch query let" {
+            Assert.Contains("text!!.Length", printed)
+        } else if shape.StartsWith("reassigned", StringComparison.Ordinal) || shape.StartsWith(
+            "single foreach",
+            StringComparison.Ordinal
+        ) ||
+            shape == "primary constructor method capture" ||
+            shape == "in-closure local reassignment" ||
+            shape == "query clause assignment invalidates guard" ||
+            shape == "hoisted local function before guard" ||
+            shape == "hoisted local function preserving index" ||
+            shape == "transitively hoisted local function" {
+            Assert.Contains("a!!.Length", printed)
+        } else {
+            Assert.DoesNotContain("a!!", printed)
+        }
+    }
+
     shared {
         private func Verify(source string, expected string, isAsync bool = false) string {
             let project = CSharpProjectLoader.LoadInMemory([](string, string){("Snippet.cs", source)})
