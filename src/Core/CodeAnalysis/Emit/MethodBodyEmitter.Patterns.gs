@@ -905,6 +905,30 @@ internal partial class MethodBodyEmitter {
                 this.EmitErasedObjectReturnWidening(itemGetter.ReturnType, lp.ElementType)
             }
         }
+        let EmitElementPattern = func (index int32, loadIndex() -> void) {
+            let element = lp.Elements[index]
+            if lp.ElementVariables[index] is not{} value {
+                this.EmitPattern(element, () -> EmitElementAt(loadIndex), lp.ElementType, failLabel)
+                return
+            }
+            let valueSlot = this.locals[value]
+            let loadedSlot = this.locals[lp.ElementLoadedVariables[index]!!]
+            this.il.LoadConstantI4(0)
+            this.il.StoreLocal(loadedSlot)
+            let loadElement() -> void = () -> {
+                // A short-circuit branch can bypass the first lexical input read.
+                let ready = this.il.DefineLabel()
+                this.il.LoadLocal(loadedSlot)
+                this.il.Branch(ILOpCode.Brtrue, ready)
+                EmitElementAt(loadIndex)
+                this.il.StoreLocal(valueSlot)
+                this.il.LoadConstantI4(1)
+                this.il.StoreLocal(loadedSlot)
+                this.il.MarkLabel(ready)
+                this.il.LoadLocal(valueSlot)
+            }
+            this.EmitPattern(element, loadElement, lp.ElementType, failLabel)
+        }
         var sliceIndex = -1
         for var i = 0; i < lp.Elements.Length; i++ {
             if lp.Elements[i] is BoundSlicePattern {
@@ -919,12 +943,7 @@ internal partial class MethodBodyEmitter {
             this.il.Branch(ILOpCode.Brfalse, failLabel)
             for var i = 0; i < lp.Elements.Length; i++ {
                 let index = i
-                this.EmitPattern(
-                    lp.Elements[index],
-                    () -> EmitElementAt(() -> this.il.LoadConstantI4(index)),
-                    lp.ElementType,
-                    failLabel
-                )
+                EmitElementPattern(index, () -> this.il.LoadConstantI4(index))
             }
             return
         }
@@ -936,26 +955,17 @@ internal partial class MethodBodyEmitter {
         this.il.Branch(ILOpCode.Brtrue, failLabel)
         for var i = 0; i < prefix; i++ {
             let index = i
-            this.EmitPattern(
-                lp.Elements[index],
-                () -> EmitElementAt(() -> this.il.LoadConstantI4(index)),
-                lp.ElementType,
-                failLabel
-            )
+            EmitElementPattern(index, () -> this.il.LoadConstantI4(index))
         }
         for var k = 0; k < suffix; k++ {
             let fromEnd = suffix - k
-            this.EmitPattern(
-                lp.Elements[sliceIndex + 1 + k],
-                () -> EmitElementAt(
-                    () -> {
-                        EmitLength()
-                        this.il.LoadConstantI4(fromEnd)
-                        this.il.OpCode(ILOpCode.Sub)
-                    }
-                ),
-                lp.ElementType,
-                failLabel
+            EmitElementPattern(
+                sliceIndex + 1 + k,
+                () -> {
+                    EmitLength()
+                    this.il.LoadConstantI4(fromEnd)
+                    this.il.OpCode(ILOpCode.Sub)
+                }
             )
         }
         let rest = cast[BoundSlicePattern](lp.Elements[sliceIndex])

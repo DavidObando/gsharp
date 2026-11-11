@@ -2408,6 +2408,80 @@ shared class SpillSequenceSpiller {
             sideEffects ImmutableArray[BoundStatement].Builder,
             failLabel BoundLabel
         ) {
+            EmitSpilledPatternTest(pattern, () -> input, locals, sideEffects, failLabel)
+        }
+
+        private func EmitSpilledPatternTest(
+            pattern BoundPattern,
+            loadInput() -> BoundExpression,
+            locals ImmutableArray[LocalVariableSymbol].Builder,
+            sideEffects ImmutableArray[BoundStatement].Builder,
+            failLabel BoundLabel
+        ) {
+            switch pattern {
+                case BoundDiscardPattern{Variable: nil} {
+                    return
+                }
+                case bp is BoundBinaryPattern {
+                    if bp.IsConjunction {
+                        let leftPattern = if bp.RightInputVariable is {} rightInput {
+                            MarkTypePatternBinding(bp.Left, rightInput)
+                        } else {
+                            bp.Left
+                        }
+                        EmitSpilledPatternTest(leftPattern, loadInput, locals, sideEffects, failLabel)
+                        if bp.RightInputVariable is {} narrowedInput {
+                            EmitSpilledPatternTest(
+                                bp.Right,
+                                BoundVariableExpression(nil, narrowedInput),
+                                locals,
+                                sideEffects,
+                                failLabel
+                            )
+                        } else {
+                            EmitSpilledPatternTest(bp.Right, loadInput, locals, sideEffects, failLabel)
+                        }
+                        return
+                    }
+                    let matchLabel = MakeLabel()
+                    let tryRightLabel = MakeLabel()
+                    EmitSpilledPatternTest(bp.Left, loadInput, locals, sideEffects, tryRightLabel)
+                    sideEffects.Add(BoundGotoStatement(nil, matchLabel))
+                    sideEffects.Add(BoundLabelStatement(nil, tryRightLabel))
+                    EmitSpilledPatternTest(bp.Right, loadInput, locals, sideEffects, failLabel)
+                    sideEffects.Add(BoundLabelStatement(nil, matchLabel))
+                    return
+                }
+                case np is BoundNotPattern {
+                    let notMatchedLabel = MakeLabel()
+                    EmitSpilledPatternTest(np.Pattern, loadInput, locals, sideEffects, notMatchedLabel)
+                    sideEffects.Add(BoundGotoStatement(nil, failLabel))
+                    sideEffects.Add(BoundLabelStatement(nil, notMatchedLabel))
+                    return
+                }
+                case pp is BoundPropertyPattern {
+                    if pp.InputVariable == nil &&
+                        !(pp.Type is NullableTypeSymbol) &&
+                        ReflectionMetadataEmitter
+                        .IsValueTypeSymbol(pp.Type) {
+                        for field in pp.Fields {
+                            EmitSpilledPatternTest(
+                                field.Pattern,
+                                () -> StoreOperand(
+                                    BuildPropertyPatternMemberAccess(field, loadInput(), pp.Type),
+                                    locals,
+                                    sideEffects
+                                ),
+                                locals,
+                                sideEffects,
+                                failLabel
+                            )
+                        }
+                        return
+                    }
+                }
+            }
+            let input = loadInput()
             if !HasAwait(pattern) {
                 let isMatch = BoundIsExpression(pattern.Syntax, input, pattern)
                 sideEffects.Add(BoundConditionalGotoStatement(pattern.Syntax, failLabel, isMatch, jumpIfTrue: false))
@@ -2507,36 +2581,6 @@ shared class SpillSequenceSpiller {
                 }
                 case lp is BoundListPattern {
                     EmitSpilledListPatternTest(lp, input, locals, sideEffects, failLabel)
-                }
-                case bp is BoundBinaryPattern {
-                    if bp.IsConjunction {
-                        let leftPattern = if bp.RightInputVariable is {} rightInput {
-                            MarkTypePatternBinding(bp.Left, rightInput)
-                        } else {
-                            bp.Left
-                        }
-                        EmitSpilledPatternTest(leftPattern, input, locals, sideEffects, failLabel)
-                        let rightInputExpr = if bp.RightInputVariable is {} narrowedInput {
-                            cast[BoundExpression](BoundVariableExpression(nil, narrowedInput))
-                        } else {
-                            input
-                        }
-                        EmitSpilledPatternTest(bp.Right, rightInputExpr, locals, sideEffects, failLabel)
-                        return
-                    }
-                    let matchLabel = MakeLabel()
-                    let tryRightLabel = MakeLabel()
-                    EmitSpilledPatternTest(bp.Left, input, locals, sideEffects, tryRightLabel)
-                    sideEffects.Add(BoundGotoStatement(nil, matchLabel))
-                    sideEffects.Add(BoundLabelStatement(nil, tryRightLabel))
-                    EmitSpilledPatternTest(bp.Right, input, locals, sideEffects, failLabel)
-                    sideEffects.Add(BoundLabelStatement(nil, matchLabel))
-                }
-                case np is BoundNotPattern {
-                    let notMatchedLabel = MakeLabel()
-                    EmitSpilledPatternTest(np.Pattern, input, locals, sideEffects, notMatchedLabel)
-                    sideEffects.Add(BoundGotoStatement(nil, failLabel))
-                    sideEffects.Add(BoundLabelStatement(nil, notMatchedLabel))
                 }
                 default {
                     let isMatch = BoundIsExpression(pattern.Syntax, input, pattern)
@@ -2704,8 +2748,44 @@ shared class SpillSequenceSpiller {
                 } else {
                     BoundIndexExpression(element.Syntax, receiver, ImmutableArray.Create(indexExpr), lp.ElementType)
                 }
-                let elemInput = StoreOperand(rawElementExpr, locals, sideEffects)
-                EmitSpilledPatternTest(element, elemInput, locals, sideEffects, failLabel)
+                if element.InputReadCount <= 1 {
+                    EmitSpilledPatternTest(
+                        element,
+                        () -> StoreOperand(rawElementExpr, locals, sideEffects),
+                        locals,
+                        sideEffects,
+                        failLabel
+                    )
+                    return
+                }
+                let value = MakeSpillTemp(lp.ElementType)
+                let loaded = MakeSpillTemp(TypeSymbol.Bool)
+                locals.Add(value)
+                locals.Add(loaded)
+                sideEffects.Add(BoundVariableDeclaration(nil, loaded, BoundLiteralExpression(nil, false)))
+                let loadElement = func () BoundExpression {
+                    let ready = MakeLabel()
+                    sideEffects.Add(
+                        BoundConditionalGotoStatement(
+                            nil,
+                            ready,
+                            BoundVariableExpression(nil, loaded),
+                            jumpIfTrue: true
+                        )
+                    )
+                    sideEffects.Add(
+                        BoundExpressionStatement(nil, BoundAssignmentExpression(nil, value, rawElementExpr))
+                    )
+                    sideEffects.Add(
+                        BoundExpressionStatement(
+                            nil,
+                            BoundAssignmentExpression(nil, loaded, BoundLiteralExpression(nil, true))
+                        )
+                    )
+                    sideEffects.Add(BoundLabelStatement(nil, ready))
+                    return BoundVariableExpression(nil, value)
+                }
+                EmitSpilledPatternTest(element, loadElement, locals, sideEffects, failLabel)
             }
             if sliceIndex < 0 {
                 for var i = 0; i < lp.Elements.Length; i++ {
