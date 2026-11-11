@@ -42,10 +42,21 @@ open class Issue4612StoreBridgeInventoryTests {
     @Fact
     func GSharpCheckout_EveryNonNullAssertion_IsAStoreBridgeOrListedWithAReason() {
         // CI selects the C# fixture archive. Audit the G# checkout independently of that selection.
-        let repoRoot = GsharpTestProjectRunner.FindRepoRootAbove(AppContext.BaseDirectory) ??
-            throw DirectoryNotFoundException("Could not locate the G# checkout above the test assembly.")
+        let repoRoot = FindGSharpCheckoutRoot(AppContext.BaseDirectory)
         Assert.True(CommittedCompilerSource.IsGSharp(repoRoot), "expected the G# checkout, not the C# fixture archive")
         AssertInventory(repoRoot)
+    }
+
+    @Fact
+    func DetachedTestOutput_UsesConfiguredGSharpSourceRoot() {
+        let checkoutRoot = FindGSharpCheckoutRoot(AppContext.BaseDirectory)
+        let originalRoot = Environment.GetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT")
+        try {
+            Environment.SetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT", checkoutRoot)
+            Assert.Equal(checkoutRoot, FindGSharpCheckoutRoot(nil))
+        } finally {
+            Environment.SetEnvironmentVariable("CS2GS_TEST_SOURCE_ROOT", originalRoot)
+        }
     }
 
     private func AssertInventory(repoRoot string) {
@@ -164,6 +175,10 @@ open class Issue4612StoreBridgeInventoryTests {
     }
 
     shared {
+        // Stage-2 output can have no checkout ancestor. Its configured source root must still be a G# tree.
+        private func FindGSharpCheckoutRoot(outputDirectory string?) string ->
+        GsharpTestProjectRunner.FindRepoRootAbove(outputDirectory) ?? GsharpTestProjectRunner.FindRepoRoot()!!
+
         // Method name -> number of `!!` constructions in it that are not store
         // bridges, and why.
         private let NotStoreBridges Dictionary[string, (Count int32, Reason string)] = Dictionary[
