@@ -642,18 +642,31 @@ partial class CSharpToGSharpTranslator {
                         this.InferredInitializerOriginatesFromDefault(coalesceAssignment.Right, visited)
                 }
                 case conditional is ConditionalExpressionSyntax {
-                    return this.InferredInitializerOriginatesFromDefault(conditional.WhenTrue, visited) ||
-                        this.InferredInitializerOriginatesFromDefault(conditional.WhenFalse, visited)
+                    return this.InferredInitializerOriginatesFromDefault(
+                        conditional.WhenTrue,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    ) ||
+                        this
+                        .InferredInitializerOriginatesFromDefault(
+                        conditional.WhenFalse,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
                 }
                 case coalesce is BinaryExpressionSyntax when coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                    return this.InferredInitializerOriginatesFromDefault(coalesce.Left, visited) ||
-                        this.InferredInitializerOriginatesFromDefault(coalesce.Right, visited)
+                    return this.InferredInitializerOriginatesFromDefault(
+                        coalesce.Left,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    ) ||
+                        this.InferredInitializerOriginatesFromDefault(
+                        coalesce.Right,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
                 }
                 case switchExpression is SwitchExpressionSyntax {
                     return switchExpression.Arms.Any(
                         (arm SwitchExpressionArmSyntax) -> this.InferredInitializerOriginatesFromDefault(
                             arm.Expression,
-                            visited
+                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                         )
                     )
                 }
@@ -672,12 +685,30 @@ partial class CSharpToGSharpTranslator {
             if this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local || !visited.Add(local) {
                 return false
             }
-            return this.GetReachingLocalValues(
-                local,
-                expression!!.SpanStart,
-                HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
+                (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
+            ) {
+                let emptyChain = Array.Empty[ITypeParameterSymbol]()
+                if this.TryGetSlotChainNodeMemo(declaration, emptyChain, out var cachedDefault, pathKey: "@default") {
+                    return cachedDefault
+                }
+                this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: "@default")
+                let cachedResult = this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
+                    (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
+                        value,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
+                )
+                this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: "@default")
+                return cachedResult
+            }
+            return this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
+                (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
+                    value,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                )
             )
-                .Any((value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(value, visited))
         }
 
         private func InferredTupleProjectionOriginatesFromDefault(
@@ -705,8 +736,17 @@ partial class CSharpToGSharpTranslator {
                 return this.InferredTupleProjectionOriginatesFromDefault(assignment.Right, path, visited)
             }
             if source is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
-                return this.InferredTupleProjectionOriginatesFromDefault(coalesce.Left, path, visited) ||
-                    this.InferredTupleProjectionOriginatesFromDefault(coalesce.Right, path, visited)
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    coalesce.Left,
+                    path,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                ) ||
+                    this
+                    .InferredTupleProjectionOriginatesFromDefault(
+                    coalesce.Right,
+                    path,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                )
             }
             let index = path!![0]
             let remaining IReadOnlyList[int32] = path!!.Skip(1).ToArray()
@@ -718,15 +758,24 @@ partial class CSharpToGSharpTranslator {
                 )
             }
             if source is ConditionalExpressionSyntax conditional {
-                return this.InferredTupleProjectionOriginatesFromDefault(conditional.WhenTrue, path, visited) ||
-                    this.InferredTupleProjectionOriginatesFromDefault(conditional.WhenFalse, path, visited)
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    conditional.WhenTrue,
+                    path,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                ) ||
+                    this
+                    .InferredTupleProjectionOriginatesFromDefault(
+                    conditional.WhenFalse,
+                    path,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                )
             }
             if source is SwitchExpressionSyntax switchExpression {
                 return switchExpression.Arms.Any(
                     (arm SwitchExpressionArmSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
                         arm.Expression,
                         path,
-                        visited
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
                     )
                 )
             }
@@ -740,13 +789,37 @@ partial class CSharpToGSharpTranslator {
                 .Symbol is ILocalSymbol local &&
                 visited
                 .Add(local) {
-                return this.GetReachingLocalValues(
-                    local,
-                    source!!.SpanStart,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                )
-                    .Any(
-                    (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(value, path, visited)
+                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
+                    (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
+                ) {
+                    let emptyChain = Array.Empty[ITypeParameterSymbol]()
+                    let pathKey = "@default" + FormatTupleProjection(path!!.ToList())
+                    if this.TryGetSlotChainNodeMemo(
+                        declaration,
+                        emptyChain,
+                        out var cachedTupleDefault,
+                        pathKey: pathKey
+                    ) {
+                        return cachedTupleDefault
+                    }
+                    this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: pathKey)
+                    let cachedResult = this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
+                        (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
+                            value,
+                            path,
+                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                        )
+                    )
+                    this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: pathKey)
+                    return cachedResult
+                }
+                return this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
+                    (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
+                        value,
+                        path,
+                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                    )
                 )
             }
             let projected ExpressionSyntax? = ProjectTupleElement(source, path)

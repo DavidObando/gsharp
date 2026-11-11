@@ -470,6 +470,7 @@ namespace Demo
         public T Value;
         public T[] Items;
         public T Get() => Value;
+        public T[] GetItems<U>() => Items;
         public T this[int index] => Value;
     }
     public static class P
@@ -528,6 +529,8 @@ namespace Demo
                 (Wrap(Volatile.Read(ref cache!))[0] switch { var idxArm => idxArm.Count }) +
                 (Wrap(Volatile.Read(ref cache!)).Items[0] switch { var itemArm => itemArm.Count }) +
                 (Wrap(Volatile.Read(ref cache!)).Items[0] is var itemIs ? itemIs.Count : -1) +
+                (Wrap(Volatile.Read(ref cache!)).Items![0] is var suppItemIs ? suppItemIs.Count : -1) +
+                (Wrap(Volatile.Read(ref cache!)).GetItems<int>()[0] is var genItemIs ? genItemIs.Count : -1) +
                 (Wrap(Volatile.Read(ref cache!)).Items.Echo()[0] switch { var echoArm => echoArm.Count }) +
                 (Wrap(Volatile.Read(ref cache!)).Items.Echo()[0] is var echoIs ? echoIs.Count : -1) +
                 (Pack(Volatile.Read(ref cache!)).Item1.Value switch { var packArm => packArm.Count }) +
@@ -540,7 +543,7 @@ namespace Demo
                 (alias() is var aliasedInvoked ? aliasedInvoked.Count : -1) +
                 (alias() switch { var aliasedArm => aliasedArm.Count }) +
                 (f2() is var branchedInvoked ? branchedInvoked.Count : -1) +
-                (read() switch { var invokedArm => invokedArm.Count }) - 16;
+                (read() switch { var invokedArm => invokedArm.Count }) - 18;
         }
         static int Nested() => (` + nested + ` switch { var n => n.Count }) + (` + nested + ` is var p ? p.Count : -1) - 1;
         public static string Run() =>
@@ -572,6 +575,8 @@ namespace Demo
         Assert.Contains("case var idxArm: idxArm!!.Count", printed)
         Assert.Contains("case var itemArm: itemArm!!.Count", printed)
         Assert.Contains("is var itemIs { itemIs!!.Count }", printed)
+        Assert.Contains("is var suppItemIs { suppItemIs!!.Count }", printed)
+        Assert.Contains("is var genItemIs { genItemIs!!.Count }", printed)
         Assert.Contains("case var echoArm: echoArm!!.Count", printed)
         Assert.Contains("is var echoIs { echoIs!!.Count }", printed)
         Assert.Contains("case var packArm: packArm!!.Count", printed)

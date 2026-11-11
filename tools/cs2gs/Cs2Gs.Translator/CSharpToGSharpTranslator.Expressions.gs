@@ -7836,19 +7836,11 @@ partial class CSharpToGSharpTranslator {
             }
         }
 
-        // Issue #5656: whether `expression` carries a value that is `T?` only in the emitted G# at the
-        // type-parameter slot chain `slotChain` (or as its own top-level value when `slotChain` is empty).
-        private func ExpressionCarriesNilableOnlyAtSlotChain(
-            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
-            slotChain IReadOnlyList[ITypeParameterSymbol],
-            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]? = nil
-        ) bool {
-            if expression == nil {
-                return false
-            }
-            if slotChain.Count == 0 {
-                return this.IsNilableOnlyInEmittedGSharp(expression)
-            }
+        private func UnwrapSlotChainCarrier(expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?) Microsoft
+            .CodeAnalysis
+            .CSharp
+            .Syntax
+            .ExpressionSyntax? {
             var unwrapped = Unparenthesize(expression)
             while true {
                 if unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -7864,6 +7856,23 @@ partial class CSharpToGSharpTranslator {
                 }
                 break
             }
+            return unwrapped
+        }
+
+        // Issue #5656: whether `expression` carries a value that is `T?` only in the emitted G# at the
+        // type-parameter slot chain `slotChain` (or as its own top-level value when `slotChain` is empty).
+        private func ExpressionCarriesNilableOnlyAtSlotChain(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            slotChain IReadOnlyList[ITypeParameterSymbol],
+            localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]? = nil
+        ) bool {
+            if expression == nil {
+                return false
+            }
+            if slotChain.Count == 0 {
+                return this.IsNilableOnlyInEmittedGSharp(expression)
+            }
+            let unwrapped = this.UnwrapSlotChainCarrier(expression)
             if unwrapped == nil {
                 return false
             }
@@ -7976,10 +7985,7 @@ partial class CSharpToGSharpTranslator {
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?,
             tuplePath List[int32]? = nil
         ) bool {
-            var unwrapped = Unparenthesize(callable)
-            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
-                unwrapped = Unparenthesize(checkedExpr.Expression)
-            }
+            let unwrapped = this.UnwrapSlotChainCarrier(callable)
             if unwrapped == nil {
                 return false
             }
@@ -8575,10 +8581,7 @@ partial class CSharpToGSharpTranslator {
             slotChain IReadOnlyList[ITypeParameterSymbol],
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
         ) bool {
-            var unwrapped = Unparenthesize(arrayExpr)
-            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
-                unwrapped = Unparenthesize(checkedExpr.Expression)
-            }
+            let unwrapped = this.UnwrapSlotChainCarrier(arrayExpr)
             if unwrapped == nil {
                 return false
             }
@@ -8751,9 +8754,11 @@ partial class CSharpToGSharpTranslator {
                 this
                 .context
                 .GetSymbolInfo(invocation)
-                .Symbol is IMethodSymbol method &&
-                !HasExplicitTypeArguments(invocation.Expression) {
+                .Symbol is IMethodSymbol method {
                 let definition = (method.ReducedFrom ?? method).OriginalDefinition
+                if this.IsTranslatorWidenedDeclaration(definition) {
+                    return false
+                }
                 if definition.ReturnType is IArrayTypeSymbol returnArray && this.TryResolveSlotChainThroughDeclaredType(
                     returnArray.ElementType,
                     slotChain,
@@ -8781,7 +8786,8 @@ partial class CSharpToGSharpTranslator {
                         )
                     }
                 }
-                if definition.ReturnType is ITypeParameterSymbol{
+                if !HasExplicitTypeArguments(invocation.Expression) &&
+                    definition.ReturnType is ITypeParameterSymbol{
                     TypeParameterKind: TypeParameterKind.Method,
                     NullableAnnotation: not Microsoft.CodeAnalysis.NullableAnnotation.Annotated
                 } returnTp {
@@ -8847,10 +8853,7 @@ partial class CSharpToGSharpTranslator {
             slotChain IReadOnlyList[ITypeParameterSymbol],
             localMemo List[(Local ILocalSymbol, Chain IReadOnlyList[ITypeParameterSymbol], Result bool)]?
         ) bool {
-            var unwrapped = Unparenthesize(tupleReceiver)
-            while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
-                unwrapped = Unparenthesize(checkedExpr.Expression)
-            }
+            let unwrapped = this.UnwrapSlotChainCarrier(tupleReceiver)
             if unwrapped == nil || accessPath.Count == 0 {
                 return false
             }
