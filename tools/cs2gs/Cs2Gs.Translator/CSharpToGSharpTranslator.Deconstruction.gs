@@ -4132,7 +4132,7 @@ partial class CSharpToGSharpTranslator {
                     .EmittedLocalStorageAcceptsNil
                     .TryGetValue(local, out var acceptsNil) &&
                     !acceptsNil {
-                    EnsureNonNullAssertion(value)
+                    this.ReportStoreBridge(target, value, EnsureNonNullAssertion(value), slot, slotType)
                 } else {
                     value
                 }
@@ -4143,13 +4143,19 @@ partial class CSharpToGSharpTranslator {
                     return value
                 }
                 return if this.ElementAccessStoreRequiresNonNullReference(target) {
-                    EnsureNonNullAssertion(value)
+                    this.ReportStoreBridge(
+                        target,
+                        value,
+                        EnsureNonNullAssertion(value),
+                        slot ?? this.context.GetTypeInfo(access.Expression).Type as IArrayTypeSymbol,
+                        slotType
+                    )
                 } else {
                     value
                 }
             }
             return if this.TargetWillRemainNonNullableReference(slotType, slot) {
-                EnsureNonNullAssertion(value)
+                this.ReportStoreBridge(target, value, EnsureNonNullAssertion(value), slot, slotType)
             } else {
                 value
             }

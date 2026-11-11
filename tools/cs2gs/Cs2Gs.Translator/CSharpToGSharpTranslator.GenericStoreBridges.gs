@@ -361,7 +361,15 @@ partial class CSharpToGSharpTranslator {
                             this.ResolveStoreAtNode(finalValue, value).Store,
                             parameter
                         )
-                        if (parameterIsFinalStore && finalValue!!.Parent is AssignmentExpressionSyntax) ||
+                        // Match the deconstruction's leaf parameter, not a conversion-input parameter.
+                        let parameterIsAssignmentTarget = finalValue!!.Parent is AssignmentExpressionSyntax assignment &&
+                            assignment.Left == finalValue &&
+                            value != nil &&
+                            SymbolEqualityComparer
+                            .Default
+                            .Equals(this.context.GetSymbolInfo(value).Symbol, parameter)
+                        if parameterIsAssignmentTarget ||
+                            (parameterIsFinalStore && finalValue!!.Parent is AssignmentExpressionSyntax) ||
                             (
                             !parameterIsFinalStore && parameterStores.Any(
                                 (node SyntaxNode) -> SymbolEqualityComparer.Default.Equals(

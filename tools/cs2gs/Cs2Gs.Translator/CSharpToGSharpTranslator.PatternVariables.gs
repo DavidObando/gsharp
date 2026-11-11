@@ -1550,9 +1550,7 @@ partial class CSharpToGSharpTranslator {
 
         private func ScopeSynthesizesLoopContinueLabel(body SyntaxNode) bool {
             for node in body.DescendantNodes(
-                (child SyntaxNode) -> !(
-                    child is LocalFunctionStatementSyntax || child is AnonymousFunctionExpressionSyntax
-                )
+                (child SyntaxNode) -> object.ReferenceEquals(child, body) || !this.IsClosureBoundary(child)
             ) {
                 if node is DoStatementSyntax doLoop && this.LoopConditionLowersOutOfHeader(doLoop, doLoop.Condition) &&
                     BodyContainsOwnLoopContinue(doLoop.Statement) {
