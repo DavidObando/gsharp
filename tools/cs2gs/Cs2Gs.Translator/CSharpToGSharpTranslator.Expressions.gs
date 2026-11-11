@@ -5377,7 +5377,40 @@ partial class CSharpToGSharpTranslator {
             ref sawVerifiedDeclaredInput bool,
             ref sawRejectedNilableInput bool,
             visitedLocals HashSet[ILocalSymbol]? = nil,
-            remainingArrayDepth int32 = 0
+            remainingArrayDepth int32 = 0,
+            completed HashSet[(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?, ITypeSymbol?, int32)]? = nil
+        ) {
+            let activeCompleted = completed ??
+                HashSet[(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?, ITypeSymbol?, int32)]()
+            let key = (expression, parameterType, remainingArrayDepth)
+            // Results and evidence accumulate in one walk. Repeated inputs add no evidence (#5633).
+            if activeCompleted.Contains(key) {
+                return
+            }
+            this.CollectRelevantInferenceSubexpressionsCore(
+                expression,
+                parameterType,
+                relevantOrdinals,
+                results,
+                ref sawVerifiedDeclaredInput,
+                ref sawRejectedNilableInput,
+                visitedLocals,
+                remainingArrayDepth,
+                activeCompleted
+            )
+            activeCompleted.Add(key)
+        }
+
+        private func CollectRelevantInferenceSubexpressionsCore(
+            expression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?,
+            parameterType ITypeSymbol?,
+            relevantOrdinals HashSet[int32],
+            results List[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax],
+            ref sawVerifiedDeclaredInput bool,
+            ref sawRejectedNilableInput bool,
+            visitedLocals HashSet[ILocalSymbol]?,
+            remainingArrayDepth int32,
+            completed HashSet[(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?, ITypeSymbol?, int32)]
         ) {
             var unwrapped = Unparenthesize(expression)
             while unwrapped is Microsoft.CodeAnalysis.CSharp.Syntax.CheckedExpressionSyntax checkedExpr {
@@ -5398,7 +5431,8 @@ partial class CSharpToGSharpTranslator {
                     ref sawVerifiedDeclaredInput,
                     ref sawRejectedNilableInput,
                     visitedLocals,
-                    remainingArrayDepth
+                    remainingArrayDepth,
+                    completed
                 )
                 this.CollectRelevantInferenceSubexpressions(
                     coalesce.Right,
@@ -5408,7 +5442,8 @@ partial class CSharpToGSharpTranslator {
                     ref sawVerifiedDeclaredInput,
                     ref sawRejectedNilableInput,
                     visitedLocals,
-                    remainingArrayDepth
+                    remainingArrayDepth,
+                    completed
                 )
                 return
             }
@@ -5422,7 +5457,8 @@ partial class CSharpToGSharpTranslator {
                         ref sawVerifiedDeclaredInput,
                         ref sawRejectedNilableInput,
                         visitedLocals,
-                        remainingArrayDepth
+                        remainingArrayDepth,
+                        completed
                     )
                 }
                 return
@@ -5507,7 +5543,8 @@ partial class CSharpToGSharpTranslator {
                                 ref sawVerifiedDeclaredInput,
                                 ref sawRejectedNilableInput,
                                 visitedLocals,
-                                remainingArrayDepth
+                                remainingArrayDepth,
+                                completed
                             )
                         }
                         return
@@ -5546,7 +5583,8 @@ partial class CSharpToGSharpTranslator {
                                 ref sawVerifiedDeclaredInput,
                                 ref sawRejectedNilableInput,
                                 visitedLocals,
-                                remainingArrayDepth
+                                remainingArrayDepth,
+                                completed
                             )
                         }
                         return
@@ -5591,7 +5629,8 @@ partial class CSharpToGSharpTranslator {
                                 ref sawVerifiedDeclaredInput,
                                 ref sawRejectedNilableInput,
                                 visitedLocals,
-                                remainingArrayDepth
+                                remainingArrayDepth,
+                                completed
                             )
                         }
                     }
@@ -5622,7 +5661,8 @@ partial class CSharpToGSharpTranslator {
                         ref sawVerifiedDeclaredInput,
                         ref sawRejectedNilableInput,
                         visitedLocals,
-                        remainingArrayDepth
+                        remainingArrayDepth,
+                        completed
                     )
                     return
                 }
@@ -5642,7 +5682,8 @@ partial class CSharpToGSharpTranslator {
             ref sawVerifiedDeclaredInput bool,
             ref sawRejectedNilableInput bool,
             visitedLocals HashSet[ILocalSymbol]?,
-            remainingArrayDepth int32 = 0
+            remainingArrayDepth int32,
+            completed HashSet[(Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax?, ITypeSymbol?, int32)]
         ) {
             if this.UnwrapNullableValueTupleType(parameterType) is INamedTypeSymbol{IsTupleType: true} paramTuple &&
                 this.UnwrapNullableValueTupleType(localType) is INamedTypeSymbol{IsTupleType: true} localTuple &&
@@ -5687,7 +5728,8 @@ partial class CSharpToGSharpTranslator {
                             ref sawVerifiedDeclaredInput,
                             ref sawRejectedNilableInput,
                             visitedLocals,
-                            remainingArrayDepth
+                            remainingArrayDepth,
+                            completed
                         )
                         continue
                     }
@@ -5738,7 +5780,8 @@ partial class CSharpToGSharpTranslator {
                                     ref sawVerifiedDeclaredInput,
                                     ref sawRejectedNilableInput,
                                     activeVisited,
-                                    remainingArrayDepth
+                                    remainingArrayDepth,
+                                    completed
                                 )
                             } finally {
                                 activeVisited.Remove(tupleLocal)
@@ -5756,7 +5799,8 @@ partial class CSharpToGSharpTranslator {
                                     ref sawVerifiedDeclaredInput,
                                     ref sawRejectedNilableInput,
                                     activeVisited,
-                                    remainingArrayDepth
+                                    remainingArrayDepth,
+                                    completed
                                 )
                             } finally {
                                 activeVisited.Remove(tupleLocal)
@@ -5780,7 +5824,8 @@ partial class CSharpToGSharpTranslator {
                             ref sawVerifiedDeclaredInput,
                             ref sawRejectedNilableInput,
                             activeVisited,
-                            remainingArrayDepth
+                            remainingArrayDepth,
+                            completed
                         )
                     } finally {
                         activeVisited.Remove(tupleLocal)

@@ -34,6 +34,7 @@ partial class CSharpToGSharpTranslator {
             SyntaxNode,
             HashSet[string]
         ]()
+        private var defaultOriginCycleVersion int32 = 0
         private enum DelegateArgumentBehavior {
             NotObserved,
             InvokedDuringCall,
@@ -718,33 +719,10 @@ partial class CSharpToGSharpTranslator {
             if expression!!.SyntaxTree != this.context.SemanticModel.SyntaxTree {
                 return false
             }
-            if this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local || !visited.Add(local) {
+            if this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local {
                 return false
             }
-            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-            if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
-                (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
-            ) {
-                let emptyChain = Array.Empty[ITypeParameterSymbol]()
-                if this.TryGetSlotChainNodeMemo(declaration, emptyChain, out var cachedDefault, pathKey: "@default") {
-                    return cachedDefault
-                }
-                this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: "@default")
-                let cachedResult = this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
-                    (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
-                        value,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
-                )
-                this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: "@default")
-                return cachedResult
-            }
-            return this.GetReachingLocalValues(local, expression!!.SpanStart, visited).Any(
-                (value ExpressionSyntax) -> this.InferredInitializerOriginatesFromDefault(
-                    value,
-                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                )
-            )
+            return this.LocalOriginatesFromDefault(local, expression!!.SpanStart, Array.Empty[int32](), visited)
         }
 
         private func InferredTupleProjectionOriginatesFromDefault(
@@ -822,41 +800,8 @@ partial class CSharpToGSharpTranslator {
                 this
                 .context
                 .GetSymbolInfo(source)
-                .Symbol is ILocalSymbol local &&
-                visited
-                .Add(local) {
-                let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                if declaration is VariableDeclaratorSyntax && !this.IsLocalReassigned(local) && visited.All(
-                    (sym ISymbol) -> sym is ILocalSymbol visitedLocal && !this.IsLocalReassigned(visitedLocal)
-                ) {
-                    let emptyChain = Array.Empty[ITypeParameterSymbol]()
-                    let pathKey = "@default" + FormatTupleProjection(path!!.ToList())
-                    if this.TryGetSlotChainNodeMemo(
-                        declaration,
-                        emptyChain,
-                        out var cachedTupleDefault,
-                        pathKey: pathKey
-                    ) {
-                        return cachedTupleDefault
-                    }
-                    this.SetSlotChainNodeMemo(declaration, emptyChain, false, pathKey: pathKey)
-                    let cachedResult = this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
-                        (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                            value,
-                            path,
-                            HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                        )
-                    )
-                    this.SetSlotChainNodeMemo(declaration, emptyChain, cachedResult, pathKey: pathKey)
-                    return cachedResult
-                }
-                return this.GetReachingLocalValues(local, source!!.SpanStart, visited).Any(
-                    (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
-                        value,
-                        path,
-                        HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
-                    )
-                )
+                .Symbol is ILocalSymbol local {
+                return this.LocalOriginatesFromDefault(local, source!!.SpanStart, path!!, visited)
             }
             let projected ExpressionSyntax? = ProjectTupleElement(source, path)
             return projected!!.SyntaxTree == this
@@ -864,6 +809,43 @@ partial class CSharpToGSharpTranslator {
                 .SemanticModel
                 .SyntaxTree &&
                 this.InferredInitializerOriginatesFromDefault(projected, visited)
+        }
+
+        private func LocalOriginatesFromDefault(
+            local ILocalSymbol,
+            usePosition int32,
+            path IReadOnlyList[int32],
+            visited HashSet[ISymbol]
+        ) bool {
+            if !visited.Add(local) {
+                this.defaultOriginCycleVersion++
+                return false
+            }
+            let declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+            let emptyChain = Array.Empty[ITypeParameterSymbol]()
+            // Reaching values depend on the read position, including reads of reassigned locals (#5633).
+            let pathKey = "@default:${usePosition}" + FormatTupleProjection(path.ToList())
+            if declaration is VariableDeclaratorSyntax && this.TryGetSlotChainNodeMemo(
+                declaration,
+                emptyChain,
+                out var cached,
+                pathKey: pathKey
+            ) {
+                return cached
+            }
+            let cycleVersion = this.defaultOriginCycleVersion
+            let result = this.GetReachingLocalValues(local, usePosition, visited).Any(
+                (value ExpressionSyntax) -> this.InferredTupleProjectionOriginatesFromDefault(
+                    value,
+                    path,
+                    HashSet[ISymbol](visited, SymbolEqualityComparer.Default)
+                )
+            )
+            // A cycle can hide evidence from an ancestor. Keep negative answers only after complete walks.
+            if declaration is VariableDeclaratorSyntax && (result || cycleVersion == this.defaultOriginCycleVersion) {
+                this.SetSlotChainNodeMemo(declaration, emptyChain, result, pathKey: pathKey)
+            }
+            return result
         }
 
         private func TryGetTupleElementAccess(
@@ -933,6 +915,55 @@ partial class CSharpToGSharpTranslator {
             left ExpressionSyntax?,
             right ExpressionSyntax?,
             visited HashSet[ISymbol]? = nil
+        ) ExpressionSyntax? -> this.FindDeconstructionInitializerMemo(target, left, right, visited)
+
+        private func FindDeconstructionInitializer(
+            target SingleVariableDesignationSyntax,
+            designation VariableDesignationSyntax,
+            right ExpressionSyntax?,
+            visited HashSet[ISymbol]? = nil
+        ) ExpressionSyntax? -> this.FindDeconstructionInitializerMemo(target, designation, right, visited)
+
+        private func FindDeconstructionInitializerMemo(
+            target SingleVariableDesignationSyntax,
+            left SyntaxNode?,
+            right ExpressionSyntax?,
+            visited HashSet[ISymbol]?
+        ) ExpressionSyntax? {
+            if left == nil || right == nil {
+                return nil
+            }
+            let key = (cast[SyntaxNode](target), left, cast[SyntaxNode](right))
+            if this.state.DeconstructionInitializers.TryGetValue(key, out var cached) {
+                return cached
+            }
+            let cycleVersion = this.defaultOriginCycleVersion
+            let result = switch left {
+                case expression is ExpressionSyntax: this.ComputeDeconstructionInitializer(
+                    target,
+                    expression,
+                    right,
+                    visited
+                )
+                case designation is VariableDesignationSyntax: this.ComputeDeconstructionInitializer(
+                    target,
+                    designation,
+                    right,
+                    visited
+                )
+                default: default(ExpressionSyntax?)
+            }
+            if cycleVersion == this.defaultOriginCycleVersion {
+                this.state.DeconstructionInitializers[key] = result
+            }
+            return result
+        }
+
+        private func ComputeDeconstructionInitializer(
+            target SingleVariableDesignationSyntax,
+            left ExpressionSyntax?,
+            right ExpressionSyntax?,
+            visited HashSet[ISymbol]?
         ) ExpressionSyntax? {
             var left = left
             var right = right
@@ -948,6 +979,7 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(right)
                 .Symbol is ILocalSymbol alias {
                 if !visited!!.Add(alias) {
+                    this.defaultOriginCycleVersion++
                     return nil
                 }
                 let reaching = this.GetReachingLocalValues(alias, right!!.SpanStart, visited)
@@ -1052,11 +1084,11 @@ partial class CSharpToGSharpTranslator {
             return nil
         }
 
-        private func FindDeconstructionInitializer(
+        private func ComputeDeconstructionInitializer(
             target SingleVariableDesignationSyntax,
             designation VariableDesignationSyntax,
             right ExpressionSyntax?,
-            visited HashSet[ISymbol]? = nil
+            visited HashSet[ISymbol]?
         ) ExpressionSyntax? {
             var right = right
             var visited = visited
@@ -1073,6 +1105,7 @@ partial class CSharpToGSharpTranslator {
                 .GetSymbolInfo(right)
                 .Symbol is ILocalSymbol alias {
                 if !visited!!.Add(alias) {
+                    this.defaultOriginCycleVersion++
                     return nil
                 }
                 let reaching = this.GetReachingLocalValues(alias, right!!.SpanStart, visited)

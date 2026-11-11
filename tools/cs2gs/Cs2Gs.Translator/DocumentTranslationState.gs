@@ -74,6 +74,10 @@ internal class DocumentTranslationState {
         LocalHoldsPromotedValueInProgress = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         EmittedLocalTypeClauses = HashSet[ILocalSymbol](SymbolEqualityComparer.Default)
         InferredLocalDefaultTypedDeclarations = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
+        DeconstructionInitializers = Dictionary[
+            (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode),
+            ExpressionSyntax?
+        ]()
         VarCaptureInputNonNull = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpLocals = Dictionary[ILocalSymbol, bool](SymbolEqualityComparer.Default)
         NilableOnlyInEmittedGSharpNodes = Dictionary[Microsoft.CodeAnalysis.SyntaxNode, bool]()
@@ -454,6 +458,14 @@ internal class DocumentTranslationState {
     // Issue #4445: semantic/CFG default provenance is invariant per local and
     // can be queried repeatedly while lowering one declaration.
     prop InferredLocalDefaultTypedDeclarations Dictionary[ILocalSymbol, bool] {
+        get;
+    }
+
+    // Issue #5633: retain each deconstruction projection, including misses, across composed alias arms.
+    prop DeconstructionInitializers Dictionary[
+        (Target SyntaxNode, Left SyntaxNode, Right SyntaxNode),
+        ExpressionSyntax?
+    ] {
         get;
     }
 
