@@ -14,6 +14,8 @@ The published **0.5** documentation snapshot and all current installation/downlo
 
 ## Unreleased (0.5 line)
 
+- **Callback-aware call-effect summaries** (#5326). Include interpolated-string handlers, imported getters, deferred LINQ comparers, recursive tuple formatting, and set/ordering callbacks. Resolve package-qualified storage types conservatively, inspect private imported comparers, and cache call summaries and comparer-factory indexes per compilation.
+
 ### Bug Fixes
 
 - Reuse inferred generic call arguments during implicit static dispatch, so deeply nested calls bind in linear work. (Fixes #5652)

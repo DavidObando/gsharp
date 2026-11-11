@@ -142,14 +142,24 @@ Run()
     }
 
     shared {
-        /// Builds the driver line prefix of the `GS0158` that the unique `.Value` read of
-        /// [`source`](paramref) must report: file, 1-based line and column of `Value`, and its end.
+        /// Builds the diagnostic location of the unique `.Value` read, or the read after `/* expect GS0158 */`.
         private func ExpectedDiagnostic(path string, source string) string {
-            let dot = source.IndexOf(".Value", StringComparison.Ordinal)
+            let marker = "/* expect GS0158 */"
+            let marked = source.IndexOf(marker, StringComparison.Ordinal)
+            let start = if marked < 0 {
+                0
+            } else {
+                marked + marker.Length
+            }
+            let dot = source.IndexOf(".Value", start, StringComparison.Ordinal)
             Assert.True(dot >= 0, "the case must read `.Value` once")
             Assert.True(
                 source.IndexOf(".Value", dot + 1, StringComparison.Ordinal) < 0,
-                "the case must read `.Value` once"
+                "the case must have one target `.Value` read"
+            )
+            Assert.True(
+                marked < 0 || source.IndexOf(marker, start, StringComparison.Ordinal) < 0,
+                "the case must have one diagnostic marker"
             )
             var line = 1
             var lineStart = 0
@@ -1860,7 +1870,7 @@ func ReadLazy(l Lazy[int32]) int32 -> l.Value
 func Run(ref a C?, l Lazy[int32]) int32 {
     if a == nil { return 0 }
     let _ = ReadLazy(l)
-    return a.Value
+    return a/* expect GS0158 */.Value
 }
 let lazyVal = Lazy[int32](() -> {
     globalC = nil
@@ -1893,6 +1903,30 @@ let keys = List[Key](){Key{}}
 let distinctSeq = keys.Distinct()
 globalC = C{}
 Console.WriteLine(Run(ref globalC, distinctSeq))
+`}
+            yield []object{"issue-5326-deferred-unmodeled-countby-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, seq IEnumerable[KeyValuePair[Key, int32]]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.ToArray()
+    return a.Value
+}
+let keys = List[Key](){Key{}}
+let counted = keys.CountBy((key Key) -> key)
+globalC = C{}
+Console.WriteLine(Run(ref globalC, counted))
 `}
             yield []object{"issue-5326-tuple-interpolation-element-tostring-clears-global", `
 import System
@@ -1961,6 +1995,44 @@ func Run(ref a C?, items List[Item]) int32 {
 let items = List[Item](){Item{}, Item{}}
 globalC = C{}
 Console.WriteLine(Run(ref globalC, items))
+`}
+            yield []object{"issue-5326-transitive-nullable-tuple-formatting-clears-global", `
+import System
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Render(row ((Noisy, int32)?, int32)) string -> "${row}"
+func Run(ref a C?, row ((Noisy, int32)?, int32)) int32 {
+    if a == nil { return 0 }
+    let _ = Render(row)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, ((Noisy{}, 1), 2)))
+`}
+            yield []object{"issue-5326-transitive-clr-tuple-formatting-clears-global", `
+import System
+
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Render(row Tuple[Noisy, int32]) string -> "${row}"
+func Run(ref a C?, row Tuple[Noisy, int32]) int32 {
+    if a == nil { return 0 }
+    let _ = Render(row)
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, Tuple[Noisy, int32](Noisy{}, 1)))
 `}
         }
 
@@ -2386,6 +2458,26 @@ let seq = xs.Where((x int32) -> {
     return true
 })
 Console.WriteLine(Run(ref globalC, seq))
+`, []string{"1"}}
+            yield []object{"issue-5326-safe-deferred-factory-value-arguments-are-not-callbacks", `
+import System
+import System.Collections.Generic
+import System.Linq
+import System.Text
+
+class C { var Value int32 = 1 }
+func Run(ref a C?, seq IEnumerable[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.Count()
+    return a.Value
+}
+func Main() {
+    let builder = StringBuilder()
+    let text = "value"
+    builder.Append(text)
+    var value C? = C{}
+    Console.WriteLine(Run(ref value, Enumerable.Range(1, 2)))
+}
 `, []string{"1"}}
             yield []object{"issue-5326-safe-elided-conditional-call-preserves-narrowing", `
 import System

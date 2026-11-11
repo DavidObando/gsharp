@@ -71,12 +71,15 @@ internal class BindingServices {
     var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
     var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
     var CachedHasUnmodeledImportedComparer bool?
+    let CachedTrustedFrameworkAssemblies Dictionary[Assembly, bool] = Dictionary[Assembly, bool]()
     let CachedBoundCallEffectSummaries Dictionary[BoundExpression, CallEffectSummary] = Dictionary[
         BoundExpression,
         CallEffectSummary
     ](ReferenceEqualityComparer.Instance)
     var CachedComparerCreateCalls List[(ElemType TypeSymbol?, Call CallExpressionSyntax)]?
     var CachedDeferredLinqCalls List[CallExpressionSyntax]?
+    var CachedDeferredLinqOperatorNames HashSet[string]?
+    var CachedDeferredLinqCallbackPositions Dictionary[string, HashSet[int32]]?
     var CachedYieldFunctionDecls List[FunctionDeclarationSyntax]?
 }
 

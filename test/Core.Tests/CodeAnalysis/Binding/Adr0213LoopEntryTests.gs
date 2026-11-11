@@ -5,10 +5,15 @@
 package GSharp.Core.Tests.CodeAnalysis.Binding
 
 import GSharp.Core.CodeAnalysis
+import GSharp.Core.CodeAnalysis.Binding
 import GSharp.Core.CodeAnalysis.Compilation
+import GSharp.Core.CodeAnalysis.Symbols
+import GSharp.Core.CodeAnalysis.Syntax
+import GSharp.Core.CodeAnalysis.Text
 import GSharp.Tests
 import System
 import System.Collections.Generic
+import System.Collections.Immutable
 import System.Linq
 import Xunit
 
@@ -60,6 +65,100 @@ func Run(n int32) int32 {
 }`}, EmittedOracleOptions{IsLibrary: true})
         Assert.Equal(1L, measurements.GetCounter("narrowing.region-walks"))
         Assert.Equal(1L, measurements.GetCounter("narrowing.region-facts-killed"))
+    }
+
+    @Theory
+    @InlineData(false, "keys.ContainsKey(1)")
+    @InlineData(true, "keys.ContainsKey(1)")
+    @InlineData(false, "ReadCount(counter)")
+    @InlineData(true, "ReadCount(counter)")
+    func ImportedPrivateComparerOrGetter_InvalidatesRefStorage(runtimeReferences bool, call string) {
+        using let fixture = CSharpFixture(`namespace CallEffectsImportedComparer;
+public static class Factory {
+    public static System.Collections.Generic.IEqualityComparer<int> Make(System.Action onHash) => new Hidden(onHash);
+    private sealed class Hidden(System.Action onHash) : System.Collections.Generic.IEqualityComparer<int> {
+        public bool Equals(int x, int y) => x == y;
+        public int GetHashCode(int value) { onHash(); return value; }
+    }
+}
+public sealed class Counter(System.Action onRead) {
+    public int Count { get { onRead(); return 0; } }
+}`)
+        using let references = if runtimeReferences {
+            fixture.RuntimeReferences()
+        } else {
+            ReferenceResolver.WithReferences([]string{fixture.AssemblyPath})
+        }
+        let source = `package T
+import System.Collections.Generic
+import CallEffectsImportedComparer
+class C { var Value int32 = 1 }
+var globalC C? = C{}
+func Run(ref a C?, keys Dictionary[int32, int32], counter Counter) int32 {
+    if a == nil { return 0 }
+    let _ = ` + call + `
+    return a.Value
+}
+func ReadCount(counter Counter) int32 -> counter.Count
+let comparer = Factory.Make(() -> { globalC = nil })
+let keys = Dictionary[int32, int32](comparer)
+let counter = Counter(() -> { globalC = nil })
+let _ = Run(ref globalC, keys, counter)`
+        let tree = SyntaxTree.Parse(SourceText.From(source))
+        let globalScope = Binder.BindGlobalScope(previous: nil, ImmutableArray.Create(tree), references)
+        let program = Binder.BindProgram(globalScope, references)
+        let errors = globalScope
+            .Diagnostics
+            .AddRange(program.Diagnostics)
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@9:14", string.Join(" ", errors))
+    }
+
+    @Theory
+    @InlineData("Box")
+    @InlineData("Baz.Box")
+    func CalleeLocalType_DoesNotSelectAnotherPackagesStorage(typeName string) {
+        let result = EmittedOracle.Evaluate([]string{`package Foo
+class Box { var Field int32 = 0 }`, `package Foo.Baz
+class Box { var Field int32 = 0 }`, `package Baz
+class C { var Value int32 = 1 }
+class Box { var Field C? = C{} }
+var globalBox = Box{}
+func Clear() {
+    let local ` + typeName + ` = globalBox
+    local.Field = nil
+}
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    Clear()
+    return a.Value
+}
+func Main() { let _ = Run(ref globalBox.Field) }`}, EmittedOracleOptions{IsLibrary: false})
+        let errors = result
+            .Diagnostics
+            .Where((d Diagnostic) -> d.IsError)
+            .Select((d Diagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@12:14", string.Join(" ", errors))
+    }
+
+    @Fact
+    func CallEffectsAndComparerFactories_AreNotRescannedForEachNarrowedRoot() {
+        using let measurements = CompilationMeasurements.Start("test")
+        let result = EmittedOracle.Evaluate([]string{`package T
+import System.Collections.Generic
+class C { var Value int32 = 1 }
+func Run(ref a C?, ref b C?, ref c C?, keys List[int32]) int32 {
+    if a == nil || b == nil || c == nil { return 0 }
+    let _ = keys.Contains(1)
+    let _ = keys.Contains(2)
+    return a.Value + b.Value + c.Value
+}`}, EmittedOracleOptions{IsLibrary: true})
+        Assert.Empty(result.Diagnostics.Where((d Diagnostic) -> d.IsError))
+        Assert.Equal(2L, measurements.GetCounter("narrowing.bound-call-effect-summaries"))
+        Assert.Equal(1L, measurements.GetCounter("narrowing.comparer-factory-indexes"))
     }
 
     @Fact
