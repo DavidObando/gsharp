@@ -226,9 +226,144 @@ public static class Obj {
         AssertParity(source, printed, "null")
     }
 
-    @Fact
-    func TupleOutArgument_DoesNotFreezeTheCallersLeaf() {
-        const source = `public static class Obj {
+    @Theory
+    @InlineData("leaf")
+    @InlineData("whole-tuple")
+    @InlineData("whole-tuple-preserve")
+    @InlineData("projected-tuple")
+    @InlineData("nullable-tuple")
+    @InlineData("nullable-tuple-write")
+    @InlineData("nested-nullable-tuple")
+    @InlineData("projected-nullable-tuple")
+    @InlineData("oblivious-producer")
+    @InlineData("container-and-leaf")
+    func TupleOutArgument_DoesNotFreezeTheCallersLeaf(shape string) {
+        let source = switch shape {
+            case "whole-tuple": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        return row.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "whole-tuple-preserve": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        Produce(out row);
+        return alias.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "projected-tuple": `public static class Obj {
+    private static ((string Text, int Code) Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Inner);
+        ref (string? Text, int Code) alias = ref row.Inner;
+        alias = (null, 1);
+        return row.Inner.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref (string? Text, int Code)? alias = ref row;
+        alias = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nullable-tuple-write": `public static class Obj {
+    private static (string Text, int Code)? row = ("x", 1);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        row = (null, 1);
+        return row.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "nested-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out ((string Text, int Code)? Inner, int Flag) value) { value = (("p", 1), 3); }
+#nullable disable
+    private static string Read() {
+        Produce(out row);
+        ref ((string? Text, int Code)? Inner, int Flag) alias = ref row;
+        alias = ((null, 1), 2);
+        return row.Inner.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "projected-nullable-tuple": `public static class Obj {
+    private static ((string Text, int Code)? Inner, int Flag) row = (("x", 1), 2);
+#nullable enable
+    private static void Produce(out (string Text, int Code)? value) { value = ("p", 1); }
+#nullable disable
+    private static string Read() {
+        Produce(out row.Inner);
+        ref (string? Text, int Code)? alias = ref row.Inner;
+        alias = (null, 1);
+        return row.Inner.Value.Text;
+    }
+    public static string Run() => Read() ?? "null";
+}`
+            case "oblivious-producer": `public static class Obj {
+    private static (string Text, int Code) row = ("x", 1);
+    private static void Produce(out (string Text, int Code) value) { value = ("p", 1); }
+    private static string Read() {
+        Produce(out row);
+#nullable enable
+        (string Text, int Code) fixedRow = ("f", 2);
+#nullable disable
+        Produce(out fixedRow);
+        ref (string? Text, int Code) alias = ref row;
+        alias = (null, 1);
+        return (row.Text ?? "null") + ":" + fixedRow.Text;
+    }
+    public static string Run() => Read();
+}`
+            case "container-and-leaf": `public static class Obj {
+    private static ((string Text, int Code)[] Rows, string Label) state = (new[] { ("x", 1) }, "a");
+    private static void Produce(out ((string Text, int Code)[] Rows, string Label) value) {
+        value = (new[] { ("p", 1) }, "b");
+    }
+    private static string Read() {
+        Produce(out state);
+#nullable enable
+        ((string? Text, int Code)[] Rows, string Label) fixedLabel = (new (string? Text, int Code)[] { ("f", 2) }, "k");
+#nullable disable
+        Produce(out fixedLabel);
+        ref string rowAlias = ref state.Rows[0].Text;
+        rowAlias = null;
+        ref string labelAlias = ref state.Label;
+        labelAlias = null;
+        return (state.Rows[0].Text ?? "null") + ":" + (state.Label ?? "null") + ":" + (fixedLabel.Rows[0].Text ?? "null") + ":" + fixedLabel.Label;
+    }
+    public static string Run() => Read();
+}`
+            default: `public static class Obj {
     private static (string Text, int Code) row = ("x", 1);
 #nullable enable
     private static void Produce(out string value) { value = "p"; }
@@ -241,9 +376,16 @@ public static class Obj {
     }
     public static string Run() => Read() ?? "null";
 }`
+        }
         let printed = Translate(source)
         Assert.Contains("Text string?", printed)
-        AssertParity(source, printed, "null")
+        let expected = switch shape {
+            case "whole-tuple-preserve": "p"
+            case "oblivious-producer": "null:p"
+            case "container-and-leaf": "null:null:p:b"
+            default: "null"
+        }
+        AssertParity(source, printed, expected)
     }
 
     @Theory

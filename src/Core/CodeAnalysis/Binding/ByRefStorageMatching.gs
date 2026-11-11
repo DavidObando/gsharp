@@ -80,7 +80,7 @@ internal shared class ByRefStorageMatching {
         if !IsSameRuntimeType(storage, parameter) {
             return false
         }
-        nestedMismatch = HasNestedNullabilityMismatch(storage, parameter)
+        ClassifyNestedNullability(storage, parameter, ref storageNullable, ref parameterNullable, ref nestedMismatch)
         return true
     }
 
@@ -746,6 +746,53 @@ internal shared class ByRefStorageMatching {
     private func HasErasedRuntimeShape(type TypeSymbol) bool -> TypeSymbol.ContainsSameCompilationUserType(type) ||
         TypeSymbol.ContainsTypeParameter(type) || TypeSymbol.ContainsFixedLengthArray(type) ||
         TypeSymbol.ContainsFunctionPointer(type)
+
+    // Value-tuple fields live directly in the passed storage (#5905).
+    // Classify their leaf nullability by direction, and keep shared container positions invariant.
+    private func ClassifyNestedNullability(
+        storage TypeSymbol,
+        parameter TypeSymbol,
+        ref storageNullable bool,
+        ref parameterNullable bool,
+        ref nestedMismatch bool
+    ) {
+        if TupleTypeSymbol.TryGetTupleShape(storage.StripToBareShape(), out _) && TupleTypeSymbol.TryGetTupleShape(
+            parameter.StripToBareShape(),
+            out _
+        ) {
+            let storagePositions = storage.GetElementPositions()
+            let parameterPositions = parameter.GetElementPositions()
+            if storagePositions.Length != parameterPositions.Length {
+                return
+            }
+            for var i = 0; i < storagePositions.Length; i++ {
+                let storageElement = storagePositions[i]
+                let parameterElement = parameterPositions[i]
+                let storageKind = storageElement.ReferenceNullability
+                let parameterKind = parameterElement.ReferenceNullability
+                if storageKind == ReferenceNullabilityKind.Nullable &&
+                    parameterKind == ReferenceNullabilityKind.NotNull {
+                    storageNullable = true
+                } else if parameterKind == ReferenceNullabilityKind.Nullable &&
+                    storageKind == ReferenceNullabilityKind.NotNull {
+                    parameterNullable = true
+                }
+                let innerStorage = StripValueWrapper(StripReferenceWrapper(storageElement))
+                let innerParameter = StripValueWrapper(StripReferenceWrapper(parameterElement))
+                ClassifyNestedNullability(
+                    innerStorage,
+                    innerParameter,
+                    ref storageNullable,
+                    ref parameterNullable,
+                    ref nestedMismatch
+                )
+            }
+            return
+        }
+        if HasNestedNullabilityMismatch(storage, parameter) {
+            nestedMismatch = true
+        }
+    }
 
     /// Whether any element or type-argument position of the two types differs
     /// in stated reference nullability, at any depth.
