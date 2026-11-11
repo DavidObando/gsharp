@@ -77,10 +77,19 @@ shard_cost_jsons=("$shards_dir"/*/shard-costs.json)
 shopt -u nullglob
 costs="$migrate_dir/selfmig-shard-costs.json"
 if (( ${#shard_cost_jsons[@]} > 0 )); then
-  jq -s --arg runId "$(jq -r '.runId' "$merged")" \
-    '{schema: 1, runId: $runId,
-      note: "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
-      apps: (reduce .[] as $shard ({}; . + $shard))}' \
+  jq -s --slurpfile merged "$merged" --arg runId "$(jq -r '.runId' "$merged")" \
+    '($merged[0].apps // []) as $apps
+     | ([ $apps[]
+          | select(.succeeded == true and (.unverified | not)
+                   and ([.stages[]?.stage] == ["translate","compile","ilverify","test-parity"])
+                   and all(.stages[]?; .status == "passed"))
+          | .appId ]) as $complete
+     | (reduce .[] as $shard ({}; . + $shard)
+        | with_entries(select((.key) as $id | ($complete | index($id)) != null and (.value | type == "number" and (isnan | not) and (isinfinite | not) and . > 0)))) as $priced
+     | {schema: 1, runId: $runId,
+        note: "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
+        apps: (if ($apps | length) > 0 and ($complete | length) == ($apps | length) and ($priced | length) == ($apps | length)
+               then $priced else {} end)}' \
     "${shard_cost_jsons[@]}" > "$costs"
   echo "gate: recorded durations for $(jq '.apps | length' "$costs") app(s) in $costs"
 else

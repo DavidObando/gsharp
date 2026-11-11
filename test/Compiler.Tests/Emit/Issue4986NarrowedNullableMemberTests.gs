@@ -2915,6 +2915,147 @@ Console.WriteLine("${ternary(sample)} ${expression(sample)} ${statement(sample)}
     }
 
     @Fact
+    func Issue5030_Imported_Nullable_Tuple_GetValueOrDefault_With_Tuple_Fallback() {
+        for arrayShape in[]string{"string[]", "string[,]"} {
+            let emptyArray = if arrayShape == "string[]" {
+                "new string[1]"
+            } else {
+                "new string[1,1]"
+            }
+            let gsLiteralFallback = if arrayShape == "string[]" {
+                `([]string{"x"}, 0)`
+            } else {
+                `([1, 1]string{"x"}, 0)`
+            }
+            let genericArray = arrayShape.Replace("string", "T")
+            for includeExtension in[]bool{false, true} {
+                let extensionMethod = if includeExtension {
+                    "public static (" +
+                        arrayShape +
+                        ",int) GetValueOrDefault<T>(this (" +
+                        genericArray +
+                        ",int) value, T fallback) where T : new() => (" +
+                        emptyArray +
+                        ",99);"
+                } else {
+                    ""
+                }
+                using let fixture = CSharpFixture(`namespace Fixture4986 {
+    public static class Extensions {
+        public static (` + arrayShape + `,int)? Stored(bool present) =>
+            present ? (` + emptyArray + `,7) : ((` + arrayShape + `,int)?)null;
+        public static ((` + arrayShape + `,int),bool)? StoredNested(bool present) =>
+            present ? ((` + emptyArray + `,7),true) : (((` + arrayShape + `,int),bool)?)null;
+        public static (` + arrayShape + `,int,int,int,int,int,int,` + arrayShape + `)? StoredLong(bool present) =>
+            present ? (` + emptyArray + `,1,2,3,4,5,7,` + emptyArray + `) : ((` + arrayShape + `,int,int,int,int,int,int,` + arrayShape + `)?)null;
+        public static (` + arrayShape + `,int) Fallback() => (` + emptyArray + `,0);
+        public static ((` + arrayShape + `,int),bool) FallbackNested() => ((` + emptyArray + `,0),false);
+        public static (` + arrayShape + `,int,int,int,int,int,int,` + arrayShape + `) FallbackLong() =>
+            (` + emptyArray + `,0,0,0,0,0,0,` + emptyArray + `);
+        public static int Oracle() =>
+            Stored(true).GetValueOrDefault(Fallback()).Item2;
+        ` + extensionMethod + `
+    }
+}`)
+                let result = CompileAndRun(`import System
+import Fixture4986
+func unguarded(present bool) int32 {
+    let n = Extensions.Stored(present)
+    return n.GetValueOrDefault(Extensions.Fallback()).Item2
+}
+func unguardedLiteral(present bool) int32 {
+    let n = Extensions.Stored(present)
+    return n.GetValueOrDefault(` + gsLiteralFallback + `).Item2
+}
+func unguardedNoArg(present bool) int32 {
+    let n = Extensions.Stored(present)
+    return n.GetValueOrDefault().Item2
+}
+func ternary(present bool) int32 {
+    let n = Extensions.Stored(present)
+    return n != nil ? n.GetValueOrDefault(Extensions.Fallback()).Item2 : 0
+}
+func expression(present bool) int32 {
+    let n = Extensions.Stored(present)
+    return if n != nil { n.GetValueOrDefault(Extensions.Fallback()).Item2 } else { 0 }
+}
+func statement(present bool) int32 {
+    let n = Extensions.Stored(present)
+    if n != nil {
+        return n.GetValueOrDefault(Extensions.Fallback()).Item2
+    }
+    return 0
+}
+func valueAndHasValue(present bool) int32 {
+    let n = Extensions.Stored(present)
+    let u = if n.HasValue { n.Value.Item2 } else { 0 }
+    let g = n != nil ? (n.HasValue ? n.Value.Item2 : -1) : 0
+    return u + g
+}
+func nestedAndLong(present bool) int32 {
+    let nested = Extensions.StoredNested(present)
+    let longTuple = Extensions.StoredLong(present)
+    let a = nested != nil ? nested.GetValueOrDefault(Extensions.FallbackNested()).Item1.Item2 : nested.GetValueOrDefault(Extensions.FallbackNested()).Item1.Item2
+    let b = longTuple != nil ? longTuple.GetValueOrDefault(Extensions.FallbackLong()).Item7 : longTuple.GetValueOrDefault(Extensions.FallbackLong()).Item7
+    return a + b
+}
+Console.WriteLine("${Extensions.Oracle()} ${unguarded(true)} ${unguarded(false)} ${unguardedLiteral(true)} ${unguardedLiteral(false)} ${unguardedNoArg(true)} ${unguardedNoArg(false)} ${ternary(true)} ${ternary(false)} ${expression(true)} ${expression(false)} ${statement(true)} ${statement(false)} ${valueAndHasValue(true)} ${valueAndHasValue(false)} ${nestedAndLong(true)} ${nestedAndLong(false)}")
+`, fixture.AssemblyPath)
+                Assert.Equal("7 7 0 7 0 7 0 7 0 7 0 7 0 14 0 14 0" + Environment.NewLine, result.Output)
+            }
+        }
+    }
+
+    @Fact
+    func Issue5030_Array_To_Interface_Tuple_Fallback_And_Nullable_Value_Element_Extension_Probe() {
+        using let fixture = CSharpFixture(`using System.Collections.Generic;
+namespace Fixture4986 {
+    public static class Extensions {
+        public static (IList<string>, int)? StoredInterface(bool present) =>
+            present ? (new string[1], 7) : ((IList<string>, int)?)null;
+        public static List<(IList<string>, int)?> StoredInterfaceList() =>
+            new List<(IList<string>, int)?> { (new string[1], 7) };
+        public static int CountNullableTuples(this IEnumerable<(IList<string>, int)?> items) =>
+            items is ICollection<(IList<string>, int)?> c ? c.Count : 0;
+        public static (int?, string[])? StoredNullableElement(bool present) =>
+            present ? (7, new string[1]) : ((int?, string[])?)null;
+        public static (int, int) GetValueOrDefault<T>(this (T?, string[]) value)
+            where T : struct => (99, 99);
+    }
+}`)
+        let result = CompileAndRun(`import System
+import Fixture4986
+func ifaceUnguarded(present bool) int32 {
+    let n = Extensions.StoredInterface(present)
+    return n.GetValueOrDefault(([]string{"x"}, 0)).Item2
+}
+func ifaceGuarded(present bool) int32 {
+    let n = Extensions.StoredInterface(present)
+    return n != nil ? n.GetValueOrDefault(([]string{"x"}, 0)).Item2 : 0
+}
+func ifaceListCount() int32 {
+    let items = Extensions.StoredInterfaceList()
+    return items.CountNullableTuples()
+}
+func nullableElemImported(present bool) int32 {
+    let n = Extensions.StoredNullableElement(present)
+    return n != nil ? n.GetValueOrDefault().Item1 : 0
+}
+func nullableElemSymbolic(present bool) int32 {
+    let v int32? = 7
+    let n (int32?, []string?)? = if present { (v, []string?{"a"}) } else { nil }
+    return n != nil ? n.GetValueOrDefault().Item1 : 0
+}
+func openStructTuple[T struct](x T?) {
+    Console.WriteLine((x, 0))
+}
+openStructTuple[int32](5)
+Console.WriteLine("${ifaceUnguarded(true)} ${ifaceUnguarded(false)} ${ifaceGuarded(true)} ${ifaceGuarded(false)} ${ifaceListCount()} ${nullableElemImported(true)} ${nullableElemImported(false)} ${nullableElemSymbolic(true)} ${nullableElemSymbolic(false)}")
+`, fixture.AssemblyPath)
+        Assert.Equal("(5, 0)" + Environment.NewLine + "7 0 7 0 1 99 0 99 0" + Environment.NewLine, result.Output)
+    }
+
+    @Fact
     func Recursive_Array_Upper_Bound_Keeps_Nullable_Storage_Fallback() {
         using let fixture = CSharpFixture(`namespace Fixture4986 {
     public interface IProbe<in T> {}

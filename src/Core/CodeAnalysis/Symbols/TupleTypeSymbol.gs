@@ -353,7 +353,7 @@ class TupleTypeSymbol : TypeSymbol {
         /// @param elementTypes The element CLR types, nullable value types unwrapped.
         /// @param liftToNullable Per element, whether to wrap it in `Nullable<>`.
         /// @returns The closed CLR type.
-        private func BuildClrType(elementTypes[]Type, liftToNullable[]bool) Type? {
+        internal func BuildClrType(elementTypes[]Type, liftToNullable[]bool) Type? {
             let hostObject = typeof(object)
             let contextObject = ResolveLoadContextObject(elementTypes)
             if !object.ReferenceEquals(contextObject, hostObject) &&
@@ -549,7 +549,7 @@ class TupleTypeSymbol : TypeSymbol {
         /// chain this also answers for an interface.
         /// @param type A CLR type.
         /// @returns The context's `System.Object`, or `null` when it cannot be determined.
-        private func FindLoadContextObject(type Type) Type? {
+        internal func FindLoadContextObject(type Type) Type? {
             try {
                 let root = type.MakeArrayType().BaseType?.BaseType
                 return if root != nil && root.FullName == "System.Object" {
