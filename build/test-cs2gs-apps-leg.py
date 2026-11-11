@@ -284,6 +284,7 @@ def main():
         assert gate.returncode != 0 and f"fell below floor {floor}" in gate.stderr, gate.stderr
         shard_with_runner_local_oracle(d)
         single_job_with_separate_corpus(d)
+        incomplete_stage_duration_maps_are_rejected(d)
     print("OK")
 
 
@@ -387,6 +388,192 @@ def shard_with_runner_local_oracle(d: Path) -> None:
         else:
             assert result["stages"][-1]["status"] == "failed", result
             assert not (shard / "csharp-tests" / "cases").exists()
+
+
+def incomplete_stage_duration_maps_are_rejected(d: Path) -> None:
+    """Issue #5884: failed or dependency-blocked runs must not price apps at 0s."""
+    compiler_tests = "test/Compiler.Tests/Compiler.Tests.csproj"
+    cs2gs_tests = "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj"
+    core = "src/Core/Core.csproj"
+    corpus_apps = [compiler_tests, cs2gs_tests, core]
+
+    run_dir = d / "plan-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({
+        "runId": "r5884",
+        "succeeded": True,
+        "apps": [translated(app_id) for app_id in corpus_apps],
+    }))
+    for idx, app_id in enumerate(corpus_apps):
+        manifest_dir = run_dir / f"app-{idx}"
+        manifest_dir.mkdir()
+        (manifest_dir / "validation-context.json").write_text(json.dumps({
+            "appId": app_id,
+            "emittedFiles": ["a.gs"],
+            "isTestProject": app_id.endswith(".Tests.csproj"),
+        }))
+
+    # 1. Reproduction of run 42432678690: dependency-blocked apps priced at 0.0s.
+    zero_dir = d / "failed-42432678690"
+    zero_dir.mkdir()
+    zero_costs = zero_dir / "selfmig-shard-costs.json"
+    zero_costs.write_text(json.dumps({
+        "schema": 1,
+        "runId": "42432678690",
+        "apps": {compiler_tests: 0.0, cs2gs_tests: 0.0, core: 174.6},
+    }))
+    check = subprocess.run(
+        ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+         "--run-dir", str(run_dir), "--costs", str(zero_costs), "--check-costs"],
+        capture_output=True, text=True,
+    )
+    assert check.returncode == 1, check.stdout + check.stderr
+
+    # Shard planning rejects the 0.0s map and falls back to the checked-in seed
+    # map, keeping Compiler.Tests and Cs2Gs.Tests on separate shards.
+    plan = subprocess.run(
+        ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+         "--run-dir", str(run_dir), "--shards", "2", "--costs", str(zero_costs)],
+        capture_output=True, text=True, check=True,
+    )
+    include = json.loads(plan.stdout)["include"]
+    shards = [entry["apps"].split() for entry in include]
+    assert not any(compiler_tests in s and cs2gs_tests in s for s in shards), shards
+
+    # Non-finite durations (NaN / Infinity) are also rejected and fall back to the seed map.
+    for token in ("NaN", "Infinity", "-Infinity"):
+        non_finite = zero_dir / f"costs-{token}.json"
+        non_finite.write_text(
+            f'{{"schema":1,"apps":{{"{compiler_tests}":{token},"{cs2gs_tests}":{token},"{core}":174.6}}}}'
+        )
+        check = subprocess.run(
+            ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+             "--run-dir", str(run_dir), "--costs", str(non_finite), "--check-costs"],
+            capture_output=True, text=True,
+        )
+        assert check.returncode == 1, (token, check.stdout, check.stderr)
+        plan = subprocess.run(
+            ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+             "--run-dir", str(run_dir), "--shards", "2", "--costs", str(non_finite)],
+            capture_output=True, text=True, check=True,
+        )
+        shards = [entry["apps"].split() for entry in json.loads(plan.stdout)["include"]]
+        assert not any(compiler_tests in s and cs2gs_tests in s for s in shards), (token, shards)
+
+    # 2. Positive compile-failure duration with skipped ilverify/test-parity
+    # in companion run.merged.json / stats.json (run 42484819030 shape) is rejected.
+    skipped_dir = d / "failed-42484819030"
+    skipped_dir.mkdir()
+    skipped_costs = skipped_dir / "selfmig-shard-costs.json"
+    skipped_costs.write_text(json.dumps({
+        "schema": 1,
+        "runId": "42484819030",
+        "apps": {compiler_tests: 456.4, cs2gs_tests: 5015.4, core: 236.1},
+    }))
+    (skipped_dir / "run.merged.json").write_text(json.dumps({
+        "runId": "42484819030",
+        "succeeded": False,
+        "unverified": False,
+        "apps": [
+            app(compiler_tests, *COMPILE_RED, category="compile-error"),
+            app(cs2gs_tests, *GREEN),
+            app(core, *GREEN),
+        ],
+    }))
+    check = subprocess.run(
+        ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+         "--run-dir", str(run_dir), "--costs", str(skipped_costs), "--check-costs"],
+        capture_output=True, text=True,
+    )
+    assert check.returncode == 1, check.stdout + check.stderr
+
+    # 3. A complete 4-stage green run with positive durations is accepted.
+    complete_dir = d / "complete-run"
+    complete_dir.mkdir()
+    complete_costs = complete_dir / "selfmig-shard-costs.json"
+    complete_costs.write_text(json.dumps({
+        "schema": 1,
+        "runId": "42625367048",
+        "apps": {compiler_tests: 5431.9, cs2gs_tests: 5634.7, core: 194.9},
+    }))
+    (complete_dir / "run.merged.json").write_text(json.dumps({
+        "runId": "42625367048",
+        "succeeded": True,
+        "unverified": False,
+        "apps": [app(app_id, *GREEN) for app_id in corpus_apps],
+    }))
+    (complete_dir / "stats.json").write_text(json.dumps({
+        "green": 3, "total": 3, "red": 0, "floor": 3, "runLevelFailure": False,
+    }))
+    check = subprocess.run(
+        ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+         "--run-dir", str(run_dir), "--costs", str(complete_costs), "--check-costs"],
+        capture_output=True, text=True,
+    )
+    assert check.returncode == 0, check.stdout + check.stderr
+
+    # 4. derive-selfmig-app-durations.py advances `previous` across failed apps
+    # while omitting incomplete-stage and 0.0s dependency-blocked apps.
+    derive_root = d / "derive"
+    manifests = derive_root / "manifests"
+    shard_runs = derive_root / "runs" / "r1"
+    shard_runs.mkdir(parents=True)
+    for idx, (app_id, mtime) in enumerate(((core, 110.0), (compiler_tests, 110.0), (cs2gs_tests, 170.0))):
+        m_dir = manifests / f"dir-{idx}"
+        m_dir.mkdir(parents=True)
+        (m_dir / "validation-context.json").write_text(json.dumps({"appId": app_id}))
+        a_dir = shard_runs / f"dir-{idx}"
+        a_dir.mkdir(parents=True)
+        marker = a_dir / "marker.txt"
+        marker.write_text("x")
+        os.utime(marker, (mtime, mtime))
+        os.utime(a_dir, (mtime, mtime))
+    failed_core = app(core, *COMPILE_RED, category="compile-error")
+    blocked_compiler = app(compiler_tests, *COMPILE_RED, category="dependency-blocked")
+    passed_cs2gs = app(cs2gs_tests, *GREEN)
+    for item in (failed_core, blocked_compiler, passed_cs2gs):
+        item["stages"] = item["stages"][1:]
+    (shard_runs / "run.json").write_text(json.dumps({
+        "apps": [failed_core, blocked_compiler, passed_cs2gs],
+    }))
+    derived = subprocess.run(
+        ["python3", str(HERE / "derive-selfmig-app-durations.py"),
+         "--runs", str(derive_root / "runs"), "--manifests", str(manifests), "--started", "100.0"],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(derived.stdout) == {cs2gs_tests: 60.0}, derived.stdout
+
+    # 5. run-cs2gs-selfmig-gate.sh omits duration maps when any app in the
+    # merged run had incomplete stages, and publishes them when all apps pass.
+    gate_env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+    for label, second_status, expected_apps in (
+        ("gate-incomplete", COMPILE_RED, {}),
+        ("gate-complete", GREEN, {"src/A/A.csproj": 12.5, "src/B/B.csproj": 34.0}),
+    ):
+        m_dir = d / label
+        (m_dir / "migrated").mkdir(parents=True)
+        (m_dir / "runs" / "r1").mkdir(parents=True)
+        (m_dir / "runs" / "r1" / "run.json").write_text(json.dumps({
+            "runId": label,
+            "succeeded": True,
+            "apps": [translated("src/A/A.csproj"), translated("src/B/B.csproj")],
+        }))
+        s_dir = d / f"{label}-shards" / "cs2gs-selfmig-shard-1"
+        s_dir.mkdir(parents=True)
+        s_apps = [app("src/A/A.csproj", *GREEN), app("src/B/B.csproj", *second_status)]
+        for item in s_apps:
+            item["stages"] = item["stages"][1:]
+        (s_dir / "shard-run.json").write_text(json.dumps({"apps": s_apps}))
+        (s_dir / "shard-costs.json").write_text(json.dumps({
+            "src/A/A.csproj": 12.5,
+            "src/B/B.csproj": 0.0 if second_status == COMPILE_RED else 34.0,
+        }))
+        subprocess.run(
+            ["bash", str(HERE / "run-cs2gs-selfmig-gate.sh"), str(m_dir), str(d / f"{label}-shards")],
+            capture_output=True, text=True, env=gate_env,
+        )
+        recorded = json.loads((m_dir / "selfmig-shard-costs.json").read_text())
+        assert recorded["apps"] == expected_apps, (label, recorded)
 
 
 main()
