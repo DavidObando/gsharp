@@ -164,7 +164,7 @@ namespace Demo
         LocalFunctionHoistTranslationTests.CompileAndRun(
             printed,
             "System.Console.WriteLine(P.Run(true))\nSystem.Console.WriteLine(P.Run(false))",
-            "False:True:False:False:True:False\nFalse:True:False:False:True:False"
+            "False:True:False:False:True:False" + Environment.NewLine + "False:True:False:False:True:False"
         )
     }
 
