@@ -4,6 +4,7 @@
 
 package Cs2Gs.Tests
 
+import Cs2Gs.Pipeline
 import GSharpAccessorExpressionSyntax = GSharp.Core.CodeAnalysis.Syntax.AccessorExpressionSyntax
 import GSharpCallExpressionSyntax = GSharp.Core.CodeAnalysis.Syntax.CallExpressionSyntax
 import GSharpFunctionDeclarationSyntax = GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax
@@ -35,6 +36,19 @@ open class Issue4612StoreBridgeInventoryTests {
     @Fact
     func EveryNonNullAssertion_IsAStoreBridgeOrListedWithAReason() {
         let repoRoot = Adr0169TranslatedAnalyzerHarness.FindRepoRoot()
+        AssertInventory(repoRoot)
+    }
+
+    @Fact
+    func GSharpCheckout_EveryNonNullAssertion_IsAStoreBridgeOrListedWithAReason() {
+        // CI selects the C# fixture archive. Audit the G# checkout independently of that selection.
+        let repoRoot = GsharpTestProjectRunner.FindRepoRootAbove(AppContext.BaseDirectory) ??
+            throw DirectoryNotFoundException("Could not locate the G# checkout above the test assembly.")
+        Assert.True(CommittedCompilerSource.IsGSharp(repoRoot), "expected the G# checkout, not the C# fixture archive")
+        AssertInventory(repoRoot)
+    }
+
+    private func AssertInventory(repoRoot string) {
         let translatorDirectory = Path.Combine(repoRoot, "tools", "cs2gs", "Cs2Gs.Translator")
         let actual = SortedDictionary[string, int32](StringComparer.Ordinal)
         var funneled = 0
@@ -120,15 +134,19 @@ open class Issue4612StoreBridgeInventoryTests {
             ),
             StringComparer.Ordinal
         )
+        // The pinned C# archive has an independent inventory. Do not mask changes to either source tree.
         if !isGSharp {
             expected.Remove("BridgeDeconstructedElementStore")
             expected.Remove("BuildBridgedTupleLeaf")
             expected.Remove("BuildBridgedTupleLiteral")
-            expected.Remove("ForgiveInitializerElementValue")
+            expected.Remove("BuildCachedSwitchTypeConversion")
+            expected.Remove("ForgiveInitializerElementValueCore")
             expected.Remove("RewriteRecordDeconstruction")
+            expected.Remove("TranslateConversionCapturingAndPatternTest")
             expected.Remove("TryBridgeTupleValue")
+            expected.Remove("TryGetSharedRecordPatternTypeGuard")
             expected["BuildPatternNarrowingReplacement"] = 4
-            expected["TranslateExtendedPropertyLink"] = 2
+            expected["TranslateRecursivePatternTest"] = 3
             expected["TryBuildNestedNegatedGuardHoist"] = 1
         }
         if !expected.SequenceEqual(actual) {
@@ -159,23 +177,40 @@ open class Issue4612StoreBridgeInventoryTests {
                 "converted tuple element handed to ReportStoreBridge on the next statement"
             ),
             ["BuildBridgedTupleLiteral"] = (1, "nested nullable value-tuple unwrap before rebuilding elements"),
+            ["BuildCachedSwitchTypeConversion"] = (
+                1,
+                "read of a nullable conversion cache after its matched flag succeeds"
+            ),
             ["BuildNegatedPatternBindingValue"] = (3, "pattern binding narrowed by the enclosing test"),
             ["BuildNullConditionalStaticExtensionHelper"] = (1, "receiver of a ?. helper, guarded by its nil test"),
             ["BuildPatternNarrowingReplacement"] = (6, "pattern binding narrowed by the enclosing test"),
             ["BuildPositiveValueGuardHoist"] = (1, "value narrowed by the hoisted guard"),
             ["EmitGuardedFieldLocalCaptures"] = (1, "field capture narrowed by its guard"),
-            ["ForgiveInitializerElementValue"] = (1, "C# flow analysis proved the closure-assigned value non-null"),
+            ["ForgiveInitializerElementValueCore"] = (
+                1,
+                "C# flow analysis proved the closure-assigned value non-null; the separate store bridge already reports"
+            ),
             ["MaterializeFallbackPatternBindings"] = (1, "pattern binding narrowed by the enclosing test"),
             ["NarrowToType"] = (1, "type-test narrowing, not a store"),
-            ["RewriteRecordDeconstruction"] = (1, "record Deconstruct receiver"),
+            ["RewriteRecordDeconstruction"] = (
+                3,
+                "record Deconstruct receivers: imported instance, static extension receiver, and generated adapter"
+            ),
             ["SnapshotReorderedDelegateTarget"] = (1, "delegate call receiver"),
             ["TranslateAssignmentAsExpression"] = (1, "result of an assignment expression, not a store"),
             ["TranslateAssignmentTarget"] = (2, "assignment-target receiver"),
             ["TranslateCast"] = (2, "cast operand"),
             ["TranslateCoalescingAssignmentAsExpression"] = (1, "result of ??=, not a store"),
             ["TranslateConditionalAccessWithLocalAssignmentSeam"] = (1, "receiver of a ?. access"),
+            ["TranslateConversionCapturingAndPatternTest"] = (
+                3,
+                "two narrowed member receivers and a delayed pattern-binding read after successful conversion tests"
+            ),
             ["TranslateExpression"] = (1, "the ??= hoisted assignment target"),
-            ["TranslateExtendedPropertyLink"] = (1, "receiver of an extended property pattern"),
+            ["TranslateExtendedPropertyLink"] = (
+                2,
+                "cached and local intermediate receivers after extended-property pattern guards"
+            ),
             ["TranslateIdentifierName"] = (1, "recursive local function reference"),
             ["TranslateInvocationCore"] = (2, "call receiver"),
             ["TranslateListPatternTest"] = (1, "pattern subject narrowed by the test"),
@@ -183,11 +218,18 @@ open class Issue4612StoreBridgeInventoryTests {
             ["TranslateNotPatternTest"] = (1, "pattern subject narrowed by the test"),
             ["TranslatePatternTest"] = (1, "pattern subject narrowed by the test"),
             ["TranslateReceiverWithNullForgiveness"] = (2, "dereference receiver"),
-            ["TranslateRecursivePatternTest"] = (3, "pattern subject narrowed by the test"),
+            ["TranslateRecursivePatternTest"] = (
+                5,
+                "pattern bindings and member receivers narrowed by type or nil guards, including cached record receivers"
+            ),
             ["TranslateVoidConditionalAccessWithLocalAssignmentSeam"] = (1, "receiver of a ?. access"),
             ["TranslateYieldStatement"] = (1, "C# flow analysis proved the yielded value non-null"),
             ["TryBridgeTupleValue"] = (1, "nullable value-tuple unwrap before rebuilding elements"),
             ["TryBuildPositiveGuardHoist"] = (1, "value narrowed by the hoisted guard"),
+            ["TryGetSharedRecordPatternTypeGuard"] = (
+                3,
+                "guarded pattern-temp capture and two receiver reads after the shared record type guard"
+            ),
             ["TryTranslateAnalyzerMemberAccess"] = (1, "analyzer-API member-access receiver"),
             ["TryTranslateAnalyzerTypeNameSwitch"] = (1, "analyzer-API switch subject")
         }
