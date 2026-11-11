@@ -714,6 +714,7 @@ namespace Demo
         static Func<System.Threading.Tasks.Task<T>>[] MakeTaskReaders<T>(T seed) => new Func<System.Threading.Tasks.Task<T>>[1];
         static Func<(Dictionary<string, int>, T)>[] Readers<T>(T seed) => new Func<(Dictionary<string, int>, T)>[] { () => (new Dictionary<string, int>(), seed) };
         static string KeepFixedString(object? ignored) => "ok";
+        static System.Threading.Tasks.Task<string> KeepFixedStringAsync(object? ignored) => System.Threading.Tasks.Task.FromResult("ok");
         static T FirstOfTwo<T, U>(T value, U ignored) => value;
         static void TakeStringArray(string[] x) { }
         static void GetOutBox(out Box<Dictionary<string, int>> value) { value = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); }
@@ -745,7 +746,7 @@ namespace Demo
         static int InferredDelegateArrayObjectStore() { var fs = SimpleReaders(Volatile.Read(ref cache!)); fs[0] = Volatile.Read(ref fullNullableReader!); return fs[0]() != null ? 1 : 0; }
         static int InferredTaskReaderSyncLambdaElement() { var fs = MakeTaskReaders(Volatile.Read(ref stringCache!)); fs[0] = () => Volatile.Read(ref fullNullableTask!); Func<System.Threading.Tasks.Task<string?>>[] declaredReaders = new[] { () => Volatile.Read(ref fullNullableTask!) }; return fs[0]().Result == "ok" && declaredReaders[0]().Result == "ok" ? 1 : 0; }
         static int FactoryJaggedArrayRowStore() { var rows = MakeJaggedRows(Volatile.Read(ref stringCache!)); rows[0] = Volatile.Read(ref fullNullableRow!); rows[..][0] = Volatile.Read(ref fullNullableRow!); rows[0][0] = Volatile.Read(ref stringCache!); var literalRows = new[] { new[] { Volatile.Read(ref stringCache!) } }; literalRows[0] = Volatile.Read(ref fullNullableRow!); literalRows[0][0] = Volatile.Read(ref stringCache!); return rows[0][0] == null && literalRows[0][0] == null ? 1 : 0; }
-        static async System.Threading.Tasks.Task<int> AwaitedFactoryJaggedArrayRowStoreAsync() { var rows = await MakeJaggedRowsAsync(Volatile.Read(ref stringCache!)); rows[0] = Volatile.Read(ref fullNullableRow!); rows[0][0] = Volatile.Read(ref stringCache!); return rows[0][0] == null ? 1 : 0; }
+        static async System.Threading.Tasks.Task<int> AwaitedFactoryJaggedArrayRowStoreAsync() { var rows = await MakeJaggedRowsAsync(Volatile.Read(ref stringCache!)); rows[0] = Volatile.Read(ref fullNullableRow!); rows[0][0] = Volatile.Read(ref stringCache!); var dAwait = await KeepFixedStringAsync(Volatile.Read(ref cache!)); dAwait = Volatile.Read(ref fullString!); return rows[0][0] == null && dAwait == "ok" ? 1 : 0; }
         static int AwaitedFactoryJaggedArrayRowStore() => AwaitedFactoryJaggedArrayRowStoreAsync().Result;
         static ConvBox<T>[] MakeConvBoxes<T>(T seed) => new ConvBox<T>[1];
         static int InferredBoxArrayConversionElement() { var arr = MakeConvBoxes(Volatile.Read(ref cache!)); arr[0] = Volatile.Read(ref fullString!); return 1; }
@@ -759,7 +760,7 @@ namespace Demo
         static int OutVarExplicitTupleSeedBox() { (object, int) seed = (Volatile.Read(ref fullString!), 0); GetOutFromTuple(seed, out var b); b.Value = Volatile.Read(ref fullString!); GetOutFromArray(new string[] { Volatile.Read(ref fullString!) }, out var b2); b2.Value = Volatile.Read(ref fullString!); GetOutFromArray(new string[] { }, out var b3); b3.Value = Volatile.Read(ref fullString!); return (b.Value.ToString()!.Length + b2.Value.Length + b3.Value.Length) / 3; }
         static int PatternTypedBox(object o) { if (o is Box<Dictionary<string, int>> b) { b.Value = Volatile.Read(ref full!); return b.Value.Count; } return 0; }
         static int TypedBox() { Box<Dictionary<string, int>> b = new Box<Dictionary<string, int>>(new Dictionary<string, int>()); b.Value = Volatile.Read(ref full!); return b.Value.Count; }
-        static int TypedBoxMembers() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)) { Value = Volatile.Read(ref full!) }; b.Prop = Volatile.Read(ref full!); b[0] = Volatile.Read(ref full!); b.Items[0] = Volatile.Read(ref full!); return b.Accept(Volatile.Read(ref full!)) + b.Value.Count + b.Prop.Count + b[0].Count + b.Items[0].Count; }
+        static int TypedBoxMembers() { var b = new Box<Dictionary<string, int>>(Volatile.Read(ref full!)) { Value = Volatile.Read(ref full!) }; b.Prop = Volatile.Read(ref full!); b[0] = Volatile.Read(ref full!); b.Items[0] = Volatile.Read(ref full!); var nullableBoxes = new Box<string>?[] { new Box<string>("ok") }; nullableBoxes[0]!.Value = Volatile.Read(ref fullString!); return b.Accept(Volatile.Read(ref full!)) + b.Value.Count + b.Prop.Count + b[0].Count + b.Items[0].Count + (nullableBoxes[0]!.Value == "ok" ? 0 : 1); }
         static int ForEachTypedBox() { var total = 0; foreach (var item in new[] { new Box<Dictionary<string, int>>(new Dictionary<string, int>()) }) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
         static int ForEachTypedBoxList() { var total = 0; foreach (var item in Boxes(new Dictionary<string, int>())) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
         static int ForEachPatternTypedSeq() { var total = 0; foreach (var item in MakeSeq(new Dictionary<string, int>())) { item.Value = Volatile.Read(ref full!); total += item.Value.Count; } return total; }
@@ -772,7 +773,7 @@ namespace Demo
         static int ImplicitInferredArrayElement() { var arr = new[] { Volatile.Read(ref cache!) }; arr[0] = Volatile.Read(ref cache!); var xs = new[] { "ok", Volatile.Read(ref stringCache!) }; return xs[0] == "ok" && xs[1] == null ? 1 : 0; }
         static int ConditionalImplicitArrays(bool flag) { var a = flag ? new[] { "ok" } : new[] { Volatile.Read(ref stringCache!) }; var b = flag ? new[] { "ok" }! : new[] { Volatile.Read(ref stringCache!) }; return a[0] == "ok" && b[0] == "ok" ? 1 : 0; }
         static int AliasedConditionalImplicitArrays(bool flag) { var row = new[] { "ok" }; var a = flag ? row : new[] { Volatile.Read(ref stringCache!) }; var sameRow = new[] { "ok" }; var alias = flag ? sameRow : sameRow; var rows = new[] { alias, new[] { Volatile.Read(ref stringCache!) } }; return a[0] == "ok" && rows[0][0] == "ok" && rows[1][0] == null ? 1 : 0; }
-        static int CoalescedNestedImplicitArrays() { var rows = new[] { new[] { Volatile.Read(ref stringCache!) } ?? new[] { "ok" } }; var b = WrapArray(new[] { Volatile.Read(ref stringCache!) } ?? new[] { "ok" }); b.Value = Volatile.Read(ref stringCache!); string[]? nullableNonNullRow = null; var bNonNull = WrapArray(nullableNonNullRow ?? new[] { "ok" }); bNonNull.Value = Volatile.Read(ref fullString!); return rows[0][0] == null && b.Value == null && bNonNull.Value == "ok" ? 1 : 0; }
+        static int CoalescedNestedImplicitArrays() { var rows = new[] { new[] { Volatile.Read(ref stringCache!) } ?? new[] { "ok" } }; var b = WrapArray(new[] { Volatile.Read(ref stringCache!) } ?? new[] { "ok" }); b.Value = Volatile.Read(ref stringCache!); string[]? nullableNonNullRow = null; var bNonNull = WrapArray(nullableNonNullRow ?? new[] { "ok" }); bNonNull.Value = Volatile.Read(ref fullString!); var bNested = WrapArray(new[] { new[] { Volatile.Read(ref stringCache!) } }); bNested.Value[0] = Volatile.Read(ref stringCache!); return rows[0][0] == null && b.Value == null && bNonNull.Value == "ok" && bNested.Value[0] == null ? 1 : 0; }
         static int NullableJaggedConsumer() { var row = new[] { Volatile.Read(ref stringCache!) }; string?[][] rows = new[] { row }; return rows[0][0] == null ? 1 : 0; }
         static int NullableTupleLeafDelegateJaggedConsumer() { var row = new[] { () => (Volatile.Read(ref stringCache!), 0) }; Func<(string?, int)>[][] rows = new[] { row }; var pairs = new[] { (Volatile.Read(ref stringCache!), 0) }; return rows[0][0]().Item1 == null && pairs[0].Item1 == null ? 1 : 0; }
         static int ImplicitInferredJaggedArrayElement() { var rows = new[] { Volatile.Read(ref arrayCache!) }; rows[0] = Volatile.Read(ref arrayCache!); return 1; }
@@ -861,6 +862,9 @@ namespace Demo
         Assert.Contains("b2!!.Value = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("b3!!.Value = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("bNonNull.Value = Volatile.Read(&fullString)!!\n", printed)
+        Assert.Contains("bNested.Value[0] = Volatile.Read(&stringCache)\n", printed)
+        Assert.Contains("nullableBoxes[0]!!.Value = Volatile.Read(&fullString)!!\n", printed)
+        Assert.Contains("dAwait = Volatile.Read(&fullString)!!\n", printed)
         Assert.Contains("[]string?{\"ok\", Volatile.Read(&stringCache)}", printed)
         Assert.Contains("b2.Value = Volatile.Read(&stringCache)\n", printed)
         Assert.Contains("GetOutFromTuple(seed, out var b)\n        b!!.Value = Volatile.Read(&fullString)!!\n", printed)
