@@ -287,6 +287,7 @@ namespace TypedForEach {
     @InlineData("reassigned in closure", "3,")
     @InlineData("hoisted local function before guard", "3,")
     @InlineData("transitively hoisted local function", "3,")
+    @InlineData("hoisted local function preserving index", "3,")
     func NullGuardedForEachCaptures_MatchNarrowingAndCSharpOutput(shape string, expected string) {
         let loopBody = switch shape {
             case "deconstructed inferred parenthesized lambda":
@@ -412,6 +413,14 @@ namespace TypedForEach {
                  int Wrapper(bool run) => run ? Read() : 0;
                  callbacks.Add(() => Wrapper(true));
              }`
+            case "hoisted local function preserving index":
+            `foreach (var (a, b) in items) {
+                 if (a is null) continue;
+                 callbacks.Add(Read);
+                 int Read() => a.Length + Z1<int>() + Z2<int>();
+                 int Z1<T>() => 0;
+                 int Z2<T>() => 0;
+             }`
             default:
             `foreach (var (a, b) in items) {
                  if (a is null) continue;
@@ -461,7 +470,7 @@ namespace TypedForEach {
             StringComparison.Ordinal
         ) ||
             shape == "primary constructor method capture" ||
-            shape == "hoisted local function before guard" ||
+            shape.StartsWith("hoisted local function", StringComparison.Ordinal) ||
             shape == "transitively hoisted local function" {
             Assert.Contains("a!!.Length", printed)
         } else {

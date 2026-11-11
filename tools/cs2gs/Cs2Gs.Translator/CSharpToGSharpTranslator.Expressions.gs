@@ -9941,8 +9941,15 @@ partial class CSharpToGSharpTranslator {
             }
             if statements != nil {
                 let reordered = this.HoistCallBeforeDeclLocalFunctions(statements, enclosingSpan)
-                if IndexOfReference(reordered, localFunction) != IndexOfReference(statements, localFunction) {
-                    return false
+                let reorderedIndex = IndexOfReference(reordered, localFunction)
+                for statement in statements {
+                    if object.ReferenceEquals(statement, localFunction) {
+                        break
+                    }
+                    if !(statement is LocalFunctionStatementSyntax) &&
+                        reorderedIndex < IndexOfReference(reordered, statement) {
+                        return false
+                    }
                 }
             }
             return true
