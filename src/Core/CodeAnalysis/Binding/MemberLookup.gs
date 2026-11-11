@@ -4088,7 +4088,8 @@ internal class MemberLookup {
                                     return false
                                 }
                                 erasedElements[i] = erasedUnderlying
-                                liftToNullable[i] = true
+                                liftToNullable[i] = erasedUnderlying.IsValueType &&
+                                    !NullableLifting.IsValueTypeNullableClr(erasedUnderlying)
                                 continue
                             }
                             if !TryProjectErasedClrType(elementTypes[i], out var erasedElement) ||

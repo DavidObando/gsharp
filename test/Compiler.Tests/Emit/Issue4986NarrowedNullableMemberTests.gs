@@ -3038,9 +3038,13 @@ func nullableElemSymbolic(present bool) int32 {
     let n (int32?, []string?)? = if present { (v, []string?{"a"}) } else { nil }
     return n != nil ? n.GetValueOrDefault().Item1 : 0
 }
+func openStructTuple[T struct](x T?) {
+    Console.WriteLine((x, 0))
+}
+openStructTuple[int32](5)
 Console.WriteLine("${ifaceUnguarded(true)} ${ifaceUnguarded(false)} ${ifaceGuarded(true)} ${ifaceGuarded(false)} ${nullableElemImported(true)} ${nullableElemImported(false)} ${nullableElemSymbolic(true)} ${nullableElemSymbolic(false)}")
 `, fixture.AssemblyPath)
-        Assert.Equal("7 0 7 0 99 0 99 0" + Environment.NewLine, result.Output)
+        Assert.Equal("(5, 0)" + Environment.NewLine + "7 0 7 0 99 0 99 0" + Environment.NewLine, result.Output)
     }
 
     @Fact
