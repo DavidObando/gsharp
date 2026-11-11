@@ -89,6 +89,7 @@ internal class ConversionClassifier {
     private var enterTupleConversion(() -> void)?
     private var leaveTupleConversion(() -> void)?
     private var rebindTupleElement((BoundExpression, ExpressionSyntax) -> BoundExpression)?
+    private var wasNarrowedBeforeBackwardJump((SyntaxNode, AccessPath) -> bool)?
     private var bindConditionalRefParts(
         (ExpressionSyntax, ExpressionSyntax, ExpressionSyntax) -> (
             Condition BoundExpression,
@@ -108,7 +109,8 @@ internal class ConversionClassifier {
             Condition BoundExpression,
             WhenTrue BoundExpression,
             WhenFalse BoundExpression
-        )
+        ),
+        wasNarrowedBeforeBackwardJump(SyntaxNode, AccessPath) -> bool
     ) {
         this.expressionNarrowingVersion = expressionNarrowingVersion
         this.onConversionBound = onConversionBound
@@ -117,6 +119,7 @@ internal class ConversionClassifier {
         this.leaveTupleConversion = leaveTupleConversion
         this.rebindTupleElement = rebindTupleElement
         this.bindConditionalRefParts = bindConditionalRefParts
+        this.wasNarrowedBeforeBackwardJump = wasNarrowedBeforeBackwardJump
     }
 
     internal func ResolveReboundSibling(expression BoundExpression) BoundExpression {
@@ -625,39 +628,145 @@ internal class ConversionClassifier {
         }
     }
 
+    internal func CaptureNarrowedValue(expression BoundExpression, syntax SyntaxNode) BoundExpression? {
+        if expression is BoundBlockExpression block {
+            if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
+                resultVar
+                .Name
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                var captured BoundExpression? = nil
+                let _ = RewriteCleanupBlockExpression(
+                    block,
+                    resultVar,
+                    (initializer BoundExpression) -> {
+                        captured = CaptureNarrowedValue(initializer, initializer.Syntax ?? syntax)
+                        return initializer
+                    }
+                )
+                return captured
+            }
+            return CaptureNarrowedValue(block.Expression, block.Expression.Syntax ?? syntax)
+        }
+        if binderCtx.TryGetNarrowedAccessPath(expression, out _, out _) {
+            return expression
+        }
+        var path AccessPath? = nil
+        if expression is BoundVariableExpression variable {
+            path = AccessPath.ForVariable(variable.Variable)
+        } else {
+            let _ = SmartCastStability.TryGetStableMemberPath(expression, out path, out _)
+        }
+        return if path != nil && wasNarrowedBeforeBackwardJump?.Invoke(expression.Syntax ?? syntax, path) == true {
+            expression
+        } else {
+            default(BoundExpression?)
+        }
+    }
+
+    /// Resolves block tails and captured tuple element reads at the consumer's target type.
     /// Replaces a narrowed member read with its declared read when the conversion to [`target`](paramref)
     /// does not need the narrowing (cref:TryRecoverDeclaredMemberRead).
     /// @param diagnosticLocation The location of the use.
     /// @param expression The value.
     /// @param target The conversion target.
+    /// @param allowExplicit Whether explicit element conversions are allowed.
+    /// @param capturedRead The read captured when a tuple element bound.
     /// @returns The value, with the declared read when it replaces the narrowed read.
-    func DecideNarrowedConversion(
+    func ResolveNarrowedValue(
         diagnosticLocation TextLocation,
         expression BoundExpression,
-        target TypeSymbol?
+        target TypeSymbol?,
+        allowExplicit bool = false,
+        capturedRead BoundExpression? = nil
     ) BoundExpression {
         if expression is BoundBlockExpression block {
             if block.Expression is BoundVariableExpression{Variable: LocalVariableSymbol resultVar} &&
                 resultVar
                 .Name
-                .StartsWith("<blockResult", StringComparison.Ordinal) &&
-                TryRecoverCleanupBlockDeclaredRead(
-                diagnosticLocation,
-                block.Statements,
-                resultVar,
-                target,
-                out var rewrittenStatements,
-                out var newResultVar
-            ) {
-                return BoundBlockExpression(
-                    block.Syntax,
-                    rewrittenStatements,
-                    BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
-                )
+                .StartsWith("<blockResult", StringComparison.Ordinal) {
+                if TryResolveCleanupBlockValue(
+                    diagnosticLocation,
+                    block.Statements,
+                    resultVar,
+                    target,
+                    allowExplicit,
+                    capturedRead,
+                    out var rewrittenStatements,
+                    out var newResultVar
+                ) {
+                    return BoundBlockExpression(
+                        block.Syntax,
+                        rewrittenStatements,
+                        BoundVariableExpression(block.Expression.Syntax, newResultVar!!)
+                    )
+                }
+                // Cleanup already saved the value. Do not read its source again after cleanup.
+                return expression
             }
-            let recoveredTail = DecideNarrowedConversion(diagnosticLocation, block.Expression, target)
+            let recoveredTail = ResolveNarrowedValue(
+                diagnosticLocation,
+                block.Expression,
+                target,
+                allowExplicit,
+                capturedRead
+            )
             if !object.ReferenceEquals(recoveredTail, block.Expression) {
                 return BoundBlockExpression(block.Syntax, block.Statements, recoveredTail)
+            }
+            return expression
+        }
+        if capturedRead != nil {
+            return BindConversion(
+                capturedRead.Syntax?.Location ?? diagnosticLocation,
+                capturedRead,
+                target,
+                allowExplicit
+            )
+        }
+        if expression is BoundTupleLiteralExpression literal && ExpressionBinder.GetTargetTupleType(
+            target
+        ) is {} targetTuple &&
+            literal
+            .TupleType
+            .Arity == targetTuple.Arity &&
+            Conversion
+            .Classify(literal.TupleType, targetTuple).IsIdentity {
+            var rewritten ImmutableArray[BoundExpression].Builder? = nil
+            var consumedCaptures = false
+            for var index = 0; index < literal.Elements.Length; index++ {
+                let original = literal.Elements[index]
+                let read = if literal.NarrowedElementReads.IsDefaultOrEmpty {
+                    default(BoundExpression?)
+                } else {
+                    literal.NarrowedElementReads[index]
+                }
+                consumedCaptures = consumedCaptures || read != nil
+                let resolved = ResolveNarrowedValue(
+                    diagnosticLocation,
+                    original,
+                    targetTuple.ElementTypes[index],
+                    allowExplicit,
+                    read
+                )
+                if resolved.Type == TypeSymbol.Error {
+                    return BoundErrorExpression(literal.Syntax)
+                }
+                if !object.ReferenceEquals(original, resolved) && rewritten == nil {
+                    rewritten = ImmutableArray.CreateBuilder[BoundExpression](literal.Elements.Length)
+                    for var previous = 0; previous < index; previous++ {
+                        rewritten.Add(literal.Elements[previous])
+                    }
+                }
+                rewritten?.Add(resolved)
+            }
+            if rewritten != nil || consumedCaptures {
+                let elements = rewritten?.MoveToImmutable() ?? literal.Elements
+                let tupleType = TupleTypeSymbol.Get(
+                    elements.Select((element BoundExpression) -> element.Type).ToImmutableArray(),
+                    literal.TupleType.ElementNames
+                )
+                // A committed conversion must not replay the element's captured source.
+                return BoundTupleLiteralExpression(literal.Syntax, tupleType, elements)
             }
             return expression
         }
@@ -676,11 +785,13 @@ internal class ConversionClassifier {
         return expression
     }
 
-    private func TryRecoverCleanupBlockDeclaredRead(
+    private func TryResolveCleanupBlockValue(
         diagnosticLocation TextLocation,
         statements ImmutableArray[BoundStatement],
         resultVar LocalVariableSymbol,
         target TypeSymbol?,
+        allowExplicit bool,
+        capturedRead BoundExpression?,
         out rewritten ImmutableArray[BoundStatement],
         out newResultVar LocalVariableSymbol?
     ) bool {
@@ -690,7 +801,13 @@ internal class ConversionClassifier {
         for stmt in statements {
             if !changed && stmt is BoundVariableDeclaration decl && object.ReferenceEquals(decl.Variable, resultVar) &&
                 decl.Initializer is {} initializer {
-                let recoveredInit = DecideNarrowedConversion(diagnosticLocation, initializer, target)
+                let recoveredInit = ResolveNarrowedValue(
+                    diagnosticLocation,
+                    initializer,
+                    target,
+                    allowExplicit,
+                    capturedRead
+                )
                 if !object.ReferenceEquals(recoveredInit, initializer) {
                     let updatedVar = LocalVariableSymbol(
                         resultVar.Name,
@@ -704,11 +821,13 @@ internal class ConversionClassifier {
                 }
             } else if !changed &&
                 stmt is BoundBlockStatement innerBlock &&
-                TryRecoverCleanupBlockDeclaredRead(
+                TryResolveCleanupBlockValue(
                 diagnosticLocation,
                 innerBlock.Statements,
                 resultVar,
                 target,
+                allowExplicit,
+                capturedRead,
                 out var innerStatements,
                 out newResultVar
             ) {
@@ -718,11 +837,13 @@ internal class ConversionClassifier {
             } else if !changed &&
                 stmt is BoundTryStatement tryStmt &&
                 tryStmt.TryBlock is BoundBlockStatement tryBlock &&
-                TryRecoverCleanupBlockDeclaredRead(
+                TryResolveCleanupBlockValue(
                 diagnosticLocation,
                 tryBlock.Statements,
                 resultVar,
                 target,
+                allowExplicit,
+                capturedRead,
                 out var tryStatements,
                 out newResultVar
             ) {
@@ -767,7 +888,7 @@ internal class ConversionClassifier {
         // Issue #5603: the decision is shared with the deferred conversion of an inferred lambda result. Issue #5613:
         // a branch value converts to the common type without it, because the branch decided it where the read binds.
         if trackNarrowing {
-            expression = DecideNarrowedConversion(diagnosticLocation, expression, type)
+            expression = ResolveNarrowedValue(diagnosticLocation, expression, type, allowExplicit)
         }
         if NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) ||
             ManagedReferenceTypes
@@ -1953,7 +2074,7 @@ internal class ConversionClassifier {
                     allowConcreteSymbolic: true
                 ) ??
                     argument.Type
-                argument = DecideNarrowedConversion(
+                argument = ResolveNarrowedValue(
                     if !parameterArgumentLocations.IsDefault &&
                         paramIndex < parameterArgumentLocations.Length &&
                         parameterArgumentLocations[paramIndex] is {} inferredLocation {
