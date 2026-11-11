@@ -87,13 +87,94 @@ import GSharp.Core.Tests.Fixtures
     @InlineData("defer")
     func UnmanagedPointerArguments_AreValues(keyword string) {
         let source = `package Issue5708Pointer
+struct Pair {
+    var first int32
+    var second int32
+}
+struct Counter {
+    var n int32
+    var pair Pair
+    func Bump() { n++ }
+}
+unsafe func GetPointer(items []int32) *int32 -> &items[0]
+unsafe func GetSlot(slots []*int32) **int32 -> &slots[0]
+unsafe func GetCounterPointer(items []Counter) *Counter -> &items[0]
 unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func ClearSlot(slot **int32) { *slot = nil }
 unsafe func Run() {
-    let items = []int32{0}
+    let items = []int32{0, 0}
+    let slots = []*int32{&items[0], &items[1]}
+    let counters = []Counter{Counter{}}
     ` + keyword + ` Write(&items[0])
+    ` + keyword + ` Write(&*GetPointer(items))
+    ` + keyword + ` Write(&*{
+        let _ = 0
+        GetPointer(items)
+    })
+    ` + keyword + ` Write(&GetPointer(items)[1])
+    ` + keyword + ` Write(&(*GetCounterPointer(counters)).n)
+    ` + keyword + ` Write(&(*GetCounterPointer(counters)).pair.first)
+    ` + keyword + ` Write(GetPointer(items))
+    ` + keyword + ` (*GetCounterPointer(counters)).Bump()
+    ` + keyword + ` ClearSlot(&slots[0])
+    ` + keyword + ` ClearSlot(&*GetSlot(slots))
+    ` + keyword + ` ClearSlot(&*{
+        let _ = 0
+        GetSlot(slots)
+    })
+    ` + keyword + ` ClearSlot(&GetSlot(slots)[1])
 }
 `
         Assert.Empty(BindErrors(source))
+    }
+
+    @Fact
+    func FixedPointerCapturedInGo_StillReportsGS9008() {
+        let source = `package Issue5836FixedPointer
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    var items = []int32{0}
+    fixed p *int32 = items {
+        scope {
+            go Write(&*p)
+        }
+    }
+}
+`
+        let error = Assert.Single(BindErrors(source))
+        Assert.Equal("GS9008", error.Id)
+    }
+
+    @Fact
+    func HoistedPointerBlockLocals_DoNotLeakIntoEnclosingScope() {
+        let redeclareSource = `package Issue5836BlockScope
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() {
+    let items = []int32{0}
+    scope {
+        go Write({
+            var hidden = 1
+            (&items[hidden - 1])
+        })
+        var hidden = 2
+    }
+}
+`
+        Assert.Empty(BindErrors(redeclareSource))
+
+        let leakSource = `package Issue5836BlockLeak
+unsafe func Write(pointer *int32) { *pointer = 42 }
+unsafe func Run() int32 {
+    let items = []int32{0}
+    go Write({
+        var hidden = 1
+        (&items[hidden - 1])
+    })
+    return hidden
+}
+`
+        let error = Assert.Single(BindErrors(leakSource))
+        Assert.Equal("GS0125", error.Id)
     }
 
     @Theory
@@ -146,6 +227,79 @@ scope {
         let error = Assert.Single(BindErrors(source))
         Assert.Equal("GS9004", error.Id)
         Assert.Equal(TextSpan(source.IndexOf(operand), operand.Length), error.Location.Span)
+    }
+
+    @Theory
+    @InlineData("UseSpan(MakeSpan(), { let _ = 0 x = 1 x })", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(extra: 1, value: text.AsSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan({ let s = text.AsSpan() s }, 1)", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(default(ReadOnlySpan[char]), 1)", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseSpan(spanLocal, 1)", "System.ReadOnlySpan[char]", " (variable 'spanLocal')")
+    @InlineData("items.AsSpan().Clear()", "System.Span[int32]", "")
+    @InlineData("default(Span[int32]).Clear()", "System.Span[int32]", "")
+    @InlineData("(*&(choose ? spanA : spanB)).Clear()", "System.Span[int32]", " (variable 'spanA')")
+    @InlineData("MakeWindow().Run()", "Window", "")
+    @InlineData("MakeWindow().counter.Bump()", "Window", "")
+    @InlineData("MakeWindow().pair.Item1.Bump()", "Window", "")
+    @InlineData("worker.AcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("Worker.StaticAcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("indirectSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("base.AcceptSpan(MakeSpan())", "System.ReadOnlySpan[char]", "")
+    @InlineData("UseUtf8(u8\"abc\")", "System.ReadOnlySpan[uint8]", "")
+    func ByRefLikeGoOperands_ReportGS0219AtTheCall(operand string, typeName string, variableSuffix string) {
+        let source = `package Issue5836
+import System
+struct Counter {
+    var n int32
+    func Bump() { n++ }
+}
+ref struct Window {
+    var counter Counter
+    var pair (Counter, int32)
+    func Run() {}
+}
+func MakeSpan() ReadOnlySpan[char] -> "abc".AsSpan()
+func MakeWindow() Window -> Window{counter: Counter{}, pair: (Counter{}, 0)}
+func UseSpan(value ReadOnlySpan[char], extra int32) {}
+func UseUtf8(value ReadOnlySpan[byte]) {}
+var x int32 = 0
+open class Parent {
+    open func AcceptSpan(value ReadOnlySpan[char]) {}
+}
+class Worker : Parent {
+    shared { func StaticAcceptSpan(value ReadOnlySpan[char]) {} }
+    func Run(choose bool) {
+        let text = "abc"
+        let spanLocal = text.AsSpan()
+        let items = []int32{1}
+        let other = []int32{2}
+        var spanA = items.AsSpan()
+        var spanB = other.AsSpan()
+        let worker = Worker()
+        let indirectSpan = func(value ReadOnlySpan[char]) {}
+        scope {
+            go ` + operand + `
+        }
+    }
+}
+`
+        let errors = BindErrors(source)
+        Assert.NotEmpty(errors)
+        Assert.All(
+            errors,
+            func (error Diagnostic) {
+                Assert.Equal("GS0219", error.Id)
+                Assert.Equal(TextSpan(source.IndexOf("go ") + 3, operand.Length), error.Location.Span)
+            }
+        )
+        Assert.Equal(
+            "By-ref-like type '" +
+                typeName +
+                "' is a `ref struct` and cannot be captured by a closure" +
+                variableSuffix +
+                ".",
+            errors[0].Message
+        )
     }
 
     shared {
