@@ -5206,7 +5206,14 @@ partial class CSharpToGSharpTranslator {
             arrayExpression ExpressionSyntax,
             elementTypeSyntax TypeSyntax?
         ) GTypeReference? {
-            let nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax
+            let nullableElementSyntax = elementTypeSyntax is NullableTypeSyntax &&
+                (
+                arrayExpression is not ArrayCreationExpressionSyntax arrayCreation ||
+                    arrayCreation
+                    .Type
+                    .RankSpecifiers
+                    .Count <= 1
+            )
             let info = this.context.GetTypeInfo(arrayExpression)
             let arrayType ITypeSymbol? = info.Type ?? info.ConvertedType
             if arrayType is IArrayTypeSymbol array && this.typeMapper.Map(
