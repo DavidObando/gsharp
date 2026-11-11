@@ -286,6 +286,7 @@ namespace TypedForEach {
     @InlineData("single foreach query select", "3")
     @InlineData("single foreach query let", "3")
     @InlineData("single foreach query select into", "3")
+    @InlineData("single foreach switch query let", "3")
     @InlineData("primary constructor method capture", "3,")
     @InlineData("reassigned in loop body", "2,")
     @InlineData("reassigned in closure", "3,")
@@ -421,6 +422,20 @@ namespace TypedForEach {
                  foreach (var v in q) total += v;
              }
              return total.ToString();`
+            case "single foreach switch query let":
+            `int total = 0;
+             var names = new string[2];
+             names[0] = null;
+             names[1] = "abc";
+             foreach (var a in names) {
+                 switch (a) {
+                     case "abc":
+                         var q = from n in new[] { 0 } let text = a select text.Length + n;
+                         foreach (var v in q) total += v;
+                         break;
+                 }
+             }
+             return total.ToString();`
             case "primary constructor method capture":
             `var box = new PrimaryMethodBox("abc");
              var fn = box.Read();
@@ -521,7 +536,9 @@ namespace TypedForEach {
     }
 }`).Replace("EXTRA_TYPES", extraTypes).Replace("EXTRA_MEMBERS", extraMembers).Replace("LOOP_BODY", loopBody)
         let printed = Verify(source, expected)
-        if shape == "single foreach query let" || shape == "single foreach query select into" {
+        if shape == "single foreach query let" ||
+            shape == "single foreach query select into" ||
+            shape == "single foreach switch query let" {
             Assert.Contains("text!!.Length", printed)
         } else if shape.StartsWith("reassigned", StringComparison.Ordinal) || shape.StartsWith(
             "single foreach",

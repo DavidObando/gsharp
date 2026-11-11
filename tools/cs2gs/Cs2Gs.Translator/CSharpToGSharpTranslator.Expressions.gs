@@ -10068,7 +10068,7 @@ partial class CSharpToGSharpTranslator {
             }
             for var node Microsoft
                 .CodeAnalysis
-                .SyntaxNode? = effectiveTarget.Parent;
+                .SyntaxNode? = effectiveTarget;
                 node != nil &&
                 node != $scope;
                 node = node!!
