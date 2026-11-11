@@ -1821,6 +1821,147 @@ func Run(ref a C?) int32 {
 }
 Console.WriteLine(Run(ref globalC))
 `}
+            yield []object{"issue-5326-loop-interpolated-handler-primitive-hole-clears-global", `
+import System
+import System.Runtime.CompilerServices
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+@InterpolatedStringHandler
+struct ClearHandler {
+    init(literalLength int32, formattedCount int32) { }
+    func AppendLiteral(s string) { }
+    func AppendFormatted(v bool) {
+        globalC = nil
+    }
+}
+func Sink(h ClearHandler) { }
+func Run(ref a C?) int32 {
+    if a == nil { return 0 }
+    var total = 0
+    for var i = 0; i < 2; i++ {
+        total += a.Value
+        Sink("${true}")
+    }
+    return total
+}
+Console.WriteLine(Run(ref globalC))
+`}
+            yield []object{"issue-5326-callee-reads-lazy-value-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+func ReadLazy(l Lazy[int32]) int32 -> l.Value
+func Run(ref a C?, l Lazy[int32]) int32 {
+    if a == nil { return 0 }
+    let _ = ReadLazy(l)
+    return a.Value
+}
+let lazyVal = Lazy[int32](() -> {
+    globalC = nil
+    return 7
+})
+Console.WriteLine(Run(ref globalC, lazyVal))
+`}
+            yield []object{"issue-5326-deferred-enumerable-distinct-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, seq IEnumerable[Key]) int32 {
+    if a == nil { return 0 }
+    let _ = seq.ToArray()
+    return a.Value
+}
+let keys = List[Key](){Key{}}
+let distinctSeq = keys.Distinct()
+globalC = C{}
+Console.WriteLine(Run(ref globalC, distinctSeq))
+`}
+            yield []object{"issue-5326-tuple-interpolation-element-tostring-clears-global", `
+import System
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Noisy {
+    override func ToString() string {
+        globalC = nil
+        return "noisy"
+    }
+}
+func Run(ref a C?, row (Noisy, int32)) int32 {
+    if a == nil { return 0 }
+    let _ = "${row}"
+    return a.Value
+}
+Console.WriteLine(Run(ref globalC, (Noisy{}, 1)))
+`}
+            yield []object{"issue-5326-hashset-setequals-clears-global", `
+import System
+import System.Collections.Generic
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Key {
+    override func GetHashCode() int32 {
+        globalC = nil
+        return 0
+    }
+    override func Equals(other object?) bool -> true
+}
+func Run(ref a C?, set HashSet[Key], other []Key) int32 {
+    if a == nil { return 0 }
+    let _ = set.SetEquals(other)
+    return a.Value
+}
+let set = HashSet[Key]()
+globalC = C{}
+Console.WriteLine(Run(ref globalC, set, []Key{Key{}}))
+`}
+            yield []object{"issue-5326-enumerable-max-compareto-clears-global", `
+import System
+import System.Collections.Generic
+import System.Linq
+
+class C {
+    var Value int32 = 1
+}
+var globalC C? = C{}
+class Item : IComparable[Item] {
+    func CompareTo(other Item?) int32 {
+        globalC = nil
+        return 0
+    }
+}
+func Run(ref a C?, items List[Item]) int32 {
+    if a == nil { return 0 }
+    let _ = items.Max()
+    return a.Value
+}
+let items = List[Item](){Item{}, Item{}}
+globalC = C{}
+Console.WriteLine(Run(ref globalC, items))
+`}
         }
 
         /// Gets the accepted programs: each is (name, source, expected stdout lines).

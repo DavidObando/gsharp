@@ -850,6 +850,18 @@ class ReferenceResolver : IDisposable {
     /// behind the supplied references.
     internal func IsHostFallbackName(simpleName string) bool -> hostFallbackAssemblyNames.Contains(simpleName)
 
+    /// Tells whether [`assembly`](paramref) was explicitly supplied to (cref:WithReferences) or
+    /// (cref:WithRuntimeReferences) rather than inherited from the ambient host runtime.
+    internal func IsExplicitReference(assembly Assembly) bool {
+        if metadataContext != nil {
+            return !IsHostFallbackName(assembly.GetName().Name ?? "")
+        }
+        if runtimeContext != nil {
+            return AssemblyOriginalPaths.TryGetValue(assembly, out _)
+        }
+        return false
+    }
+
     /// Discards the memoized results of (cref:TryResolveType).
     /// The comparison mode calls it, so that its lookups leave no state behind.
     internal func DiscardResolutionCache() {

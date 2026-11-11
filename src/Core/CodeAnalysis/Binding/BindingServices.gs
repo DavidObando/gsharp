@@ -71,6 +71,13 @@ internal class BindingServices {
     var CachedMethodsByNameStructs ImmutableArray[StructSymbol]
     var CachedMethodsByNameInterfaces ImmutableArray[InterfaceSymbol]
     var CachedHasUnmodeledImportedComparer bool?
+    let CachedBoundCallEffectSummaries Dictionary[BoundExpression, CallEffectSummary] = Dictionary[
+        BoundExpression,
+        CallEffectSummary
+    ](ReferenceEqualityComparer.Instance)
+    var CachedComparerCreateCalls List[(ElemType TypeSymbol?, Call CallExpressionSyntax)]?
+    var CachedDeferredLinqCalls List[CallExpressionSyntax]?
+    var CachedYieldFunctionDecls List[FunctionDeclarationSyntax]?
 }
 
 /// Issue #5326: summarizes the storage locations (fields/globals and elements) that a callee may transitively write.
