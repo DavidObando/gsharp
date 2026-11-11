@@ -3945,6 +3945,9 @@ partial class CSharpToGSharpTranslator {
             let tupleIndices = List[int32]()
             let storeNodes = List[Microsoft.CodeAnalysis.SyntaxNode]()
             let outermost = OutermostTransparentNode(value, tupleIndices, storeNodes)
+            if tupleIndices.Count > 0 && value is not AnonymousFunctionExpressionSyntax {
+                return false
+            }
             if storeNodes.Count > 0 &&
                 storeNodes[0].Parent is Microsoft
                 .CodeAnalysis
