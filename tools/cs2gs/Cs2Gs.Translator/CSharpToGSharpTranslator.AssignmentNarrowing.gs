@@ -27,7 +27,7 @@ partial class CSharpToGSharpTranslator {
             requireRuntimeNonNullProof bool
         ) bool {
             let type = this.GetDeclaredValueType(expression)
-            if symbol == nil {
+            if symbol == nil || !IsDirectVariableAssignmentTarget(symbol) {
                 return false
             }
             if type == nil {
@@ -64,6 +64,9 @@ partial class CSharpToGSharpTranslator {
                 }
             }
         }
+
+        private func IsDirectVariableAssignmentTarget(symbol ISymbol?) bool ->
+        symbol is ILocalSymbol{RefKind: RefKind.None} or IParameterSymbol{RefKind: RefKind.None}
 
         private func ComputeGSharpAssignmentNarrowedLocal(
             expression ExpressionSyntax,
@@ -164,7 +167,11 @@ partial class CSharpToGSharpTranslator {
                         requireRuntimeNonNullProof
                     )
                 }
-                return proof
+                return if proof != nil && this.AssignmentNarrowingSurvivesToRead(symbol, proof, use, use, block) {
+                    proof
+                } else {
+                    default(SyntaxNode?)
+                }
             }
             if statement is IfStatementSyntax conditional {
                 let entry = if inherited != nil && !this.SymbolIsWrittenBetween(
@@ -435,6 +442,19 @@ partial class CSharpToGSharpTranslator {
                 (includeReferenceStorageWrites && this.NodeMayWriteReferenceStorage(assignment))
         )
 
+        private func CleanupCompletesAfterProof(node SyntaxNode, proof SyntaxNode, use SyntaxNode) bool {
+            let cleanupScope = switch node {
+                case declaration is LocalDeclarationStatementSyntax when declaration.UsingKeyword.RawKind != 0:
+                declaration.Parent
+                case usingStatement is UsingStatementSyntax: usingStatement
+                default: default(SyntaxNode?)
+            }
+            return cleanupScope != nil && cleanupScope.Span.Contains(proof.Span) &&
+                cleanupScope
+                .Span
+                .End <= use.SpanStart
+        }
+
         private func AssignmentHasNullableTargetTypedRhs(assignment AssignmentExpressionSyntax) bool {
             if !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) {
                 return false
@@ -489,8 +509,7 @@ partial class CSharpToGSharpTranslator {
             }
             let target = this.context.GetSymbolInfo(assigned.Left).Symbol
             // Match gsc's BoundAssignmentExpression and source BoundFieldAssignmentExpression recovery.
-            let recoverable = target is ILocalSymbol or
-                IParameterSymbol ||
+            let recoverable = IsDirectVariableAssignmentTarget(target) ||
                 (
                 target is IFieldSymbol field && this.IsSourceSymbol(field) && field.ContainingType?.IsTupleType != true
             )
@@ -554,7 +573,14 @@ partial class CSharpToGSharpTranslator {
                         assigned.Left
                     )
                 ) ||
-                    this.GSharpValueHasRuntimeNonNullProof(assigned.Right)
+                    (
+                    (
+                        assigned.IsKind(SyntaxKind.SimpleAssignmentExpression) || assigned.IsKind(
+                            SyntaxKind.CoalesceAssignmentExpression
+                        )
+                    ) &&
+                        this.GSharpValueHasRuntimeNonNullProof(assigned.Right)
+                )
             }
             if unwrapped is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression) {
                 return this.GSharpValueHasRuntimeNonNullProof(coalesce.Left) || this.GSharpValueHasRuntimeNonNullProof(

@@ -5255,15 +5255,7 @@ partial class CSharpToGSharpTranslator {
             if this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
                 return false
             }
-            let target ISymbol? = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
-            if this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
-                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
-                (
-                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
-            ) {
-                return false
-            }
-            return true
+            return !this.CoalesceAssignmentTargetIsFlowNarrowed(assignment)
         }
 
         private func TranslateCoalescingAssignmentAsExpression(assignment AssignmentExpressionSyntax) GExpression? {

@@ -18,9 +18,216 @@ import Xunit
 /// Issue #5936: disabling assignment postconditions makes the initial five assignment regressions report GS0300.
 /// On 064897012, four review regressions fail, and the 24-step prefix chain exceeds a 30-second test-host limit.
 /// On cadefd047, the five nested-store, coalescing-arm, and incoming-contract regressions fail.
+/// On 6326b12f6, compound results throw, incoming coalescing values warn, and disposal exits lose nullable storage.
 /// The C# output oracle also rejects erased null guards and throwing bridges on nullable stores.
 /// Each test also compares the translated program's output with C#.
 open class Issue5706NarrowedConditionalIndexTests {
+    @Fact
+    func ReferenceAssignmentJoins_KeepStorageAndReadFactsSeparate() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        sealed class C { public int N; }
+        static C Fill(ref C? c) { c = null; if (c == null) { c = new C(); } c.N = 1; return c; }
+        static char? GuardJoin(ref string? s) { s = null; if (s == null) { s = "g"; } return s?[0]; }
+        static char? AssignedJoin(bool flag, ref string? s)
+        {
+            if (flag) { s = "t"; } else { s = "f"; }
+            return s?[0];
+        }
+        static char? Reestablished(bool flag, ref string? s)
+        {
+            if (flag) { s = null; }
+            s = "r";
+            return s?[0];
+        }
+        static char? Local() { string? s = null; s = "l"; return s?[0]; }
+        public static string Run()
+        {
+            C? c = null;
+            string? s = null;
+            return Fill(ref c).N + "|" + GuardJoin(ref s) + "|" + AssignedJoin(true, ref s) + "|" +
+                AssignedJoin(false, ref s) + "|" + Reestablished(true, ref s) + "|" + Local();
+        }
+    }
+}`)
+        Assert.Contains("c!!.N = 1", printed)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
+    @Theory
+    @InlineData("enable")
+    @InlineData("enable annotations")
+    @InlineData("disable")
+    func AssignmentPostconditions_RemoveOnlyRedundantBridges(nullableMode string) {
+        let printed = Issue5626ConstantPatternNarrowingTests.AssertRunsLikeCSharp("#nullable " + nullableMode + `
+using System;
+namespace Demo
+{
+    public static class P
+    {
+        sealed class C { public int N = 7; public C? BaseClass; }
+        sealed class Box<T> where T : class { public static int Use(T value) => 8; }
+        sealed class Target { public string Value { get; set; } = ""; }
+        sealed class Shape { public Type ClrType { get; } public Shape(Type type) { ClrType = type; } }
+        static C? Maybe() => null;
+        static int Use(C c) => c.N;
+        static int Argument(C p) { p = Maybe(); if (p == null) { p = new C(); } return Use(p); }
+        static int Generic(C p) { p = Maybe(); if (p == null) { p = new C(); } return Box<C>.Use(p); }
+        static Target Initializer(string value) { if (value == null) { value = "fallback"; } return new Target { Value = value }; }
+        static bool Lockable(Shape type) { if (type == null) return true; return type.ClrType == null || !type.ClrType.IsValueType; }
+        static int Walk(C s)
+        {
+            int count = 0;
+            var current = s;
+            while (current != null) { count++; current = current.BaseClass; }
+            return count;
+        }
+        public static string Run() =>
+            Argument(new C()) + "|" + Generic(new C()) + "|" + Initializer(null).Value + "|" +
+            Initializer("v").Value + "|" + Walk(new C { BaseClass = new C() }) + "|" +
+            Lockable(null) + "|" + Lockable(new Shape(null)) + "|" + Lockable(new Shape(typeof(int))) + "|" +
+            Lockable(new Shape(typeof(string)));
+    }
+}`, rejectRedundantAssertions: nullableMode != "enable annotations")
+        Assert.Contains("Use(p)", printed)
+        Assert.Contains("Target{Value: value}", printed)
+        Assert.DoesNotContain("Use(p!!)", printed)
+        Assert.DoesNotContain("current!!.BaseClass", printed)
+        Assert.DoesNotContain("type!!.ClrType", printed)
+    }
+
+    @Fact
+    func CompoundAssignmentResults_DoNotInheritOperandRuntimeProofs() {
+        let printed = Issue5617ByReferenceAccessorNarrowingTests.AssertRunsLikeCSharp(`
+#nullable enable
+using ObLib5936;
+public static class Demo
+{
+    static int indices;
+    static int Index() { indices++; return 0; }
+    static char? Read()
+    {
+        Box b = new Box();
+        Box? s = null;
+        s = (b -= new Box());
+        return s?[Index()];
+    }
+    public static string Run() => Read() + "|" + indices + ":" + Box.Calls;
+}`, `
+#nullable enable
+namespace ObLib5936;
+public sealed class Box
+{
+    public static int Calls;
+    public static Box operator -(Box left, Box right) { Calls++; return (Box)(object?)null; }
+    public char this[int index] => 'x';
+}`, rejectConditionalIndexWarnings: true)
+        Assert.Contains("object.ReferenceEquals", printed)
+    }
+
+    @Fact
+    func CoalescingValues_PreserveIncomingProofsWithNullableFallbacks() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static int calls, indices;
+        static string Contract(string? value) => (string)value;
+        static string? Seed(string? value) { calls++; return value; }
+        static int Index() { indices++; return 0; }
+        static char? Known(string? seed)
+        {
+            string? s = null;
+            s = "a";
+            return (s ??= Seed(seed))?[Index()];
+        }
+        static char? Unknown(string? initial, string? seed)
+        {
+            string? s = null;
+            s = Contract(initial);
+            return (s ??= Seed(seed))?[Index()];
+        }
+        static char? Nested(string? seed)
+        {
+            string? s = null, other = null;
+            other = "n";
+            s = (other ??= Seed(seed));
+            return s?[Index()];
+        }
+        public static string Run() =>
+            Known(null) + "|" + Known("b") + "|" + Unknown(null, null) + "|" +
+            Unknown(null, "c") + "|" + Unknown("d", null) + "|" + Nested(null) + "|" + calls + ":" + indices;
+    }
+}`)
+        Assert.Contains("object.ReferenceEquals", printed)
+        Assert.DoesNotContain("Seed(seed)!!", printed)
+    }
+
+    @Fact
+    func DisposalExits_InvalidateOnlyFactsThatCleanupCanChange() {
+        let printed = AssertRunsWithoutConditionalIndexWarning(`
+#nullable enable
+using System;
+using System.Threading.Tasks;
+namespace Demo
+{
+    public static class P
+    {
+        sealed class Cleaner : IDisposable, IAsyncDisposable
+        {
+            readonly Action clear;
+            public Cleaner(Action clear) { this.clear = clear; }
+            public void Dispose() => clear();
+            public ValueTask DisposeAsync() { clear(); return default; }
+        }
+        static char? Exited()
+        {
+            string? s = null;
+            { using var d = new Cleaner(() => s = null); s = "a"; }
+            return s?[0];
+        }
+        static char? Inside()
+        {
+            string? s = null;
+            using var d = new Cleaner(() => s = null);
+            s = "i";
+            return s?[0];
+        }
+        static char? Uncaptured()
+        {
+            string? s = null;
+            { using var d = new Cleaner(() => {}); s = "u"; }
+            return s?[0];
+        }
+        static char? Joined(bool flag)
+        {
+            string? s = null;
+            if (flag) { using var d = new Cleaner(() => s = null); s = "j"; }
+            else { s = "e"; }
+            return s?[0];
+        }
+        static async Task<char?> Async()
+        {
+            string? s = null;
+            { await using var d = new Cleaner(() => s = null); s = "a"; }
+            return s?[0];
+        }
+        public static string Run() =>
+            Exited() + "|" + Inside() + "|" + Uncaptured() + "|" + Joined(true) + "|" + Joined(false) + "|" +
+            Async().GetAwaiter().GetResult();
+    }
+}`)
+        Assert.Contains("s?[0]", printed)
+        Assert.Contains("cast[char?](s[0])", printed)
+    }
+
     @Fact
     func NestedReferenceStorageWrites_InvalidateInnerParameterFacts() {
         let printed = AssertRunsWithoutConditionalIndexWarning(`

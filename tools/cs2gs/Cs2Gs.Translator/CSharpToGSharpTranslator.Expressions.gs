@@ -11483,7 +11483,8 @@ partial class CSharpToGSharpTranslator {
                 case assignment is Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax {
                     if assignment.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.CoalesceAssignmentExpression) {
                         if UnwrapTranslatedValue(translated) is NonNullAssertionExpression ||
-                            this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) {
+                            this.CoalesceAssignmentTargetIsNonNullInGSharp(assignment) ||
+                            this.CoalesceAssignmentTargetIsFlowNarrowed(assignment) {
                             return true
                         }
                         let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -11575,7 +11576,8 @@ partial class CSharpToGSharpTranslator {
         private func CoalesceAssignmentResultIsStaticallyNonNull(
             coalesceAssignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
         ) bool {
-            if this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceAssignment) {
+            if this.CoalesceAssignmentTargetIsNonNullInGSharp(coalesceAssignment) ||
+                this.CoalesceAssignmentTargetIsFlowNarrowed(coalesceAssignment) {
                 return true
             }
             let target ISymbol? = this.GetProjectedAssignmentTarget(
@@ -11584,6 +11586,21 @@ partial class CSharpToGSharpTranslator {
             )
             let targetType ITypeSymbol? = this.GetAssignmentTargetType(coalesceAssignment.Left, target)
             return this.CoalesceAssignmentValueIsStaticallyNonNull(coalesceAssignment.Right, targetType)
+        }
+
+        private func CoalesceAssignmentTargetIsFlowNarrowed(
+            assignment Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax
+        ) bool {
+            let left = Unparenthesize(assignment.Left)
+            if left == nil {
+                return false
+            }
+            let target = this.GetProjectedAssignmentTarget(left, this.context.GetSymbolInfo(left).Symbol)
+            return this.IsGSharpFlowNarrowedLocal(left, requireRoslynFlowNotNull: false) ||
+                this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(left) ||
+                (
+                (target is ILocalSymbol || target is IParameterSymbol) && this.IsDominatedByNullCheckGuard(left, target)
+            )
         }
 
         // The operands that a composed value yields: both arms of a conditional, each arm of a switch expression
@@ -19321,7 +19338,8 @@ partial class CSharpToGSharpTranslator {
                                 node,
                                 narrowingGuard,
                                 includeReferenceStorageWrites: byReference
-                            )
+                            ) ||
+                                this.CleanupCompletesAfterProof(node, narrowingGuard, use)
                         ) &&
                             node
                             .Span
