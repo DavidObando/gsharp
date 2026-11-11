@@ -11477,14 +11477,26 @@ partial class CSharpToGSharpTranslator {
                 let expr = argument.Expression
                 if !argument.RefKindKeyword.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.None) {
                     if expr is Microsoft.CodeAnalysis.CSharp.Syntax.DeclarationExpressionSyntax decl {
-                        if decl.Type is not IdentifierNameSyntax{IsVar: true} && this.ResolveExplicitTypeClauseOrigin(
-                            this.context.GetTypeInfo(decl.Type).Type
-                        ) == nil {
-                            return false
+                        if decl.Type is not IdentifierNameSyntax{IsVar: true} {
+                            let declType = this.context.GetTypeInfo(decl.Type).Type
+                            if declType is INamedTypeSymbol{IsGenericType: true} ||
+                                ContainsTypeParameter(declType) ||
+                                this.ResolveExplicitTypeClauseOrigin(declType) == nil {
+                                return false
+                            }
                         }
                         continue
                     }
-                    if this.ResolveExpressionRegionReceiverTypes(expr, regionScope) == nil {
+                    if StripParentheses(expr) is not IdentifierNameSyntax operandId {
+                        return false
+                    }
+                    let operandSymbol = this.context.GetSymbolInfo(operandId).Symbol
+                    let operandType ITypeSymbol? = switch operandSymbol {
+                        case local is ILocalSymbol when !this.IsDeclaredInRegion(local, regionScope): local.Type
+                        case parameter is IParameterSymbol: parameter.Type
+                        default: default(ITypeSymbol?)
+                    }
+                    if operandType == nil || ContainsTypeParameter(operandType) {
                         return false
                     }
                     continue

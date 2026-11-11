@@ -4181,6 +4181,22 @@ func Run(ref text string?, maybe string?, dt DateTime) int32 {
     return n
 }
 func Main() { }`, "GS0158@8:16")
+            Add("nil-argument-selects-reference-conversion-overload (A3, #5662)", `package T
+import System
+class Token { var Raw int32 }
+func operator implicit (value string?) Token { return Token{Raw: 1} }
+func Use(t Token) { }
+func Use(n int32) { }
+func Run(ref text string?) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(nil)
+    }
+    return n
+}
+func Main() { }`, "GS0158@10:16")
             return rows
         }
     }

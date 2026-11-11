@@ -910,11 +910,29 @@ internal partial class StatementBinder {
             return false
         }
         for candidate in imported {
-            if !AddClrType(candidate.ReturnType, ImmutableArray[TypeSymbol].Empty, nil, next) {
+            if !AddClrType(ClrMethodResultType(candidate), ImmutableArray[TypeSymbol].Empty, nil, next) {
                 return false
             }
         }
         return true
+    }
+
+    private func ClrMethodResultType(method MethodInfo) Type {
+        let returnType = method.ReturnType
+        if !ImportedFunctionSymbol.IsSuspendingMethod(method) {
+            return returnType
+        }
+        if returnType.FullName == "System.Threading.Tasks.ValueTask" {
+            return typeof(void)
+        }
+        if returnType.IsGenericType && returnType.GetGenericTypeDefinition()
+            .FullName == "System.Threading.Tasks.ValueTask`1" {
+            let args = returnType.GetGenericArguments()
+            if args.Length == 1 {
+                return args[0]
+            }
+        }
+        return returnType
     }
 
     private func Distinct(types List[ReceiverType]) List[ReceiverType] {
@@ -1558,7 +1576,7 @@ internal partial class StatementBinder {
                                 memberType = property.PropertyType
                             }
                         } else if clrMember is MethodInfo method {
-                            memberType = method.ReturnType
+                            memberType = ClrMethodResultType(method)
                         }
                         if memberType != nil {
                             found = true
@@ -1576,7 +1594,7 @@ internal partial class StatementBinder {
                         allowProtectedInherited: false
                     ) {
                         found = true
-                        if !AddClrType(method.ReturnType, arguments, definition, next) {
+                        if !AddClrType(ClrMethodResultType(method), arguments, definition, next) {
                             return StepUnresolved
                         }
                     }
@@ -3313,9 +3331,16 @@ internal partial class StatementBinder {
         type
     }
 
-    // `nil` reaches a reference type, a nullable type or a type parameter without an operator. A non-nullable value
-    // type takes it only through a conversion operator (`func operator implicit(value string?) Token`).
+    // `nil` reaches a reference type, a nullable type or a type parameter without an operator, unless the target
+    // rejects `nil` directly and takes it through a user-defined conversion operator (`func operator implicit(value string?) Token`).
     private func AcceptsNilWithoutOperator(type TypeSymbol) bool {
+        let stripped = StripReferenceNullability(type) ?? type
+        if !Conversion.Classify(TypeSymbol.Null, type).IsImplicit && conversions.HasUserDefinedImplicitConversion(
+            TypeSymbol.Null,
+            stripped
+        ) {
+            return false
+        }
         if type is NullableTypeSymbol || type is TypeParameterSymbol || type is ByRefTypeSymbol || !type.IsValueType {
             return true
         }

@@ -333,4 +333,44 @@ func Main() {
         IlVerifier.Verify(exe, []string{lib.AssemblyPath})
         Assert.Equal("fmt:n={0}:1|sfmt:n={0}:1", fixture.Run(exe).Trim())
     }
+
+    private const SuspendingLibrarySource string = `namespace Gsharp.Concurrency {
+    [System.AttributeUsage(System.AttributeTargets.Method)]
+    public sealed class SuspendingAttribute : System.Attribute { }
+}
+namespace SuspendLib {
+    public class Helper {
+        [Gsharp.Concurrency.Suspending]
+        public System.Threading.Tasks.ValueTask<int> Make() => default;
+    }
+}`
+
+    @Fact
+    func ImportedSuspendingCallResult_SelectsUnwrappedOverloadWithConversion() {
+        let source = `package T
+import System
+import System.Threading.Tasks
+import SuspendLib
+func Use(v int32, d DateTimeOffset) { }
+func Use(t ValueTask[int32], o object) { }
+func Run(ref text string?, helper Helper, dt DateTime) int32 {
+    if text == nil { return 0 }
+    var n = 0
+    while text.Length > 0 && n < 3 {
+        n++
+        Use(helper.Make(), dt)
+    }
+    return n
+}
+func Main() { }`
+        using let fixture = CSharpFixture(SuspendingLibrarySource, assemblyName: "SuspendLib")
+        using let references = fixture.RuntimeReferences()
+        let errors = GsCompilation(references, GsSyntaxTree.Parse(SourceText.From(source)))
+            .BoundProgram
+            .Diagnostics
+            .Where((diagnostic GsDiagnostic) -> diagnostic.IsError && diagnostic.Id == "GS0158")
+            .Select((d GsDiagnostic) -> "${d.Id}@${d.Location.StartLine + 1}:${d.Location.StartCharacter + 1}")
+            .ToArray()
+        Assert.Equal("GS0158@10:16", string.Join(" ", errors))
+    }
 }
