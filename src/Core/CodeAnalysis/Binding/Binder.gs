@@ -702,7 +702,8 @@ partial class Binder {
                 conditionSyntax ExpressionSyntax,
                 whenTrueSyntax ExpressionSyntax,
                 whenFalseSyntax ExpressionSyntax
-            ) -> expressions.BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax)
+            ) -> expressions.BindConditionalRefParts(conditionSyntax, whenTrueSyntax, whenFalseSyntax),
+            (syntax SyntaxNode, path AccessPath) -> Statements.WasNarrowedBeforeBackwardJump(syntax, path)
         )
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor

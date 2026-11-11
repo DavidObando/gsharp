@@ -4164,6 +4164,7 @@ internal partial class ExpressionBinder {
         let bound = ImmutableArray.CreateBuilder[BoundExpression](syntax.Elements.Count)
         let elementTypes = ImmutableArray.CreateBuilder[TypeSymbol](syntax.Elements.Count)
         let elementNames = ImmutableArray.CreateBuilder[string?](syntax.Elements.Count)
+        var narrowedReads ImmutableArray[BoundExpression?].Builder? = nil
         var anyName = false
         let nameTokens = [syntax.Elements.Count]SyntaxToken?
         for var i = 0; i < syntax.Elements.Count; i++ {
@@ -4226,6 +4227,14 @@ internal partial class ExpressionBinder {
             ) is {} refDelegateType {
                 be = conversions.BindConversion(e.Location, be, refDelegateType)
             }
+            let capturedRead = conversions.CaptureNarrowedValue(be, e)
+            if capturedRead != nil && narrowedReads == nil {
+                narrowedReads = ImmutableArray.CreateBuilder[BoundExpression?](syntax.Elements.Count)
+                for var previous = 0; previous < i; previous++ {
+                    narrowedReads.Add(nil)
+                }
+            }
+            narrowedReads?.Add(capturedRead)
             ApplySubExpressionNarrowingEffects(e, be)
             bound.Add(be)
             elementTypes.Add(be.Type)
@@ -4247,7 +4256,12 @@ internal partial class ExpressionBinder {
             )
         }
         let tupleType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable(), names)
-        return BoundTupleLiteralExpression(syntax, tupleType, bound.MoveToImmutable())
+        return BoundTupleLiteralExpression(
+            syntax,
+            tupleType,
+            bound.MoveToImmutable(),
+            narrowedReads?.MoveToImmutable() ?? ImmutableArray[BoundExpression?].Empty
+        )
     }
 
     /// ADR-0172: validates declared tuple element names — duplicates

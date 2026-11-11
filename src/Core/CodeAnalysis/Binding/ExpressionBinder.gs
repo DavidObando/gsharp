@@ -1550,28 +1550,6 @@ internal partial class ExpressionBinder {
         return conversions.BindConversion(syntax.Location, value, targetType)
     }
 
-    private func TryGetTargetTupleType(type TypeSymbol?, @NotNullWhen(true) out tupleType TupleTypeSymbol?) bool {
-        tupleType = nil
-        var current = type
-        while true {
-            if current is NullableTypeSymbol nullable {
-                current = nullable.UnderlyingType
-                continue
-            }
-            if current is PlatformTypeSymbol platform {
-                current = platform.UnderlyingType
-                continue
-            }
-            if current is NullabilityAnnotatedTypeSymbol annotated {
-                current = annotated.BaseType
-                continue
-            }
-            break
-        }
-        tupleType = current as TupleTypeSymbol
-        return tupleType != nil
-    }
-
     private func IsStrictDescendantScope(candidate BoundScope?, ancestor BoundScope?) bool {
         if candidate == nil || ancestor == nil || object.ReferenceEquals(candidate, ancestor) {
             return false
@@ -5524,6 +5502,26 @@ internal partial class ExpressionBinder {
     }
 
     shared {
+        internal func GetTargetTupleType(type TypeSymbol?) TupleTypeSymbol? {
+            var current = type
+            while true {
+                if current is NullableTypeSymbol nullable {
+                    current = nullable.UnderlyingType
+                    continue
+                }
+                if current is PlatformTypeSymbol platform {
+                    current = platform.UnderlyingType
+                    continue
+                }
+                if current is NullabilityAnnotatedTypeSymbol annotated {
+                    current = annotated.BaseType
+                    continue
+                }
+                break
+            }
+            return current as TupleTypeSymbol
+        }
+
         /// Issue #1547: builds a smart-cast-narrowed read from a bare (declared-type)
         /// read and its narrowed static type.
         ///
