@@ -85,7 +85,7 @@ if (( ${#shard_cost_jsons[@]} > 0 )); then
                    and all(.stages[]?; .status == "passed"))
           | .appId ]) as $complete
      | (reduce .[] as $shard ({}; . + $shard)
-        | with_entries(select((.key) as $id | ($complete | index($id)) != null and (.value | type == "number" and . > 0)))) as $priced
+        | with_entries(select((.key) as $id | ($complete | index($id)) != null and (.value | type == "number" and (isnan | not) and (isinfinite | not) and . > 0)))) as $priced
      | {schema: 1, runId: $runId,
         note: "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
         apps: (if ($apps | length) > 0 and ($complete | length) == ($apps | length) and ($priced | length) == ($apps | length)

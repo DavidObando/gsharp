@@ -25,6 +25,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def main() -> int:
         # wall time, but record only positive complete-stage durations (#5884).
         duration = round(max(moment - previous, 0.0), 1)
         previous = max(previous, moment)
-        if duration > 0.0 and (completed is None or app_id in completed):
+        if math.isfinite(duration) and duration > 0.0 and (completed is None or app_id in completed):
             durations[app_id] = duration
 
     print(json.dumps(durations, indent=2, sort_keys=True))

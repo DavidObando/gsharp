@@ -440,6 +440,26 @@ def incomplete_stage_duration_maps_are_rejected(d: Path) -> None:
     shards = [entry["apps"].split() for entry in include]
     assert not any(compiler_tests in s and cs2gs_tests in s for s in shards), shards
 
+    # Non-finite durations (NaN / Infinity) are also rejected and fall back to the seed map.
+    for token in ("NaN", "Infinity", "-Infinity"):
+        non_finite = zero_dir / f"costs-{token}.json"
+        non_finite.write_text(
+            f'{{"schema":1,"apps":{{"{compiler_tests}":{token},"{cs2gs_tests}":{token},"{core}":174.6}}}}'
+        )
+        check = subprocess.run(
+            ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+             "--run-dir", str(run_dir), "--costs", str(non_finite), "--check-costs"],
+            capture_output=True, text=True,
+        )
+        assert check.returncode == 1, (token, check.stdout, check.stderr)
+        plan = subprocess.run(
+            ["python3", str(HERE / "generate-selfmig-shard-matrix.py"),
+             "--run-dir", str(run_dir), "--shards", "2", "--costs", str(non_finite)],
+            capture_output=True, text=True, check=True,
+        )
+        shards = [entry["apps"].split() for entry in json.loads(plan.stdout)["include"]]
+        assert not any(compiler_tests in s and cs2gs_tests in s for s in shards), (token, shards)
+
     # 2. Positive compile-failure duration with skipped ilverify/test-parity
     # in companion run.merged.json / stats.json (run 42484819030 shape) is rejected.
     skipped_dir = d / "failed-42484819030"

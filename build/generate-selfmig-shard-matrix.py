@@ -34,6 +34,7 @@ partition of the translated apps, which is the one property that must hold.
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 # A test project additionally restores, builds and runs xUnit under `dotnet
@@ -153,10 +154,12 @@ def load_costs(path: Path) -> dict[str, float]:
             not isinstance(app_id, str)
             or isinstance(seconds, bool)
             or not isinstance(seconds, (int, float))
-            or seconds <= 0
         ):
             return {}
-        costs[app_id] = float(seconds)
+        value = float(seconds)
+        if not math.isfinite(value) or value <= 0:
+            return {}
+        costs[app_id] = value
 
     if not companion_run_is_complete(path.parent, costs):
         return {}
