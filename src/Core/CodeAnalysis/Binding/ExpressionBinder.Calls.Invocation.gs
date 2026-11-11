@@ -4171,14 +4171,25 @@ internal partial class ExpressionBinder {
         @NotNullWhen(true) out result BoundExpression?
     ) bool {
         result = nil
-        if methodName != "GetValueOrDefault" || ce.TypeArgumentList != nil {
+        if ce.TypeArgumentList != nil {
             return false
         }
         if !$scope.References!!.TryGetMemberLookupType(typeof(System.Nullable[_]), out var openNullable) ||
             openNullable == nil {
-            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1.GetValueOrDefault")
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(ce.Location, "System.Nullable`1." + methodName)
             result = BoundErrorExpression(nil)
             return true
+        }
+        if methodName != "GetValueOrDefault" {
+            return TryBindInheritedClrInstanceCall(
+                receiver,
+                openNullable,
+                methodName,
+                arguments,
+                ce,
+                out result,
+                argumentNames: argumentNames
+            )
         }
         var openMethod MethodInfo? = nil
         for candidate in openNullable.GetMethods(BindingFlags.Public | BindingFlags.Instance) {
