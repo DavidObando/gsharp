@@ -2022,10 +2022,15 @@ partial class CSharpToGSharpTranslator {
                 widenedSinkInfersType: this.SinkInfersTypeFromValue(targetParameter, argument.Expression)
             ) {
                 let unbridged GExpression? = this.TranslateExpression(argument.Expression)
-                return this.ReportStoreBridge(
+                return this.BridgeWidenedImplicitArrayConsumer(
                     argument.Expression,
-                    unbridged,
-                    EnsureNonNullAssertion(unbridged),
+                    this.ReportStoreBridge(
+                        argument.Expression,
+                        unbridged,
+                        EnsureNonNullAssertion(unbridged),
+                        targetParameter
+                    ),
+                    targetType,
                     targetParameter
                 )
             }
@@ -2099,6 +2104,16 @@ partial class CSharpToGSharpTranslator {
                         includePromotedValue: true
                     )
                 }
+            } else if !IsNameOfArgument(argument) &&
+                !isXunitNullAssertion &&
+                targetParameter is {} nullableTargetParam &&
+                targetType != nil {
+                translated = this.BridgeWidenedImplicitArrayConsumer(
+                    argument.Expression,
+                    translated,
+                    targetType,
+                    nullableTargetParam
+                )
             }
             return translated
         }
@@ -3419,6 +3434,24 @@ partial class CSharpToGSharpTranslator {
             translatedValue GExpression?,
             targetType ITypeSymbol?,
             targetSymbolForPromotionCheck ISymbol?
+        ) GExpression? -> this
+            .BridgeWidenedImplicitArrayConsumer(
+            valueExpression,
+            this.ForgiveInitializerElementValueCore(
+                valueExpression,
+                translatedValue,
+                targetType,
+                targetSymbolForPromotionCheck
+            ),
+            targetType,
+            targetSymbolForPromotionCheck
+        )
+
+        private func ForgiveInitializerElementValueCore(
+            valueExpression Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax,
+            translatedValue GExpression?,
+            targetType ITypeSymbol?,
+            targetSymbolForPromotionCheck ISymbol?
         ) GExpression? {
             var targetType = targetType
             var targetSymbolForPromotionCheck = targetSymbolForPromotionCheck
@@ -3448,8 +3481,13 @@ partial class CSharpToGSharpTranslator {
             // property has no null evidence of its own and stays non-null. The
             // C# accepted the initializer only by trusting the generated
             // annotation, so asserting restores the contract it assumed.
+            let emittedNilableValue = this.SlotTypeIsDeclared(targetSymbolForPromotionCheck, valueExpression) &&
+                this.YieldsValueNilableBeyondItsCSharpType(valueExpression)
             return if (
-                this.NullableReferenceValueMayBeNull(valueExpression, respectDeclaredCallResults: true) ||
+                emittedNilableValue || this.NullableReferenceValueMayBeNull(
+                    valueExpression,
+                    respectDeclaredCallResults: true
+                ) ||
                     (
                     if this.IsObliviousCompilation() {
                         this.IsNullablePromotedValue(valueExpression)
@@ -3458,10 +3496,27 @@ partial class CSharpToGSharpTranslator {
                     }
                 )
             ) {
+                let assertionOperand GExpression? = if (
+                    valueExpression is Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .ConditionalExpressionSyntax or
+                        Microsoft
+                        .CodeAnalysis
+                        .CSharp
+                        .Syntax
+                        .SwitchExpressionSyntax or
+                        ConditionalAccessExpressionSyntax
+                ) {
+                    cast[GExpression](ParenthesizedExpression(translatedValue))
+                } else {
+                    translatedValue
+                }
                 this.ReportStoreBridge(
                     valueExpression,
                     translatedValue,
-                    EnsureNonNullAssertion(translatedValue),
+                    EnsureNonNullAssertion(assertionOperand),
                     targetSymbolForPromotionCheck,
                     targetType
                 )
