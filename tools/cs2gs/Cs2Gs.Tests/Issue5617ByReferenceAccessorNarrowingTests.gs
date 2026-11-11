@@ -2016,13 +2016,13 @@ namespace OtherNs
         protected void LibExtParts() { }
     }
 }`)
-        Assert.Contains("return s!!.Length + total\n", printed.Replace("\r\n", "\n"))
-        Assert.Contains("total += s!!.Length", printed)
+        Assert.Contains("return s.Length + total\n", printed.Replace("\r\n", "\n"))
+        Assert.Contains("total += s.Length", printed)
         Assert.Contains("return s!!.Length + total + 3", printed)
-        Assert.Contains("return s!!.Length + total + 5", printed)
+        Assert.Contains("return s.Length + total + 5", printed)
         Assert.Contains("return s!!.Length + total + 6", printed)
         Assert.Contains("return s!!.Length + total + 7", printed)
-        Assert.Contains("return s!!.Length + total + 8", printed)
+        Assert.Contains("return s.Length + total + 8", printed)
         Assert.Contains("return s!!.Length + total + 9", printed)
         Assert.Contains("return s!!.Length + 10", printed)
         Assert.Contains("return s!!.Length + 14", printed)
@@ -2031,7 +2031,7 @@ namespace OtherNs
         Assert.Contains("return s!!.Length + total + 20", printed)
         Assert.Contains("return s.Length + total + 21", printed)
         Assert.Contains("return s.Length + 22", printed)
-        Assert.Contains("return s!!.Length + total + 13", printed)
+        Assert.Contains("return s.Length + total + 13", printed)
         Assert.Contains("return s!!.Length + 17", printed)
         Assert.Contains("return s!!.Length + 18", printed)
         Assert.Contains("return s.Length + 19", printed)
@@ -2040,7 +2040,7 @@ namespace OtherNs
         Assert.Contains("return s.Length + total + 1", printed)
         Assert.Contains("return s.Length + total + 2", printed)
         Assert.Contains("return s.Length + total + 4", printed)
-        Assert.Equal(16, Regex.Matches(printed, `s!!`).Count)
+        Assert.Equal(11, Regex.Matches(printed, `s!!`).Count)
     }
 
     /// Issue #5697: gsc narrows after a `do ... while`, `while`, or `for` loop whose exit condition proves non-null

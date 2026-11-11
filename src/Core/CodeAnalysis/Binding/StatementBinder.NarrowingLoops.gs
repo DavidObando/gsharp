@@ -1094,7 +1094,7 @@ internal partial class StatementBinder {
         } else {
             StripAllNullability(type)
         }
-        if stripped == nil || TypeSymbol.ContainsTypeParameter(stripped) {
+        if stripped == nil || stripped is TypeParameterSymbol {
             return false
         }
         types.Add(ReceiverType(stripped, nil))
@@ -1449,22 +1449,19 @@ internal partial class StatementBinder {
                 return ClrMemberVisibility.GetVisibleGetter(property, includeInternal) != nil
             }
             case method is MethodInfo {
-                return !method.IsPrivate &&
-                    (
-                    ClrMemberVisibility.IsVisible(method, includeInternal) ||
-                        (
-                        Expressions?.GetFamilyAccessBase() != nil && ClrMemberVisibility.IsVisibleFromDerived(
-                            method,
-                            includeInternal
-                        )
-                    )
-                )
+                return ClrMemberVisibility.IsVisible(method, includeInternal)
             }
             default {
                 return false
             }
         }
     }
+
+    private func IsFamilyAccessibleClrBase(clrBase Type?) bool -> clrBase != nil &&
+        Expressions != nil &&
+        Expressions!!
+        .WithFamilyAccess(ImportedClassSymbol(clrBase, declaration: nil, references: $scope.References))
+        .IsFamilyAccessible(clrBase)
 
     // The CLR form of a step. [`definition`](paramref) is the open definition of an imported generic type whose
     // type arguments are [`arguments`](paramref); a member type that is one of its type parameters is the argument.
@@ -1576,7 +1573,7 @@ internal partial class StatementBinder {
                         type,
                         step.Name ?? "",
                         staticAccess: false,
-                        allowProtectedInherited: Expressions?.GetFamilyAccessBase() != nil
+                        allowProtectedInherited: false
                     ) {
                         found = true
                         if !AddClrType(method.ReturnType, arguments, definition, next) {
@@ -2630,7 +2627,7 @@ internal partial class StatementBinder {
                     out receiverApplies,
                     out runsConversion,
                     ReceiverType(declared, nil),
-                    allowProtectedInherited: !staticAccess && Expressions?.GetFamilyAccessBase() != nil
+                    allowProtectedInherited: !staticAccess && IsFamilyAccessibleClrBase(baseClr)
                 )
             }
             case contract is InterfaceSymbol {
@@ -3165,7 +3162,7 @@ internal partial class StatementBinder {
         if clrType == nil || ReflectionType(clrType) is not{} reflected {
             return false
         }
-        let allowProtectedInherited = receiver.Symbol is StructSymbol && Expressions?.GetFamilyAccessBase() != nil
+        let allowProtectedInherited = receiver.Symbol is StructSymbol && IsFamilyAccessibleClrBase(reflected)
         let methods = CollectClrCandidateMethods(reflected, name, staticAccess: false, allowProtectedInherited)
         if methods.Count == 0 {
             return false
@@ -3537,7 +3534,7 @@ internal partial class StatementBinder {
             }
             let allowProtectedInherited = !staticAccess &&
                 receiver.Symbol is StructSymbol &&
-                Expressions?.GetFamilyAccessBase() != nil
+                IsFamilyAccessibleClrBase(reflected)
             for method in CollectClrCandidateMethods(reflected, name, staticAccess, allowProtectedInherited) {
                 let methodParameters = method.GetParameters()
                 let types = ClrParameterTypes(symbolic, method, methodParameters)
