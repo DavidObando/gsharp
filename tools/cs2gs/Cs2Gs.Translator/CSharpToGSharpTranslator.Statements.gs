@@ -1385,6 +1385,8 @@ partial class CSharpToGSharpTranslator {
             if useBlock?.IsReachable != true {
                 return Array.Empty[ExpressionSyntax]()
             }
+            // Backedges retain the read's block; acyclic reads evaluate only its prefix below.
+            let predecessorBlocks = GetPredecessorClosure(graph!!, useBlock!!)
             let outputs = Dictionary[BasicBlock, HashSet[ExpressionSyntax]]()
             let assignedValues = Dictionary[AssignmentExpressionSyntax, ExpressionSyntax]()
             let elementAssignedValues = Dictionary[(Write string, Previous string), ExpressionSyntax]()
@@ -1393,7 +1395,7 @@ partial class CSharpToGSharpTranslator {
             do {
                 changed = false
                 for block in graph!!.Blocks {
-                    if !block.IsReachable {
+                    if !block.IsReachable || !predecessorBlocks.Contains(block) {
                         continue
                     }
                     let values = HashSet[ExpressionSyntax]()

@@ -47,6 +47,8 @@ open class Issue5633ConditionalLocalQueryTests {
     @InlineData(false, false, "assigned-switch")
     @InlineData(true, false, "assigned-coalesce")
     @InlineData(false, false, "assigned-coalesce")
+    @InlineData(true, false, "late-writes")
+    @InlineData(false, false, "late-writes")
     func JoinedLocalChain_CompletesWithinBound(enabled bool, nullableInput bool, shape string) {
         let body = StringBuilder()
         if !enabled && nullableInput {
@@ -56,7 +58,7 @@ open class Issue5633ConditionalLocalQueryTests {
         for var i = 1; i <= 24; i++ {
             let previous = "x${i - 1}"
             let value = switch shape {
-                case "conditional", "assigned": "flag ? $previous : $previous"
+                case "conditional", "assigned", "late-writes": "flag ? $previous : $previous"
                 case "switch", "assigned-switch": "flag switch { true => $previous, false => $previous }"
                 default: "$previous ?? $previous"
             }
@@ -64,6 +66,9 @@ open class Issue5633ConditionalLocalQueryTests {
             if shape.StartsWith("assigned", StringComparison.Ordinal) {
                 body.AppendLine("x$i = $value;")
             }
+        }
+        if shape == "late-writes" {
+            body.AppendLine("x0 = x24; x24 = x0;")
         }
         let annotation = if enabled && nullableInput {
             "?"
@@ -212,6 +217,44 @@ namespace Demo
             body.ToString() + "return x24;\n} } }"
         let printed = this.TranslateWithinBound(source, enabled)
         Assert.Contains("return x24", printed)
+        TranslationTestValidation.AssertBinds(printed)
+    }
+
+    @Fact
+    func LaterWritesOnBackedges_StillReachEarlierReads() {
+        let printed = this.TranslateWithinBound(`
+#nullable enable
+namespace Demo
+{
+    public static class P
+    {
+        static bool IsNull<T>(T value) => value is null;
+        public static bool Loop<T>(T replacement, bool again)
+        {
+            T value = replacement;
+            while (again)
+            {
+                var loopRead = value;
+                value = default(T);
+                if (IsNull(loopRead)) return true;
+            }
+            return false;
+        }
+        public static bool Jump<T>(T replacement, bool again)
+        {
+            T value = replacement;
+            repeat:
+            {
+                var jumpRead = value;
+                value = default(T);
+                if (again) goto repeat;
+                return IsNull(jumpRead);
+            }
+        }
+    }
+}`, enabled: true)
+        Assert.Contains("let loopRead T? = value\n", printed)
+        Assert.Contains("let jumpRead T? = value\n", printed)
         TranslationTestValidation.AssertBinds(printed)
     }
 
