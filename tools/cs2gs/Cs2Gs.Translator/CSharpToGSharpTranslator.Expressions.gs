@@ -13837,23 +13837,6 @@ partial class CSharpToGSharpTranslator {
             } else {
                 this.EnclosingFlowScope(declaration) ?? declaration.SyntaxTree.GetRoot()
             }
-            let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
-            if requireRoslynFlowNotNull &&
-                flowState != Microsoft
-                .CodeAnalysis
-                .NullableFlowState
-                .NotNull &&
-                !(
-                flowState == Microsoft
-                    .CodeAnalysis
-                    .NullableFlowState
-                    .None &&
-                    declaringScope != nil &&
-                    this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope)
-            ) {
-                return false
-            }
-            let requireJumpFreeScope = flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull
             let nearestCallable = expression.AncestorsAndSelf().FirstOrDefault(
                 (ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is BaseMethodDeclarationSyntax ||
                     ancestor is AccessorDeclarationSyntax ||
@@ -13871,6 +13854,26 @@ partial class CSharpToGSharpTranslator {
             if scope_ == nil {
                 return false
             }
+            let isDeconstructedForEachLeaf = declaration is SingleVariableDesignationSyntax && declaration.Ancestors()
+                .Any((ancestor Microsoft.CodeAnalysis.SyntaxNode) -> ancestor is ForEachVariableStatementSyntax)
+            let flowState = this.context.GetTypeInfo(expression).Nullability.FlowState
+            if requireRoslynFlowNotNull &&
+                flowState != Microsoft
+                .CodeAnalysis
+                .NullableFlowState
+                .NotNull &&
+                !(
+                flowState == Microsoft
+                    .CodeAnalysis
+                    .NullableFlowState
+                    .None &&
+                    declaringScope != nil &&
+                    this.IsEmittedReadOnlyCapture(symbol!!, declaration, declaringScope) &&
+                    (isDeconstructedForEachLeaf || this.IsClosureBoundary(scope_))
+            ) {
+                return false
+            }
+            let requireJumpFreeScope = flowState != Microsoft.CodeAnalysis.NullableFlowState.NotNull
             if this.IsGSharpFlowNarrowedLocalInScope(expression, expression, symbol, scope_, requireJumpFreeScope) {
                 return true
             }
